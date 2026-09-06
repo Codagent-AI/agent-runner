@@ -1377,7 +1377,14 @@ func sandboxedCrosscheckCommand(args []string, workspace, outputDir string) (*ex
 		if err != nil {
 			return nil, fmt.Errorf("resolve audit workspace: %w", err)
 		}
-		argv := linuxSandboxArgs(args, workspaceRoot, boundary)
+		self, err := os.Executable()
+		if err != nil {
+			return nil, fmt.Errorf("resolve audit model launcher: %w", err)
+		}
+		// The final exec closes inherited nonstandard descriptors, which can
+		// otherwise retain write access through a read-only bind mount.
+		payload := append([]string{self, "internal", "audit-model-exec"}, args...)
+		argv := linuxSandboxArgs(payload, workspaceRoot, boundary)
 		command := exec.Command("bwrap", argv...) // #nosec G204 -- registered adapter argv is wrapped in an audit-owned OS sandbox.
 		command.Dir = workspaceRoot
 		return command, nil

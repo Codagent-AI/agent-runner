@@ -16,6 +16,7 @@ LOAD_DEFAULT_SECRETS=1
 MOUNT_CODEX_AUTH=0
 MOUNT_CLAUDE_AUTH=0
 DEV_AUDIT=0
+AUDIT_SMOKE=0
 ENV_VARS=()
 ENV_FILES=()
 DOCKER_RUN_ARGS=()
@@ -38,6 +39,7 @@ Options:
   --input-dir PATH       Existing host directory mounted read-only at /eval-input.
   --dev-audit            Build the private development-audit binary. The default
                           build remains untagged and has no audit capability.
+  --dev-audit-smoke      Include the test-only workflow fixture; requires --dev-audit.
   --no-default-secrets   Do not automatically load .sandbox-secrets.env.
   --secrets-file PATH    Load a sandbox secrets env file. Default, when present:
                           .sandbox-secrets.env
@@ -105,6 +107,10 @@ while (($#)); do
       DEV_AUDIT=1
       shift
       ;;
+    --dev-audit-smoke)
+      AUDIT_SMOKE=1
+      shift
+      ;;
     --no-default-secrets)
       LOAD_DEFAULT_SECRETS=0
       shift
@@ -148,6 +154,11 @@ while (($#)); do
       ;;
   esac
 done
+
+if [[ "$AUDIT_SMOKE" == 1 && "$DEV_AUDIT" != 1 ]]; then
+  echo "--dev-audit-smoke requires --dev-audit" >&2
+  exit 2
+fi
 
 if (($# == 0)); then
   echo "Missing command. Use -- <command>." >&2
@@ -248,7 +259,11 @@ cd /tmp/agent-runner-local
 if [[ "${AGENT_RUNNER_DEV_AUDIT:-0}" == 1 ]]; then
   dev_audit_root_encoded="$(printf '%s' /agent-runner-source | base64 | tr -d '\n')"
   dev_audit_ldflags="-X main.version=local-dev -X github.com/codagent/agent-runner/internal/devaudit.BuildRootEncoded=${dev_audit_root_encoded} -X github.com/codagent/agent-runner/internal/devaudit.BuildRevision=${AGENT_RUNNER_SOURCE_COMMIT} -X github.com/codagent/agent-runner/internal/devaudit.BuildDirty=${AGENT_RUNNER_SOURCE_DIRTY}"
-  go build -tags dev_audit -ldflags "$dev_audit_ldflags" -o /workspace/bin/agent-runner ./cmd/agent-runner
+  dev_audit_tags=dev_audit
+  if [[ "${AGENT_RUNNER_AUDIT_SMOKE:-0}" == 1 ]]; then
+    dev_audit_tags=dev_audit,devaudit_smoke
+  fi
+  go build -tags "$dev_audit_tags" -ldflags "$dev_audit_ldflags" -o /workspace/bin/agent-runner ./cmd/agent-runner
 else
   go build -ldflags "-X main.version=local-dev" -o /workspace/bin/agent-runner ./cmd/agent-runner
 fi
@@ -275,15 +290,16 @@ run_cmd=(
   -e AGENT_RUNNER_SOURCE_COMMIT
   -e AGENT_RUNNER_SOURCE_DIRTY
   -e AGENT_RUNNER_DEV_AUDIT=$DEV_AUDIT
+  -e AGENT_RUNNER_AUDIT_SMOKE=$AUDIT_SMOKE
   -v "$RUNNER_ROOT:/agent-runner-source:ro"
   -v "$ARTIFACT_DIR:/artifacts"
 )
 
 # Bubblewrap needs the user-namespace syscalls that Docker's default seccomp
-# profile blocks. This narrow opt-in is required only for the private audit
-# build; it grants neither privileged mode nor host mounts.
+# profile blocks. Keep a deny-by-default profile with only the audit launcher
+# namespace/mount additions; do not disable seccomp or grant host capabilities.
 if [[ "$DEV_AUDIT" == 1 ]]; then
-  run_cmd+=(--security-opt seccomp=unconfined)
+  run_cmd+=(--security-opt "seccomp=$RUNNER_ROOT/docker/dev/dev-audit-seccomp.json")
 fi
 
 if [[ -n "$INPUT_DIR" ]]; then

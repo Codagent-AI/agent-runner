@@ -54,8 +54,11 @@ layering, inheritance, and built-in defaults, then freezes the resolved
 
 On Linux the development image uses Bubblewrap to make the ordinary filesystem
 read-only and grants write access only to the audit-owned model-output tree.
-The opt-in Docker invocation relaxes Docker's seccomp profile only enough to
-allow Bubblewrap user namespaces; it does not use privileged containers. If
+It requires unprivileged user namespaces and Linux 5.11 or newer for closing
+inherited descriptors on model exec. The opt-in Docker invocation uses the
+repository's `docker/dev/dev-audit-seccomp.json`, derived from a pinned Moby
+default-deny profile with user/mount namespace and mount-operation exceptions.
+It retains seccomp filtering and adds no container capabilities or privileged mode. If
 that OS boundary cannot be established, the linked audit records a diagnostic
 and does not start the model command. This is write confinement only: existing
 read access and network behavior are unchanged. On macOS the existing
@@ -69,13 +72,36 @@ Go dependencies have been provisioned:
 scripts/docker-dev-audit-smoke.sh
 ```
 
-It uses a temporary project, synthetic authentication, and fake local model
-responses. It keeps artifacts in the selected artifact directory and waits for
-the linked audit's terminal lifecycle state after the source CLI has returned.
+The smoke adds the separate `devaudit_smoke` build tag through
+`--dev-audit --dev-audit-smoke`; ordinary `dev_audit` builds contain no smoke
+workflow. The fixture tag only registers a hidden workflow and retains the
+production sandbox and lifecycle code.
+
+It uses a temporary project and fake local model responses with no host
+credentials. It keeps artifacts in the selected artifact directory and waits
+for both the linked audit's terminal lifecycle and terminal run state after the
+source CLI has returned. It checks reciprocal source/session linkage, model
+outputs, validated observations, local report, and verified mounted provenance.
 That distinction matters: source completion never waits for auditing in normal
 Runner operation. The smoke does not call external model, GitHub, or reporting
 services; missing reporting configuration is expected to remain a local audit
-warning.
+warning. Set `ARTIFACT_DIR` to retain evidence in a chosen host directory and
+`AUDIT_SMOKE_TIMEOUT_SECONDS` to change the default 45-second audit wait. Timeout,
+invalid output, or missing terminal state fails the smoke and preserves evidence.
+
+Run the production Linux confinement regressions in the same Docker environment:
+
+```bash
+scripts/sandbox-run.sh --dev-audit --no-default-secrets \
+  --docker-run-arg --network=none -- \
+  'cd /tmp/agent-runner-local && AGENT_RUNNER_REQUIRE_LINUX_SANDBOX=1 go test -tags dev_audit ./internal/devaudit -run "^TestLinuxAudit" -count=1 -v'
+```
+
+The required-sandbox setting makes unavailable Linux confinement a test failure.
+The tests exercise real subprocess writes, descendants, inherited descriptors,
+escape attempts, disposable runtime state with synthetic authentication, and
+setup failure. The smoke supervisor's timeout and invalid-result regressions
+also run through `go test ./scripts`.
 
 Arguments after `--` retain their original boundaries. A single argument is
 treated as a shell command for convenience; multiple arguments are executed as

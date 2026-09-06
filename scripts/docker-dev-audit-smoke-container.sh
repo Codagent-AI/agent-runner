@@ -86,35 +86,7 @@ if len(links) != 1 or links[0].get("state") == "completed":
 PY
 
 touch "$release"
-deadline=$(( $(date +%s) + ${AUDIT_SMOKE_TIMEOUT_SECONDS:-45} ))
-while :; do
-  if python3 - "$source_dir/audit-lifecycle.json" <<'PY'
-import json, sys
-with open(sys.argv[1], encoding="utf-8") as stream: links = json.load(stream).get("links", [])
-raise SystemExit(0 if len(links) == 1 and links[0].get("state") == "completed" else 1)
-PY
-  then break; fi
-  if [ "$(date +%s)" -ge "$deadline" ]; then
-    echo "smoke: linked audit did not become terminal; artifacts retained in $smoke_root" >&2
-    exit 1
-  fi
-  sleep 0.1
-done
-
-audit_id="$(python3 - "$source_dir/audit-lifecycle.json" <<'PY'
-import json, sys
-with open(sys.argv[1], encoding="utf-8") as stream: print(json.load(stream)["links"][0]["audit_run_id"])
-PY
-)"
-audit_dir="$(dirname "$source_dir")/$audit_id"
-for artifact in model-output/value-001.json model-output/correctness.json value-observations.json local-report.json request.json; do
-  test -s "$audit_dir/$artifact" || { echo "smoke: required artifact missing: $audit_dir/$artifact" >&2; exit 1; }
-done
+python3 "$(dirname -- "${BASH_SOURCE[0]}")/wait-dev-audit-smoke.py" \
+  "$source_dir" "${AUDIT_SMOKE_TIMEOUT_SECONDS:-45}"
 test "$(cat "$protected")" = "protected source" || { echo "smoke: protected source changed" >&2; exit 1; }
-python3 - "$audit_dir/request.json" <<'PY'
-import json, sys
-with open(sys.argv[1], encoding="utf-8") as stream: request = json.load(stream)
-if request.get("runner_source", {}).get("launch_root") != "/agent-runner-source":
-    raise SystemExit("smoke: request did not use mounted Agent Runner source")
-PY
 echo "development-audit smoke passed; artifacts retained in $smoke_root"

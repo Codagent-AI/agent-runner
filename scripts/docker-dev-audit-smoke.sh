@@ -11,6 +11,7 @@ mkdir -p "$ARTIFACT_DIR"
 export AUDIT_SMOKE_TIMEOUT_SECONDS="$TIMEOUT_SECONDS"
 ARTIFACT_DIR="$ARTIFACT_DIR" "$RUNNER_ROOT/scripts/sandbox-run.sh" \
   --dev-audit \
+  --dev-audit-smoke \
   --no-default-secrets \
   --env AUDIT_SMOKE_TIMEOUT_SECONDS \
   --artifact-dir "$ARTIFACT_DIR" \

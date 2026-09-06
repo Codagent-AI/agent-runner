@@ -16,6 +16,30 @@
 - **WHEN** the operator requests help or a dry run with the opt-in
 - **THEN** the build selection is visible and dry-run output neither starts a container nor prints secret values
 
+### Requirement: Smoke fixture registration requires a separate build selection
+
+Ordinary untagged and `dev_audit` binaries SHALL NOT register the smoke fixture workflow. The product-owned smoke SHALL explicitly add `devaudit_smoke` through `--dev-audit --dev-audit-smoke`. That tag SHALL add only fixture registration and SHALL NOT replace production confinement, profile resolution, or audit lifecycle behavior.
+
+#### Scenario: Ordinary development binary resolves the fixture
+- **WHEN** an ordinary `dev_audit` binary is asked to resolve `openspec:audit-smoke`
+- **THEN** that workflow is unavailable
+
+#### Scenario: Smoke explicitly selects its fixture
+- **WHEN** the smoke selects both development auditing and the separate fixture build option
+- **THEN** its hidden canonical workflow is available and both model stages retain the production launcher
+
+### Requirement: Audit Docker opt-in retains seccomp filtering
+
+The opted-in Docker invocation SHALL use a repository-owned default-deny seccomp profile with only the user/mount namespace and mount-operation additions needed by the supported Bubblewrap launcher. It SHALL NOT disable seccomp or add container capabilities or privileged mode. Unsupported confinement prerequisites SHALL remain diagnostic failures without an unconfined fallback.
+
+#### Scenario: Developer selects the audit container
+- **WHEN** the developer runs the supported audit Docker invocation
+- **THEN** seccomp remains active, required namespace setup succeeds on the supported environment, and model filesystem confinement is enforced
+
+#### Scenario: Developer selects the default container
+- **WHEN** the developer omits the audit opt-in
+- **THEN** Docker's default seccomp profile remains selected
+
 ### Requirement: Product-owned Docker smoke proves the detached audit journey
 
 Agent Runner SHALL provide a hermetic Docker smoke using its own fixtures and the supported sandbox build path. It SHALL run an eligible source workflow, exercise both model stages through the production Linux confinement launcher, and verify durable reciprocal linkage, validated local output, and terminal linked-audit state. It MUST NOT run or modify Agent Evals, use real model/reporting services, import host credentials, or replace confinement with the existing E2E bypass.

@@ -71,7 +71,7 @@ func TestSandboxRunDevAuditOptInBuildsTaggedBinaryWithMountedSourceProvenance(t 
 	}
 	text := string(output)
 	for _, want := range []string{
-		"-tags dev_audit",
+		"dev_audit_tags=dev_audit",
 		"internal/devaudit.BuildRootEncoded=",
 		"/agent-runner-source",
 		"development-audit build selected",
@@ -82,29 +82,67 @@ func TestSandboxRunDevAuditOptInBuildsTaggedBinaryWithMountedSourceProvenance(t 
 	}
 }
 
-func TestDockerDevelopmentAuditSmokeUsesTheSupportedConfinementPath(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "docker-dev-audit-smoke.sh"))
-	if err != nil {
-		t.Fatalf("read development-audit smoke: %v", err)
+func TestDevelopmentAuditSmokeHarness(t *testing.T) {
+	cmd := exec.Command("python3", "docker_dev_audit_smoke_test.py")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("smoke supervisor regressions: %v\n%s", err, output)
 	}
-	containerData, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "docker-dev-audit-smoke-container.sh"))
-	if err != nil {
-		t.Fatalf("read development-audit smoke container fixture: %v", err)
-	}
-	text := string(data) + string(containerData)
-	for _, want := range []string{
-		"sandbox-run.sh", "--dev-audit", "--network=none", "audit-lifecycle.json",
-		"model-output", "local-report.json", "AUDIT_SMOKE_RELEASE", "AUDIT_SMOKE_PROTECTED",
-	} {
+}
+
+func TestSandboxAuditUsesScopedSeccompAndExplicitFixtureSelection(t *testing.T) {
+	for _, fixture := range []bool{false, true} {
+		args := []string{"./sandbox-run.sh", "--dry-run", "--no-default-secrets", "--dev-audit", "--artifact-dir", t.TempDir()}
+		if fixture {
+			args = append(args, "--dev-audit-smoke")
+		}
+		args = append(args, "--", "agent-runner", "--version")
+		output, err := exec.Command("bash", args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("sandbox invocation: %v\n%s", err, output)
+		}
+		text := string(output)
+		if strings.Contains(text, "seccomp=unconfined") || !strings.Contains(text, "seccomp=") || !strings.Contains(text, "dev-audit-seccomp.json") {
+			t.Fatalf("audit must select a bounded seccomp policy:\n%s", text)
+		}
+		want := "AGENT_RUNNER_AUDIT_SMOKE=0"
+		if fixture {
+			want = "AGENT_RUNNER_AUDIT_SMOKE=1"
+		}
 		if !strings.Contains(text, want) {
-			t.Fatalf("development-audit smoke missing %q", want)
+			t.Fatalf("missing explicit fixture build selection %q:\n%s", want, text)
 		}
 	}
-	if strings.Contains(text, "devaudit_e2e") {
-		t.Fatal("development-audit smoke must not use the E2E launcher bypass")
+}
+
+func TestAuditSeccompProfileRetainsDefaultDeny(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "docker", "dev", "dev-audit-seccomp.json"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), `--env AUDIT_SMOKE_TIMEOUT_SECONDS`) {
-		t.Fatal("development-audit smoke must pass its configured timeout into the container")
+	var profile struct {
+		DefaultAction string `json:"defaultAction"`
+		Syscalls      []struct {
+			Names    []string       `json:"names"`
+			Action   string         `json:"action"`
+			Includes map[string]any `json:"includes"`
+		} `json:"syscalls"`
+	}
+	if err := json.Unmarshal(data, &profile); err != nil {
+		t.Fatal(err)
+	}
+	if profile.DefaultAction != "SCMP_ACT_ERRNO" {
+		t.Fatal("audit seccomp profile must deny unlisted syscalls")
+	}
+	for _, rule := range profile.Syscalls {
+		if rule.Action != "SCMP_ACT_ALLOW" || len(rule.Includes) != 0 {
+			continue
+		}
+		for _, name := range rule.Names {
+			switch name {
+			case "keyctl", "add_key", "bpf", "setns", "init_module", "delete_module":
+				t.Fatalf("audit profile unnecessarily allows %s", name)
+			}
+		}
 	}
 }
 

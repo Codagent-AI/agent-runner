@@ -52,20 +52,6 @@ func TestTaggedProviderInjectsTheSingleHiddenAuditWorkflow(t *testing.T) {
 	}
 }
 
-func TestTaggedProviderRegistersHermeticCanonicalSmokeFixture(t *testing.T) {
-	ref, err := builtinworkflows.Resolve("openspec:audit-smoke")
-	if err != nil {
-		t.Fatalf("resolve canonical smoke workflow: %v", err)
-	}
-	workflow, err := loader.LoadWorkflow(ref, loader.Options{})
-	if err != nil {
-		t.Fatalf("load canonical smoke workflow: %v", err)
-	}
-	if !workflow.Hidden || len(workflow.Steps) != 1 || workflow.Steps[0].Agent != "crosscheck" {
-		t.Fatalf("canonical smoke workflow = %#v, want hidden one-step crosscheck fixture", workflow)
-	}
-}
-
 func TestReapDetachedProcessWaitsForChild(t *testing.T) {
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
 	if err := cmd.Start(); err != nil {
@@ -197,6 +183,11 @@ func TestSandboxedCodexGetsDisposableWritableRuntime(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("macOS sandbox-exec integration")
 	}
+	testSandboxedCodexRuntime(t)
+}
+
+func testSandboxedCodexRuntime(t *testing.T) {
+	t.Helper()
 	root := t.TempDir()
 	root, err := filepath.EvalSymlinks(root)
 	if err != nil {

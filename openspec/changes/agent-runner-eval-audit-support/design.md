@@ -20,6 +20,8 @@ Keep the platform decision behind the shared command factory used by both value 
 
 Choose the concrete Linux OS mechanism during implementation against these fixed constraints: it must work in the delivered Docker development invocation, actually deny filesystem operations, establish confinement before model execution, and report unsupported or denied setup without running the model. The backend implementation is not a new user-selectable mode. Document its minimum platform prerequisites and any narrowly necessary Docker settings. Do not require privileged containers or introduce a fallback that runs unconfined.
 
+Review resolution: use Bubblewrap with a read-only root and a writable model-output bind, and retain Docker seccomp filtering through a pinned Moby default-deny profile with user/mount namespace and mount-operation additions. No extra container capabilities are granted. A final Linux model-exec helper marks nonstandard inherited descriptors close-on-exec before executing the adapter, requiring Linux 5.11 or newer; failure remains diagnostic. The profile provenance and exact additions are documented in `docker/dev/README.md`.
+
 Validate/canonicalize boundary paths, reject an output allowance that overlaps trusted input or resolves through an unsafe escape, and prevent inherited writable filesystem descriptors from defeating confinement. Test traversal, symlink, rename, and child-process writes. Preserve ordinary standard stream operation. Fingerprints remain defense in depth; detection after a write is not confinement.
 
 Retain Darwin's parameterized `sandbox-exec` path and disposable Codex runtime. Accept the existing read/network behavior explicitly; do not claim a new restriction on either. Sequoia requires real OS evidence, not an assumed equivalence with other macOS versions.
@@ -35,6 +37,8 @@ Use the source's recorded profile-set selection with configuration available at 
 Deliver `scripts/docker-dev-audit-smoke.sh` with fixtures owned by this repository. Use isolated temporary project/home/artifact directories, deterministic fake adapter executables, no host credentials, no default secret import, and no real reporting services. The smoke passes through the delivered sandbox opt-in and real production model launcher.
 
 Prefer an ordinary fixture workflow loaded through the existing resolver. If deterministic canonical registration requires a test-only asset, a separate fixture-only build tag may register that asset but MUST NOT replace the sandbox, coordinator, profile resolver, source snapshotter, or completion logic. The ordinary `--dev-audit` binary must also be verified independently. The existing `devaudit_e2e` bypass is not permitted as isolation evidence.
+
+Review resolution: the smoke explicitly selects `--dev-audit --dev-audit-smoke`, compiling `dev_audit,devaudit_smoke`. The additional tag only registers the hidden canonical fixture. Ordinary development-audit builds do not register it.
 
 Use structured fake model responses for both stages, zero correctness candidates, and missing Google connection state. A retained local report with a reporting warning is expected; successful remote delivery is not required. Record model invocation evidence under permitted output, not an unconstrained marker outside it.
 
