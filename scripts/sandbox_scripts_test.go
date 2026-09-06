@@ -55,6 +55,56 @@ func TestSandboxRunDryRunShowsSafeDockerInvocation(t *testing.T) {
 	}
 }
 
+func TestSandboxRunDevAuditOptInBuildsTaggedBinaryWithMountedSourceProvenance(t *testing.T) {
+	artifacts := filepath.Join(t.TempDir(), "artifacts")
+	cmd := exec.Command("bash", "./sandbox-run.sh",
+		"--dry-run",
+		"--no-default-secrets",
+		"--dev-audit",
+		"--artifact-dir", artifacts,
+		"--",
+		"agent-runner", "--version",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-run dry run failed: %v\n%s", err, output)
+	}
+	text := string(output)
+	for _, want := range []string{
+		"-tags dev_audit",
+		"internal/devaudit.BuildRootEncoded=",
+		"/agent-runner-source",
+		"development-audit build selected",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dev-audit dry-run output missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestDockerDevelopmentAuditSmokeUsesTheSupportedConfinementPath(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "docker-dev-audit-smoke.sh"))
+	if err != nil {
+		t.Fatalf("read development-audit smoke: %v", err)
+	}
+	containerData, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "docker-dev-audit-smoke-container.sh"))
+	if err != nil {
+		t.Fatalf("read development-audit smoke container fixture: %v", err)
+	}
+	text := string(data) + string(containerData)
+	for _, want := range []string{
+		"sandbox-run.sh", "--dev-audit", "--network=none", "audit-lifecycle.json",
+		"model-output", "local-report.json", "AUDIT_SMOKE_RELEASE", "AUDIT_SMOKE_PROTECTED",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("development-audit smoke missing %q", want)
+		}
+	}
+	if strings.Contains(text, "devaudit_e2e") {
+		t.Fatal("development-audit smoke must not use the E2E launcher bypass")
+	}
+}
+
 func TestSandboxRunResolvesDockerfileOutsideRepository(t *testing.T) {
 	root := repoRoot(t)
 	cmd := exec.Command("bash", filepath.Join(root, "scripts", "sandbox-run.sh"),

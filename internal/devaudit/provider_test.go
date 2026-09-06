@@ -52,6 +52,20 @@ func TestTaggedProviderInjectsTheSingleHiddenAuditWorkflow(t *testing.T) {
 	}
 }
 
+func TestTaggedProviderRegistersHermeticCanonicalSmokeFixture(t *testing.T) {
+	ref, err := builtinworkflows.Resolve("openspec:audit-smoke")
+	if err != nil {
+		t.Fatalf("resolve canonical smoke workflow: %v", err)
+	}
+	workflow, err := loader.LoadWorkflow(ref, loader.Options{})
+	if err != nil {
+		t.Fatalf("load canonical smoke workflow: %v", err)
+	}
+	if !workflow.Hidden || len(workflow.Steps) != 1 || workflow.Steps[0].Agent != "crosscheck" {
+		t.Fatalf("canonical smoke workflow = %#v, want hidden one-step crosscheck fixture", workflow)
+	}
+}
+
 func TestReapDetachedProcessWaitsForChild(t *testing.T) {
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
 	if err := cmd.Start(); err != nil {
@@ -100,6 +114,28 @@ func TestSandboxExecArgsBindsOutputDirectoryAsParameter(t *testing.T) {
 	}
 	if !strings.Contains(args[3], `(param "OUTPUT_DIR")`) {
 		t.Fatalf("sandbox profile must bind OUTPUT_DIR parameter: %q", args[3])
+	}
+}
+
+func TestAuditOutputBoundaryRejectsSymlinkAndTrustedInputOverlap(t *testing.T) {
+	root := t.TempDir()
+	trusted := filepath.Join(root, "trusted")
+	output := filepath.Join(root, "output")
+	if err := os.MkdirAll(trusted, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(trusted, output); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validateAuditOutputBoundary(output, []string{trusted}); err == nil {
+		t.Fatal("symlinked output boundary unexpectedly accepted")
+	}
+
+	if _, err := validateAuditOutputBoundary(trusted, []string{trusted}); err == nil {
+		t.Fatal("trusted input overlap unexpectedly accepted")
+	}
+	if !pathsOverlap(filepath.Join(root, "output"), string(filepath.Separator)) {
+		t.Fatal("root trusted input must overlap every output boundary")
 	}
 }
 

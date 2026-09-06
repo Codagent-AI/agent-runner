@@ -1350,24 +1350,100 @@ func trustedAuditInputsFingerprint(request *Request) (string, error) {
 }
 
 func sandboxedCrosscheckCommand(args []string, workspace, outputDir string) (*exec.Cmd, error) {
-	if runtime.GOOS != "darwin" {
-		return nil, fmt.Errorf("OS-enforced audit filesystem sandbox is unavailable on %s", runtime.GOOS)
-	}
-	if _, err := exec.LookPath("sandbox-exec"); err != nil {
-		return nil, fmt.Errorf("resolve audit sandbox: %w", err)
+	if len(args) == 0 {
+		return nil, fmt.Errorf("audit sandbox command is empty")
 	}
 	if err := os.MkdirAll(outputDir, 0o700); err != nil {
 		return nil, err
 	}
-	argv := sandboxExecArgs(args, outputDir)
-	command := exec.Command("sandbox-exec", argv...) // #nosec G204 -- registered adapter argv is wrapped in an audit-owned OS sandbox.
-	command.Dir = workspace
-	return command, nil
+	boundary, err := validateAuditOutputBoundary(outputDir, []string{workspace})
+	if err != nil {
+		return nil, err
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		if _, err := exec.LookPath("sandbox-exec"); err != nil {
+			return nil, fmt.Errorf("resolve audit sandbox: %w", err)
+		}
+		argv := sandboxExecArgs(args, boundary)
+		command := exec.Command("sandbox-exec", argv...) // #nosec G204 -- registered adapter argv is wrapped in an audit-owned OS sandbox.
+		command.Dir = workspace
+		return command, nil
+	case "linux":
+		if _, err := exec.LookPath("bwrap"); err != nil {
+			return nil, fmt.Errorf("resolve Linux audit sandbox: %w", err)
+		}
+		workspaceRoot, err := filepath.EvalSymlinks(workspace)
+		if err != nil {
+			return nil, fmt.Errorf("resolve audit workspace: %w", err)
+		}
+		argv := linuxSandboxArgs(args, workspaceRoot, boundary)
+		command := exec.Command("bwrap", argv...) // #nosec G204 -- registered adapter argv is wrapped in an audit-owned OS sandbox.
+		command.Dir = workspaceRoot
+		return command, nil
+	default:
+		return nil, fmt.Errorf("OS-enforced audit filesystem sandbox is unavailable on %s", runtime.GOOS)
+	}
 }
 
 func sandboxExecArgs(args []string, outputDir string) []string {
 	argv := []string{"-D", "OUTPUT_DIR=" + outputDir, "-p", auditSandboxProfile, "--"}
 	return append(argv, args...)
+}
+
+// linuxSandboxArgs makes the ordinary filesystem read-only, then restores
+// write access only for the already-validated audit-owned output tree. The
+// user namespace is deliberate: it lets a non-root Docker user mount this
+// boundary without granting the container privileged mode.
+func linuxSandboxArgs(args []string, workspace, outputDir string) []string {
+	argv := []string{
+		"--die-with-parent", "--new-session", "--unshare-user", "--uid", "0", "--gid", "0",
+		"--ro-bind", "/", "/", "--bind", outputDir, outputDir,
+		"--proc", "/proc", "--dev", "/dev", "--chdir", workspace, "--",
+	}
+	return append(argv, args...)
+}
+
+// validateAuditOutputBoundary resolves the output after it exists, so a
+// symlink cannot turn an apparently local output directory into a write grant
+// over source evidence or any other trusted input.
+func validateAuditOutputBoundary(outputDir string, trustedInputs []string) (string, error) {
+	boundary, err := filepath.EvalSymlinks(outputDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve audit output boundary: %w", err)
+	}
+	boundary, err = filepath.Abs(boundary)
+	if err != nil {
+		return "", fmt.Errorf("resolve audit output boundary: %w", err)
+	}
+	for _, input := range trustedInputs {
+		if strings.TrimSpace(input) == "" {
+			continue
+		}
+		trusted, err := filepath.EvalSymlinks(input)
+		if err != nil {
+			return "", fmt.Errorf("resolve trusted audit input: %w", err)
+		}
+		trusted, err = filepath.Abs(trusted)
+		if err != nil {
+			return "", fmt.Errorf("resolve trusted audit input: %w", err)
+		}
+		if pathsOverlap(boundary, trusted) {
+			return "", fmt.Errorf("audit output boundary overlaps trusted input %q", trusted)
+		}
+	}
+	return boundary, nil
+}
+
+func pathsOverlap(first, second string) bool {
+	return pathContains(first, second) || pathContains(second, first)
+}
+
+func pathContains(parent, child string) bool {
+	if parent == child || parent == string(filepath.Separator) {
+		return true
+	}
+	return strings.HasPrefix(child, parent+string(filepath.Separator))
 }
 
 func cliEnvironment(adapter cli.Adapter, request *Request, input []byte, workdir, outputDir string) (environment []string, cleanup func(), err error) {

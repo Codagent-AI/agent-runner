@@ -52,8 +52,15 @@ func injectedBuildRoot() string {
 //go:embed workflows/audit/run-audit-v1.0.yaml
 var auditWorkflow []byte
 
+//go:embed workflows/openspec/audit-smoke-v1.0.yaml
+var auditSmokeWorkflow []byte
+
 func init() {
 	builtinworkflows.RegisterBuiltinAsset("audit/run-audit-v1.0.yaml", auditWorkflow)
+	// The smoke fixture is available only to a tagged binary. It provides a
+	// canonical, one-step source workflow so the product-owned Docker smoke can
+	// prove detached auditing without relying on the E2E launcher bypass.
+	builtinworkflows.RegisterBuiltinAsset("openspec/audit-smoke-v1.0.yaml", auditSmokeWorkflow)
 	// Package tests exercise the coordinator directly. Registering the default
 	// self-exec hook in a test binary would recursively execute that test binary
 	// for any eligible fixture, which is neither a production path nor useful

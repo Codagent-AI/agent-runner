@@ -23,6 +23,60 @@ the requested command:
 scripts/sandbox-run.sh -- agent-runner --version
 ```
 
+## Development-audit builds
+
+The normal sandbox build is deliberately untagged: it has no private audit
+command, hidden audit workflow, or automatic audit hook. Select the private
+development-audit build explicitly when exercising the audit lifecycle:
+
+```bash
+scripts/sandbox-run.sh --dev-audit -- agent-runner audit help
+scripts/sandbox-run.sh --dry-run --dev-audit -- agent-runner --version
+```
+
+`--dev-audit` builds with the `dev_audit` tag and injects
+`/agent-runner-source` as the authoritative Agent Runner source root. The
+source mount is distinct from the disposable copy used for compilation and
+from `/eval-input`. At audit launch, Runner snapshots and verifies that mounted
+tree before source-verified correctness publication. A worktree can have a
+complete source tree while its host Git indirection is unavailable in the
+container; that condition is recorded as unavailable launch-time Git metadata,
+not as a clean checkout and not as a substitute for build diagnostics.
+
+Automatic audit eligibility is intentionally narrow: the resolved canonical
+workflow reference must be in the `openspec/` or `spec-driven/` namespace (with
+an optional `builtin:` prefix), and only a finalized top-level execution with
+an execution-session identity qualifies. A display name, project directory, or
+an absolute path that merely contains those words does not qualify. The audit
+resolves the source run's recorded profile set at launch using normal profile
+layering, inheritance, and built-in defaults, then freezes the resolved
+`crosscheck` CLI, model, and reasoning effort for both model stages.
+
+On Linux the development image uses Bubblewrap to make the ordinary filesystem
+read-only and grants write access only to the audit-owned model-output tree.
+The opt-in Docker invocation relaxes Docker's seccomp profile only enough to
+allow Bubblewrap user namespaces; it does not use privileged containers. If
+that OS boundary cannot be established, the linked audit records a diagnostic
+and does not start the model command. This is write confinement only: existing
+read access and network behavior are unchanged. On macOS the existing
+parameterized `sandbox-exec` boundary remains in use; Sequoia acceptance must
+be run and recorded separately.
+
+The product-owned detached-audit smoke is available after the Docker image and
+Go dependencies have been provisioned:
+
+```bash
+scripts/docker-dev-audit-smoke.sh
+```
+
+It uses a temporary project, synthetic authentication, and fake local model
+responses. It keeps artifacts in the selected artifact directory and waits for
+the linked audit's terminal lifecycle state after the source CLI has returned.
+That distinction matters: source completion never waits for auditing in normal
+Runner operation. The smoke does not call external model, GitHub, or reporting
+services; missing reporting configuration is expected to remain a local audit
+warning.
+
 Arguments after `--` retain their original boundaries. A single argument is
 treated as a shell command for convenience; multiple arguments are executed as
 an argument vector.

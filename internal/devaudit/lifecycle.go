@@ -67,10 +67,14 @@ type SourceProvenance struct {
 	LaunchRoot     string `json:"launch_root,omitempty"`
 	LaunchRevision string `json:"launch_revision,omitempty"`
 	LaunchDirty    string `json:"launch_dirty,omitempty"`
-	SnapshotPath   string `json:"snapshot_path,omitempty"`
-	Coverage       string `json:"coverage,omitempty"`
-	Verified       bool   `json:"verified"`
-	Diagnostic     string `json:"diagnostic,omitempty"`
+	// LaunchGitAvailable distinguishes a complete source tree whose Git
+	// indirection is unavailable (common for read-only worktree mounts) from a
+	// checkout that was verified clean at audit launch.
+	LaunchGitAvailable bool   `json:"launch_git_available"`
+	SnapshotPath       string `json:"snapshot_path,omitempty"`
+	Coverage           string `json:"coverage,omitempty"`
+	Verified           bool   `json:"verified"`
+	Diagnostic         string `json:"diagnostic,omitempty"`
 }
 
 // Link is the durable source-side lifecycle record.
@@ -580,9 +584,15 @@ func snapshotRunnerSource(snapshotDir string) SourceProvenance {
 		return provenance
 	}
 	provenance.LaunchRoot = absRoot
-	provenance.LaunchRevision = gitOutput(absRoot, "rev-parse", "HEAD")
-	if gitOutput(absRoot, "status", "--porcelain") != "" {
-		provenance.LaunchDirty = "true"
+	revision, revisionAvailable := gitOutputAvailable(absRoot, "rev-parse", "HEAD")
+	dirty, dirtyAvailable := gitOutputAvailable(absRoot, "status", "--porcelain")
+	if revisionAvailable && dirtyAvailable {
+		provenance.LaunchGitAvailable = true
+		provenance.LaunchRevision = revision
+		provenance.LaunchDirty = "false"
+		if dirty != "" {
+			provenance.LaunchDirty = "true"
+		}
 	}
 	destination := filepath.Join(snapshotDir, "runner-source")
 	if err := copySourceTree(absRoot, destination); err != nil {
@@ -614,13 +624,13 @@ func runnerSnapshotComplete(root string) bool {
 	return true
 }
 
-func gitOutput(root string, args ...string) string {
+func gitOutputAvailable(root string, args ...string) (string, bool) {
 	command := exec.Command("git", append([]string{"-C", root}, args...)...) // #nosec G204 -- fixed git provenance argv for injected local checkout.
 	data, err := command.Output()
 	if err != nil {
-		return ""
+		return "", false
 	}
-	return strings.TrimSpace(string(data))
+	return strings.TrimSpace(string(data)), true
 }
 
 func copySourceTree(source, destination string) error {
