@@ -117,6 +117,24 @@ func TestSandboxExecArgsBindsOutputDirectoryAsParameter(t *testing.T) {
 	}
 }
 
+func TestLinuxSandboxArgsKeepsDeviceFilesystemReadOnly(t *testing.T) {
+	args := linuxSandboxArgs([]string{"crosscheck", "--batch"}, "/audit/workspace", "/audit/output")
+	for _, arg := range args {
+		if arg == "--dev" {
+			t.Fatalf("Linux sandbox must not create a writable device filesystem: %v", args)
+		}
+	}
+	joined := strings.Join(args, "\x00")
+	for _, want := range []string{
+		"--ro-bind\x00/\x00/",
+		"--bind\x00/audit/output\x00/audit/output",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("Linux sandbox args missing %q: %v", want, args)
+		}
+	}
+}
+
 func TestAuditOutputBoundaryRejectsSymlinkAndTrustedInputOverlap(t *testing.T) {
 	root := t.TempDir()
 	trusted := filepath.Join(root, "trusted")

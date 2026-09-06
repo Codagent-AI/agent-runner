@@ -12,6 +12,7 @@ export AUDIT_SMOKE_TIMEOUT_SECONDS="$TIMEOUT_SECONDS"
 ARTIFACT_DIR="$ARTIFACT_DIR" "$RUNNER_ROOT/scripts/sandbox-run.sh" \
   --dev-audit \
   --no-default-secrets \
+  --env AUDIT_SMOKE_TIMEOUT_SECONDS \
   --artifact-dir "$ARTIFACT_DIR" \
   --docker-run-arg "--network=none" \
   -- "bash /agent-runner-source/scripts/docker-dev-audit-smoke-container.sh"

@@ -103,6 +103,9 @@ func TestDockerDevelopmentAuditSmokeUsesTheSupportedConfinementPath(t *testing.T
 	if strings.Contains(text, "devaudit_e2e") {
 		t.Fatal("development-audit smoke must not use the E2E launcher bypass")
 	}
+	if !strings.Contains(string(data), `--env AUDIT_SMOKE_TIMEOUT_SECONDS`) {
+		t.Fatal("development-audit smoke must pass its configured timeout into the container")
+	}
 }
 
 func TestSandboxRunResolvesDockerfileOutsideRepository(t *testing.T) {

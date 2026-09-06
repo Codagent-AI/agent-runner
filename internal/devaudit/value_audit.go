@@ -1399,7 +1399,7 @@ func linuxSandboxArgs(args []string, workspace, outputDir string) []string {
 	argv := []string{
 		"--die-with-parent", "--new-session", "--unshare-user", "--uid", "0", "--gid", "0",
 		"--ro-bind", "/", "/", "--bind", outputDir, outputDir,
-		"--proc", "/proc", "--dev", "/dev", "--chdir", workspace, "--",
+		"--proc", "/proc", "--chdir", workspace, "--",
 	}
 	return append(argv, args...)
 }
