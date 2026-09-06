@@ -268,6 +268,39 @@ Interactive shell steps use the same direct terminal-process primitive and job-c
 
 Shell steps do not use the agent control endpoint or turn-durability handshake. Exit code 0 produces `success`; a nonzero exit code produces `failed`. Terminal output is live-only: Agent Runner does not proxy it, retain a transcript, or include it in `step_end`. Use an autonomous shell step with `capture` when later workflow steps need command output.
 
+## Diagnosing unexpected terminal suspension
+
+A shell message such as `suspended (tty input)` means a process tried to read
+from the terminal while its process group was in the background. This can
+happen during a faulty handoff even when Runner was launched in the foreground.
+
+The run's `audit.log` records `terminal_ownership` events when a supervised child
+starts, stops, recovers from a terminal stop, and when Runner reclaims the
+terminal. A `runner_continued` phase records receipt of `SIGCONT`, including
+continuation through the shell's `fg` command. Each event includes Runner and
+child PIDs and process groups, the terminal name, and the observed foreground
+process group (or the query error). Stop events include the signal; failed
+recovery and restoration events include the error. These events contain no
+terminal input or output.
+
+If returning foreground ownership or continuing a child after `SIGTTIN` or
+`SIGTTOU` fails, Runner reports the failure and kills and reaps the child rather
+than silently retrying. The diagnostics observe Runner continuation; they do
+not automatically transfer terminal ownership on `fg` or `bg`.
+
+For an incident, preserve these events and a process snapshot taken before
+stopping the run:
+
+```sh
+ps -axo pid,ppid,pgid,tpgid,stat,tty,comm
+```
+
+A wrapper process can remain running while its child is stopped. Runner waits
+for its direct child, so a stopped grandchild may not produce a `child_stopped`
+event. The process snapshot is needed to distinguish this case. A continuation
+event alone does not prove that the child resumed or that an earlier suspension
+was caused by terminal input.
+
 ## Verification
 
 The implementation has several test layers:

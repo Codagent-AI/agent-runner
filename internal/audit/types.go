@@ -23,6 +23,7 @@ const (
 	EventTurnCommitted          EventType = "turn_committed"
 	EventDurabilityFailure      EventType = "durability_failure"
 	EventControlRejected        EventType = "control_rejected"
+	EventTerminalOwnership      EventType = "terminal_ownership"
 	EventChildStopped           EventType = "child_stopped"
 	EventChildContinued         EventType = "child_continued"
 	EventRouteSubmitted         EventType = "route_submitted"
