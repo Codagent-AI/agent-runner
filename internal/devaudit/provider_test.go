@@ -103,6 +103,46 @@ func TestSandboxExecArgsBindsOutputDirectoryAsParameter(t *testing.T) {
 	}
 }
 
+func TestLinuxSandboxArgsKeepsDeviceFilesystemReadOnly(t *testing.T) {
+	args := linuxSandboxArgs([]string{"crosscheck", "--batch"}, "/audit/workspace", "/audit/output")
+	for _, arg := range args {
+		if arg == "--dev" {
+			t.Fatalf("Linux sandbox must not create a writable device filesystem: %v", args)
+		}
+	}
+	joined := strings.Join(args, "\x00")
+	for _, want := range []string{
+		"--ro-bind\x00/\x00/",
+		"--bind\x00/audit/output\x00/audit/output",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("Linux sandbox args missing %q: %v", want, args)
+		}
+	}
+}
+
+func TestAuditOutputBoundaryRejectsSymlinkAndTrustedInputOverlap(t *testing.T) {
+	root := t.TempDir()
+	trusted := filepath.Join(root, "trusted")
+	output := filepath.Join(root, "output")
+	if err := os.MkdirAll(trusted, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(trusted, output); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validateAuditOutputBoundary(output, []string{trusted}); err == nil {
+		t.Fatal("symlinked output boundary unexpectedly accepted")
+	}
+
+	if _, err := validateAuditOutputBoundary(trusted, []string{trusted}); err == nil {
+		t.Fatal("trusted input overlap unexpectedly accepted")
+	}
+	if !pathsOverlap(filepath.Join(root, "output"), string(filepath.Separator)) {
+		t.Fatal("root trusted input must overlap every output boundary")
+	}
+}
+
 func TestSandboxedCrosscheckCanExecuteAndOnlyWriteAuditOutput(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("macOS sandbox-exec integration")
@@ -143,6 +183,11 @@ func TestSandboxedCodexGetsDisposableWritableRuntime(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("macOS sandbox-exec integration")
 	}
+	testSandboxedCodexRuntime(t)
+}
+
+func testSandboxedCodexRuntime(t *testing.T) {
+	t.Helper()
 	root := t.TempDir()
 	root, err := filepath.EvalSymlinks(root)
 	if err != nil {

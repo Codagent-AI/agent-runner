@@ -1,8 +1,5 @@
-# development-audit-availability Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change audit-step. Update Purpose after archive.
-## Requirements
 ### Requirement: Audit capability exists only in development-audit builds
 
 Agent Runner SHALL compile the automatic audit hook, hidden workflow asset, replay and setup commands, and concrete audit integrations only into a development-audit build produced by the repository's supported local build paths. `make build` and `dev.sh` SHALL produce development-audit builds. The Docker development sandbox SHALL additionally offer an explicit `--dev-audit` build option; its default build SHALL remain untagged. Release and ordinary untagged builds SHALL NOT register an audit command, inject an audit workflow, or provide a runtime setting that can enable the capability.
@@ -109,25 +106,10 @@ Build revision and dirty values SHALL remain build-time diagnostics. Unavailable
 - **WHEN** supplied build provenance differs from the launch-time source or launch metadata is unavailable
 - **THEN** those supplied values are not treated as verified launch-time provenance and the mounted source remains authoritative
 
-### Requirement: Google connection state is private and does not control auditing
+## REMOVED Requirements
 
-The development-audit build SHALL provide a one-time setup operation that imports compatible Google OAuth client and authorized-user token material together with an existing spreadsheet ID and worksheet tab into protected Agent Runner user storage. This record SHALL be integration state rather than layered user or project configuration, and its presence SHALL NOT enable or disable automatic auditing.
+### Requirement: Model isolation is Darwin-only in the initial development audit
 
-Missing, malformed, incomplete, or unusable Google connection state SHALL prevent or degrade only external reporting. The complete local audit report SHALL remain available for retry and the source outcome SHALL remain unchanged.
+**Reason**: Linux support replaces the initial platform limitation while retaining fail-closed behavior and Darwin confinement.
 
-#### Scenario: Connection is imported
-- **WHEN** the operator supplies compatible OAuth files and an existing spreadsheet destination to the setup operation
-- **THEN** Agent Runner copies the required values into protected user-scoped storage without retaining a runtime dependency on the source application
-
-#### Scenario: No Google connection exists
-- **WHEN** an eligible local audit runs before Google setup is complete
-- **THEN** model auditing completes locally where possible and reporting records a retryable warning
-
-#### Scenario: Connection changes during audit
-- **WHEN** the operator changes the stored destination after an audit has frozen its completed report
-- **THEN** retry uses the destination identity frozen for that audit unless the operator explicitly requests migration
-
-#### Scenario: Connection contains secrets
-- **WHEN** OAuth client or token material is imported
-- **THEN** it is stored atomically in a user-only record and is not copied into project configuration, run artifacts, logs, model prompts, or the spreadsheet
-
+**Migration**: The replacement requirements live in `audit-model-isolation`. Tagged Linux builds may run model stages only when real OS confinement is available; unsupported environments still fail diagnostically without changing the source result. Untagged builds remain inert.
