@@ -184,3 +184,34 @@ func TestCoordinatorOnlyAuditsTopLevelCanonicalWorkflowNamespaces(t *testing.T) 
 		})
 	}
 }
+
+func TestSnapshotRunnerSourceKeepsUnavailableGitMetadataDistinctFromBuildDiagnostics(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"cmd/agent-runner", "internal/runner", "workflows"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module github.com/codagent/agent-runner\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	originalRoot, originalEncoded, originalRevision, originalDirty := BuildRoot, BuildRootEncoded, BuildRevision, BuildDirty
+	BuildRoot, BuildRootEncoded, BuildRevision, BuildDirty = root, "", "build-revision", "true"
+	t.Cleanup(func() {
+		BuildRoot, BuildRootEncoded, BuildRevision, BuildDirty = originalRoot, originalEncoded, originalRevision, originalDirty
+	})
+
+	got := snapshotRunnerSource(t.TempDir())
+	if !got.Verified || got.Coverage != "complete" {
+		t.Fatalf("source coverage = %#v, want complete verified snapshot", got)
+	}
+	if got.LaunchGitAvailable {
+		t.Fatalf("launch Git availability = true, want false for non-Git source: %#v", got)
+	}
+	if got.LaunchRevision != "" || got.LaunchDirty != "" {
+		t.Fatalf("unavailable launch Git metadata = revision %q dirty %q, want empty", got.LaunchRevision, got.LaunchDirty)
+	}
+	if got.BuildRevision != "build-revision" || got.BuildDirty != "true" {
+		t.Fatalf("build diagnostics unexpectedly changed: %#v", got)
+	}
+}

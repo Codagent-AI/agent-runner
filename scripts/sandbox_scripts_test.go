@@ -55,6 +55,97 @@ func TestSandboxRunDryRunShowsSafeDockerInvocation(t *testing.T) {
 	}
 }
 
+func TestSandboxRunDevAuditOptInBuildsTaggedBinaryWithMountedSourceProvenance(t *testing.T) {
+	artifacts := filepath.Join(t.TempDir(), "artifacts")
+	cmd := exec.Command("bash", "./sandbox-run.sh",
+		"--dry-run",
+		"--no-default-secrets",
+		"--dev-audit",
+		"--artifact-dir", artifacts,
+		"--",
+		"agent-runner", "--version",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandbox-run dry run failed: %v\n%s", err, output)
+	}
+	text := string(output)
+	for _, want := range []string{
+		"dev_audit_tags=dev_audit",
+		"internal/devaudit.BuildRootEncoded=",
+		"/agent-runner-source",
+		"development-audit build selected",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dev-audit dry-run output missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestDevelopmentAuditSmokeHarness(t *testing.T) {
+	cmd := exec.Command("python3", "docker_dev_audit_smoke_test.py")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("smoke supervisor regressions: %v\n%s", err, output)
+	}
+}
+
+func TestSandboxAuditUsesScopedSeccompAndExplicitFixtureSelection(t *testing.T) {
+	for _, fixture := range []bool{false, true} {
+		args := []string{"./sandbox-run.sh", "--dry-run", "--no-default-secrets", "--dev-audit", "--artifact-dir", t.TempDir()}
+		if fixture {
+			args = append(args, "--dev-audit-smoke")
+		}
+		args = append(args, "--", "agent-runner", "--version")
+		output, err := exec.Command("bash", args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("sandbox invocation: %v\n%s", err, output)
+		}
+		text := string(output)
+		if strings.Contains(text, "seccomp=unconfined") || !strings.Contains(text, "seccomp=") || !strings.Contains(text, "dev-audit-seccomp.json") {
+			t.Fatalf("audit must select a bounded seccomp policy:\n%s", text)
+		}
+		want := "AGENT_RUNNER_AUDIT_SMOKE=0"
+		if fixture {
+			want = "AGENT_RUNNER_AUDIT_SMOKE=1"
+		}
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing explicit fixture build selection %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestAuditSeccompProfileRetainsDefaultDeny(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "docker", "dev", "dev-audit-seccomp.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var profile struct {
+		DefaultAction string `json:"defaultAction"`
+		Syscalls      []struct {
+			Names    []string       `json:"names"`
+			Action   string         `json:"action"`
+			Includes map[string]any `json:"includes"`
+		} `json:"syscalls"`
+	}
+	if err := json.Unmarshal(data, &profile); err != nil {
+		t.Fatal(err)
+	}
+	if profile.DefaultAction != "SCMP_ACT_ERRNO" {
+		t.Fatal("audit seccomp profile must deny unlisted syscalls")
+	}
+	for _, rule := range profile.Syscalls {
+		if rule.Action != "SCMP_ACT_ALLOW" || len(rule.Includes) != 0 {
+			continue
+		}
+		for _, name := range rule.Names {
+			switch name {
+			case "keyctl", "add_key", "bpf", "setns", "init_module", "delete_module":
+				t.Fatalf("audit profile unnecessarily allows %s", name)
+			}
+		}
+	}
+}
+
 func TestSandboxRunResolvesDockerfileOutsideRepository(t *testing.T) {
 	root := repoRoot(t)
 	cmd := exec.Command("bash", filepath.Join(root, "scripts", "sandbox-run.sh"),

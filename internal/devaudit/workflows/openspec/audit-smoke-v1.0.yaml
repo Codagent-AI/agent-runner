@@ -1,0 +1,8 @@
+name: audit-smoke
+description: Product-owned development-audit smoke fixture.
+hidden: true
+steps:
+  - id: source-agent
+    agent: crosscheck
+    mode: autonomous
+    prompt: Return a short source fixture response.

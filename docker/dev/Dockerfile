@@ -11,6 +11,7 @@ USER root
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
+    bubblewrap \
     curl \
     git \
     gh \
@@ -31,6 +32,16 @@ RUN arch="$(dpkg --print-architecture)" \
   && curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${go_arch}.tar.gz" -o /tmp/go.tgz \
   && tar -C /usr/local -xzf /tmp/go.tgz \
   && rm /tmp/go.tgz
+
+# The hermetic development-audit smoke disables network access only after the
+# image has provisioned the exact Go module graph needed to build its tagged
+# Runner binary.
+COPY go.mod go.sum /tmp/agent-runner-deps/
+ENV GOMODCACHE=/opt/agent-runner-go/pkg/mod
+RUN mkdir -p "$GOMODCACHE" \
+  && cd /tmp/agent-runner-deps \
+  && /usr/local/go/bin/go mod download \
+  && chmod -R a+rX /opt/agent-runner-go
 
 ENV PATH="/usr/local/go/bin:/workspace/bin:${PATH}"
 

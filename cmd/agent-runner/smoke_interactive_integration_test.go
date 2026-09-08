@@ -117,7 +117,7 @@ func TestInteractiveDirectHandoffJobControl(t *testing.T) {
 	buildAgentRunner(t, repoRoot, runnerBin)
 	writeInteractiveAgentFixtures(t, binDir, []string{"claude"})
 
-	for _, mode := range []string{"cooperative", "external", "terminal-output", "interrupt-tui"} {
+	for _, mode := range []string{"cooperative", "external", "terminal-output", "terminal-input", "interrupt-tui"} {
 		t.Run(mode, func(t *testing.T) {
 			home := filepath.Join(tmp, "home-"+mode)
 			writeSmokeProfileConfig(t, home)
@@ -184,9 +184,13 @@ func TestInteractiveDirectHandoffJobControl(t *testing.T) {
 					t.Fatalf("stop child: %v", err)
 				}
 			}
-			if mode == "terminal-output" {
-				if err := unix.Kill(-pid, unix.SIGTTOU); err != nil {
-					t.Fatalf("stop child for terminal output: %v", err)
+			if mode == "terminal-output" || mode == "terminal-input" {
+				stopSignal := unix.SIGTTOU
+				if mode == "terminal-input" {
+					stopSignal = unix.SIGTTIN
+				}
+				if err := unix.Kill(-pid, stopSignal); err != nil {
+					t.Fatalf("stop child with %s: %v", stopSignal, err)
 				}
 				time.Sleep(250 * time.Millisecond)
 				state, stateErr := exec.Command("ps", "-o", "state=", "-p", strconv.Itoa(pid)).Output()
@@ -199,11 +203,25 @@ func TestInteractiveDirectHandoffJobControl(t *testing.T) {
 					waitForPTYText(t, output, "JOB_SHELL_READY>", 15*time.Second)
 					_, _ = ptmx.WriteString("exit\r")
 					_ = command.Wait()
-					t.Fatalf("child state after SIGTTOU = %q, err %v; want automatic recovery", state, stateErr)
+					t.Fatalf("child state after %s = %q, err %v; want automatic recovery", stopSignal, state, stateErr)
 				}
 				_, _ = ptmx.WriteString("R")
 				waitForPTYText(t, output, "JOB_CHILD_RESUMED "+mode, 10*time.Second)
 				waitForPTYText(t, output, "JOB_SHELL_READY>", 15*time.Second)
+				sessionDir := latestWorkflowRunDir(t, home, repoRoot, "interactive-job-control")
+				auditData, err := os.ReadFile(filepath.Join(sessionDir, "audit.log"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, phase := range []string{"child_started", "child_stopped", "child_recovered", "after_reclaim"} {
+					if !strings.Contains(string(auditData), `"phase":"`+phase+`"`) {
+						t.Errorf("missing terminal ownership phase %s", phase)
+					}
+				}
+				if !strings.Contains(string(auditData), fmt.Sprintf(`"foreground_pgid":%d`, pid)) {
+					t.Error("audit never recorded child foreground ownership")
+				}
+
 				_, _ = ptmx.WriteString("exit\r")
 				_ = command.Wait()
 				return
