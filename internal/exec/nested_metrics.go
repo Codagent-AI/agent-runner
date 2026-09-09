@@ -129,12 +129,12 @@ func emitNestedMetricCapture(ctx *model.ExecutionContext, step *model.Step, pref
 	}
 	launch, err := readValidatorMetricsLaunch(capture.path)
 	if err == nil {
-		records, receipt, exportErr := exportValidatorMetrics(launch)
+		records, receipt, exportErr := exportValidatorMetrics(&launch)
 		if exportErr == nil {
 			launch.AcceptedRecords = records
 			launch.Receipt = receipt
 			if err = stateio.WriteJSONDurable(capture.path, launch); err == nil && receipt != "" {
-				err = acknowledgeValidatorMetrics(launch)
+				err = acknowledgeValidatorMetrics(&launch)
 				if err == nil {
 					launch.Acknowledged = true
 					err = stateio.WriteJSONDurable(capture.path, launch)
@@ -194,7 +194,7 @@ type validatorExport struct {
 	Receipt *string           `json:"receipt"`
 }
 
-func exportValidatorMetrics(launch validatorMetricsLaunch) ([]json.RawMessage, string, error) {
+func exportValidatorMetrics(launch *validatorMetricsLaunch) ([]json.RawMessage, string, error) {
 	args := []string{"metrics", "export", "--project", launch.Project, "--consumer", launch.Consumer, "--context", launch.ContextID, "--protocol-version", "1", "--measurement-version", "1", "--max-records", "100", "--max-bytes", "1000000"}
 	if launch.Configuration != "" {
 		args = append(args, "--config", launch.Configuration)
@@ -247,7 +247,7 @@ func validateValidatorRecord(raw json.RawMessage, contextID string) error {
 	return nil
 }
 
-func acknowledgeValidatorMetrics(launch validatorMetricsLaunch) error {
+func acknowledgeValidatorMetrics(launch *validatorMetricsLaunch) error {
 	args := []string{"metrics", "acknowledge", "--project", launch.Project, "--consumer", launch.Consumer, "--context", launch.ContextID, "--protocol-version", "1", "--receipt", launch.Receipt}
 	if launch.Configuration != "" {
 		args = append(args, "--config", launch.Configuration)
