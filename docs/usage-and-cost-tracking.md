@@ -55,6 +55,14 @@ Accepted agent calls receive their own execution records. Their usage and cost c
 
 A shell or script step can declare `metrics_source: agent-validator` when the launched tool may invoke models. Before launch, Runner durably records an opaque context and exposes `AGENT_RUNNER_METRICS_CONSUMER=agent-runner` and `AGENT_RUNNER_METRICS_CONTEXT=<opaque-id>`. Integrations must explicitly forward those values as `--metrics-consumer` and `--metrics-context`; Runner does not rewrite arbitrary shell commands or scrape console output. The old JSONL sink is not supported. If correlated evidence cannot be delivered, the run retains an explicit unavailable metrics gap rather than silently treating it as zero usage.
 
+Use `AGENT_RUNNER_VALIDATOR_EXECUTABLE=/absolute/path/to/agent-validator` to select a local build or wrapper. Runner records that executable and uses it for capability probing, export, and acknowledgment; the bundled validation script uses the same selection. Custom scripts must launch that executable in the declared step working directory and forward the correlation flags. Runner records the original project and configuration selection, and leaves delivery blocked if that configuration changes. Instrumentation failures warn and preserve the validation command's result.
+
+Runner saves verified batches and the consolidated artifact before acknowledging them. It retains complete records, partial values, allocations, and scoped costs. Replacement revisions update one measurement rather than adding another dispatch. A terminal checks-only invocation establishes zero dispatch; missing evidence does not.
+
+Delivery runs after validation, before resumed work, and before the final audit snapshot. For interrupted or completed runs, use `agent-runner metrics recover <run-id>` from the original project. Recovery takes the run lock and performs metrics delivery only. A nonzero exit means a delivery or collection gap remains unresolved. Existing audit snapshots remain immutable; explicit audit replay can use newly recovered evidence.
+
+Schema v4 exposes `measurement_heads` (complete Validator records with separate Runner attribution), `native_measurements` (Runner-owned envelopes), `measurement_totals` (known field subtotals and coverage), and `validator_contexts` (invocation reconciliation and delivery gaps). Compatibility step records are derived views of that evidence and must not be summed a second time. The development audit joins child measurements to their workflow leaves, retaining partial evidence while leaving incomplete scalar totals unknown.
+
 Other shell, script, UI, loop, group, and sub-workflow steps do not call an agent CLI themselves. Their token and cost cells show a dash. Container rows roll up metrics from agent steps below them.
 
 ## Reading The Summary
@@ -85,7 +93,7 @@ Skipped agent steps and steps that fail before launching a CLI do not reduce cov
 
 Each execution attempt gets its own metrics record. If a step fails and runs again, both attempts contribute to the run totals.
 
-Resuming an Agent Runner run appends to the same schema-v3 metrics artifact.
+Resuming an Agent Runner run appends to the same schema-v4 metrics artifact.
 Each invocation receives a durable `execution_session_id`; per-session rollups
 show only that invocation's work, while run totals cover every session. Active
 duration excludes time spent paused between invocations. This identity is not

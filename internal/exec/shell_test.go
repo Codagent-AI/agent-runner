@@ -415,6 +415,7 @@ func TestExecuteShellStep(t *testing.T) {
 }
 
 func TestExecuteShellStepUsesValidatorMetricsCorrelation(t *testing.T) {
+	stubValidatorCapabilities(t)
 	auditLog := &mockAuditLogger{}
 	ctx := makeCtx()
 	ctx.SessionDir = t.TempDir()
@@ -428,18 +429,10 @@ func TestExecuteShellStepUsesValidatorMetricsCorrelation(t *testing.T) {
 	if !strings.Contains(runner.command, "AGENT_RUNNER_METRICS_CONSUMER=agent-runner") || !strings.Contains(runner.command, "AGENT_RUNNER_METRICS_CONTEXT=") {
 		t.Fatalf("instrumented command = %q", runner.command)
 	}
-	var nested *audit.Event
-	for i := range auditLog.events {
-		if auditLog.events[i].Type == audit.EventNestedAgentEnd {
-			nested = &auditLog.events[i]
+	for _, event := range auditLog.events {
+		if event.Type == audit.EventNestedAgentEnd {
+			t.Fatal("missing telemetry invented a nested model dispatch")
 		}
 	}
-	if nested == nil {
-		t.Fatalf("events = %+v, want nested agent terminal event", auditLog.events)
-	}
-	identity := nested.Data["identity"].(model.ExecutionIdentity)
-	usage := nested.Data["usage"].(model.UsageRecord)
-	if identity.Role != "implementation-validator" || identity.Tool != "agent-validator" || usage.Status != model.UsageUnavailable || usage.Reason != model.UnavailableNestedMetricsMissing {
-		t.Fatalf("nested identity/usage = %+v / %+v", identity, usage)
-	}
+
 }

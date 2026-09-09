@@ -718,6 +718,9 @@ func intakeProfileModel(profileOverride config.ProfileOverride) (string, error) 
 }
 
 func dispatchRunCommand(args []string, opts *commandFlags) int {
+	if len(args) > 0 && args[0] == "metrics" {
+		return handleMetricsCommand(args[1:])
+	}
 	if isRunCommandHelp(args) {
 		printRunUsage(os.Stderr)
 		return 0

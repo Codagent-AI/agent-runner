@@ -378,6 +378,7 @@ func snapshotReplayEvidenceAt(sessionDir, dir, executionSessionID string) (strin
 		}
 	}
 	artifact.SessionRollups = rollups
+	metrics.FilterMeasurementSessions(&artifact, allowed)
 	artifact.RepositoryChanges = nil
 	artifact.Totals = model.RunTotals{
 		Tokens:             make(model.TokenCounts),

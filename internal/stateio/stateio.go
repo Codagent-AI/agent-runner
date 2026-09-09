@@ -13,6 +13,8 @@ import (
 
 const stateFileName = "state.json"
 
+var syncJSONDirectory = syncDirectory
+
 // WriteState writes the run state to a JSON file in the given directory.
 func WriteState(state *model.RunState, dir string) error {
 	if err := WriteJSONAtomic(filepath.Join(dir, stateFileName), state); err != nil {
@@ -36,6 +38,21 @@ func WriteJSONDurable(path string, v any) error {
 
 func writeJSON(path string, v any, durable bool) error {
 	dir := filepath.Dir(path)
+	directories := []string{dir}
+	if durable {
+		for current := dir; ; current = filepath.Dir(current) {
+			if _, err := os.Stat(current); err == nil {
+				break
+			} else if !os.IsNotExist(err) {
+				return fmt.Errorf("inspect JSON directory: %w", err)
+			}
+			parent := filepath.Dir(current)
+			if parent == current {
+				break
+			}
+			directories = append(directories, parent)
+		}
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create JSON dir: %w", err)
 	}
@@ -72,8 +89,12 @@ func writeJSON(path string, v any, durable bool) error {
 		return fmt.Errorf("rename JSON file: %w", err)
 	}
 	if durable {
-		if err := syncDirectory(dir); err != nil {
-			return fmt.Errorf("sync JSON directory: %w", err)
+		// Flush the leaf and the parents of newly created directory entries.
+		// The nearest pre-existing ancestor closes the creation boundary.
+		for _, directory := range directories {
+			if err := syncJSONDirectory(directory); err != nil {
+				return fmt.Errorf("sync JSON directory: %w", err)
+			}
 		}
 	}
 	return nil

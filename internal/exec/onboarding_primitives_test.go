@@ -67,6 +67,7 @@ func TestExecuteScriptStepEmitsAuditEvents(t *testing.T) {
 }
 
 func TestExecuteScriptStepUsesValidatorMetricsCorrelation(t *testing.T) {
+	stubValidatorCapabilities(t)
 	dir := t.TempDir()
 	script := filepath.Join(dir, "validate.sh")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
@@ -88,19 +89,12 @@ func TestExecuteScriptStepUsesValidatorMetricsCorrelation(t *testing.T) {
 	if !hasEnvironment(runner.environment, "AGENT_RUNNER_METRICS_CONSUMER=agent-runner") || !hasEnvironment(runner.environment, "AGENT_RUNNER_METRICS_CONTEXT=") {
 		t.Fatalf("script environment = %q, want metrics correlation", runner.environment)
 	}
-	var nested *audit.Event
-	for i := range auditLog.events {
-		if auditLog.events[i].Type == audit.EventNestedAgentEnd {
-			nested = &auditLog.events[i]
+	for _, event := range auditLog.events {
+		if event.Type == audit.EventNestedAgentEnd {
+			t.Fatal("missing telemetry invented a nested model dispatch")
 		}
 	}
-	if nested == nil {
-		t.Fatalf("events = %+v, want nested agent terminal event", auditLog.events)
-	}
-	usage := nested.Data["usage"].(model.UsageRecord)
-	if usage.Status != model.UsageUnavailable || usage.Reason != model.UnavailableNestedMetricsMissing {
-		t.Fatalf("usage = %+v", usage)
-	}
+
 }
 
 func TestExecuteScriptStepCapturesStderrBeforeReturningFailure(t *testing.T) {
