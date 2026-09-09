@@ -24,6 +24,17 @@ func WriteState(state *model.RunState, dir string) error {
 // WriteJSONAtomic marshals v as indented JSON and atomically replaces path.
 // Readers therefore observe either the prior complete document or the new one.
 func WriteJSONAtomic(path string, v any) error {
+	return writeJSON(path, v, false)
+}
+
+// WriteJSONDurable atomically publishes JSON and syncs both the replacement
+// file and containing directory. It is used for evidence that may authorize an
+// external acknowledgment, where a rename alone is not a sufficient boundary.
+func WriteJSONDurable(path string, v any) error {
+	return writeJSON(path, v, true)
+}
+
+func writeJSON(path string, v any, durable bool) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create JSON dir: %w", err)
@@ -45,6 +56,13 @@ func WriteJSONAtomic(path string, v any) error {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("write temp JSON file: %w", err)
 	}
+	if durable {
+		if err := tmp.Sync(); err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmpName)
+			return fmt.Errorf("sync temp JSON file: %w", err)
+		}
+	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("close temp JSON file: %w", err)
@@ -52,6 +70,16 @@ func WriteJSONAtomic(path string, v any) error {
 	if err := os.Rename(tmpName, path); err != nil {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("rename JSON file: %w", err)
+	}
+	if durable {
+		directory, err := os.Open(dir)
+		if err != nil {
+			return fmt.Errorf("open JSON directory for sync: %w", err)
+		}
+		defer func() { _ = directory.Close() }()
+		if err := directory.Sync(); err != nil {
+			return fmt.Errorf("sync JSON directory: %w", err)
+		}
 	}
 	return nil
 }
