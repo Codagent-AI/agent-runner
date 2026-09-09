@@ -72,12 +72,7 @@ func writeJSON(path string, v any, durable bool) error {
 		return fmt.Errorf("rename JSON file: %w", err)
 	}
 	if durable {
-		directory, err := os.Open(dir)
-		if err != nil {
-			return fmt.Errorf("open JSON directory for sync: %w", err)
-		}
-		defer func() { _ = directory.Close() }()
-		if err := directory.Sync(); err != nil {
+		if err := syncDirectory(dir); err != nil {
 			return fmt.Errorf("sync JSON directory: %w", err)
 		}
 	}
