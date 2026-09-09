@@ -460,9 +460,9 @@ func TestCoreImplementChangePreflightsValidatedPlanBeforeAgentWork(t *testing.T)
 	if implementTasksIndex < 0 {
 		t.Fatal("core implement-change has no implement-tasks step")
 	}
-	if checkPlanIndex != 1 || implementTasksIndex != 2 {
+	if checkPlanIndex != implementTasksIndex-1 {
 		t.Fatalf(
-			"preflight/task indexes = (%d, %d), want check-plan at 1 immediately before implement-tasks at 2",
+			"preflight/task indexes = (%d, %d), want check-plan immediately before implement-tasks",
 			checkPlanIndex,
 			implementTasksIndex,
 		)
@@ -480,6 +480,94 @@ func TestCoreImplementChangePreflightsValidatedPlanBeforeAgentWork(t *testing.T)
 	}
 	if workflow.Steps[implementTasksIndex].Loop == nil {
 		t.Fatal("valid plan does not continue directly into the implementation task loop")
+	}
+}
+
+func TestCoreImplementChangeSkipValidatorControlsAllValidatorRuns(t *testing.T) {
+	body, err := ReadFile("builtin:core/implement-change-v1.0.yaml")
+	if err != nil {
+		t.Fatalf("ReadFile(core implement-change): %v", err)
+	}
+
+	var workflow struct {
+		Steps []struct {
+			ID           string            `yaml:"id"`
+			Script       string            `yaml:"script"`
+			ScriptInputs map[string]string `yaml:"script_inputs"`
+			SkipIf       string            `yaml:"skip_if"`
+			Prompt       string            `yaml:"prompt"`
+			Steps        []struct {
+				ID     string            `yaml:"id"`
+				Params map[string]string `yaml:"params"`
+			} `yaml:"steps"`
+		} `yaml:"steps"`
+	}
+	if err := yaml.Unmarshal(body, &workflow); err != nil {
+		t.Fatalf("unmarshal core implement-change: %v", err)
+	}
+
+	indexes := make(map[string]int)
+	for index, step := range workflow.Steps {
+		indexes[step.ID] = index
+	}
+	for _, id := range []string{
+		"validate-skip-validator",
+		"implement-tasks",
+		"run-validator",
+		"open-draft-pr",
+		"prepare-acceptance",
+		"verify-acceptance-handoff",
+	} {
+		if _, ok := indexes[id]; !ok {
+			t.Fatalf("core implement-change has no %s step", id)
+		}
+	}
+
+	validate := workflow.Steps[indexes["validate-skip-validator"]]
+	if validate.Script != "validate-boolean-param.sh" ||
+		validate.ScriptInputs["name"] != "skip_validator" ||
+		validate.ScriptInputs["value"] != "{{skip_validator}}" {
+		t.Fatalf("validate-skip-validator = %+v, want boolean validation for skip_validator", validate)
+	}
+	if indexes["validate-skip-validator"] > indexes["implement-tasks"] {
+		t.Fatal("skip_validator must be validated before it is forwarded to task workflows")
+	}
+
+	implementTasks := workflow.Steps[indexes["implement-tasks"]]
+	if len(implementTasks.Steps) != 1 || implementTasks.Steps[0].Params["skip_validator"] != "{{skip_validator}}" {
+		t.Fatalf("implement-tasks does not forward skip_validator: %+v", implementTasks.Steps)
+	}
+
+	finalValidator := workflow.Steps[indexes["run-validator"]]
+	if finalValidator.SkipIf != "sh: test {{skip_validator}} = true" {
+		t.Fatalf("run-validator skip_if = %q, want skip_validator gate", finalValidator.SkipIf)
+	}
+	if indexes["run-validator"] >= indexes["open-draft-pr"] ||
+		indexes["open-draft-pr"] >= indexes["prepare-acceptance"] ||
+		indexes["prepare-acceptance"] >= indexes["verify-acceptance-handoff"] {
+		t.Fatal("skipped final validation must not bypass draft-PR creation or acceptance preparation")
+	}
+
+	openDraftPR := workflow.Steps[indexes["open-draft-pr"]]
+	for _, want := range []string{
+		"Agent Validator skipping was set to `{{skip_validator}}`",
+		"If `skip_validator` is `false`",
+		"If it is `true`",
+	} {
+		if !strings.Contains(openDraftPR.Prompt, want) {
+			t.Errorf("open-draft-pr prompt missing conditional validation status %q", want)
+		}
+	}
+
+	prepareAcceptance := workflow.Steps[indexes["prepare-acceptance"]]
+	for _, want := range []string{
+		"Agent Validator skipping is set to `{{skip_validator}}`",
+		"If `skip_validator` is `false`, invoke the validator-run skill",
+		"If `skip_validator` is `true`, do not invoke Agent Validator",
+	} {
+		if !strings.Contains(prepareAcceptance.Prompt, want) {
+			t.Errorf("prepare-acceptance prompt missing conditional Validator instruction %q", want)
+		}
 	}
 }
 

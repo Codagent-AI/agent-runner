@@ -29,6 +29,12 @@ steps:
     script_inputs:
       change_name: "{{change_name}}"
 
+  - id: validate-skip-validator
+    script: validate-boolean-param.sh
+    script_inputs:
+      name: skip_validator
+      value: "{{skip_validator}}"
+
   - id: check-plan
     script: validate-planning-artifacts.sh
     script_inputs:
@@ -96,6 +102,9 @@ steps:
 
   - id: run-validator
     workflow: ../core/run-validator-v1.0.yaml
+    # skip_if parameters are shell-quoted by InterpolateShellSafeTyped. The
+    # validation step above additionally constrains this value to true|false.
+    skip_if: 'sh: test {{skip_validator}} = true'
 
   - id: verify-clean-for-pr
     command: |
@@ -108,7 +117,7 @@ steps:
     session: lead-agent
     mode: autonomous
     prompt: |
-      Final validation is complete, and no tracked changes may remain uncommitted. Invoke codagent:push-pr to push the current branch and create or update its pull request. Do not create a new implementation or artifact commit here; if tracked changes remain, stop and report them instead of opening the pull request.
+      No tracked changes may remain uncommitted. Agent Validator skipping was set to `{{skip_validator}}`. If `skip_validator` is `false`, final validation is complete. If it is `true`, final validation was intentionally skipped. Invoke codagent:push-pr to push the current branch and create or update its pull request. Do not create a new implementation or artifact commit here; if tracked changes remain, stop and report them instead of opening the pull request.
 
       The pull request MUST be a draft so the user can review it during the acceptance phase. This requirement intentionally overrides the skill's default non-draft creation command:
       - preserve the base branch of an existing pull request;
@@ -163,7 +172,7 @@ steps:
 
       Before fixing an implementation defect found by acceptance testing, you MUST invoke codagent:implement-with-tdd and follow its red-green-refactor process. Add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
 
-      If a tracked file changes, run the narrowest relevant automated checks. {{artifact_validation_instruction}} Then invoke the validator-run skill and require it to pass. Incorporate any Validator fixes, commit all related changes following project conventions with the `[{{step_id}}]` prefix, push, and verify local `HEAD` equals the draft PR head.
+      If a tracked file changes, run the narrowest relevant automated checks. {{artifact_validation_instruction}} Agent Validator skipping is set to `{{skip_validator}}`. If `skip_validator` is `false`, invoke the validator-run skill and require it to pass, incorporating any Validator fixes. If `skip_validator` is `true`, do not invoke Agent Validator. In either mode, commit all related changes following project conventions with the `[{{step_id}}]` prefix, push, and verify local `HEAD` equals the draft PR head.
 
       Before each post-fix tester call, write `{{session_dir}}/output/acceptance-impact-scope.md`. Name the affected `AT-*` obligations and any directly dependent flows, plus a concise rationale bounding why other surfaces or subsystems are unaffected. Resume `acceptance-tester` with explicit re-review instructions: reproduce the prior finding against the fix, exercise only those affected and directly dependent flows, retain the prior full-pass evidence for unaffected flows, and do not begin a new broad review. It may report a newly introduced defect only when observed within that targeted scope. Give it `{{session_dir}}/output/acceptance-flow-evidence.md` as the prior full-pass baseline.
 
