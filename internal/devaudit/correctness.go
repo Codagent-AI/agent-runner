@@ -159,7 +159,7 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 		}
 		return CorrectnessCandidates{}, err
 	}
-	args, finalResponsePath, removeStructuredFiles, err := withCodexOutputSchema(request.Crosscheck.CLI, args, filepath.Join(request.AuditSessionDir, "model-output"), "correctness", correctnessOutputSchema(allEvidenceReferences(&prepared.Index)))
+	args, finalResponsePath, removeStructuredFiles, err := withCrosscheckOutputSchema(request.Crosscheck.CLI, args, filepath.Join(request.AuditSessionDir, "model-output"), "correctness", correctnessOutputSchema(allEvidenceReferences(&prepared.Index)))
 	if err != nil {
 		return CorrectnessCandidates{}, err
 	}
@@ -174,7 +174,7 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 	}
 	defer cleanup()
 	command.Env = env
-	data, runErr := runBoundedOutput(command, maxCrosscheckOutput)
+	data, runErr := runCrosscheckOutput(command, adapter)
 	if after, err := trustedAuditInputsFingerprint(request); err != nil {
 		return CorrectnessCandidates{}, err
 	} else if after != trusted {
@@ -189,15 +189,15 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 			return CorrectnessCandidates{}, fmt.Errorf("read structured crosscheck response: %w", err)
 		}
 	}
-	response := string(data)
-	if filter, ok := adapter.(cli.OutputFilter); ok && finalResponsePath == "" {
-		response = filter.FilterOutput(response)
+	response, err := crosscheckResponse(adapter, data, finalResponsePath != "")
+	if err != nil {
+		return CorrectnessCandidates{}, err
 	}
 	decoder := json.NewDecoder(strings.NewReader(response))
 	decoder.DisallowUnknownFields()
 	var output CorrectnessCandidates
 	if err := decoder.Decode(&output); err != nil {
-		return CorrectnessCandidates{}, fmt.Errorf("decode crosscheck result: %w", err)
+		return CorrectnessCandidates{}, fmt.Errorf("decode crosscheck result: %w; response: %s", err, crosscheckDiagnostic(response))
 	}
 	var extra any
 	if decoder.Decode(&extra) != io.EOF {
@@ -269,7 +269,7 @@ func runBoundedOutput(command *exec.Cmd, maximum int64) ([]byte, error) {
 		return nil, readErr
 	}
 	if waitErr != nil {
-		return nil, waitErr
+		return data, waitErr
 	}
 	return data, nil
 }

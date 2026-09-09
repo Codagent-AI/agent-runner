@@ -238,7 +238,7 @@ func testSandboxedCodexRuntime(t *testing.T) {
 func TestCodexStructuredOutputSchemaIsEphemeralAndBindsValueIdentity(t *testing.T) {
 	outputDir := t.TempDir()
 	pkg := ValuePackage{BatchID: "value-007", Leaves: []LeafEvidence{{Skeleton: ObservationSkeleton{ObservationID: "observation-1"}}}}
-	args, responsePath, cleanup, err := withCodexOutputSchema("codex", []string{"codex", "exec", "prompt"}, outputDir, "value", valueOutputSchema(pkg))
+	args, responsePath, cleanup, err := withCrosscheckOutputSchema("codex", []string{"codex", "exec", "prompt"}, outputDir, "value", valueOutputSchema(pkg))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -118,6 +118,37 @@ func TestE2E002TaggedCLIFailureResumeReplayAndRetryPreserveLineage(t *testing.T)
 	}
 }
 
+func TestTaggedClaudeAuditCompletesAllStages(t *testing.T) {
+	fixture := newCLIAuditFixture(t)
+	profilePath := filepath.Join(fixture.home, ".agent-runner", "config.yaml")
+	data, err := os.ReadFile(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(profilePath, []byte(strings.ReplaceAll(string(data), "cli: codex", "cli: claude")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeE2EFakeCodex(t, filepath.Join(fixture.root, "bin", "claude"))
+	fixture.env = append(fixture.env, "AUDIT_E2E_CLAUDE=1")
+	fixture.run(true, "-C", fixture.project, "--headless", "spec-driven:audit-e2e")
+	source := fixture.singleSourceRun()
+	link := fixture.waitForLinks(source, 1, true)[0]
+	if link.Warning != "" {
+		t.Fatalf("audit warning: %s", link.Warning)
+	}
+	auditDir := filepath.Join(filepath.Dir(source), link.AuditRunID)
+	report := readE2EReport(t, auditDir)
+	if report.DeliveryState != "delivered" || len(report.Values.Observations) != 1 {
+		t.Fatalf("Claude audit report: %#v", report)
+	}
+	if fixture.modelCallCount() != 2 {
+		t.Fatalf("expected value and correctness calls, got %d", fixture.modelCallCount())
+	}
+	if got := fixture.server.rowCount(); got != 1 {
+		t.Fatalf("delivered rows=%d", got)
+	}
+}
+
 type cliAuditFixture struct {
 	t            *testing.T
 	root         string
@@ -133,6 +164,17 @@ type cliAuditFixture struct {
 func newCLIAuditFixture(t *testing.T) *cliAuditFixture {
 	t.Helper()
 	root := t.TempDir()
+	t.Cleanup(func() {
+		if t.Failed() {
+			_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+				if err == nil && (entry.Name() == "detached.log" || entry.Name() == "value-model-diagnostics.json") {
+					data, _ := os.ReadFile(path)
+					t.Logf("%s: %s", entry.Name(), data)
+				}
+				return nil
+			})
+		}
+	})
 	t.Cleanup(func() {
 		_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 			if err == nil {
@@ -170,7 +212,14 @@ func newCLIAuditFixture(t *testing.T) *cliAuditFixture {
 	writeE2EFakeGitHub(t, filepath.Join(binDir, "gh"), fixture.githubMarker)
 	writeE2EProfile(t, fixture.home)
 	fixture.initProject()
+	// Resolve before changing HOME: version-manager shims may not work in the
+	// disposable audit runtime.
+	python, err := exec.Command("python3", "-c", "import sys; print(sys.executable)").Output()
+	if err != nil {
+		t.Fatalf("resolve fixture Python: %v", err)
+	}
 	fixture.env = replaceE2EEnv(os.Environ(),
+		"AUDIT_E2E_PYTHON="+strings.TrimSpace(string(python)),
 		"HOME="+fixture.home,
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"AGENT_RUNNER_NO_TUI=1",
@@ -376,8 +425,16 @@ set -eu
 prompt=""
 output_path=""
 capture_output_path=""
+schema=""
+capture_schema=""
 for arg in "$@"; do
   prompt=$arg
+  if [ "$capture_schema" = "true" ]; then
+    schema=$arg
+    capture_schema=""
+  elif [ "$arg" = "--json-schema" ]; then
+    capture_schema="true"
+  fi
   if [ "$capture_output_path" = "true" ]; then
     output_path=$arg
     capture_output_path=""
@@ -387,8 +444,8 @@ for arg in "$@"; do
 done
 sleep "${AUDIT_E2E_DELAY_SECONDS:-0}"
 printf 'call\n' >> "$AUDIT_E2E_MODEL_CALLS"
-python3 - "$prompt" "$output_path" <<'PY'
-import json, sys
+"$AUDIT_E2E_PYTHON" - "$prompt" "$output_path" "$schema" <<'PY'
+import json, sys, os
 prompt = sys.argv[1]
 output_path = sys.argv[2]
 if prompt.startswith("You are judging workflow-step value"):
@@ -410,6 +467,14 @@ text = json.dumps(result, separators=(",", ":"))
 if output_path:
     with open(output_path, "w", encoding="utf-8") as stream:
         stream.write(text + "\n")
+if os.environ.get("AUDIT_E2E_CLAUDE"):
+    schema = json.loads(sys.argv[3])  # Missing schema must fail the journey.
+    assert schema["additionalProperties"] is False
+    if "batch_id" in result:
+        assert schema["properties"]["batch_id"]["enum"] == [result["batch_id"]]
+        result["observations"] = {row["observation_id"]: row for row in result["observations"]}
+    print(json.dumps({"type":"result","subtype":"success","is_error":False,"session_id":"audit-e2e", "result":"The audit is complete", "structured_output":result}))
+    sys.exit(0)
 print(json.dumps({"type":"thread.started","thread_id":"audit-e2e"}))
 print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":text}}))
 print(json.dumps({"type":"turn.completed"}))
