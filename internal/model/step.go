@@ -187,7 +187,7 @@ type Step struct {
 	OutcomeCapture string            `yaml:"outcome_capture,omitempty" json:"outcome_capture,omitempty"`
 	Tools          RunnerTools       `yaml:"tools,omitempty" json:"tools,omitempty"`
 	// MetricsSource declares that a shell or script step launches a tool which may invoke
-	// nested models and will write the Runner structured metrics handoff.
+	// nested models and participates in Runner's correlated metrics protocol.
 	MetricsSource string `yaml:"metrics_source,omitempty" json:"metrics_source,omitempty"`
 }
 

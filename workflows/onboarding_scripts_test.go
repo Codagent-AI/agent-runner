@@ -88,6 +88,34 @@ printf '%s\n' "$@" > validator-args
 	}
 }
 
+func TestCoreRunValidatorForwardsMetricsCorrelation(t *testing.T) {
+	workdir := t.TempDir()
+	binDir := t.TempDir()
+	writeFakeBinary(t, binDir, "agent-runner", `#!/bin/sh
+printf ''
+`)
+	writeFakeBinary(t, binDir, "agent-validator", `#!/bin/sh
+printf '%s\n' "$@" > validator-args
+`)
+
+	cmd := exec.Command("sh", coreRunValidatorScript(t))
+	cmd.Dir = workdir
+	cmd.Env = append(os.Environ(), "PATH="+binDir, "AGENT_RUNNER_EXECUTABLE="+filepath.Join(binDir, "agent-runner"),
+		"AGENT_RUNNER_METRICS_CONSUMER=agent-runner", "AGENT_RUNNER_METRICS_CONTEXT=opaque-context")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("run-validator failed: %v\n%s", err, out)
+	}
+	args, err := os.ReadFile(filepath.Join(workdir, "validator-args"))
+	if err != nil {
+		t.Fatalf("read validator arguments: %v", err)
+	}
+	for _, want := range []string{"--metrics-consumer", "agent-runner", "--metrics-context", "opaque-context"} {
+		if !strings.Contains(string(args), want) {
+			t.Fatalf("validator args = %q, want %q", args, want)
+		}
+	}
+}
+
 func TestOpenSpecCreateChangeReportsUnvalidatedChanges(t *testing.T) {
 	workdir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(workdir, "openspec", "changes"), 0o755); err != nil {

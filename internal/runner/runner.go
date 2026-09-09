@@ -548,6 +548,9 @@ func emitRunStart(rs *runState, opts *Options) {
 		auditData["resumed"] = true
 		auditData["resume_from"] = opts.From
 	}
+	if err := exec.RecoverValidatorMetrics(rs.ctx); err != nil {
+		rs.log.Printf("agent-runner: warning: validator metrics recovery incomplete: %v\n", err)
+	}
 	emitAudit(rs.ctx, audit.Event{
 		Timestamp: rs.runStartTime.UTC().Format(time.RFC3339Nano),
 		Type:      audit.EventRunStart,
@@ -730,6 +733,9 @@ func runStep(step *model.Step, rs *runState) (exec.StepOutcome, *exec.LoopResult
 }
 
 func finalizeRun(rs *runState, result WorkflowResult) {
+	if err := exec.RecoverValidatorMetrics(rs.ctx); err != nil {
+		rs.log.Printf("agent-runner: warning: final validator metrics delivery incomplete: %v\n", err)
+	}
 	if closer, ok := rs.ctx.Control.(interface{ Close() error }); ok && closer != nil {
 		if err := closer.Close(); err != nil {
 			rs.log.Printf("agent-runner: warning: close control endpoint: %v\n", err)

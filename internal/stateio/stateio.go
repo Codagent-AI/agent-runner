@@ -13,6 +13,8 @@ import (
 
 const stateFileName = "state.json"
 
+var syncJSONDirectory = syncDirectory
+
 // WriteState writes the run state to a JSON file in the given directory.
 func WriteState(state *model.RunState, dir string) error {
 	if err := WriteJSONAtomic(filepath.Join(dir, stateFileName), state); err != nil {
@@ -24,7 +26,33 @@ func WriteState(state *model.RunState, dir string) error {
 // WriteJSONAtomic marshals v as indented JSON and atomically replaces path.
 // Readers therefore observe either the prior complete document or the new one.
 func WriteJSONAtomic(path string, v any) error {
+	return writeJSON(path, v, false)
+}
+
+// WriteJSONDurable atomically publishes JSON and syncs both the replacement
+// file and containing directory. It is used for evidence that may authorize an
+// external acknowledgment, where a rename alone is not a sufficient boundary.
+func WriteJSONDurable(path string, v any) error {
+	return writeJSON(path, v, true)
+}
+
+func writeJSON(path string, v any, durable bool) error {
 	dir := filepath.Dir(path)
+	directories := []string{dir}
+	if durable {
+		for current := dir; ; current = filepath.Dir(current) {
+			if _, err := os.Stat(current); err == nil {
+				break
+			} else if !os.IsNotExist(err) {
+				return fmt.Errorf("inspect JSON directory: %w", err)
+			}
+			parent := filepath.Dir(current)
+			if parent == current {
+				break
+			}
+			directories = append(directories, parent)
+		}
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create JSON dir: %w", err)
 	}
@@ -45,6 +73,13 @@ func WriteJSONAtomic(path string, v any) error {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("write temp JSON file: %w", err)
 	}
+	if durable {
+		if err := tmp.Sync(); err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmpName)
+			return fmt.Errorf("sync temp JSON file: %w", err)
+		}
+	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("close temp JSON file: %w", err)
@@ -52,6 +87,15 @@ func WriteJSONAtomic(path string, v any) error {
 	if err := os.Rename(tmpName, path); err != nil {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("rename JSON file: %w", err)
+	}
+	if durable {
+		// Flush the leaf and the parents of newly created directory entries.
+		// The nearest pre-existing ancestor closes the creation boundary.
+		for _, directory := range directories {
+			if err := syncJSONDirectory(directory); err != nil {
+				return fmt.Errorf("sync JSON directory: %w", err)
+			}
+		}
 	}
 	return nil
 }

@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	SchemaVersion = 3
+	SchemaVersion = 4
 	FileName      = "run-metrics.json"
 	// Compact UTC with fixed nanoseconds is sortable, collision-resistant, and
 	// safe on Windows (unlike RFC3339, which contains colons).
@@ -35,15 +35,34 @@ const (
 
 // Artifact is the stable run-metrics.json schema.
 type Artifact struct {
-	SchemaVersion     int                    `json:"schema_version"`
-	RunID             string                 `json:"run_id"`
-	Workflow          string                 `json:"workflow"`
-	HistoryComplete   bool                   `json:"history_complete"`
-	Sessions          []SessionRecord        `json:"sessions"`
-	Steps             []StepRecord           `json:"steps"`
-	SessionRollups    []SessionRollup        `json:"session_rollups"`
-	RepositoryChanges *audit.GitChangeCounts `json:"repository_changes,omitempty"`
-	Totals            model.RunTotals        `json:"totals"`
+	NativeMeasurements []NativeMeasurement       `json:"native_measurements"`
+	MeasurementHeads   []MeasurementHead         `json:"measurement_heads"`
+	ValidatorContexts  []DeliveryContext         `json:"validator_contexts"`
+	MeasurementTotals  map[string]FieldAggregate `json:"measurement_totals"`
+	AggregateVersion   int                       `json:"aggregate_version"`
+	SchemaVersion      int                       `json:"schema_version"`
+	RunID              string                    `json:"run_id"`
+	Workflow           string                    `json:"workflow"`
+	HistoryComplete    bool                      `json:"history_complete"`
+	Sessions           []SessionRecord           `json:"sessions"`
+	Steps              []StepRecord              `json:"steps"`
+	SessionRollups     []SessionRollup           `json:"session_rollups"`
+	RepositoryChanges  *audit.GitChangeCounts    `json:"repository_changes,omitempty"`
+	Totals             model.RunTotals           `json:"totals"`
+	// ValidatorDelivery is separate from native collection and totals so a
+	// missing, blocked, or legacy producer history can never be interpreted as
+	// confirmed zero model work.
+	ValidatorDelivery *ValidatorDeliveryState `json:"validator_delivery,omitempty"`
+}
+
+// ValidatorDeliveryState is the v4 downstream projection of Validator
+// delivery. Detailed receipts remain in the local recovery journal; this
+// summary keeps artifact consumers honest without exposing operational paths.
+type ValidatorDeliveryState struct {
+	HistoryCoverage string   `json:"history_coverage"`
+	Collection      string   `json:"collection"`
+	Delivery        string   `json:"delivery"`
+	Gaps            []string `json:"gaps,omitempty"`
 }
 
 type SessionRecord struct {
@@ -56,6 +75,8 @@ type SessionRecord struct {
 }
 
 type StepRecord struct {
+	LegacyMeasurement        bool                   `json:"legacy_measurement,omitempty"`
+	MeasurementKey           string                 `json:"measurement_key,omitempty"`
 	RecordID                 string                 `json:"record_id"`
 	Prefix                   string                 `json:"prefix"`
 	ID                       string                 `json:"id"`
@@ -126,6 +147,7 @@ func NewCollector(sessionDir, runID, workflow string, sessionStart time.Time) *C
 		artifact: Artifact{
 			SchemaVersion: SchemaVersion, RunID: runID, Workflow: workflow, HistoryComplete: true,
 			Sessions: []SessionRecord{}, Steps: []StepRecord{}, SessionRollups: []SessionRollup{}, Totals: emptyTotals(),
+			ValidatorDelivery: &ValidatorDeliveryState{HistoryCoverage: "complete", Collection: "unavailable", Delivery: "unavailable"},
 		},
 		attempts:       make(map[executionKey]int),
 		seenCalls:      make(map[string]struct{}),
@@ -506,6 +528,8 @@ func totalsForRecords(records []StepRecord, activeDuration int64) model.RunTotal
 }
 
 func (c *Collector) refreshAggregatesLocked() {
+	c.artifact.AggregateVersion = 1
+	c.refreshMeasurementsLocked()
 	c.artifact.Totals = c.totalsLocked(false)
 	c.artifact.RepositoryChanges = aggregateRepositoryChanges(c.artifact.Steps)
 	rollups := make([]SessionRollup, 0, len(c.artifact.Sessions))
@@ -585,7 +609,7 @@ func (c *Collector) rehydrate(sessionStart time.Time) {
 		c.recoverArtifact(sessionStart, fmt.Errorf("parse existing artifact: %w", err))
 		return
 	}
-	if artifact.SchemaVersion != 1 && artifact.SchemaVersion != 2 && artifact.SchemaVersion != SchemaVersion {
+	if artifact.SchemaVersion != 1 && artifact.SchemaVersion != 2 && artifact.SchemaVersion != 3 && artifact.SchemaVersion != SchemaVersion {
 		c.recoverArtifact(sessionStart, fmt.Errorf("unsupported schema version %d", artifact.SchemaVersion))
 		return
 	}
@@ -606,16 +630,23 @@ func (c *Collector) rehydrate(sessionStart time.Time) {
 	if artifact.Steps == nil {
 		artifact.Steps = []StepRecord{}
 	}
+	migrated := artifact.SchemaVersion != SchemaVersion
 	if artifact.SchemaVersion == 1 {
 		migrateSchemaV1(&artifact)
 	}
 	if artifact.SchemaVersion == 1 || artifact.SchemaVersion == 2 {
 		migrateSchemaV2(&artifact)
 	}
+	if artifact.SchemaVersion <= 3 {
+		migrateSchemaV3(&artifact)
+	}
 	c.artifact = artifact
 	c.artifact.SchemaVersion = SchemaVersion
 	c.refreshAggregatesLocked()
 	c.artifactLoaded = true
+	if migrated {
+		c.persist()
+	}
 	for i := range artifact.Steps {
 		record := &artifact.Steps[i]
 		if record.CallID != "" {
@@ -646,6 +677,18 @@ func (c *Collector) rehydrate(sessionStart time.Time) {
 			c.totalBaselines[baseline] = *record.Usage.RawCumulativeTokenTotals
 		} else {
 			delete(c.totalBaselines, baseline)
+		}
+	}
+}
+
+func migrateSchemaV3(artifact *Artifact) {
+	for i := range artifact.Steps {
+		artifact.Steps[i].LegacyMeasurement = true
+	}
+	if artifact.ValidatorDelivery == nil {
+		artifact.ValidatorDelivery = &ValidatorDeliveryState{
+			HistoryCoverage: "legacy", Collection: "unavailable", Delivery: "unavailable",
+			Gaps: []string{"legacy-validator-metrics-unavailable"},
 		}
 	}
 }
