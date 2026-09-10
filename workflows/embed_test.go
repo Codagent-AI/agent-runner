@@ -12,6 +12,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/google/go-cmp/cmp"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1468,6 +1469,90 @@ func TestCoreCommitChangePlanRestrictsCommitToChangeDirectory(t *testing.T) {
 	}
 	if !strings.Contains(string(script), `-- "$change_dir"`) {
 		t.Fatal("commit-change-plan.sh must restrict git commit to change_dir")
+	}
+}
+
+func TestCoreCommitChangePlanIncludesOpenSpecBootstrapConfig(t *testing.T) {
+	script, err := ReadAsset("core/commit-change-plan.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(core/commit-change-plan.sh): %v", err)
+	}
+
+	tempDir := t.TempDir()
+	scriptPath := filepath.Join(tempDir, "commit-change-plan.sh")
+	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.name", "Agent Runner Test"},
+		{"config", "user.email", "agent-runner@example.com"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = tempDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "README.md"), []byte("fixture\n"), 0o600); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	for _, args := range [][]string{{"add", "README.md"}, {"commit", "-m", "chore: initialize fixture"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = tempDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	changeDir := filepath.Join(tempDir, "openspec", "changes", "demo")
+	if err := os.MkdirAll(changeDir, 0o755); err != nil {
+		t.Fatalf("create change directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(changeDir, "proposal.md"), []byte("proposal\n"), 0o600); err != nil {
+		t.Fatalf("write proposal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "openspec", "config.yaml"), []byte("schema: spec-driven\n"), 0o600); err != nil {
+		t.Fatalf("write OpenSpec config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "unrelated.txt"), []byte("leave me alone\n"), 0o600); err != nil {
+		t.Fatalf("write unrelated file: %v", err)
+	}
+
+	binDir := filepath.Join(tempDir, "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatalf("create bin dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "agent-validator"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write fake agent-validator: %v", err)
+	}
+	cmd := exec.Command("sh", scriptPath)
+	cmd.Dir = tempDir
+	cmd.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
+	cmd.Stdin = strings.NewReader(`{"change_name":"demo","change_dir":"openspec/changes/demo"}`)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("commit plan: %v\n%s", err, out)
+	}
+
+	show := exec.Command("git", "show", "--pretty=", "--name-only", "HEAD")
+	show.Dir = tempDir
+	out, err := show.Output()
+	if err != nil {
+		t.Fatalf("show committed files: %v", err)
+	}
+	got := strings.Fields(string(out))
+	want := []string{"openspec/changes/demo/proposal.md", "openspec/config.yaml"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("committed files mismatch (-want +got):\n%s", diff)
+	}
+	status := exec.Command("git", "status", "--porcelain", "--", "openspec/config.yaml", "unrelated.txt")
+	status.Dir = tempDir
+	out, err = status.Output()
+	if err != nil {
+		t.Fatalf("git status: %v", err)
+	}
+	if got, want := string(out), "?? unrelated.txt\n"; got != want {
+		t.Fatalf("git status = %q, want %q", got, want)
 	}
 }
 

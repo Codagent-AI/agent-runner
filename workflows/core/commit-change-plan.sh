@@ -45,6 +45,13 @@ case "$change_dir" in
 esac
 
 git add -A -- "$change_dir"
+openspec_config=""
+if [ "$change_dir" = "openspec/changes/$change_name" ]; then
+  openspec_config=$(git ls-files --others --exclude-standard -- openspec/config.yaml)
+  if [ "$openspec_config" = "openspec/config.yaml" ]; then
+    git add -- "$openspec_config"
+  fi
+fi
 if git diff --cached --quiet -- "$change_dir"; then
   printf 'commit-change-plan: no staged changes found for %s\n' "$change_name" >&2
   exit 1
@@ -65,5 +72,9 @@ case "$ticket_prefix:$ticket_number" in
     ;;
 esac
 
-git commit -m "$commit_message" -- "$change_dir"
+if [ -n "$openspec_config" ]; then
+  git commit -m "$commit_message" -- "$change_dir" "$openspec_config"
+else
+  git commit -m "$commit_message" -- "$change_dir"
+fi
 agent-validator skip
