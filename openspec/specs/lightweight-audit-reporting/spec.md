@@ -61,6 +61,12 @@ The reporter MUST NOT write transcripts, transcript summaries, prompts, response
 - **WHEN** a proposed note contains a local path, evidence excerpt, or transcript-like content
 - **THEN** validation rejects or sanitizes the note before any row is written
 
+#### Scenario: Rejected optional note does not block an audit
+- **WHEN** an otherwise valid model observation contains a note rejected by the evidence-safety checks
+- **THEN** value validation omits that note from the validated observation and continues the audit
+- **AND** the original model output remains available locally for diagnosis
+- **AND** invalid categorical judgments and unknown evidence references still fail validation
+
 #### Scenario: Unknown metric is reported
 - **WHEN** cost, tokens, or another approved metric is unknown
 - **THEN** its spreadsheet value remains explicitly empty or unknown according to the schema and is not written as zero

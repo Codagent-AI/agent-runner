@@ -549,8 +549,11 @@ func TestValidateValueStageAcceptsOnlyCompleteFixedRubricOutput(t *testing.T) {
 	}
 }
 
-func TestValidateValueStageRejectsFabricatedMeasurementsAndUnsafeNotes(t *testing.T) {
+func TestValidateValueStageOmitsUnsafeNotesAndRejectsMissingOutput(t *testing.T) {
 	temp := t.TempDir()
+	if err := os.Mkdir(filepath.Join(temp, "model-output"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	request := Request{AuditRunID: "audit", AuditSessionDir: temp, SnapshotPath: temp, ExecutionSessionID: "session", Crosscheck: AgentProvenance{Model: "fake"}}
 	prepared := PreparedValueAudit{Index: EvidenceIndex{Fingerprints: Fingerprints{}}, Packages: []ValuePackage{{BatchID: "value-001", Leaves: []LeafEvidence{{Skeleton: ObservationSkeleton{ObservationID: "observation"}}}}}}
 	before, err := fingerprintTree(temp)
@@ -560,8 +563,12 @@ func TestValidateValueStageRejectsFabricatedMeasurementsAndUnsafeNotes(t *testin
 	prepared.Index.Fingerprints.SnapshotBefore = before
 	prepared.Index.Fingerprints.OutputBefore = before
 	output := ModelValueBatch{BatchID: "value-001", Observations: []ModelValueJudgment{{ObservationID: "observation", OverallValue: "medium", ChangeEffect: "intended", UniqueContribution: "unique", DownstreamEvidence: "supporting", Confidence: "medium", EvidenceCoverage: "partial", Note: "https://example.test/evidence"}}}
-	if _, err := ValidateValueOutputs(request, prepared, []ModelValueBatch{output}); err == nil {
-		t.Fatal("unsafe note was accepted")
+	result, err := ValidateValueOutputs(request, prepared, []ModelValueBatch{output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Observations) != 1 || result.Observations[0].Note != "" {
+		t.Fatalf("unsafe note was not omitted: %+v", result.Observations)
 	}
 	if _, err := loadModelValueBatches(temp, []ValuePackage{{BatchID: "value-001"}}); err == nil {
 		t.Fatal("missing model output was accepted")

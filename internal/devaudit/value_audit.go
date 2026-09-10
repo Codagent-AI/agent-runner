@@ -897,19 +897,24 @@ func validateValueBatch(request *Request, pkg ValuePackage, batch *ModelValueBat
 	}
 	observations := make([]ValueObservation, 0, len(batch.Observations))
 	for index := range batch.Observations {
-		judgment := &batch.Observations[index]
+		judgment := batch.Observations[index]
+		// Notes are optional. Keep rejected detail in the original local model
+		// output, but do not let it block otherwise valid observations.
+		if safeValueNote(judgment.Note) != nil {
+			judgment.Note = ""
+		}
 		skeleton, exists := expected[judgment.ObservationID]
 		if !exists {
 			return nil, fmt.Errorf("%s has unknown observation %q", pkg.BatchID, judgment.ObservationID)
 		}
 		delete(expected, judgment.ObservationID)
-		if err := validateJudgment(judgment, knownRefs); err != nil {
+		if err := validateJudgment(&judgment, knownRefs); err != nil {
 			return nil, fmt.Errorf("%s observation %q: %w", pkg.BatchID, judgment.ObservationID, err)
 		}
 		if incomplete[judgment.ObservationID] && judgment.EvidenceCoverage == "complete" {
 			return nil, fmt.Errorf("%s observation %q claims complete coverage despite omitted evidence", pkg.BatchID, judgment.ObservationID)
 		}
-		observations = append(observations, valueObservation(&skeleton, judgment, provenance))
+		observations = append(observations, valueObservation(&skeleton, &judgment, provenance))
 	}
 	if len(expected) != 0 {
 		return nil, fmt.Errorf("%s omitted one or more observations", pkg.BatchID)
