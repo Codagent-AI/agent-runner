@@ -27,6 +27,27 @@ type CursorAdapter struct {
 	runStoreQuery           func(context.Context, string) ([]byte, error)
 	prepareCompletionPlugin func(CompletionCommand) (string, error)              // test seam; nil uses prepareCursorCompletionPlugin
 	prepareConfig           func(CompletionCommand) (cursorPrivateConfig, error) // test seam; nil uses prepareCursorPrivateConfigCommands
+	resultStallGrace        time.Duration                                        // test seam; zero uses cursorResultStallGrace
+}
+
+// SetResultStallGrace overrides the idle window used to detect a Cursor
+// stream that completed thinking without emitting a terminal result.
+func (a *CursorAdapter) SetResultStallGrace(d time.Duration) {
+	if a == nil {
+		return
+	}
+	a.resultStallGrace = d
+}
+
+// WatchHeadlessStream observes raw Cursor JSONL and invokes onStall when
+// useful events are followed by a completed thinking block, no in-flight
+// tools, and no terminal result.
+func (a *CursorAdapter) WatchHeadlessStream(downstream io.Writer, onStall func()) io.Writer {
+	grace := cursorResultStallGrace
+	if a != nil && a.resultStallGrace > 0 {
+		grace = a.resultStallGrace
+	}
+	return watchCursorHeadlessStream(downstream, grace, onStall)
 }
 
 // cursorPrivateConfig describes the materialized per-invocation configuration

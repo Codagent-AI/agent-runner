@@ -2,6 +2,7 @@ package exec
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -90,6 +91,21 @@ func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logge
 			stdoutWrapper = wrapper.WrapStdout
 		}
 	}
+	if watcher, ok := input.Adapter.(cli.HeadlessStreamWatch); ok && input.InvocationContext.IsHeadless() {
+		watchCtx, cancel := context.WithCancelCause(ctx)
+		defer cancel(nil)
+		ctx = watchCtx
+		inner := stdoutWrapper
+		stdoutWrapper = func(w io.Writer) io.Writer {
+			next := w
+			if inner != nil {
+				next = inner(w)
+			}
+			return watcher.WatchHeadlessStream(next, func() {
+				cancel(cli.ErrCursorResultStall)
+			})
+		}
+	}
 	stderrWrapper := input.StderrWrapper
 	if stderrWrapper == nil {
 		if wrapper, ok := input.Adapter.(cli.StderrWrapper); ok {
@@ -123,6 +139,10 @@ func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logge
 	if launched {
 		processOptions.NotifyStarted()
 	}
+	if cause := context.Cause(ctx); errors.Is(cause, cli.ErrCursorResultStall) {
+		runErr = cause
+		outcome = OutcomeFailed
+	}
 	extraction, usageErr := extractAgentUsage(input.Adapter, input.CLI, input.InvocationContext, processResult.Stdout)
 	attachInvocationIdentity(&extraction.Usage, input.CLI, input.Model, input.Effort)
 	result := AgentInvocationResult{
@@ -137,6 +157,8 @@ func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logge
 		if filter, ok := input.Adapter.(cli.OutputFilter); ok {
 			result.Response = filter.FilterOutput(processResult.Stdout)
 		}
+	}
+	if launched {
 		result.DiscoveredSessionID = input.Adapter.DiscoverSessionID(&cli.DiscoverOptions{
 			SpawnTime: startedAt, PresetID: input.SessionID,
 			Headless:      input.InvocationContext.IsHeadless(),

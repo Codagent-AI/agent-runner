@@ -224,30 +224,36 @@ func ExecuteAgentStep(
 		buildWorkflowDirectInvocation(step, ctx, adapter, cliName, sessionID, spawnEnv, agentCallEligible, callHandler, routeEligible),
 		intakeDelivery.Started,
 	), runner, log)
-	if runErr != nil {
-		extraction := cli.UsageExtraction{Usage: invocation.Usage, EstimatedCostUSD: invocation.EstimatedCostUSD}
-		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, invocation.CLILaunched, "", invocation.Outcome, "", invocation.Stderr, &invocation.ExitCode, runErr, &extraction, invocation.UsageError)
-		return invocation.Outcome, runErr
-	}
-
-	if step.Capture != "" {
-		captureAgentResponse(step, ctx, invocation.Response)
-	}
-
-	// Record the originating profile before post-exit session discovery.
-	if step.Session == model.SessionNew || model.IsNamedSession(step.Session) {
-		ctx.LastSessionStepID = step.ID
-		if profile := stepProfileName(step, ctx); profile != "" {
-			ctx.SessionProfiles[step.ID] = profile
+	if runErr == nil {
+		if step.Capture != "" {
+			captureAgentResponse(step, ctx, invocation.Response)
+		}
+		if step.Session == model.SessionNew || model.IsNamedSession(step.Session) {
+			ctx.LastSessionStepID = step.ID
+			if profile := stepProfileName(step, ctx); profile != "" {
+				ctx.SessionProfiles[step.ID] = profile
+			}
 		}
 	}
+	return finishAgentStep(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, &invocation, runErr, log)
+}
 
+func finishAgentStep(
+	ctx *model.ExecutionContext,
+	prefix string,
+	startTime time.Time,
+	step *model.Step,
+	cliName, sessionID string,
+	invocationContext cli.InvocationContext,
+	isResume bool,
+	invocation *AgentInvocationResult,
+	runErr error,
+	log Logger,
+) (StepOutcome, error) {
 	discoveredID := storeDiscoveredSession(step, ctx, invocation.DiscoveredSessionID, log)
-
 	extraction := cli.UsageExtraction{Usage: invocation.Usage, EstimatedCostUSD: invocation.EstimatedCostUSD}
-	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, invocation.CLILaunched, discoveredID, invocation.Outcome, invocation.Response, invocation.Stderr, &invocation.ExitCode, nil, &extraction, invocation.UsageError)
-
-	return invocation.Outcome, nil
+	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, invocation.CLILaunched, discoveredID, invocation.Outcome, invocation.Response, invocation.Stderr, &invocation.ExitCode, runErr, &extraction, invocation.UsageError)
+	return invocation.Outcome, runErr
 }
 
 func captureAgentResponse(step *model.Step, ctx *model.ExecutionContext, response string) {

@@ -291,6 +291,42 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("cursor result stall records session and step_end error", func(t *testing.T) {
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		step := model.Step{
+			ID: "generate-code", Mode: model.ModeAutonomous, Prompt: "implement",
+			Session: model.SessionNew, CLI: "cursor",
+		}
+		stdout := `{"type":"system","subtype":"init","session_id":"stall-session"}` + "\n" +
+			`{"type":"thinking","subtype":"completed"}` + "\n"
+		runner := &invocationRecordingRunner{
+			options: make(chan AgentProcessOptions, 1),
+			result:  ProcessResult{Started: true, ExitCode: -1, Stdout: stdout},
+			err:     cli.ErrCursorResultStall,
+		}
+
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if outcome != OutcomeFailed || !errors.Is(err, cli.ErrCursorResultStall) {
+			t.Fatalf("ExecuteAgentStep() = (%q, %v), want cursor result stall", outcome, err)
+		}
+		if ctx.SessionIDs["generate-code"] != "stall-session" {
+			t.Fatalf("SessionIDs = %#v, want stall-session", ctx.SessionIDs)
+		}
+		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
+		if end == nil {
+			t.Fatal("expected step_end")
+		}
+		if end.Data["discovered_session_id"] != "stall-session" {
+			t.Fatalf("discovered_session_id = %#v", end.Data["discovered_session_id"])
+		}
+		errorText, _ := end.Data["error"].(string)
+		if !strings.Contains(errorText, "without a terminal result") {
+			t.Fatalf("step_end error = %#v, want stall diagnostic", end.Data["error"])
+		}
+	})
+
 	t.Run("headless spawn failure is not counted as an agent invocation", func(t *testing.T) {
 		auditLog := &recordingAuditLogger{}
 		ctx := makeCtx()

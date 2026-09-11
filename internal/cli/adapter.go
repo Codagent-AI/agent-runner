@@ -408,6 +408,12 @@ type HeadlessCompletionDetector interface {
 	HasCompletedHeadlessOutput(stdout string) bool
 }
 
+// HeadlessStreamWatch is an optional interface for adapters that can detect a
+// hung headless child from its live JSONL stream and cancel the invocation.
+type HeadlessStreamWatch interface {
+	WatchHeadlessStream(downstream io.Writer, onStall func()) io.Writer
+}
+
 // StdoutWrapper is an optional interface adapters may implement to wrap the
 // stdout io.Writer used by the process runner. This allows adapters that
 // produce structured output (e.g. JSONL) to filter bytes in-flight so the
