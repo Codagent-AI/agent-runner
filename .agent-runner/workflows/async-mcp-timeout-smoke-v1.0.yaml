@@ -1,5 +1,5 @@
 name: async-mcp-timeout-smoke
-description: "Manual smoke: Cursor parent call_agent to a child that waits more than 60s (run with -p smoke_test)"
+description: "Manual smoke: interactive Cursor parent call_agent to a child that waits more than 60s (run with -p smoke_test)"
 
 params:
   - name: wait_seconds
@@ -7,11 +7,10 @@ params:
 
 steps:
   - id: long-call
-    agent: cursor_headless_smoke
+    agent: cursor_interactive_smoke
     session: new
-    mode: autonomous
+    mode: interactive
     tools: [call_agent]
-    capture: result
     prompt: |
       Use the Runner-owned call_agent tool exactly once. Do not substitute a
       shell agent CLI, a subagent, or any other delegation path.
@@ -27,9 +26,5 @@ steps:
       the call is terminal. Do not treat accepted or running as success. Do not
       start a second child.
 
-      When get_agent_call is terminal, reply with only the child's response
-      text. If the call fails, reply with only the structured error.
-
-  - id: check
-    command: |
-      printf '%s\n' "{{result}}" | grep -q 'ASYNC-MCP-OK'
+      When get_agent_call is terminal, show me the child's response text (expect
+      ASYNC-MCP-OK) or the structured error. Then wait for me to continue.
