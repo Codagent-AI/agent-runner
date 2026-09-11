@@ -146,6 +146,10 @@ Credentials enter the sandbox only through explicit options:
 - `--mount-codex-auth` mounts `~/.codex/auth.json` read-only.
 - `--mount-claude-auth` mounts Claude credentials and available settings files
   read-only.
+- `--mount-cursor-auth` mounts `~/.cursor/auth.json` read-only. Host Cursor
+  `cli-config.json` is intentionally not copied. The sync script seeds both
+  `~/.cursor/auth.json` (macOS path) and `~/.config/cursor/auth.json` (Linux
+  XDG path the container CLI reads).
 
 Mounted authentication files are copied into the container's writable home by
 `scripts/sandbox-sync-home.sh`. Host Codex configuration is intentionally not

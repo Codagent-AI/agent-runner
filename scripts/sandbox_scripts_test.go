@@ -386,6 +386,7 @@ func TestSandboxRunCanMountSubscriptionAuthFiles(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join(home, ".codex"),
 		filepath.Join(home, ".claude"),
+		filepath.Join(home, ".cursor"),
 	} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			t.Fatalf("mkdir %s: %v", path, err)
@@ -397,6 +398,8 @@ func TestSandboxRunCanMountSubscriptionAuthFiles(t *testing.T) {
 		filepath.Join(home, ".claude", ".credentials.json"):   "{}\n",
 		filepath.Join(home, ".claude", "settings.json"):       "{}\n",
 		filepath.Join(home, ".claude", "settings.local.json"): "{}\n",
+		filepath.Join(home, ".cursor", "auth.json"):           "{}\n",
+		filepath.Join(home, ".cursor", "cli-config.json"):     "{}\n",
 	} {
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatalf("write %s: %v", path, err)
@@ -409,6 +412,7 @@ func TestSandboxRunCanMountSubscriptionAuthFiles(t *testing.T) {
 		"--artifact-dir", filepath.Join(dir, "artifacts"),
 		"--mount-codex-auth",
 		"--mount-claude-auth",
+		"--mount-cursor-auth",
 		"--",
 		"echo proof",
 	)
@@ -423,6 +427,7 @@ func TestSandboxRunCanMountSubscriptionAuthFiles(t *testing.T) {
 		"target=/host-home/claude/.credentials.json",
 		"target=/host-home/claude/settings.json",
 		"target=/host-home/claude/settings.local.json",
+		"target=/host-home/cursor/auth.json",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("dry-run output missing auth mount %q:\n%s", want, text)
@@ -430,6 +435,9 @@ func TestSandboxRunCanMountSubscriptionAuthFiles(t *testing.T) {
 	}
 	if strings.Contains(text, "target=/host-home/codex/config.toml") {
 		t.Fatalf("sandbox-run should not mount host Codex config:\n%s", text)
+	}
+	if strings.Contains(text, "target=/host-home/cursor/cli-config.json") {
+		t.Fatalf("sandbox-run should not mount host Cursor config:\n%s", text)
 	}
 }
 
@@ -440,6 +448,7 @@ func TestSandboxSyncHomeCopiesAllowedFilesWritable(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join(hostHome, "codex"),
 		filepath.Join(hostHome, "claude"),
+		filepath.Join(hostHome, "cursor"),
 		filepath.Join(hostHome, "shell"),
 		filepath.Join(hostHome, "git"),
 		filepath.Join(containerHome, ".codex"),
@@ -454,6 +463,8 @@ func TestSandboxSyncHomeCopiesAllowedFilesWritable(t *testing.T) {
 		filepath.Join(hostHome, "codex", "config.toml"):        "model = \"host-model\"\n[plugins.\"agentmemory@agentmemory\"]\nenabled = true\n[mcp_servers.node_repl]\ncommand = \"node_repl\"\n",
 		filepath.Join(hostHome, "claude", ".credentials.json"): `{"claude":true}` + "\n",
 		filepath.Join(hostHome, "claude", "settings.json"):     "{}\n",
+		filepath.Join(hostHome, "cursor", "auth.json"):         `{"cursor":true}` + "\n",
+		filepath.Join(hostHome, "cursor", "cli-config.json"):   `{"permissions":{}}` + "\n",
 		filepath.Join(hostHome, "shell", ".zshrc"):             "export TEST_ZSH=1\n",
 		filepath.Join(hostHome, "git", ".gitconfig"):           "[user]\n\tname = Test\n[credential]\n\thelper = /opt/homebrew/bin/gh auth git-credential\n",
 		filepath.Join(hostHome, "git", "config-ignore"):        "*.tmp\n",
@@ -481,11 +492,13 @@ func TestSandboxSyncHomeCopiesAllowedFilesWritable(t *testing.T) {
 	}
 
 	targets := map[string]string{
-		filepath.Join(containerHome, ".codex", "auth.json"):          files[filepath.Join(hostHome, "codex", "auth.json")],
-		filepath.Join(containerHome, ".claude", ".credentials.json"): files[filepath.Join(hostHome, "claude", ".credentials.json")],
-		filepath.Join(containerHome, ".claude", "settings.json"):     files[filepath.Join(hostHome, "claude", "settings.json")],
-		filepath.Join(containerHome, ".zshrc"):                       files[filepath.Join(hostHome, "shell", ".zshrc")],
-		filepath.Join(containerHome, ".config", "git", "ignore"):     files[filepath.Join(hostHome, "git", "config-ignore")],
+		filepath.Join(containerHome, ".codex", "auth.json"):            files[filepath.Join(hostHome, "codex", "auth.json")],
+		filepath.Join(containerHome, ".claude", ".credentials.json"):   files[filepath.Join(hostHome, "claude", ".credentials.json")],
+		filepath.Join(containerHome, ".claude", "settings.json"):       files[filepath.Join(hostHome, "claude", "settings.json")],
+		filepath.Join(containerHome, ".cursor", "auth.json"):           files[filepath.Join(hostHome, "cursor", "auth.json")],
+		filepath.Join(containerHome, ".config", "cursor", "auth.json"): files[filepath.Join(hostHome, "cursor", "auth.json")],
+		filepath.Join(containerHome, ".zshrc"):                         files[filepath.Join(hostHome, "shell", ".zshrc")],
+		filepath.Join(containerHome, ".config", "git", "ignore"):       files[filepath.Join(hostHome, "git", "config-ignore")],
 	}
 	for path, want := range targets {
 		data, err := os.ReadFile(path)
@@ -520,6 +533,9 @@ func TestSandboxSyncHomeCopiesAllowedFilesWritable(t *testing.T) {
 		if strings.Contains(string(data), forbidden) {
 			t.Fatalf("codex config should not include host/stale config marker %q:\n%s", forbidden, data)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(containerHome, ".cursor", "cli-config.json")); !os.IsNotExist(err) {
+		t.Fatalf("sandbox home should not copy host Cursor cli-config.json: %v", err)
 	}
 	sandboxEnv := filepath.Join(containerHome, ".sandbox-env")
 	data, err = os.ReadFile(sandboxEnv)
@@ -1031,6 +1047,7 @@ func TestEvalDevcontainerUsesSharedDockerfile(t *testing.T) {
 		"target=/host-home/claude/.credentials.json",
 		"target=/host-home/claude/settings.json",
 		"target=/host-home/claude/settings.local.json",
+		"target=/host-home/cursor/auth.json",
 		"target=/host-home/shell/.zshrc",
 		"target=/host-home/shell/.zprofile",
 		"target=/host-home/git/.gitconfig",
@@ -1080,6 +1097,22 @@ func TestDevDockerfileIncludesGitHubCLIForDeliveryWorkflows(t *testing.T) {
 	}
 	if !regexp.MustCompile(`(?m)^\s*gh(?:\s*\\)?\s*$`).Match(data) {
 		t.Fatalf("dev Dockerfile should install gh for draft-PR delivery workflows:\n%s", data)
+	}
+}
+
+func TestDevDockerfileIncludesCursorAgentCLI(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "docker", "dev", "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read dev Dockerfile: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"https://cursor.com/install",
+		"/usr/local/bin/agent",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dev Dockerfile should install the Cursor agent CLI %q:\n%s", want, data)
+		}
 	}
 }
 
