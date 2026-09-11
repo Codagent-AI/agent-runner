@@ -15,7 +15,7 @@ steps:
       Use the Runner-owned call_agent tool exactly once. Do not substitute a
       shell agent CLI, a subagent, or any other delegation path.
 
-      Target: agent cursor_headless_smoke. Do not set session.
+      Target: agent claude_headless_smoke. Do not set session.
 
       Child prompt (send this text verbatim as the call prompt):
       Run one shell command: sleep {{wait_seconds}}. Do not reply until that
