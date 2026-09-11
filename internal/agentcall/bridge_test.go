@@ -13,12 +13,19 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func TestBridgePublishesOnlyCallAgentAndMapsStructuredSuccess(t *testing.T) {
-	server := NewServer(BridgeOptions{Send: func(_ context.Context, requestID string, request Request) (Response, error) {
-		if requestID == "" || request.Prompt != "do it" || request.Agent == nil || *request.Agent != "implementor" {
-			t.Fatalf("forwarded request id=%q request=%#v", requestID, request)
+func TestBridgePublishesStartPollAndCancelAndMapsStructuredSuccess(t *testing.T) {
+	server := NewServer(BridgeOptions{Send: func(_ context.Context, messageType, requestID string, payload json.RawMessage) (Response, error) {
+		if messageType != "agent_call" || requestID == "" {
+			t.Fatalf("forwarded type=%q id=%q", messageType, requestID)
 		}
-		return Response{CallID: "internal-call-id", Result: &Result{Target: request.Target(), Response: "done"}}, nil
+		var request Request
+		if err := json.Unmarshal(payload, &request); err != nil {
+			t.Fatal(err)
+		}
+		if request.Prompt != "do it" || request.Agent == nil || *request.Agent != "implementor" {
+			t.Fatalf("forwarded request=%#v", request)
+		}
+		return Response{CallID: "call-1", Status: StatusAccepted, Target: &Target{Kind: TargetAgent, Name: "implementor"}}, nil
 	}})
 	clientSession, closeSessions := connectBridgeTest(t, server, nil)
 	defer closeSessions()
@@ -27,8 +34,14 @@ func TestBridgePublishesOnlyCallAgentAndMapsStructuredSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 1 || tools.Tools[0].Name != ToolName {
-		t.Fatalf("tools = %#v", tools.Tools)
+	got := map[string]bool{}
+	for _, tool := range tools.Tools {
+		got[tool.Name] = true
+	}
+	for _, name := range []string{ToolName, GetToolName, CancelToolName} {
+		if !got[name] {
+			t.Fatalf("tools = %#v, missing %s", tools.Tools, name)
+		}
 	}
 	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: ToolName, Arguments: map[string]any{"prompt": "do it", "agent": "implementor"},
@@ -43,17 +56,50 @@ func TestBridgePublishesOnlyCallAgentAndMapsStructuredSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got Result
-	if err := json.Unmarshal(raw, &got); err != nil {
+	var gotResponse Response
+	if err := json.Unmarshal(raw, &gotResponse); err != nil {
 		t.Fatal(err)
 	}
-	if got != (Result{Target: Target{Kind: TargetAgent, Name: "implementor"}, Response: "done"}) {
-		t.Fatalf("structured result = %#v", got)
+	if gotResponse.CallID != "call-1" || gotResponse.Status != StatusAccepted || gotResponse.Result != nil {
+		t.Fatalf("structured result = %#v", gotResponse)
+	}
+}
+
+func TestBridgeGetAndCancelUseCallIDWithoutStartingAChild(t *testing.T) {
+	var calls []string
+	server := NewServer(BridgeOptions{Send: func(_ context.Context, messageType, _ string, payload json.RawMessage) (Response, error) {
+		calls = append(calls, messageType)
+		var request CallIDRequest
+		if err := json.Unmarshal(payload, &request); err != nil || request.CallID != "call-1" {
+			t.Fatalf("payload = %s", payload)
+		}
+		if messageType == "agent_call_cancel" {
+			return Response{CallID: "call-1", Status: StatusCanceled, Error: &Error{Code: CodeCallCanceled, Message: "canceled", CallID: "call-1"}}, nil
+		}
+		return Response{CallID: "call-1", Status: StatusRunning, Target: &Target{Kind: TargetAgent, Name: "implementor"}, Elapsed: "1s"}, nil
+	}})
+	clientSession, closeSessions := connectBridgeTest(t, server, nil)
+	defer closeSessions()
+
+	getResult, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: GetToolName, Arguments: map[string]any{"call_id": "call-1"},
+	})
+	if err != nil || getResult.IsError {
+		t.Fatalf("get result = %#v err=%v", getResult, err)
+	}
+	cancelResult, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: CancelToolName, Arguments: map[string]any{"call_id": "call-1"},
+	})
+	if err != nil || !cancelResult.IsError {
+		t.Fatalf("cancel result = %#v err=%v", cancelResult, err)
+	}
+	if diff := cmp.Diff([]string{"agent_call_get", "agent_call_cancel"}, calls); diff != "" {
+		t.Fatalf("control RPCs mismatch (-want +got):\n%s", diff)
 	}
 }
 
 func TestBridgeMapsStructuredToolFailure(t *testing.T) {
-	server := NewServer(BridgeOptions{Send: func(context.Context, string, Request) (Response, error) {
+	server := NewServer(BridgeOptions{Send: func(context.Context, string, string, json.RawMessage) (Response, error) {
 		return Response{CallID: "internal", Error: &Error{Code: CodeExecutionFailed, Message: "child failed"}}, nil
 	}})
 	clientSession, closeSessions := connectBridgeTest(t, server, nil)
@@ -68,7 +114,11 @@ func TestBridgeMapsStructuredToolFailure(t *testing.T) {
 		t.Fatalf("tool result = %#v, want IsError", result)
 	}
 	raw, _ := json.Marshal(result.StructuredContent)
-	if string(raw) != `{"code":"execution_failed","message":"child failed"}` {
+	var got Response
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.CallID != "internal" || got.Error == nil || got.Error.Code != CodeExecutionFailed || got.Error.Message != "child failed" {
 		t.Fatalf("structured error = %s", raw)
 	}
 }
@@ -83,12 +133,12 @@ func TestBridgeRetriesLostControlResponseWithSameRequestID(t *testing.T) {
 			generated++
 			return fmt.Sprintf("request-%d", generated)
 		},
-		Send: func(_ context.Context, requestID string, request Request) (Response, error) {
+		Send: func(_ context.Context, _ string, requestID string, _ json.RawMessage) (Response, error) {
 			requestIDs = append(requestIDs, requestID)
 			response, duplicate := accepted[requestID]
 			if !duplicate {
 				launches++
-				response = Response{Result: &Result{Target: request.Target(), Response: "cached result"}}
+				response = Response{CallID: "call-1", Status: StatusAccepted}
 				accepted[requestID] = response
 				return Response{}, errors.New("lost control response")
 			}
@@ -120,7 +170,7 @@ func TestBridgeRetriesLostControlResponseWithSameRequestID(t *testing.T) {
 
 func TestBridgeMapsStructuralValidationToStableToolError(t *testing.T) {
 	called := false
-	server := NewServer(BridgeOptions{Send: func(context.Context, string, Request) (Response, error) {
+	server := NewServer(BridgeOptions{Send: func(context.Context, string, string, json.RawMessage) (Response, error) {
 		called = true
 		return Response{}, nil
 	}})
@@ -147,7 +197,7 @@ func TestBridgeReportsRateLimitedProgressAndPropagatesCancellation(t *testing.T)
 	canceled := make(chan struct{})
 	server := NewServer(BridgeOptions{
 		ProgressInterval: 10 * time.Millisecond,
-		Send: func(ctx context.Context, _ string, _ Request) (Response, error) {
+		Send: func(ctx context.Context, _ string, _ string, _ json.RawMessage) (Response, error) {
 			close(started)
 			<-ctx.Done()
 			close(canceled)

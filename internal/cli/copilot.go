@@ -90,7 +90,9 @@ func (a *CopilotAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, er
 		}
 		args = append(args, "--additional-mcp-config="+string(config))
 		if context.IsAutonomous() {
-			args = append(args, "--allow-tool=agent-runner(call_agent)")
+			for _, name := range agentCallMCPToolNames {
+				args = append(args, "--allow-tool=agent-runner("+name+")")
+			}
 		}
 	}
 	if completionCommandEnabled(input) {

@@ -33,10 +33,12 @@ const (
 	EnvAttemptID     = "AGENT_RUNNER_ATTEMPT_ID"
 	EnvControlToken  = "AGENT_RUNNER_CONTROL_TOKEN"
 
-	MessageCompleteStep  = "complete_step"
-	MessageTurnCommitted = "turn_committed"
-	MessageAgentCall     = "agent_call"
-	MessageSubmitRoute   = "submit_route"
+	MessageCompleteStep    = "complete_step"
+	MessageTurnCommitted   = "turn_committed"
+	MessageAgentCall       = "agent_call"
+	MessageAgentCallGet    = "agent_call_get"
+	MessageAgentCallCancel = "agent_call_cancel"
+	MessageSubmitRoute     = "submit_route"
 
 	ControlSocketPointerFile  = "control-socket"
 	MaxControlMessageBytes    = 16 * 1024 * 1024
@@ -145,6 +147,8 @@ type AgentCallRequest struct {
 
 type AgentCallHandler interface {
 	HandleAgentCall(context.Context, AgentCallRequest) json.RawMessage
+	HandleGetAgentCall(context.Context, AgentCallRequest) json.RawMessage
+	HandleCancelAgentCall(context.Context, AgentCallRequest) json.RawMessage
 }
 
 // RouteStore is the minimal route-sidecar surface the control server needs.
@@ -475,6 +479,14 @@ func (s *ControlServer) handleConnection(connection net.Conn) {
 		s.handleCommittedTurn(connection, &request, active)
 	case MessageAgentCall:
 		s.handleAgentCall(connection, &request, active)
+	case MessageAgentCallGet:
+		s.handleAgentCallOp(connection, &request, active, func(ctx context.Context, handler AgentCallHandler, envelope AgentCallRequest) json.RawMessage {
+			return handler.HandleGetAgentCall(ctx, envelope)
+		})
+	case MessageAgentCallCancel:
+		s.handleAgentCallOp(connection, &request, active, func(ctx context.Context, handler AgentCallHandler, envelope AgentCallRequest) json.RawMessage {
+			return handler.HandleCancelAgentCall(ctx, envelope)
+		})
 	case MessageSubmitRoute:
 		s.handleRouteSubmission(connection, &request, active, cacheKey, pendingRoute)
 	}
@@ -544,27 +556,28 @@ func (s *ControlServer) rejectRouteSubmission(connection net.Conn, reason string
 }
 
 func (s *ControlServer) handleAgentCall(connection net.Conn, request *controlRequest, active *attemptState) {
+	s.handleAgentCallOp(connection, request, active, func(ctx context.Context, handler AgentCallHandler, envelope AgentCallRequest) json.RawMessage {
+		return handler.HandleAgentCall(ctx, envelope)
+	})
+}
+
+func (s *ControlServer) handleAgentCallOp(
+	connection net.Conn,
+	request *controlRequest,
+	active *attemptState,
+	handle func(context.Context, AgentCallHandler, AgentCallRequest) json.RawMessage,
+) {
 	if !active.agentCallEligible || active.agentCallHandler == nil {
 		s.mu.Unlock()
 		s.reject(connection, "call_agent is not enabled for the active step attempt", request)
 		return
 	}
 	handler := active.agentCallHandler
-	parentContext := active.Context
+	attemptContext := active.Context
 	s.mu.Unlock()
 
-	// Calls have no Runner deadline. Once authentication framing is complete,
-	// the connection itself leases the work: EOF, bridge exit, or request
-	// cancellation closes the socket and cancels the handler context.
 	_ = connection.SetDeadline(time.Time{})
-	leaseContext, cancel := context.WithCancel(parentContext)
-	defer cancel()
-	go func() {
-		var one [1]byte
-		_, _ = connection.Read(one[:])
-		cancel()
-	}()
-	payload := handler.HandleAgentCall(leaseContext, AgentCallRequest{
+	payload := handle(attemptContext, handler, AgentCallRequest{
 		AttemptID: request.AttemptID,
 		RequestID: request.RequestID,
 		Payload:   append(json.RawMessage(nil), request.Payload...),
@@ -730,7 +743,7 @@ func validateControlRequest(request *controlRequest, active *attemptState, runID
 	if active == nil {
 		return errors.New("no interactive step is active")
 	}
-	if request.Type != MessageCompleteStep && request.Type != MessageTurnCommitted && request.Type != MessageAgentCall && request.Type != MessageSubmitRoute {
+	if request.Type != MessageCompleteStep && request.Type != MessageTurnCommitted && request.Type != MessageAgentCall && request.Type != MessageAgentCallGet && request.Type != MessageAgentCallCancel && request.Type != MessageSubmitRoute {
 		return fmt.Errorf("unknown control message type %q", request.Type)
 	}
 	if request.RunID == "" || request.StepID == "" || request.Token == "" || request.RequestID == "" {
@@ -739,7 +752,7 @@ func validateControlRequest(request *controlRequest, active *attemptState, runID
 	if request.RunID != runID || request.RunID != active.RunID || request.StepID != active.StepID || request.Token != active.Token {
 		return errors.New("control credential does not match the active step attempt")
 	}
-	if request.Type == MessageAgentCall && request.AttemptID != active.ID {
+	if (request.Type == MessageAgentCall || request.Type == MessageAgentCallGet || request.Type == MessageAgentCallCancel) && request.AttemptID != active.ID {
 		return errors.New("control credential does not match the active step attempt")
 	}
 	return nil
@@ -820,18 +833,23 @@ func SendControlEventFromEnvironment(ctx context.Context, messageType string, ge
 	return "", errors.New("control request failed")
 }
 
-// SendAgentCallFromEnvironment forwards one typed agent-call payload and
-// keeps the authenticated connection open as the call's lease. It applies no
-// Runner timeout; only the caller's context deadline or cancellation bounds
-// the request.
+// SendAgentCallFromEnvironment forwards one typed agent-call payload over a
+// short authenticated control request. After acceptance the child is leased to
+// the parent attempt, not this connection.
 func SendAgentCallFromEnvironment(
 	ctx context.Context,
+	messageType string,
 	requestID string,
 	payload json.RawMessage,
 	getenv func(string) string,
 ) (json.RawMessage, error) {
 	if err := controlPlatformError(); err != nil {
 		return nil, err
+	}
+	switch messageType {
+	case MessageAgentCall, MessageAgentCallGet, MessageAgentCallCancel:
+	default:
+		return nil, fmt.Errorf("unsupported agent-call control message type %q", messageType)
 	}
 	if strings.TrimSpace(requestID) == "" || len(payload) == 0 {
 		return nil, errors.New("agent-call control request is missing request ID or payload")
@@ -852,7 +870,7 @@ func SendAgentCallFromEnvironment(
 	}
 	_ = connection.SetWriteDeadline(writeDeadline)
 	request := controlRequest{
-		Type: MessageAgentCall, RunID: values[EnvRunID], StepID: values[EnvStepID],
+		Type: messageType, RunID: values[EnvRunID], StepID: values[EnvStepID],
 		AttemptID: values[EnvAttemptID], Token: values[EnvControlToken],
 		RequestID: requestID, Payload: payload,
 	}

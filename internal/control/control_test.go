@@ -282,10 +282,10 @@ func TestControlServerRejectsAgentCallWithWrongAttemptIdentity(t *testing.T) {
 	}
 }
 
-func TestControlServerDisconnectCancelsAgentCallLease(t *testing.T) {
+func TestControlServerDisconnectDoesNotCancelAcceptedAgentCall(t *testing.T) {
 	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
 	defer server.Close()
-	handler := &blockingCallHandler{started: make(chan struct{}), canceled: make(chan struct{})}
+	handler := &capturingCallHandler{started: make(chan struct{})}
 	attempt := server.ActivateAttempt(context.Background(), "step", AttemptOptions{
 		AgentCallEligible: true,
 		AgentCallHandler:  handler,
@@ -296,7 +296,7 @@ func TestControlServerDisconnectCancelsAgentCallLease(t *testing.T) {
 	}
 	request := controlRequest{
 		Type: MessageAgentCall, RunID: attempt.RunID, StepID: attempt.StepID,
-		AttemptID: attempt.ID, Token: attempt.Token, RequestID: "call-1", Payload: json.RawMessage(`{}`),
+		AttemptID: attempt.ID, Token: attempt.Token, RequestID: "call-1", Payload: json.RawMessage(`{"prompt":"x"}`),
 	}
 	if err := json.NewEncoder(connection).Encode(request); err != nil {
 		t.Fatal(err)
@@ -306,11 +306,48 @@ func TestControlServerDisconnectCancelsAgentCallLease(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("agent-call handler did not start")
 	}
+	var response controlResponse
+	if err := json.NewDecoder(connection).Decode(&response); err != nil || !response.OK {
+		t.Fatalf("start response = %#v err=%v", response, err)
+	}
 	_ = connection.Close()
-	select {
-	case <-handler.canceled:
-	case <-time.After(time.Second):
-		t.Fatal("control disconnect did not cancel the agent-call lease")
+	time.Sleep(20 * time.Millisecond)
+	if handler.ctx.Err() != nil {
+		t.Fatalf("disconnect canceled the attempt context: %v", handler.ctx.Err())
+	}
+	get := exchange(t, server.SocketPath(), &controlRequest{
+		Type: MessageAgentCallGet, RunID: attempt.RunID, StepID: attempt.StepID,
+		AttemptID: attempt.ID, Token: attempt.Token, RequestID: "get-1",
+		Payload: json.RawMessage(`{"call_id":"call-1"}`),
+	})
+	if !get.OK || string(get.Payload) != `{"call_id":"call-1","status":"accepted"}` {
+		t.Fatalf("get after disconnect = %#v", get)
+	}
+}
+
+func TestControlServerGetAndCancelAgentCallRPCs(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+	handler := &recordingCallHandler{requests: make(chan AgentCallRequest, 3)}
+	attempt := server.ActivateAttempt(context.Background(), "step", AttemptOptions{
+		AgentCallEligible: true,
+		AgentCallHandler:  handler,
+	})
+	get := exchange(t, server.SocketPath(), &controlRequest{
+		Type: MessageAgentCallGet, RunID: attempt.RunID, StepID: attempt.StepID,
+		AttemptID: attempt.ID, Token: attempt.Token, RequestID: "get-1",
+		Payload: json.RawMessage(`{"call_id":"call-1"}`),
+	})
+	if !get.OK || string(get.Payload) != `{"result":"got"}` {
+		t.Fatalf("get response = %#v", get)
+	}
+	cancel := exchange(t, server.SocketPath(), &controlRequest{
+		Type: MessageAgentCallCancel, RunID: attempt.RunID, StepID: attempt.StepID,
+		AttemptID: attempt.ID, Token: attempt.Token, RequestID: "cancel-1",
+		Payload: json.RawMessage(`{"call_id":"call-1"}`),
+	})
+	if !cancel.OK || string(cancel.Payload) != `{"result":"canceled"}` {
+		t.Fatalf("cancel response = %#v", cancel)
 	}
 }
 
@@ -325,7 +362,7 @@ func TestSendAgentCallFromEnvironmentUsesAuthenticatedAttemptAndReturnsPayload(t
 	values := attempt.EnvironmentMap()
 
 	got, err := SendAgentCallFromEnvironment(
-		context.Background(), "request-1", json.RawMessage(`{"prompt":"do it"}`),
+		context.Background(), MessageAgentCall, "request-1", json.RawMessage(`{"prompt":"do it"}`),
 		func(key string) string { return values[key] },
 	)
 	if err != nil {
@@ -371,16 +408,33 @@ func (h *recordingCallHandler) HandleAgentCall(_ context.Context, request AgentC
 	return json.RawMessage(`{"result":"done"}`)
 }
 
-type blockingCallHandler struct {
-	started  chan struct{}
-	canceled chan struct{}
+func (h *recordingCallHandler) HandleGetAgentCall(_ context.Context, request AgentCallRequest) json.RawMessage {
+	h.requests <- request
+	return json.RawMessage(`{"result":"got"}`)
 }
 
-func (h *blockingCallHandler) HandleAgentCall(ctx context.Context, _ AgentCallRequest) json.RawMessage {
+func (h *recordingCallHandler) HandleCancelAgentCall(_ context.Context, request AgentCallRequest) json.RawMessage {
+	h.requests <- request
+	return json.RawMessage(`{"result":"canceled"}`)
+}
+
+type capturingCallHandler struct {
+	ctx     context.Context
+	started chan struct{}
+}
+
+func (h *capturingCallHandler) HandleAgentCall(ctx context.Context, _ AgentCallRequest) json.RawMessage {
+	h.ctx = ctx
 	close(h.started)
-	<-ctx.Done()
-	close(h.canceled)
-	return json.RawMessage(`{"error":"canceled"}`)
+	return json.RawMessage(`{"call_id":"call-1","status":"accepted"}`)
+}
+
+func (h *capturingCallHandler) HandleGetAgentCall(context.Context, AgentCallRequest) json.RawMessage {
+	return json.RawMessage(`{"call_id":"call-1","status":"accepted"}`)
+}
+
+func (h *capturingCallHandler) HandleCancelAgentCall(context.Context, AgentCallRequest) json.RawMessage {
+	return json.RawMessage(`{"call_id":"call-1","status":"canceled"}`)
 }
 
 func TestControlServerSocketPathIsUniquePerRunDirectory(t *testing.T) {

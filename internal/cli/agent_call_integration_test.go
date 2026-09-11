@@ -15,10 +15,11 @@ import (
 const (
 	testAgentCallExecutable       = "agent-runner-test-bin"
 	expectedAgentCallServer       = "agent-runner"
-	expectedAgentCallTool         = "call_agent"
 	expectedAgentCallTimeoutSec   = int64(2_592_000)
 	expectedAgentCallTimeoutMilli = int64(2_147_483_647)
 )
+
+var expectedAgentCallTools = []string{"call_agent", "get_agent_call", "cancel_agent_call"}
 
 type agentCallPreparedInvocation struct {
 	args []string
@@ -47,8 +48,8 @@ func TestRegisteredAdaptersProvisionAgentCallProcessLocally(t *testing.T) {
 				if registration.serverName != expectedAgentCallServer {
 					t.Fatalf("MCP server name = %q, want %q", registration.serverName, expectedAgentCallServer)
 				}
-				if len(registration.tools) != 1 || registration.tools[0] != expectedAgentCallTool {
-					t.Fatalf("MCP tools = %v, want only %q", registration.tools, expectedAgentCallTool)
+				if diff := cmp.Diff(expectedAgentCallTools, registration.tools); diff != "" {
+					t.Fatalf("MCP tools mismatch (-want +got):\n%s", diff)
 				}
 
 				assertAgentCallApproval(t, adapterName, invocationContext, prepared)
@@ -235,7 +236,11 @@ func TestOpenCodeAgentCallUsesNativeSpawnEnvironment(t *testing.T) {
 	} else if err := json.Unmarshal([]byte(got), &permission); err != nil {
 		t.Fatalf("decode OPENCODE_PERMISSION: %v", err)
 	}
-	if diff := cmp.Diff(map[string]string{"agent-runner_call_agent": "allow"}, permission); diff != "" {
+	if diff := cmp.Diff(map[string]string{
+		"agent-runner_call_agent":        "allow",
+		"agent-runner_get_agent_call":    "allow",
+		"agent-runner_cancel_agent_call": "allow",
+	}, permission); diff != "" {
 		t.Fatalf("OPENCODE_PERMISSION mismatch (-want +got):\n%s", diff)
 	}
 	for _, name := range []string{"OPENCODE_CONFIG_CONTENT", "OPENCODE_PERMISSION", "OPENCODE_DISABLE_AUTOUPDATE"} {
@@ -412,7 +417,7 @@ func agentCallRegistration(t *testing.T, adapterName string, prepared agentCallP
 			serverName: expectedAgentCallServer,
 			command:    tomlStringValue(t, text, "command"),
 			args:       []string{"internal", "call-agent-mcp"},
-			tools:      []string{expectedAgentCallTool},
+			tools:      expectedAgentCallTools,
 			timeout:    tomlIntValue(t, text, "tool_timeout_sec"),
 		}
 	case "copilot":
@@ -438,7 +443,7 @@ func agentCallRegistration(t *testing.T, adapterName string, prepared agentCallP
 		if !ok || len(server.Command) == 0 {
 			t.Fatalf("OpenCode MCP config = %#v", config.MCP)
 		}
-		return agentCallRegistrationView{serverName: expectedAgentCallServer, command: server.Command[0], args: server.Command[1:], tools: []string{expectedAgentCallTool}}
+		return agentCallRegistrationView{serverName: expectedAgentCallServer, command: server.Command[0], args: server.Command[1:], tools: expectedAgentCallTools}
 	}
 	t.Fatalf("unsupported adapter %q", adapterName)
 	return agentCallRegistrationView{}
@@ -476,7 +481,7 @@ func decodeStandardMCPJSON(t *testing.T, data []byte) agentCallRegistrationView 
 	}
 	tools := server.Tools
 	if len(tools) == 0 {
-		tools = []string{expectedAgentCallTool}
+		tools = append([]string{}, expectedAgentCallTools...)
 	}
 	return agentCallRegistrationView{serverName: expectedAgentCallServer, command: server.Command, args: server.Args, tools: tools, env: server.Env, timeout: server.Timeout}
 }
@@ -487,26 +492,94 @@ func assertAgentCallApproval(t *testing.T, adapterName string, invocationContext
 	found := false
 	switch adapterName {
 	case "claude":
-		found = hasFlagValue(prepared.args, "--allowedTools", "mcp__agent-runner__call_agent")
+		if wantApproval {
+			found = true
+			for _, name := range expectedAgentCallTools {
+				if !hasFlagValue(prepared.args, "--allowedTools", "mcp__agent-runner__"+name) {
+					found = false
+					break
+				}
+			}
+		} else {
+			found = false
+			for _, name := range expectedAgentCallTools {
+				if hasFlagValue(prepared.args, "--allowedTools", "mcp__agent-runner__"+name) {
+					found = true
+					break
+				}
+			}
+		}
 	case "codex":
 		home := envValue(t, prepared.env, "CODEX_HOME")
 		data, err := os.ReadFile(filepath.Join(home, "config.toml"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		found = strings.Contains(string(data), "approval_mode = \"approve\"")
+		text := string(data)
+		found = strings.Contains(text, "approval_mode = \"approve\"")
+		if wantApproval {
+			for _, name := range expectedAgentCallTools {
+				if !strings.Contains(text, "[mcp_servers.agent-runner.tools."+name+"]") {
+					found = false
+					break
+				}
+			}
+		}
 	case "copilot":
-		found = containsString(prepared.args, "--allow-tool=agent-runner(call_agent)")
+		if wantApproval {
+			found = true
+			for _, name := range expectedAgentCallTools {
+				if !containsString(prepared.args, "--allow-tool=agent-runner("+name+")") {
+					found = false
+					break
+				}
+			}
+		} else {
+			found = false
+			for _, name := range expectedAgentCallTools {
+				if containsString(prepared.args, "--allow-tool=agent-runner("+name+")") {
+					found = true
+					break
+				}
+			}
+		}
 	case "cursor":
 		configDir := envValue(t, prepared.env, "CURSOR_CONFIG_DIR")
 		data, err := os.ReadFile(filepath.Join(configDir, "cli-config.json"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		found = strings.Contains(string(data), `"Mcp(agent-runner:call_agent)"`)
+		text := string(data)
+		if wantApproval {
+			found = true
+			for _, name := range expectedAgentCallTools {
+				if !strings.Contains(text, `"Mcp(agent-runner:`+name+`)"`) {
+					found = false
+					break
+				}
+			}
+		} else {
+			found = false
+			for _, name := range expectedAgentCallTools {
+				if strings.Contains(text, `"Mcp(agent-runner:`+name+`)"`) {
+					found = true
+					break
+				}
+			}
+		}
 	case "opencode":
 		config := envValue(t, prepared.env, "OPENCODE_CONFIG_CONTENT")
-		found = strings.Contains(config, `"agent-runner_call_agent":"allow"`)
+		if wantApproval {
+			found = true
+			for _, name := range expectedAgentCallTools {
+				if !strings.Contains(config, `"agent-runner_`+name+`":"allow"`) {
+					found = false
+					break
+				}
+			}
+		} else {
+			found = strings.Contains(config, `"agent-runner_call_agent":"allow"`)
+		}
 	}
 	if found != wantApproval {
 		t.Fatalf("%s %s narrow approval present = %v, want %v; args=%v env=%v", adapterName, invocationContext, found, wantApproval, prepared.args, prepared.env)
@@ -534,7 +607,7 @@ func assertAgentCallTimeout(t *testing.T, adapterName string, registration *agen
 func assertNoAgentCallIntegration(t *testing.T, adapterName string, prepared agentCallPreparedInvocation) {
 	t.Helper()
 	joined := strings.Join(append(append([]string{}, prepared.args...), prepared.env...), "\n")
-	for _, forbidden := range []string{"call-agent-mcp", "agent-runner(call_agent)", "agent-runner_call_agent", "mcp__agent-runner__call_agent"} {
+	for _, forbidden := range []string{"call-agent-mcp", "agent-runner(call_agent)", "agent-runner_call_agent", "mcp__agent-runner__call_agent", "get_agent_call", "cancel_agent_call"} {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("%s emitted agent-call integration %q: args=%v env=%v", adapterName, forbidden, prepared.args, prepared.env)
 		}

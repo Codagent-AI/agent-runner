@@ -93,7 +93,9 @@ func (a *ClaudeAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, err
 		}
 		args = append(args, "--plugin-dir", pluginDir)
 		if context.IsAutonomous() {
-			args = append(args, "--allowedTools", "mcp__agent-runner__call_agent")
+			for _, name := range agentCallMCPToolNames {
+				args = append(args, "--allowedTools", "mcp__agent-runner__"+name)
+			}
 		}
 	}
 

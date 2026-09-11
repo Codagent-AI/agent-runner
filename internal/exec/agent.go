@@ -340,6 +340,7 @@ func prepareAgentCallRuntime(
 	attempt := server.ActivateAttempt(context.Background(), step.ID, control.AttemptOptions{
 		AgentCallEligible: true, AgentCallHandler: handler,
 	})
+	handler.options.AttemptContext = attempt.Context
 	return handler, append(spawnEnv, attempt.Environment()...), server.Deactivate, nil
 }
 

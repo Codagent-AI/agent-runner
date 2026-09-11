@@ -207,7 +207,9 @@ func appendCodexAgentCallConfig(config []byte, command MCPServerCommand, autonom
 	result.WriteString("args = ")
 	result.Write(args)
 	result.WriteByte('\n')
-	result.WriteString(`enabled_tools = ["call_agent"]`)
+	tools, _ := json.Marshal(agentCallMCPToolNames)
+	result.WriteString("enabled_tools = ")
+	result.Write(tools)
 	result.WriteByte('\n')
 	envVars, _ := json.Marshal(agentCallControlEnvironmentVariables)
 	result.WriteString("env_vars = ")
@@ -215,9 +217,13 @@ func appendCodexAgentCallConfig(config []byte, command MCPServerCommand, autonom
 	result.WriteByte('\n')
 	fmt.Fprintf(&result, "tool_timeout_sec = %d\n", agentCallTimeoutSeconds)
 	if autonomous {
-		result.WriteString("\n[mcp_servers.agent-runner.tools.call_agent]\n")
-		result.WriteString(`approval_mode = "approve"`)
-		result.WriteByte('\n')
+		for _, name := range agentCallMCPToolNames {
+			result.WriteString("\n[mcp_servers.agent-runner.tools.")
+			result.WriteString(name)
+			result.WriteString("]\n")
+			result.WriteString(`approval_mode = "approve"`)
+			result.WriteByte('\n')
+		}
 	}
 	return []byte(result.String())
 }

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestRequestValidationRejectsInvalidForms(t *testing.T) {
@@ -36,8 +38,11 @@ func TestRequestValidationRejectsInvalidForms(t *testing.T) {
 
 func TestCanonicalToolPublishesOnlySupportedFields(t *testing.T) {
 	tool := Tool()
-	if tool.Name != ToolName || !strings.Contains(tool.Description, "synchronous") || !strings.Contains(tool.Description, "serial") {
+	if tool.Name != ToolName || !strings.Contains(tool.Description, "call_id") || !strings.Contains(tool.Description, "serial") {
 		t.Fatalf("Tool() = %#v", tool)
+	}
+	if strings.Contains(tool.Description, "synchronous") {
+		t.Fatalf("start tool still describes a blocking wait: %#v", tool)
 	}
 	raw, err := json.Marshal(tool.InputSchema)
 	if err != nil {
@@ -51,6 +56,60 @@ func TestCanonicalToolPublishesOnlySupportedFields(t *testing.T) {
 	}
 	if strings.Contains(schema, `"mode"`) {
 		t.Fatalf("schema unexpectedly publishes mode: %s", schema)
+	}
+}
+
+func TestCanonicalToolsPublishStartPollAndCancel(t *testing.T) {
+	tools := Tools()
+	if len(tools) != 3 {
+		t.Fatalf("Tools() = %#v, want call_agent, get_agent_call, cancel_agent_call", tools)
+	}
+	got := map[string]string{}
+	for _, tool := range tools {
+		got[tool.Name] = tool.Description
+	}
+	if got[ToolName] == "" || !strings.Contains(got[ToolName], "get_agent_call") {
+		t.Fatalf("call_agent description = %q, want start/poll guidance", got[ToolName])
+	}
+	if got[GetToolName] == "" || !strings.Contains(strings.ToLower(got[GetToolName]), "terminal") {
+		t.Fatalf("get_agent_call description = %q", got[GetToolName])
+	}
+	if got[CancelToolName] == "" || !strings.Contains(strings.ToLower(got[CancelToolName]), "terminat") {
+		t.Fatalf("cancel_agent_call description = %q", got[CancelToolName])
+	}
+	for _, tool := range []*mcp.Tool{GetTool(), CancelTool()} {
+		raw, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		schema := string(raw)
+		if !strings.Contains(schema, `"call_id"`) || strings.Contains(schema, `"prompt"`) {
+			t.Fatalf("%s schema = %s, want call_id only", tool.Name, schema)
+		}
+	}
+}
+
+func TestDecodeCallIDRequestRejectsInvalidForms(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		code string
+	}{
+		{name: "empty object", raw: `{}`, code: CodeInvalidRequest},
+		{name: "blank call id", raw: `{"call_id":" "}`, code: CodeInvalidRequest},
+		{name: "unknown field", raw: `{"call_id":"call-1","prompt":"no"}`, code: CodeInvalidRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, failure := DecodeCallIDRequest([]byte(tt.raw))
+			if failure == nil || failure.Code != tt.code {
+				t.Fatalf("DecodeCallIDRequest() = %#v, want code %q", failure, tt.code)
+			}
+		})
+	}
+	request, failure := DecodeCallIDRequest([]byte(`{"call_id":"call-1"}`))
+	if failure != nil || request.CallID != "call-1" {
+		t.Fatalf("valid DecodeCallIDRequest() = %#v %#v", request, failure)
 	}
 }
 

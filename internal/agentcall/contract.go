@@ -12,7 +12,15 @@ import (
 )
 
 const (
-	ToolName = "call_agent"
+	ToolName       = "call_agent"
+	GetToolName    = "get_agent_call"
+	CancelToolName = "cancel_agent_call"
+
+	StatusAccepted  = "accepted"
+	StatusRunning   = "running"
+	StatusSucceeded = "succeeded"
+	StatusFailed    = "failed"
+	StatusCanceled  = "canceled"
 
 	CodeInvalidRequest  = "invalid_request"
 	CodeInvalidTarget   = "invalid_target"
@@ -20,6 +28,7 @@ const (
 	CodeIneligible      = "call_agent_unavailable"
 	CodeUnknownAgent    = "unknown_agent"
 	CodeUnknownSession  = "unknown_session"
+	CodeUnknownCall     = "unknown_call"
 	CodeInvalidCLI      = "invalid_cli"
 	CodeInvalidModel    = "invalid_model"
 	CodeInvalidWorkdir  = "invalid_workdir"
@@ -31,9 +40,24 @@ const (
 	CodeResultTooLarge  = "result_too_large"
 )
 
-const toolDescription = "Call one Agent Runner profile or declared named session. The tool is synchronous and serial: " +
-	"wait for the active call to finish or cancel it before starting another. " +
-	"The child receives the profile system prompt and supplied prompt without workflow-step enrichment."
+const (
+	toolDescription = "Start one Agent Runner profile or declared named session. Returns a call_id immediately " +
+		"with a non-terminal status; poll get_agent_call until the call is terminal. Calls are serial: " +
+		"poll get_agent_call or cancel cancel_agent_call before starting another. " +
+		"The child receives the profile system prompt and supplied prompt without workflow-step enrichment."
+	getToolDescription = "Return the current status or cached terminal result for a call_id from this parent attempt. " +
+		"Does not wait for the child and does not start another call."
+	cancelToolDescription = "Terminate a running child for call_id. A finished call returns its cached terminal result. " +
+		"Does not start another call."
+	callIDSchema = `{
+  "type": "object",
+  "properties": {
+    "call_id": {"type": "string", "minLength": 1}
+  },
+  "required": ["call_id"],
+  "additionalProperties": false
+}`
+)
 
 // Request is the canonical call_agent input. Pointer fields distinguish an
 // omitted optional field from an explicitly empty value during validation.
@@ -74,6 +98,8 @@ type Error struct {
 	Code    string  `json:"code"`
 	Message string  `json:"message"`
 	Target  *Target `json:"target,omitempty"`
+	CallID  string  `json:"call_id,omitempty"`
+	Elapsed string  `json:"elapsed,omitempty"`
 }
 
 func (e *Error) Error() string {
@@ -84,9 +110,37 @@ func (e *Error) Error() string {
 }
 
 type Response struct {
-	CallID string  `json:"call_id,omitempty"`
-	Result *Result `json:"result,omitempty"`
-	Error  *Error  `json:"error,omitempty"`
+	CallID  string  `json:"call_id,omitempty"`
+	Status  string  `json:"status,omitempty"`
+	Target  *Target `json:"target,omitempty"`
+	Elapsed string  `json:"elapsed,omitempty"`
+	Result  *Result `json:"result,omitempty"`
+	Error   *Error  `json:"error,omitempty"`
+}
+
+// CallIDRequest is the canonical input for get_agent_call and cancel_agent_call.
+type CallIDRequest struct {
+	CallID string `json:"call_id"`
+}
+
+func (r CallIDRequest) Validate() *Error {
+	if strings.TrimSpace(r.CallID) == "" {
+		return &Error{Code: CodeInvalidRequest, Message: "call_id is required"}
+	}
+	return nil
+}
+
+func IsTerminalStatus(status string) bool {
+	switch status {
+	case StatusSucceeded, StatusFailed, StatusCanceled:
+		return true
+	default:
+		return false
+	}
+}
+
+func ToolNames() []string {
+	return []string{ToolName, GetToolName, CancelToolName}
 }
 
 func (r Request) Target() Target {
@@ -147,6 +201,36 @@ func DecodeRequest(raw json.RawMessage) (Request, *Error) {
 		return Request{}, validation
 	}
 	return request, nil
+}
+
+// DecodeCallIDRequest applies strict JSON decoding for poll and cancel tools.
+func DecodeCallIDRequest(raw json.RawMessage) (CallIDRequest, *Error) {
+	var request CallIDRequest
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		return CallIDRequest{}, &Error{Code: CodeInvalidRequest, Message: "invalid call_id request: " + err.Error()}
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return CallIDRequest{}, &Error{Code: CodeInvalidRequest, Message: "invalid call_id request: multiple JSON values"}
+	}
+	if validation := request.Validate(); validation != nil {
+		return CallIDRequest{}, validation
+	}
+	return request, nil
+}
+
+func Tools() []*mcp.Tool {
+	return []*mcp.Tool{Tool(), GetTool(), CancelTool()}
+}
+
+func GetTool() *mcp.Tool {
+	return &mcp.Tool{Name: GetToolName, Description: getToolDescription, InputSchema: json.RawMessage(callIDSchema)}
+}
+
+func CancelTool() *mcp.Tool {
+	return &mcp.Tool{Name: CancelToolName, Description: cancelToolDescription, InputSchema: json.RawMessage(callIDSchema)}
 }
 
 // Tool returns the one canonical schema and description shared by every
