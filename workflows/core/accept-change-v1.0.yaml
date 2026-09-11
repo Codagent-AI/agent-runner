@@ -45,7 +45,7 @@ steps:
 
       Implement user-requested fixes and minor enhancements. Confirm changes to behavior, scope, or design before editing. Do not implement requests that materially expand the change's scope or require substantial redesign.
 
-      Before fixing a defect found during acceptance review or testing, you MUST invoke codagent:implement-with-tdd and follow its red-green-refactor process. Add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
+      When fixing a defect found during acceptance review or testing, add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
 
       Decide whether a requested change belongs in the specifications. Update the applicable active specifications under `{{change_dir}}/specs/` when it changes or clarifies observable behavior, requirements, scope, or design that should be normative. Do not edit the proposal, design, or tasks, and omit minor technical details from specifications.
 
@@ -86,7 +86,7 @@ steps:
 
       Follow codagent:call-agent's verification and autonomous result-accounting rules rather than performing the acceptance testing yourself. If the targeted pass succeeds, summarize the result and continue to next step.
 
-      If it finds an actionable defect, fix it without expanding the approved scope. Before editing, you MUST invoke codagent:implement-with-tdd and follow its red-green-refactor process. Add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
+      If it finds an actionable defect, fix it without expanding the approved scope. Add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
 
       Run relevant targeted automated checks. {{artifact_validation_instruction}} Invoke the validator-run skill, incorporate its fixes, commit changes that belong to the current project repository using the project's conventions and the `[{{step_id}}]` prefix, leave artifacts outside the repository uncommitted, and push while keeping the pull request in draft. Then resume `acceptance-tester` with explicit re-review instructions to reproduce the prior finding, verify the fix, and exercise only the affected and directly dependent flows. Retain the earlier full-pass evidence for unaffected flows and do not begin a new broad review. It may report a newly introduced defect only when observed within that targeted scope.
 
@@ -124,7 +124,7 @@ steps:
           - assumptions ledger: `{{session_dir}}/output/acceptance-assumptions.md`;
           - prior full-pass evidence: `{{session_dir}}/output/acceptance-flow-evidence.md`.
 
-          Follow codagent:call-agent's independent-verification and result-accounting rules. If testing finds an actionable product defect, invoke codagent:implement-with-tdd before editing, add practical regression coverage, run relevant checks and the full Validator, commit with the `[recover-reacceptance-testing]` prefix, push the draft pull request, and resume the same tester against the affected scope.
+          Follow codagent:call-agent's independent-verification and result-accounting rules. If testing finds an actionable product defect, fix it, add practical regression coverage, run relevant checks and the full Validator, commit with the `[recover-reacceptance-testing]` prefix, push the draft pull request, and resume the same tester against the affected scope.
 
           Preserve `REACCEPTANCE_FAILED` and the honest handoff while any defect, impediment, or required evidence remains. Overwrite `{{session_dir}}/output/reacceptance-status.txt` with exactly `REACCEPTANCE_COMPLETE` only after all applicable acceptance obligations have passing durable evidence for the current revision. Request completion of this interactive step only after that file and the acceptance handoff agree.
 

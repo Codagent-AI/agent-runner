@@ -44,7 +44,7 @@ steps:
     session: new
     mode: autonomous
     prompt: |
-      Implement the task described in openspec/changes/{{change_name}}/tasks.md. You MUST use the codagent:implement-with-tdd skill. When you are done implementing, commit your changes following the project's commit message conventions and prepend [{{step_id}}]. Then summarize to the user what you changed.
+      Implement the task described in openspec/changes/{{change_name}}/tasks.md. When you are done implementing, commit your changes following the project's commit message conventions and prepend [{{step_id}}]. Then summarize to the user what you changed.
 
   - id: run-validator
     workflow: ../core/run-validator-v1.0.yaml

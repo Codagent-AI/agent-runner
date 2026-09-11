@@ -170,7 +170,7 @@ steps:
 
       Follow codagent:call-agent's verification and autonomous result-accounting rules after every pass. Inspect the durable evidence and resolve every high-confidence in-scope finding you can, including implementation, CI, PR-state, tooling, setup, and environmental problems. Preserve approved behavior, scope, design, and testing strategy; append ambiguity to the assumptions ledger instead of deciding it silently.
 
-      Before fixing an implementation defect found by acceptance testing, you MUST invoke codagent:implement-with-tdd and follow its red-green-refactor process. Add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
+      When fixing an implementation defect found by acceptance testing, add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
 
       If a tracked file changes, run the narrowest relevant automated checks. {{artifact_validation_instruction}} Agent Validator skipping is set to `{{skip_validator}}`. If `skip_validator` is `false`, invoke the validator-run skill and require it to pass, incorporating any Validator fixes. If `skip_validator` is `true`, do not invoke Agent Validator. In either mode, commit all related changes following project conventions with the `[{{step_id}}]` prefix, push, and verify local `HEAD` equals the draft PR head.
 

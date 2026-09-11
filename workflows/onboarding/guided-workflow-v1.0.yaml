@@ -143,7 +143,7 @@ steps:
 
       Read and reference the task file at {{task_file}}. Contextualize your guidance to that plan, for example: "I see you made a plan to ...".
 
-      Explain only what happens next in this guided workflow: the next execution step is a single autonomous implementor step that reads {{task_file}}, uses the codagent:implement-with-tdd skill, stages implementation changes with `git add`, and does not commit. Do not describe OpenSpec change workflows, Agent Validator setup or runs, finalizing, CI, subagent dispatch, pushing, or opening PRs as part of this guided workflow. Those are not part of the current guided-workflow sub-workflow.
+      Explain only what happens next in this guided workflow: the next execution step is a single autonomous implementor step that reads {{task_file}}, implements it, stages implementation changes with `git add`, and does not commit. Do not describe OpenSpec change workflows, Agent Validator setup or runs, finalizing, CI, subagent dispatch, pushing, or opening PRs as part of this guided workflow. Those are not part of the current guided-workflow sub-workflow.
 
       Use the packaged documentation at {{session_dir}}/bundled/onboarding/docs/ for general Agent Runner Q&A. Answer questions about workflows, step types, sessions, validation, and related concepts.
 
@@ -164,7 +164,7 @@ steps:
     prompt: |
       Implement the task described in {{task_file}}.
 
-      You MUST use the codagent:implement-with-tdd skill. Stage all implementation changes with `git add`, including newly added files, but do not commit changes. Leave the staged working tree for the user to review. When implementation and verification are complete, summarize what changed.
+      Stage all implementation changes with `git add`, including newly added files, but do not commit changes. Leave the staged working tree for the user to review. When implementation and verification are complete, summarize what changed.
 
   - id: summary
     mode: ui
