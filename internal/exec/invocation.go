@@ -159,15 +159,26 @@ func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logge
 		}
 	}
 	if launched {
-		result.DiscoveredSessionID = input.Adapter.DiscoverSessionID(&cli.DiscoverOptions{
-			SpawnTime: startedAt, PresetID: input.SessionID,
-			Headless:      input.InvocationContext.IsHeadless(),
-			ProcessOutput: processResult.Stdout, Workdir: input.Workdir,
-		})
+		result.DiscoveredSessionID = discoverInvocationSessionID(input, startedAt, processResult.Stdout)
 	}
 	result.FinishedAt = now()
 	result.Duration = result.FinishedAt.Sub(result.StartedAt)
 	return result, runErr
+}
+
+func discoverInvocationSessionID(input *AgentInvocation, startedAt time.Time, stdout string) string {
+	if input == nil || input.Adapter == nil {
+		return ""
+	}
+	opts := &cli.DiscoverOptions{
+		SpawnTime: startedAt, PresetID: input.SessionID,
+		Headless:      input.InvocationContext.IsHeadless(),
+		ProcessOutput: stdout, Workdir: input.Workdir,
+	}
+	if input.direct != nil {
+		opts.ExcludeSessionIDs = agentCallChildSessionIDs(input.direct.agentCallHandler)
+	}
+	return input.Adapter.DiscoverSessionID(opts)
 }
 
 func attachInvocationIdentity(usage *model.UsageRecord, requestedCLI, requestedModel, requestedEffort string) {

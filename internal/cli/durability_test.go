@@ -82,8 +82,7 @@ func TestCursorAdapterImplementsReceiptTurnDurabilityProbe(t *testing.T) {
 }
 
 func TestCursorReceiptDurabilityProbeFindsReceiptToolResultAfterCheckpoint(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := isolateCursorHome(t)
 	path := filepath.Join(home, ".cursor", "chats", "workspace", "cursor-session", "store.db")
 	copyFixture(t, "testdata/durability/cursor/store.db", path)
 	probe := &CursorAdapter{}
@@ -101,8 +100,7 @@ func TestCursorReceiptDurabilityProbeFindsReceiptToolResultAfterCheckpoint(t *te
 }
 
 func TestCursorReceiptDurabilityProbeRejectsAssistantTextAndUnrelatedToolResults(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := isolateCursorHome(t)
 	path := filepath.Join(home, ".cursor", "chats", "workspace", "cursor-session", "store.db")
 	copyFixture(t, "testdata/durability/cursor/store.db", path)
 	probe := &CursorAdapter{}
@@ -127,8 +125,7 @@ func TestCursorReceiptDurabilityProbeRejectsAssistantTextAndUnrelatedToolResults
 }
 
 func TestCursorWaitForCommittedTurnWithoutReceiptFailsHonestly(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := isolateCursorHome(t)
 	path := filepath.Join(home, ".cursor", "chats", "workspace", "cursor-session", "store.db")
 	copyFixture(t, "testdata/durability/cursor/store-committed.db", path)
 	probe := &CursorAdapter{}
@@ -211,8 +208,7 @@ func TestOpenCodeDurabilityProbeRetriesTransientQueryFailure(t *testing.T) {
 }
 
 func TestCursorReceiptDurabilityProbeQueriesToolResultRows(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := isolateCursorHome(t)
 	path := filepath.Join(home, ".cursor", "chats", "workspace", "cursor-session", "store.db")
 	copyFixture(t, "testdata/durability/cursor/store.db", path)
 	responses := [][]byte{
@@ -251,8 +247,7 @@ func TestCursorReceiptDurabilityProbeQueriesToolResultRows(t *testing.T) {
 }
 
 func TestCursorDurabilityCheckpointAcceptsEmptySQLiteJSONOutput(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := isolateCursorHome(t)
 	path := filepath.Join(home, ".cursor", "chats", "workspace", "cursor-session", "store.db")
 	copyFixture(t, "testdata/durability/cursor/store.db", path)
 	probe := &CursorAdapter{runStoreQuery: func(context.Context, string) ([]byte, error) {
@@ -269,8 +264,7 @@ func TestCursorDurabilityCheckpointAcceptsEmptySQLiteJSONOutput(t *testing.T) {
 }
 
 func TestCursorDurabilityProbeFailsFastWhenSQLiteBinaryMissing(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := isolateCursorHome(t)
 	path := filepath.Join(home, ".cursor", "chats", "workspace", "cursor-session", "store.db")
 	copyFixture(t, "testdata/durability/cursor/store.db", path)
 	probe := &CursorAdapter{runStoreQuery: func(context.Context, string) ([]byte, error) {
@@ -307,8 +301,7 @@ func stubSlowBinary(t *testing.T, name string) {
 }
 
 func TestCursorProbeSubprocessesHonorContext(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := isolateCursorHome(t)
 	path := filepath.Join(home, ".cursor", "chats", "workspace", "cursor-session", "store.db")
 	copyFixture(t, "testdata/durability/cursor/store.db", path)
 	stubSlowBinary(t, "sqlite3")

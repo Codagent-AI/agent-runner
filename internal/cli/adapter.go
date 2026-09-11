@@ -372,6 +372,9 @@ type DiscoverOptions struct {
 	ProcessOutput string // Captured stdout/stderr from the CLI process (used by Codex headless)
 	Headless      bool
 	Workdir       string // Effective working directory of the CLI process (for Copilot filesystem discovery)
+	// ExcludeSessionIDs are chat IDs that must not be chosen as the parent
+	// session, typically nested agent-call children in the same workspace.
+	ExcludeSessionIDs []string
 }
 
 // OutputFilter is an optional interface adapters may implement when the CLI

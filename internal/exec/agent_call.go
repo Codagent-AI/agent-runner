@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +77,7 @@ type acceptedAgentCall struct {
 	cancel          context.CancelFunc
 	done            chan struct{}
 	response        json.RawMessage
+	childSessionID  string
 }
 
 type agentCallExecution struct {
@@ -275,11 +278,171 @@ func (h *AgentCallHandler) finalizeExecution(record *acceptedAgentCall, resolved
 	h.mu.Lock()
 	record.response = raw
 	record.status = execution.response.Status
+	record.childSessionID = strings.TrimSpace(execution.invocation.DiscoveredSessionID)
 	if h.active == record {
 		h.active = nil
 	}
 	close(record.done)
 	h.mu.Unlock()
+}
+
+func (h *AgentCallHandler) ChildSessionIDs() []string {
+	if h == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var ids []string
+	seen := make(map[string]struct{}, len(h.accepted))
+	for _, record := range h.accepted {
+		id := strings.TrimSpace(record.childSessionID)
+		if id == "" {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func agentCallChildSessionIDs(handler control.AgentCallHandler) []string {
+	provider, ok := handler.(interface{ ChildSessionIDs() []string })
+	if !ok {
+		return nil
+	}
+	return provider.ChildSessionIDs()
+}
+
+func (h *AgentCallHandler) probeChildSessionID(ctx context.Context, record *acceptedAgentCall, call *resolvedAgentCall, output *synchronizedBuffer) {
+	if output == nil {
+		return
+	}
+	defer output.Close()
+	if h.publishDiscoveredChildSession(record, call, output.String()) {
+		return
+	}
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			h.publishDiscoveredChildSession(record, call, output.String())
+			return
+		case <-ticker.C:
+			if h.publishDiscoveredChildSession(record, call, output.String()) {
+				return
+			}
+		}
+	}
+}
+
+func (h *AgentCallHandler) publishDiscoveredChildSession(record *acceptedAgentCall, call *resolvedAgentCall, output string) bool {
+	id := h.discoverRunningChildSessionID(record, call, output)
+	if id == "" {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if record.childSessionID == "" {
+		record.childSessionID = id
+	}
+	return record.childSessionID != ""
+}
+
+func (h *AgentCallHandler) discoverRunningChildSessionID(record *acceptedAgentCall, call *resolvedAgentCall, output string) string {
+	if call == nil || call.adapter == nil {
+		return ""
+	}
+	if id := strings.TrimSpace(call.adapter.DiscoverSessionID(&cli.DiscoverOptions{
+		SpawnTime: record.started, PresetID: call.sessionID,
+		Headless: true, ProcessOutput: output, Workdir: call.workdir,
+	})); id != "" {
+		return id
+	}
+	exclude := append([]string(nil), h.ChildSessionIDs()...)
+	h.parentMu.Lock()
+	parentID := h.parentSessionID
+	h.parentMu.Unlock()
+	if parentID != "" {
+		exclude = append(exclude, parentID)
+	}
+	return strings.TrimSpace(call.adapter.DiscoverSessionID(&cli.DiscoverOptions{
+		SpawnTime: record.started, PresetID: call.sessionID,
+		Headless: false, ProcessOutput: output, Workdir: call.workdir,
+		ExcludeSessionIDs: exclude,
+	}))
+}
+
+func childStdoutCapture(adapter cli.Adapter, capture io.Writer) func(io.Writer) io.Writer {
+	return func(w io.Writer) io.Writer {
+		next := w
+		if wrapper, ok := adapter.(cli.StdoutWrapper); ok {
+			next = wrapper.WrapStdout(next)
+		}
+		if capture == nil {
+			return next
+		}
+		return io.MultiWriter(next, capture)
+	}
+}
+
+const maxChildSessionProbeBytes = 64 * 1024
+
+type synchronizedBuffer struct {
+	mu     sync.Mutex
+	buf    strings.Builder
+	limit  int
+	closed bool
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	if b == nil {
+		return len(p), nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return len(p), nil
+	}
+	limit := b.limit
+	if limit <= 0 {
+		limit = maxChildSessionProbeBytes
+	}
+	remain := limit - b.buf.Len()
+	if remain <= 0 {
+		return len(p), nil
+	}
+	if len(p) > remain {
+		_, err := b.buf.Write(p[:remain])
+		return len(p), err
+	}
+	return b.buf.Write(p)
+}
+
+func (b *synchronizedBuffer) String() string {
+	if b == nil {
+		return ""
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return ""
+	}
+	return b.buf.String()
+}
+
+func (b *synchronizedBuffer) Close() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.closed = true
+	b.buf.Reset()
 }
 
 func (h *AgentCallHandler) childParentContext(requestCtx context.Context) context.Context {
@@ -546,6 +709,9 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 	if err != nil {
 		return h.preLaunchFailure(record, call, "prepare called agent environment: "+err.Error())
 	}
+	probeCtx, stopProbe := context.WithCancel(ctx)
+	defer stopProbe()
+	output := &synchronizedBuffer{limit: maxChildSessionProbeBytes}
 	invocation, runErr := InvokeAgent(&AgentInvocation{
 		Context: ctx, Adapter: call.adapter, Args: args,
 		Env: spawnEnv, DropEnv: cli.DropSpawnEnvVars(call.adapter),
@@ -553,6 +719,10 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 		InvocationContext: cli.ContextAutonomousHeadless,
 		CLI:               call.cliName, Model: call.model, Effort: call.profile.Effort, SessionID: sessionID, SessionResumed: call.resume,
 		Log: h.options.Log, Now: h.options.Now,
+		StdoutWrapper: childStdoutCapture(call.adapter, output),
+		OnStarted: func() {
+			go h.probeChildSessionID(probeCtx, record, call, output)
+		},
 	}, h.options.Runner, h.options.Log)
 	if runErr != nil {
 		if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) || ctx.Err() != nil {

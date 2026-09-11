@@ -85,6 +85,12 @@ A distinct second `call_agent` while one child is running still returns `call_in
 
 The MCP tool descriptions in this repo must be enough for a parent that only reads schemas. The published `codagent:call-agent` skill still says the tool is synchronous, so implementation also edits `/Users/paul/codagent/agent-skills/skills/call-agent/SKILL.md` (sibling commit): start, poll until terminal, explicit cancel, never treat in-progress as success.
 
+### 6. Parent session discovery excludes nested children
+
+An interactive Cursor parent and a Cursor child both write chats under the same workspace. Parent durability confirmation requires exactly one matching chat after spawn. A nested child makes that scan ambiguous, so the parent session ID is empty and checkpoint confirmation fails.
+
+Agent-call records keep each child's discovered session ID, including while the child is still running when launch output or chat metadata already identifies it. Parent `DiscoverSessionID` (live durability and post-exit) excludes those IDs. Unrelated extra chats with no excludes still return empty.
+
 ## Risks / Trade-offs
 
 - **BREAKING** for any parent that waits on one `call_agent` tools/call for the child text. Workflow YAML need not change; skills and prompts that assume a blocking result must poll.

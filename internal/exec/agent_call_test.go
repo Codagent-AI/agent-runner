@@ -49,7 +49,21 @@ func (a *callTestAdapter) BuildArgs(input *cli.BuildArgsInput) []string {
 	return []string{"test-agent"}
 }
 func (a *callTestAdapter) DiscoverSessionID(*cli.DiscoverOptions) string { return a.discovered }
-func (a *callTestAdapter) SupportsSystemPrompt() bool                    { return true }
+
+type recordingDiscoverAdapter struct {
+	callTestAdapter
+	discoverOpts []cli.DiscoverOptions
+}
+
+func (a *recordingDiscoverAdapter) DiscoverSessionID(opts *cli.DiscoverOptions) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if opts != nil {
+		a.discoverOpts = append(a.discoverOpts, *opts)
+	}
+	return a.discovered
+}
+func (a *callTestAdapter) SupportsSystemPrompt() bool { return true }
 func (a *callTestAdapter) ProbeModel(string, string) (cli.ProbeStrength, error) {
 	return cli.Verified, a.probeErr
 }
@@ -83,6 +97,7 @@ func (r *callTestRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, 
 		r.started <- *options
 	}
 	if r.release != nil {
+		options.NotifyStarted()
 		if r.ignoreCancel {
 			<-r.release
 			return r.result, r.err
@@ -312,6 +327,70 @@ func TestAgentCallHandlerRunsFreshProfileAutonomousHeadless(t *testing.T) {
 	}
 }
 
+func TestAgentCallHandlerExposesDiscoveredChildSessionIDs(t *testing.T) {
+	handler := NewAgentCallHandler(testAgentCallOptions(
+		t.TempDir(),
+		&callTestRunner{result: ProcessResult{Started: true, Stdout: "done"}},
+		&callTestAdapter{discovered: "child-chat"},
+	))
+	if ids := handler.ChildSessionIDs(); len(ids) != 0 {
+		t.Fatalf("ChildSessionIDs before call = %v, want empty", ids)
+	}
+	response := startAndAwaitAgentCall(t, handler, control.AgentCallRequest{
+		RequestID: "child", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`),
+	})
+	if response.Error != nil {
+		t.Fatalf("response = %#v", response)
+	}
+	if got := handler.ChildSessionIDs(); len(got) != 1 || got[0] != "child-chat" {
+		t.Fatalf("ChildSessionIDs = %v, want [child-chat]", got)
+	}
+}
+
+func TestAgentCallHandlerExposesInFlightChildSessionIDsForParentDiscovery(t *testing.T) {
+	workdir := t.TempDir()
+	adapter := &recordingDiscoverAdapter{callTestAdapter: callTestAdapter{discovered: "child-chat"}}
+	runner := &callTestRunner{
+		started: make(chan AgentProcessOptions, 1),
+		release: make(chan struct{}),
+		result:  ProcessResult{Started: true, Stdout: "done"},
+	}
+	ctx := testAgentCallOptions(workdir, runner, adapter).Context
+	ctx.ProjectRoot = workdir
+	ctx.WorkingDir = workdir
+	handler, _, _, err := prepareAgentCallRuntime(
+		true, cli.ContextInteractive, &model.Step{ID: "parent", Session: model.SessionNew},
+		ctx, adapter, runner, nil, "test", "", "[parent]", nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.options.Adapter = func(string) (cli.Adapter, error) { return adapter, nil }
+	handler.options.Runner = runner
+	start := startAgentCall(t, handler, control.AgentCallRequest{
+		RequestID: "nested", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`),
+	})
+	if start.Error != nil {
+		t.Fatalf("start = %#v", start)
+	}
+	<-runner.started
+	waitForChildSessionIDs(t, handler, "child-chat")
+	if handler.options.Parent.ResolveSessionID == nil {
+		close(runner.release)
+		t.Fatal("expected parent session resolver")
+	}
+	_ = handler.options.Parent.ResolveSessionID()
+	if got := lastDiscoverExcludes(t, adapter); len(got) != 1 || got[0] != "child-chat" {
+		close(runner.release)
+		t.Fatalf("in-flight parent discovery ExcludeSessionIDs = %v, want [child-chat]", got)
+	}
+	close(runner.release)
+	terminal := awaitAgentCall(t, handler, start.CallID)
+	if terminal.Error != nil {
+		t.Fatalf("terminal = %#v", terminal)
+	}
+}
+
 func TestAgentCallHandlerEmitsSuccessfulEvidencePairWithoutResponse(t *testing.T) {
 	workdir := t.TempDir()
 	cost := 0.42
@@ -473,6 +552,150 @@ func TestPrepareAgentCallRuntimeNotifiesLiveRunnerBeforeLaunchAndAfterFinish(t *
 	}
 	if runner.finished != 1 || runner.finishedBeforeLaunch {
 		t.Fatalf("finished notifications = %d beforeLaunch=%v, want one after launch", runner.finished, runner.finishedBeforeLaunch)
+	}
+}
+
+func TestPrepareAgentCallRuntimeExcludesNestedChildSessionsFromParentDiscovery(t *testing.T) {
+	workdir := t.TempDir()
+	adapter := &recordingDiscoverAdapter{callTestAdapter: callTestAdapter{discovered: "child-chat"}}
+	runner := &callTestRunner{result: ProcessResult{Started: true, Stdout: "done"}}
+	ctx := testAgentCallOptions(workdir, runner, adapter).Context
+	ctx.ProjectRoot = workdir
+	ctx.WorkingDir = workdir
+	step := &model.Step{ID: "parent", Session: model.SessionNew}
+
+	handler, _, _, err := prepareAgentCallRuntime(
+		true, cli.ContextInteractive, step, ctx, adapter, runner, nil,
+		"test", "", "[parent]", nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.options.Adapter = func(string) (cli.Adapter, error) { return adapter, nil }
+	response := startAndAwaitAgentCall(t, handler, control.AgentCallRequest{
+		RequestID: "nested", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`),
+	})
+	if response.Error != nil {
+		t.Fatalf("response = %#v", response)
+	}
+	if handler.options.Parent.ResolveSessionID == nil {
+		t.Fatal("expected parent session resolver")
+	}
+	_ = handler.options.Parent.ResolveSessionID()
+	if got := lastDiscoverExcludes(t, adapter); len(got) != 1 || got[0] != "child-chat" {
+		t.Fatalf("parent discovery ExcludeSessionIDs = %v, want [child-chat]", got)
+	}
+}
+
+func TestBuildWorkflowDirectInvocationExcludesNestedChildSessions(t *testing.T) {
+	workdir := t.TempDir()
+	adapter := &recordingDiscoverAdapter{callTestAdapter: callTestAdapter{discovered: "parent-chat"}}
+	handler := NewAgentCallHandler(testAgentCallOptions(
+		workdir,
+		&callTestRunner{result: ProcessResult{Started: true, Stdout: "done"}},
+		&callTestAdapter{discovered: "child-chat"},
+	))
+	response := startAndAwaitAgentCall(t, handler, control.AgentCallRequest{
+		RequestID: "nested", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`),
+	})
+	if response.Error != nil {
+		t.Fatalf("response = %#v", response)
+	}
+	invocation := buildWorkflowDirectInvocation(
+		&model.Step{ID: "parent", Workdir: workdir},
+		testAgentCallOptions(workdir, nil, adapter).Context,
+		adapter, "test", "", nil, true, handler, false,
+	)
+	if invocation.resolveSessionID == nil {
+		t.Fatal("expected session resolver")
+	}
+	_ = invocation.resolveSessionID()
+	if got := lastDiscoverExcludes(t, adapter); len(got) != 1 || got[0] != "child-chat" {
+		t.Fatalf("direct discovery ExcludeSessionIDs = %v, want [child-chat]", got)
+	}
+}
+
+func TestInvokeAgentExcludesNestedChildSessionsFromDiscovery(t *testing.T) {
+	workdir := t.TempDir()
+	handler := NewAgentCallHandler(testAgentCallOptions(
+		workdir,
+		&callTestRunner{result: ProcessResult{Started: true, Stdout: "done"}},
+		&callTestAdapter{discovered: "child-chat"},
+	))
+	response := startAndAwaitAgentCall(t, handler, control.AgentCallRequest{
+		RequestID: "nested", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`),
+	})
+	if response.Error != nil {
+		t.Fatalf("response = %#v", response)
+	}
+	adapter := &recordingDiscoverAdapter{callTestAdapter: callTestAdapter{discovered: "parent-chat"}}
+	runner := &callTestRunner{result: ProcessResult{Started: true, Stdout: "parent-done"}}
+	got, err := InvokeAgent(&AgentInvocation{
+		Context: context.Background(), Adapter: adapter, Args: []string{"test-agent"},
+		InvocationContext: cli.ContextAutonomousHeadless, CLI: "test",
+		direct: &directInvocation{agentCallHandler: handler},
+	}, runner, discardLogger{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DiscoveredSessionID != "parent-chat" {
+		t.Fatalf("DiscoveredSessionID = %q, want parent-chat", got.DiscoveredSessionID)
+	}
+	if excludes := lastDiscoverExcludes(t, adapter); len(excludes) != 1 || excludes[0] != "child-chat" {
+		t.Fatalf("InvokeAgent ExcludeSessionIDs = %v, want [child-chat]", excludes)
+	}
+}
+
+func lastDiscoverExcludes(t *testing.T, adapter *recordingDiscoverAdapter) []string {
+	t.Helper()
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	if len(adapter.discoverOpts) == 0 {
+		t.Fatal("expected DiscoverSessionID to be called")
+	}
+	return adapter.discoverOpts[len(adapter.discoverOpts)-1].ExcludeSessionIDs
+}
+
+func waitForChildSessionIDs(t *testing.T, handler *AgentCallHandler, want ...string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got := handler.ChildSessionIDs()
+		if len(got) == len(want) {
+			match := true
+			for i := range want {
+				if got[i] != want[i] {
+					match = false
+					break
+				}
+			}
+			if match {
+				return
+			}
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("ChildSessionIDs = %v, want %v", got, want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestSynchronizedBufferCapsAndDropsAfterClose(t *testing.T) {
+	buf := &synchronizedBuffer{limit: 8}
+	n, err := buf.Write([]byte("abcdefghij"))
+	if err != nil || n != 10 {
+		t.Fatalf("Write() = %d, %v", n, err)
+	}
+	if got := buf.String(); got != "abcdefgh" {
+		t.Fatalf("String() = %q, want capped prefix", got)
+	}
+	buf.Close()
+	n, err = buf.Write([]byte("more"))
+	if err != nil || n != 4 {
+		t.Fatalf("Write() after Close = %d, %v", n, err)
+	}
+	if got := buf.String(); got != "" {
+		t.Fatalf("String() after Close = %q, want empty", got)
 	}
 }
 

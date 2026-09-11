@@ -226,3 +226,21 @@ After acceptance, the child SHALL be leased to the parent attempt, not to a live
 #### Scenario: Bridge restart does not kill an accepted child
 - **WHEN** the MCP bridge exits or loses its authenticated control connection after a call is accepted and before the child is terminal
 - **THEN** Agent Runner leaves the child running for the parent attempt and does not treat the disconnect as cancellation
+
+### Requirement: Parent session discovery excludes called children
+
+When Agent Runner discovers the parent CLI session after spawn, it SHALL exclude session IDs belonging to agent-call children of that parent attempt. Same-workspace chats that are not nested children SHALL still make discovery fail closed when more than one match remains.
+
+#### Scenario: Nested child chat does not hide the parent
+- **WHEN** an interactive parent and a nested agent-call child both have CLI sessions in the same workspace
+- **AND** Agent Runner discovers the parent session after the child session ID is known
+- **THEN** discovery returns the parent session rather than an empty ID
+
+#### Scenario: In-flight child chat does not hide the parent
+- **WHEN** an interactive parent discovers its session while a nested agent-call child is still running
+- **AND** the child's session ID is already known from launch output or chat metadata
+- **THEN** discovery excludes that child session and returns the parent session
+
+#### Scenario: Unrelated extra chats remain ambiguous
+- **WHEN** two matching parent-workspace chats exist and neither is a nested agent-call child
+- **THEN** parent session discovery returns the empty string

@@ -14,3 +14,5 @@
 - [x] Update `docs/agent-calls.md` for start/poll/cancel, the parent-attempt lease, and troubleshooting of host `tools/call` timeouts
 - [x] Update `/Users/paul/codagent/agent-skills/skills/call-agent/SKILL.md` to start, poll until terminal, and cancel explicitly; do not treat in-progress status as success
 - [x] Make the new tests pass and keep existing agent-call coverage aligned with the non-blocking MCP contract
+- [x] Exclude nested agent-call session IDs from parent Cursor interactive discovery so a child chat cannot blank the parent session ID
+

@@ -320,9 +320,6 @@ func prepareAgentCallRuntime(
 		Parent: AgentCallParent{
 			CLI: cliName, SessionID: sessionID, NamedSession: parentNamedSession,
 			Worktree: ctx.ProjectRoot, Workdir: parentWorkdir, Prefix: prefix,
-			ResolveSessionID: func() string {
-				return adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: spawnTime, Workdir: parentWorkdir})
-			},
 		},
 	}
 	if notifier, ok := runner.(AgentCallLifecycleNotifier); ok {
@@ -330,6 +327,9 @@ func prepareAgentCallRuntime(
 		options.OnFinished = func(call AgentCallAccepted) { notifier.NotifyAgentCallFinished(&call) }
 	}
 	handler = NewAgentCallHandler(options)
+	handler.options.Parent.ResolveSessionID = func() string {
+		return discoverParentSessionID(adapter, spawnTime, parentWorkdir, handler)
+	}
 	if !invocationContext.IsHeadless() {
 		return handler, spawnEnv, nil, nil
 	}
@@ -360,7 +360,7 @@ func buildWorkflowDirectInvocation(
 		ctx: ctx, stepID: step.ID, cliName: cliName, sessionID: sessionID, probe: probe,
 		spawnEnv: spawnEnv, dropEnv: cli.DropSpawnEnvVars(adapter),
 		resolveSessionID: func() string {
-			return adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: spawnTime, Workdir: step.Workdir})
+			return discoverParentSessionID(adapter, spawnTime, step.Workdir, agentCallHandler)
 		},
 		agentCallEligible: agentCallEligible,
 		agentCallHandler:  agentCallHandler,
@@ -371,6 +371,15 @@ func buildWorkflowDirectInvocation(
 		invocation.routeValidation = routeValidationOptions(ctx)
 	}
 	return invocation
+}
+
+func discoverParentSessionID(adapter cli.Adapter, spawnTime time.Time, workdir string, handler control.AgentCallHandler) string {
+	if adapter == nil {
+		return ""
+	}
+	return adapter.DiscoverSessionID(&cli.DiscoverOptions{
+		SpawnTime: spawnTime, Workdir: workdir, ExcludeSessionIDs: agentCallChildSessionIDs(handler),
+	})
 }
 
 func isRouteEligible(step *model.Step, ctx *model.ExecutionContext) bool {

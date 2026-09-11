@@ -676,7 +676,7 @@ func (a *CursorAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
 		return opts.PresetID
 	}
 	if !opts.Headless {
-		return discoverCursorInteractiveSession(opts.SpawnTime, opts.Workdir)
+		return discoverCursorInteractiveSession(opts.SpawnTime, opts.Workdir, opts.ExcludeSessionIDs)
 	}
 	return discoverCursorSessionID(opts.ProcessOutput)
 }
@@ -853,7 +853,7 @@ func discoverCursorSessionID(output string) string {
 	return ""
 }
 
-func discoverCursorInteractiveSession(spawnTime time.Time, workdir string) string {
+func discoverCursorInteractiveSession(spawnTime time.Time, workdir string, excludeIDs []string) string {
 	if workdir == "" {
 		var err error
 		workdir, err = os.Getwd()
@@ -877,7 +877,8 @@ func discoverCursorInteractiveSession(spawnTime time.Time, workdir string) strin
 	}
 	defer func() { _ = rootDir.Close() }()
 	rootFS := rootDir.FS()
-	if sessionID := discoverCursorMetadataSession(rootFS, spawnTime, workdir); sessionID != "" {
+	excluded := excludedSessionIDSet(excludeIDs)
+	if sessionID := discoverCursorMetadataSession(rootFS, spawnTime, workdir, excluded); sessionID != "" {
 		return sessionID
 	}
 
@@ -907,11 +908,15 @@ func discoverCursorInteractiveSession(spawnTime time.Time, workdir string) strin
 			return nil
 		}
 		chatID := filepath.Base(filepath.Dir(path))
-		if chatID != "" {
-			matches = append(matches, chatID)
-			if len(matches) > 1 {
-				return fs.SkipAll
-			}
+		if chatID == "" {
+			return nil
+		}
+		if _, skip := excluded[chatID]; skip {
+			return nil
+		}
+		matches = append(matches, chatID)
+		if len(matches) > 1 {
+			return fs.SkipAll
 		}
 		return nil
 	}); err != nil {
@@ -923,7 +928,7 @@ func discoverCursorInteractiveSession(spawnTime time.Time, workdir string) strin
 	return matches[0]
 }
 
-func discoverCursorMetadataSession(rootFS fs.FS, spawnTime time.Time, workdir string) string {
+func discoverCursorMetadataSession(rootFS fs.FS, spawnTime time.Time, workdir string, excluded map[string]struct{}) string {
 	type cursorChatMetadata struct {
 		CreatedAtMS int64  `json:"createdAtMs"`
 		CWD         string `json:"cwd"`
@@ -951,11 +956,15 @@ func discoverCursorMetadataSession(rootFS fs.FS, spawnTime time.Time, workdir st
 			return nil
 		}
 		chatID := filepath.Base(filepath.Dir(path))
-		if chatID != "" {
-			matches = append(matches, chatID)
-			if len(matches) > 1 {
-				return fs.SkipAll
-			}
+		if chatID == "" {
+			return nil
+		}
+		if _, skip := excluded[chatID]; skip {
+			return nil
+		}
+		matches = append(matches, chatID)
+		if len(matches) > 1 {
+			return fs.SkipAll
 		}
 		return nil
 	})
@@ -963,6 +972,17 @@ func discoverCursorMetadataSession(rootFS fs.FS, spawnTime time.Time, workdir st
 		return ""
 	}
 	return matches[0]
+}
+
+func excludedSessionIDSet(ids []string) map[string]struct{} {
+	excluded := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			excluded[id] = struct{}{}
+		}
+	}
+	return excluded
 }
 
 func cursorStoreContains(rootFS fs.FS, path string, needle []byte) (bool, error) {
