@@ -18,11 +18,15 @@ After a successful `call_agent` start, `codagent:call-agent` SHALL invoke `get_a
 
 ### Requirement: Explicit cancel through cancel_agent_call
 
-When the caller or lead aborts an in-flight child without ending the parent step, `codagent:call-agent` SHALL invoke `cancel_agent_call` with that `call_id`. It MUST NOT rely on canceling a `call_agent` or `get_agent_call` MCP request to stop the child.
+When the caller or lead aborts an in-flight child without ending the parent step, `codagent:call-agent` SHALL invoke `cancel_agent_call` with that `call_id`. It MUST NOT rely on canceling a `call_agent` or `get_agent_call` MCP request to stop the child. After `cancel_agent_call` returns, the skill SHALL keep polling `get_agent_call` until the call is terminal. It MUST NOT treat a non-terminal cancel result as a freed in-flight slot or start another child until then.
 
 #### Scenario: Lead aborts a running child
 - **WHEN** the caller instructs the lead to stop the active child while keeping the parent step running
 - **THEN** the skill invokes `cancel_agent_call` with the active `call_id`
+
+#### Scenario: Cancel is not a freed slot
+- **WHEN** `cancel_agent_call` returns while status is still `accepted` or `running`
+- **THEN** the skill polls `get_agent_call` until the call is terminal and does not start another child yet
 
 ## MODIFIED Requirements
 

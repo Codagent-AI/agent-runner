@@ -73,7 +73,7 @@ Collect the outcome with `get_agent_call` and the same `call_id`:
 - When the child is terminal, the poll returns that cached success or structured error, including `call_id` and status. Later polls return the same cached result.
 - An unknown `call_id` is a structured error and does not spawn a child.
 
-`cancel_agent_call` terminates a running child for that `call_id`, caches a canceled result, and leaves the parent attempt active so it can start another call. Canceling an already-finished call returns the cached terminal result. `get_agent_call` and `cancel_agent_call` are not a second in-flight child.
+`cancel_agent_call` signals termination of a running child for that `call_id` and leaves the parent attempt active. It can return a still-running snapshot if its request ends before cancellation finishes. Poll `get_agent_call` until the call is terminal before treating the slot as free or starting another call. Canceling an already-finished call returns the cached terminal result. `get_agent_call` and `cancel_agent_call` are not a second in-flight child.
 
 Do not treat an `accepted` or `running` start or poll as success. A parent that never polls still leaves the child running until the parent attempt ends; it just never sees the result.
 
@@ -137,7 +137,7 @@ The run view reads full child output from the output files. It does not rebuild 
 - If a host reports `MCP error -32001: Request timed out` on `call_agent`, the start should already have returned a `call_id`. Poll `get_agent_call`; do not assume the child died. Cursor and similar hosts time out a single `tools/call` around 60 seconds, and progress notifications do not extend that wait.
 - If `get_agent_call` is missing after a start that returned a `call_id`, that is a blocker. Do not wait on another `call_agent` or substitute a different delegation path.
 - If a second `call_agent` reports `call_in_progress`, poll or cancel the active `call_id`. Calls do not queue or run in parallel.
-- To abort a running child without ending the parent step, invoke `cancel_agent_call`. Canceling the MCP `tools/call` for start or poll does not stop the child.
+- To abort a running child without ending the parent step, invoke `cancel_agent_call`, then poll `get_agent_call` until the call is terminal. A cancel RPC can return while the child is still stopping; that is not a freed slot. Canceling the MCP `tools/call` for start or poll does not stop the child.
 - If a named target is rejected, confirm it is declared, is not `new`, `resume`, or `inherit`, and does not resolve to the parent's own active session.
 - If usage or cost is unavailable, the child CLI may not have launched or may not have reported the metric. Failed launches remain visible but do not reduce usage coverage.
 - Agent calls do not provide recursive delegation, parallel fan-out, interactive children, call-specific duration budgets, or workflow-engine enrichment.
