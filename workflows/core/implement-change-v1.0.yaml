@@ -154,31 +154,28 @@ steps:
     mode: autonomous
     tools: [call_agent]
     prompt: |
-      Prepare {{change_label}} "{{change_name}}" for human acceptance by orchestrating an independent acceptance tester. Do not perform the acceptance flow testing yourself.
+      Prepare {{change_label}} "{{change_name}}" for human acceptance by orchestrating an independent exploratory tester. Do not perform the testing yourself.
 
       Use codagent:call-agent with `session: acceptance-tester`. Its first use creates a fresh independent tester session; later calls resume that same tester. Supply task-specific child instructions requiring it to use codagent:prepare-acceptance with these inputs:
       - approved artifacts: `{{change_dir}}/`;
-      - authoritative test plan: `{{change_dir}}/test-plan.md`;
+      - testing envelope and any `HT-*` obligations: `{{change_dir}}/test-plan.md`;
       - implementation evidence: `{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`;
       - evidence directory: `{{session_dir}}/output/`;
-      - assumptions ledger: `{{session_dir}}/output/acceptance-assumptions.md`;
-      - verification scope: `full` for the first pass.
+      - assumptions ledger: `{{session_dir}}/output/acceptance-assumptions.md`.
 
-      The authoritative test plan was structurally validated before implementation. Instruct the tester to execute its applicable `AT-*` inventory under the required skill.
+      The tester records the exact SHA it tested in `{{session_dir}}/output/acceptance-tested-revision.txt` after every pass. That file is the diff base for its next pass.
 
-      The first pass must exercise every required `AT-*` and every conditional `AT-*` whose activation condition holds. A flow may use a substitute only when that obligation explicitly permits it. Missing applicable-flow evidence is an impediment, not a limitation, and cannot produce `ACCEPTANCE_COMPLETE`.
+      Acceptance is exploratory. The tester sizes the pass from what the change actually moved and decides what to exercise; do not hand it a list of cases to run. It must always exercise the change's primary public surface end to end, record its budget and rationale before testing, and name what it deliberately did not exercise.
 
-      Follow codagent:call-agent's verification and autonomous result-accounting rules after every pass. Inspect the durable evidence and resolve every high-confidence in-scope finding you can, including implementation, CI, PR-state, tooling, setup, and environmental problems. Preserve approved behavior, scope, design, and testing strategy; append ambiguity to the assumptions ledger instead of deciding it silently.
+      Follow codagent:call-agent's verification and autonomous result-accounting rules after every pass. Read `{{session_dir}}/output/acceptance-findings.md` and triage each finding into a fix you make, an escalation, or an entry in the assumptions ledger. Resolve every high-confidence finding you can, including implementation, CI, PR-state, tooling, setup, and environmental problems. Do not audit the tester's evidence files for completeness; the exploration log and handoff are written for the human acceptance session to read. Preserve approved behavior, scope, and design, and append ambiguity to the ledger instead of deciding it silently.
 
       Before fixing an implementation defect found by acceptance testing, you MUST invoke codagent:implement-with-tdd and follow its red-green-refactor process. Add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
 
       If a tracked file changes, run the narrowest relevant automated checks. {{artifact_validation_instruction}} Agent Validator skipping is set to `{{skip_validator}}`. If `skip_validator` is `false`, invoke the validator-run skill and require it to pass, incorporating any Validator fixes. If `skip_validator` is `true`, do not invoke Agent Validator. In either mode, commit all related changes following project conventions with the `[{{step_id}}]` prefix, push, and verify local `HEAD` equals the draft PR head.
 
-      Before each post-fix tester call, write `{{session_dir}}/output/acceptance-impact-scope.md`. Name the affected `AT-*` obligations and any directly dependent flows, plus a concise rationale bounding why other surfaces or subsystems are unaffected. Resume `acceptance-tester` with explicit re-review instructions: reproduce the prior finding against the fix, exercise only those affected and directly dependent flows, retain the prior full-pass evidence for unaffected flows, and do not begin a new broad review. It may report a newly introduced defect only when observed within that targeted scope. Give it `{{session_dir}}/output/acceptance-flow-evidence.md` as the prior full-pass baseline.
+      Resume `acceptance-tester` after a fix without naming a scope. A fix is itself a change: instruct the tester to diff the worktree against the SHA in `acceptance-tested-revision.txt`, size that diff the same way, and explore it. If that file is missing or names an unresolvable SHA, require it to report an impediment and explore the change as a whole. It must not re-run its previous pass or derive scope from what it tested before, and it must treat its prior exploration log as history rather than as coverage. When no tracked product contents changed and only PR alignment, pushing, CI availability, or tooling was corrected, say so; an empty diff sizes to zero steps and the tester should proceed directly to current-head CI and the handoff.
 
-      If no tracked product contents changed and only PR alignment, pushing, CI availability, tooling, or another external condition was corrected, give the child an `evidence-only` scope with `acceptance-flow-evidence.md`. A Validator run that makes no tracked change does not invalidate the existing flow evidence. The child should wait for current-head CI and produce the final evidence without exercising product flows again.
-
-      Use at most three acceptance-tester calls. Stop when the skill produces complete acceptance evidence for the current revision with no clear defect or impediment. Verify that every required or activated conditional `AT-*` has passing evidence, referenced evidence exists, and any `HT-*` is reserved for the user. Summarize the ready SHA, PR URL, full-baseline and targeted-pass provenance, evidence paths, unresolved-assumption count, CI status, and known limitations.
+      Use at most three acceptance-tester calls. Stop when the tester reports no remaining finding for the current revision. Summarize the ready SHA, PR URL, what was explored, what was deliberately not exercised, any `HT-*` reserved for the user, unresolved-assumption count, CI status, and known limitations.
 
       If three calls do not converge, preserve the latest findings and assumptions under `{{session_dir}}/output/` and write `{{session_dir}}/output/acceptance-handoff.md` with an honest summary of the remaining impediments and available evidence. Do not call another tester for the same unchanged impediment.
 
