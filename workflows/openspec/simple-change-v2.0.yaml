@@ -37,9 +37,9 @@ steps:
     mode: interactive
     tools: [call_agent]
     prompt: |
-      Review the completed plan for OpenSpec change "{{change_name}}" with the user.
+      You MUST use the codagent:call-agent skill with a fresh `agent: crosscheck` for one read-only artifact review of OpenSpec change "{{change_name}}". Do not review the artifacts yourself.
 
-      Use codagent:call-agent with a fresh `agent: crosscheck` for one read-only artifact review. Give the child a standalone prompt requiring it to use codagent:review-spec and read the proposal, specifications, optional design, and `tasks.md` under `openspec/changes/{{change_name}}/`. It must treat missing optional artifact types as intentional, keep the review proportional to a small change, cite exact artifact sections for findings, and never modify files.
+      Give the child a standalone prompt requiring it to use codagent:review-spec and read the proposal, specifications, optional design, and `tasks.md` under `openspec/changes/{{change_name}}/`. It must treat missing optional artifact types as intentional, keep the review proportional to a small change, cite exact artifact sections for findings, and never modify files.
 
       Follow codagent:call-agent's verification and user-facing reporting rules. Present the child's material findings and your assessment to the user. Do not change an approved artifact in response until the user confirms the desired resolution. Apply confirmed edits, then continue to the next step without asking the user to review the written artifacts again.
 

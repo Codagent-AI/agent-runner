@@ -20,7 +20,7 @@ steps:
     mode: autonomous
     tools: [call_agent]
     prompt: |
-      Review and correct the implementation task plan for {{change_label}} "{{change_name}}" without involving the user. Use codagent:call-agent with a fresh `agent: crosscheck`.
+      You MUST use the codagent:call-agent skill with a fresh `agent: crosscheck` to obtain one independent task-plan review for {{change_label}} "{{change_name}}". Do not perform that review yourself. After the child returns, correct the task plan without involving the user.
 
       The task-specific child instructions must require it to use the codagent:review-tasks skill; read the approved proposal, every specification, the design, and `test-plan.md` under `{{change_dir}}/`; read `{{change_dir}}/tasks.md` and every file under `{{change_dir}}/tasks/`; inspect relevant repository structure when needed; and report only concrete task-plan defects that can be corrected by editing the task index or detailed task files. Require exact task and controlling-artifact citations. The proposal, specifications, design, and test plan are immutable approved inputs, not review targets. The child must not report definition or approach concerns, ask for a product, scope, design, or testing-strategy decision, or modify any file.
 
