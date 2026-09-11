@@ -1,9 +1,9 @@
 name: async-mcp-timeout-smoke
-description: "Manual smoke: interactive Cursor parent call_agent to a child that waits more than 60s (run with -p smoke_test)"
+description: "Manual smoke: interactive Cursor parent call_agent, then poll a child that sleeps (run with -p smoke_test; wait_seconds=75 to exceed the ~60s host tools/call wait)"
 
 params:
   - name: wait_seconds
-    default: "75"
+    default: "10"
 
 steps:
   - id: long-call
