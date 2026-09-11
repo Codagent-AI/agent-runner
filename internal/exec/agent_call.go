@@ -198,7 +198,7 @@ func (h *AgentCallHandler) HandleGetAgentCall(_ context.Context, envelope contro
 	return raw
 }
 
-func (h *AgentCallHandler) HandleCancelAgentCall(_ context.Context, envelope control.AgentCallRequest) json.RawMessage {
+func (h *AgentCallHandler) HandleCancelAgentCall(ctx context.Context, envelope control.AgentCallRequest) json.RawMessage {
 	request, failure := agentcall.DecodeCallIDRequest(envelope.Payload)
 	if failure != nil {
 		return marshalAgentCallResponse(agentcall.Response{Error: failure})
@@ -222,7 +222,13 @@ func (h *AgentCallHandler) HandleCancelAgentCall(_ context.Context, envelope con
 	if cancel != nil {
 		cancel()
 	}
-	<-done
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
 	h.mu.Lock()
 	raw := h.marshalSnapshotLocked(record)
 	h.mu.Unlock()
@@ -235,24 +241,13 @@ func (h *AgentCallHandler) finishAccepted(ctx context.Context, record *acceptedA
 	h.mu.Unlock()
 
 	execution := h.execute(ctx, record, resolved)
-	h.finalizeExecution(record, resolved, execution)
+	h.finalizeExecution(record, resolved, &execution)
 }
 
-func (h *AgentCallHandler) finalizeExecution(record *acceptedAgentCall, resolved *resolvedAgentCall, execution agentCallExecution) {
-	h.emitAgentCallEnd(record, resolved, &execution)
+func (h *AgentCallHandler) finalizeExecution(record *acceptedAgentCall, resolved *resolvedAgentCall, execution *agentCallExecution) {
+	h.emitAgentCallEnd(record, resolved, execution)
 	if h.options.OnFinished != nil {
 		h.options.OnFinished(h.lifecycleEvent(record, resolved.target))
-	}
-	var raw json.RawMessage
-	if successfulAgentCallResponseDefinitelyTooLarge(execution.response) {
-		execution.response = oversizedAgentCallFailure(record, resolved.target)
-		raw = marshalAgentCallResponse(execution.response)
-	} else {
-		raw = marshalAgentCallResponse(execution.response)
-		if execution.response.Result != nil && !control.FitsAgentCallPayload(raw) {
-			execution.response = oversizedAgentCallFailure(record, resolved.target)
-			raw = marshalAgentCallResponse(execution.response)
-		}
 	}
 	execution.response.CallID = record.callID
 	target := resolved.target
@@ -266,7 +261,17 @@ func (h *AgentCallHandler) finalizeExecution(record *acceptedAgentCall, resolved
 	} else {
 		execution.response.Status = agentcall.StatusSucceeded
 	}
-	raw = marshalAgentCallResponse(execution.response)
+	var raw json.RawMessage
+	if successfulAgentCallResponseDefinitelyTooLarge(execution.response) {
+		execution.response = oversizedAgentCallFailure(record, resolved.target)
+		raw = marshalAgentCallResponse(execution.response)
+	} else {
+		raw = marshalAgentCallResponse(execution.response)
+		if execution.response.Result != nil && !control.FitsAgentCallPayload(raw) {
+			execution.response = oversizedAgentCallFailure(record, resolved.target)
+			raw = marshalAgentCallResponse(execution.response)
+		}
+	}
 	h.mu.Lock()
 	record.response = raw
 	record.status = execution.response.Status

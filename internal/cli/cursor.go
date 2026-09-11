@@ -490,7 +490,7 @@ func prepareCursorPrivateConfigWithIntegrationAt(sourceDir, cacheRoot string, co
 	return result, nil
 }
 
-func cursorPrivateConfigRules(commands []RunnerCommand, integration *RunnerIntegration, autonomous bool) (shellRules []string, agentCallRules []string, err error) {
+func cursorPrivateConfigRules(commands []RunnerCommand, integration *RunnerIntegration, autonomous bool) (shellRules, agentCallRules []string, err error) {
 	// One narrow rule per granted runner command. Cursor is the only adapter
 	// with a real shell allow-list, so this is where the exact-string guarantee
 	// for `step submit-route` is actually expressed.

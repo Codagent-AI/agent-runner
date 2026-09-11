@@ -325,6 +325,39 @@ func TestControlServerDisconnectDoesNotCancelAcceptedAgentCall(t *testing.T) {
 	}
 }
 
+func TestControlServerCancelRPCUnblocksWhenClientDisconnects(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+	handler := &blockingCancelCallHandler{started: make(chan struct{})}
+	attempt := server.ActivateAttempt(context.Background(), "step", AttemptOptions{
+		AgentCallEligible: true,
+		AgentCallHandler:  handler,
+	})
+	connection, err := net.Dial("unix", server.SocketPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := controlRequest{
+		Type: MessageAgentCallCancel, RunID: attempt.RunID, StepID: attempt.StepID,
+		AttemptID: attempt.ID, Token: attempt.Token, RequestID: "cancel-1",
+		Payload: json.RawMessage(`{"call_id":"call-1"}`),
+	}
+	if err := json.NewEncoder(connection).Encode(request); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-handler.started:
+	case <-time.After(time.Second):
+		t.Fatal("cancel handler did not start")
+	}
+	_ = connection.Close()
+	select {
+	case <-handler.ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("cancel RPC did not cancel its handler context after client disconnect")
+	}
+}
+
 func TestControlServerGetAndCancelAgentCallRPCs(t *testing.T) {
 	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
 	defer server.Close()
@@ -435,6 +468,26 @@ func (h *capturingCallHandler) HandleGetAgentCall(context.Context, AgentCallRequ
 
 func (h *capturingCallHandler) HandleCancelAgentCall(context.Context, AgentCallRequest) json.RawMessage {
 	return json.RawMessage(`{"call_id":"call-1","status":"canceled"}`)
+}
+
+type blockingCancelCallHandler struct {
+	started chan struct{}
+	ctx     context.Context
+}
+
+func (h *blockingCancelCallHandler) HandleAgentCall(context.Context, AgentCallRequest) json.RawMessage {
+	return json.RawMessage(`{"call_id":"call-1","status":"accepted"}`)
+}
+
+func (h *blockingCancelCallHandler) HandleGetAgentCall(context.Context, AgentCallRequest) json.RawMessage {
+	return json.RawMessage(`{"call_id":"call-1","status":"running"}`)
+}
+
+func (h *blockingCancelCallHandler) HandleCancelAgentCall(ctx context.Context, _ AgentCallRequest) json.RawMessage {
+	h.ctx = ctx
+	close(h.started)
+	<-ctx.Done()
+	return json.RawMessage(`{"call_id":"call-1","status":"running"}`)
 }
 
 func TestControlServerSocketPathIsUniquePerRunDirectory(t *testing.T) {

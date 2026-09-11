@@ -577,7 +577,22 @@ func (s *ControlServer) handleAgentCallOp(
 	s.mu.Unlock()
 
 	_ = connection.SetDeadline(time.Time{})
-	payload := handle(attemptContext, handler, AgentCallRequest{
+	ctx := attemptContext
+	if request.Type == MessageAgentCallCancel {
+		parent := attemptContext
+		if parent == nil {
+			parent = context.Background()
+		}
+		rpcCtx, cancelRPC := context.WithCancel(parent)
+		defer cancelRPC()
+		go func() {
+			var buf [1]byte
+			_, _ = connection.Read(buf[:])
+			cancelRPC()
+		}()
+		ctx = rpcCtx
+	}
+	payload := handle(ctx, handler, AgentCallRequest{
 		AttemptID: request.AttemptID,
 		RequestID: request.RequestID,
 		Payload:   append(json.RawMessage(nil), request.Payload...),

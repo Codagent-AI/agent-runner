@@ -56,13 +56,14 @@ func (a *callTestAdapter) ProbeModel(string, string) (cli.ProbeStrength, error) 
 func (a *callTestAdapter) FilterOutput(raw string) string { return "filtered:" + raw }
 
 type callTestRunner struct {
-	mu        sync.Mutex
-	calls     int
-	started   chan AgentProcessOptions
-	release   chan struct{}
-	result    ProcessResult
-	err       error
-	beforeRun func()
+	mu           sync.Mutex
+	calls        int
+	started      chan AgentProcessOptions
+	release      chan struct{}
+	result       ProcessResult
+	err          error
+	beforeRun    func()
+	ignoreCancel bool
 }
 
 func (r *callTestRunner) RunShell(string, bool, string) (ProcessResult, error) {
@@ -82,6 +83,10 @@ func (r *callTestRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, 
 		r.started <- *options
 	}
 	if r.release != nil {
+		if r.ignoreCancel {
+			<-r.release
+			return r.result, r.err
+		}
 		select {
 		case <-options.Context.Done():
 			return ProcessResult{Started: true, ExitCode: -1}, options.Context.Err()
@@ -606,6 +611,30 @@ func TestAgentCallHandlerReturnsStructuredErrorForOversizedSuccessfulResult(t *t
 	}
 }
 
+func TestAgentCallHandlerRejectsResultThatExceedsLimitOnlyAfterTerminalMetadata(t *testing.T) {
+	stdout := stdoutThatFitsUntilTerminalMetadata(t)
+	runner := &callTestRunner{result: ProcessResult{Started: true, Stdout: stdout}}
+	options := testAgentCallOptions(t.TempDir(), runner, &passthroughCallAdapter{})
+	logger := &recordingAuditLogger{}
+	options.Context.AuditLogger = logger
+
+	response := startAndAwaitAgentCall(t, NewAgentCallHandler(options), control.AgentCallRequest{
+		RequestID: "near-limit",
+		Payload:   json.RawMessage(`{"prompt":"near limit","agent":"implementor"}`),
+	})
+
+	if response.Error == nil || response.Error.Code != agentcall.CodeResultTooLarge {
+		t.Fatalf("response = %#v, want result_too_large after terminal metadata is added", response)
+	}
+	if response.Result != nil {
+		t.Fatalf("response = %#v, want structured failure without inline result", response)
+	}
+	events := agentCallAuditEvents(logger.events)
+	if len(events) != 2 || events[1].Data["outcome"] != string(OutcomeSuccess) {
+		t.Fatalf("near-limit child evidence = %+v, want successful start/end pair", events)
+	}
+}
+
 func TestAgentCallHandlerRejectsObviouslyOversizedResultBeforeEncodingIt(t *testing.T) {
 	largeResult := strings.Repeat("x", control.MaxControlMessageBytes)
 	runner := &callTestRunner{result: ProcessResult{Started: true, Stdout: largeResult}}
@@ -999,6 +1028,41 @@ func TestAgentCallHandlerExplicitCancelTerminatesChildAndUnknownIDsAreRejected(t
 	}
 }
 
+func TestAgentCallHandlerCancelReturnsWhenRequestContextEndsEvenIfChildIgnoresCancel(t *testing.T) {
+	runner := &callTestRunner{
+		started:      make(chan AgentProcessOptions, 1),
+		release:      make(chan struct{}),
+		ignoreCancel: true,
+		result:       ProcessResult{Started: true, Stdout: "stuck"},
+	}
+	handler := NewAgentCallHandler(testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
+	start := startAgentCall(t, handler, control.AgentCallRequest{
+		RequestID: "stuck-child", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`),
+	})
+	<-runner.started
+
+	reqCtx, cancelReq := context.WithCancel(context.Background())
+	cancelReq()
+	done := make(chan agentcall.Response, 1)
+	go func() {
+		done <- cancelAgentCallWithContext(t, reqCtx, handler, start.CallID)
+	}()
+	var canceled agentcall.Response
+	select {
+	case canceled = <-done:
+	case <-time.After(time.Second):
+		t.Fatal("cancel_agent_call waited for a child that ignored cancellation")
+	}
+	if canceled.Error != nil && canceled.Error.Code == agentcall.CodeUnknownCall {
+		t.Fatalf("cancel response = %#v, want the in-flight call snapshot", canceled)
+	}
+	if canceled.CallID != start.CallID {
+		t.Fatalf("cancel response = %#v, want call_id %q", canceled, start.CallID)
+	}
+	close(runner.release)
+	_ = awaitAgentCall(t, handler, start.CallID)
+}
+
 func TestAgentCallHandlerCallInProgressIncludesCallID(t *testing.T) {
 	runner := &callTestRunner{started: make(chan AgentProcessOptions, 1), release: make(chan struct{}), result: ProcessResult{Started: true, Stdout: "done"}}
 	handler := NewAgentCallHandler(testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
@@ -1305,11 +1369,50 @@ func getAgentCall(t *testing.T, handler *AgentCallHandler, callID string) agentc
 
 func cancelAgentCall(t *testing.T, handler *AgentCallHandler, callID string) agentcall.Response {
 	t.Helper()
+	return cancelAgentCallWithContext(t, context.Background(), handler, callID)
+}
+
+func cancelAgentCallWithContext(t *testing.T, ctx context.Context, handler *AgentCallHandler, callID string) agentcall.Response {
+	t.Helper()
 	payload, err := json.Marshal(agentcall.CallIDRequest{CallID: callID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return decodeCallResponse(t, handler.HandleCancelAgentCall(context.Background(), control.AgentCallRequest{Payload: payload}))
+	return decodeCallResponse(t, handler.HandleCancelAgentCall(ctx, control.AgentCallRequest{Payload: payload}))
+}
+
+func stdoutThatFitsUntilTerminalMetadata(t *testing.T) string {
+	t.Helper()
+	target := agentcall.Target{Kind: agentcall.TargetAgent, Name: "implementor"}
+	fits := func(n int, withMetadata bool) bool {
+		response := agentcall.Response{
+			CallID: "call-1",
+			Result: &agentcall.Result{Target: target, Response: strings.Repeat("x", n)},
+		}
+		if withMetadata {
+			copied := target
+			response.Status = agentcall.StatusSucceeded
+			response.Target = &copied
+		}
+		raw, err := json.Marshal(response)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return control.FitsAgentCallPayload(raw)
+	}
+	lo, hi := 0, control.MaxControlMessageBytes
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		if fits(mid, false) {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	if !fits(lo, false) || fits(lo, true) {
+		t.Fatalf("could not find a result size that fits before terminal metadata but not after (n=%d)", lo)
+	}
+	return strings.Repeat("x", lo)
 }
 
 func awaitAgentCall(t *testing.T, handler *AgentCallHandler, callID string) agentcall.Response {
