@@ -39,7 +39,33 @@ func ExecuteLoopStep(
 		return executeCountedLoop(step, *loop.Max, loop.AsIndex, step.Steps, ctx, runner, glob, log, opts)
 	}
 
+	if loop.MaxParam != "" {
+		maxIter, err := resolveMaxParam(loop.MaxParam, ctx)
+		if err != nil {
+			return LoopResult{Outcome: OutcomeFailed, LastIteration: -1}, err
+		}
+		return executeCountedLoop(step, maxIter, loop.AsIndex, step.Steps, ctx, runner, glob, log, opts)
+	}
+
 	return LoopResult{Outcome: OutcomeFailed, LastIteration: -1}, nil
+}
+
+// resolveMaxParam resolves a loop's "max_param" against the workflow's
+// params, which are only known at execution time (unlike a literal "max",
+// params can vary per sub-workflow invocation).
+func resolveMaxParam(paramName string, ctx *model.ExecutionContext) (int, error) {
+	value, ok := ctx.Params[paramName]
+	if !ok {
+		return 0, fmt.Errorf("loop max_param %q is not a known workflow parameter", paramName)
+	}
+	maxIter, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("loop max_param %q value %q is not an integer: %w", paramName, value, err)
+	}
+	if maxIter <= 0 {
+		return 0, fmt.Errorf("loop max_param %q value %q must be a positive integer", paramName, value)
+	}
+	return maxIter, nil
 }
 
 func executeCountedLoop(
