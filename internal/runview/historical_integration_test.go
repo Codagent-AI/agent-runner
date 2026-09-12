@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/codagent/agent-runner/internal/liverun"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 )
@@ -316,4 +317,32 @@ func stripANSISlice(rows []string) []string {
 		out[i] = stripANSI(row)
 	}
 	return out
+}
+
+// TestRepairedCheckDetailShowsFinalRunOutput proves the check row's "Current
+// output" follows the run that decided the check, not the first failing run
+// whose streams were persisted under the check's own prefix.
+func TestRepairedCheckDetailShowsFinalRunOutput(t *testing.T) {
+	m := writeRepairRun(t, "plan-change", repairPlanWorkflowYAML, repairedInlineAuditFixture(), &model.RunState{
+		WorkflowName: "plan-change", Completed: true,
+	})
+	outputDir := filepath.Join(m.sessionDir, "output")
+	writeFile(t, filepath.Join(outputDir, liverun.SanitizeOutputPrefix("[check-plan]")+".err"), "plan is missing a tasks section\n")
+	writeFile(t, filepath.Join(outputDir, liverun.SanitizeOutputPrefix("[check-plan]")+".out"), "")
+	writeFile(t, filepath.Join(outputDir, liverun.SanitizeOutputPrefix("[check-plan, attempt:1, check-plan]")+".out"), "plan ok\n")
+	writeFile(t, filepath.Join(outputDir, liverun.SanitizeOutputPrefix("[check-plan, attempt:1, check-plan]")+".err"), "")
+
+	check := childByID(m.tree.Root, "check-plan")
+	if check == nil {
+		t.Fatalf("check-plan missing: loadErr=%q", m.loadErr)
+	}
+	m.setSelected(check)
+	m.loadHistoricalOutput(check)
+	detail := stripANSI(strings.Join(m.selectedDetailDocument(80).renderScreen(), "\n"))
+	if !strings.Contains(detail, "plan ok") {
+		t.Errorf("check detail missing the final run's stdout:\n%s", detail)
+	}
+	if strings.Contains(detail, "plan is missing a tasks section") {
+		t.Errorf("check detail shows the first failing run's stderr:\n%s", detail)
+	}
 }

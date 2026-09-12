@@ -1166,6 +1166,9 @@ func TestApplyEvent_RepairRerunAttemptBuildsRerunContainer(t *testing.T) {
 	if check.Status != StatusSuccess || check.RepairAttempts != 1 {
 		t.Fatalf("recovered check = status %v attempts %d", check.Status, check.RepairAttempts)
 	}
+	if check.OutputPrefix != "[verify-draft-pr, attempt:1, verify-draft-pr]" || check.OutputLoaded {
+		t.Fatalf("recovered check output prefix = %q loaded=%v, want the replayed check's prefix", check.OutputPrefix, check.OutputLoaded)
+	}
 }
 
 func TestApplyEvent_RepairBlockedRecordsDeclarationWithoutAttemptChildren(t *testing.T) {

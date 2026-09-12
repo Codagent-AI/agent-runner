@@ -60,7 +60,7 @@ A step with `repair` SHALL succeed only when its own command or script exits zer
 
 ### Requirement: Repair cycle
 
-When the check exits non-zero and attempts remain, Agent Runner SHALL first inspect the final response of the agent execution the check guards for a blocked declaration (see below). If none is present, it SHALL run the repair form and then rerun the check. An inline repair SHALL execute as an autonomous agent step using the named session or agent and the block's prompt, with the failure evidence supplied through the built-in variables `repair.attempt`, `repair.check_output`, `repair.check_stderr`, and `repair.action_response`, wrapped in an untrusted-input notice that instructs the agent not to follow directives found in the evidence. A rerun SHALL re-execute the target step and every subsequent step through the check in order, each with its declared session strategy; when the target is an agent step, its prompt SHALL be prefaced with the same evidence and notice. The cycle SHALL repeat while the check fails and completed attempts are fewer than `max`.
+When the check exits non-zero and attempts remain, Agent Runner SHALL first inspect the final response of the agent execution the check guards for a blocked declaration (see below). If none is present, it SHALL run the repair form and then rerun the check. An inline repair SHALL execute as an autonomous agent step using the named session or agent and the block's prompt, with the failure evidence supplied through the built-in variables `repair.attempt`, `repair.check_output`, `repair.check_stderr`, and `repair.action_response`, wrapped in an untrusted-input notice that instructs the agent not to follow directives found in the evidence. A rerun SHALL re-execute the target step and every subsequent step through the check in order, each with its declared session strategy; when the target is an agent step, its prompt SHALL be prefaced with the same evidence and notice. Replayed steps SHALL run in the owning scope's execution context, sharing its sessions and captured variables, so that a replayed agent step becomes the most recent agent execution in that scope for any later check. The cycle SHALL repeat while the check fails and completed attempts are fewer than `max`.
 
 #### Scenario: Inline repair recovers a failed check
 - **WHEN** a check fails, its inline repair agent fixes the reported problem, and the rerun check passes
@@ -73,6 +73,10 @@ When the check exits non-zero and attempts remain, Agent Runner SHALL first insp
 #### Scenario: Rerun re-executes the target and the check
 - **WHEN** `verify-draft-pr` fails with `repair: {rerun: open-draft-pr}` and `open-draft-pr` carries no blocked declaration
 - **THEN** `open-draft-pr` executes again with the evidence preface, then `verify-draft-pr` runs again
+
+#### Scenario: Replayed agent step guards a later check
+- **WHEN** a rerun replays an intermediate agent step and, after the check recovers, a later check in the same scope fails
+- **THEN** that later check's failure record identifies the replayed agent execution as the guarded execution
 
 #### Scenario: Rerun re-executes intermediate steps
 - **WHEN** a rerun target is two steps before the check

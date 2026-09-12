@@ -478,6 +478,17 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 }
 
 func (t *Tree) applyStepEvent(event RawEvent, tokens []prefixToken) {
+	if event.Type == "step_start" {
+		if check := t.checkRerunOwner(tokens); check != nil {
+			// The check's own rerun inside an attempt decides its outcome, so
+			// the check row follows that run's persisted output from now on
+			// instead of the first failing run recorded under its own prefix.
+			check.OutputPrefix = event.Prefix
+			check.OutputLoaded = false
+			check.Stdout = ""
+			check.Stderr = ""
+		}
+	}
 	n := t.resolve(tokens, true)
 	if n == nil {
 		return
@@ -841,6 +852,20 @@ func (t *Tree) repairScope(check *StepNode, attempt int, create bool) (scope *St
 	container := appendRepairChild(check, id, NodeGroup)
 	container.Status = StatusInProgress
 	return container, false
+}
+
+// checkRerunOwner returns the check whose own rerun a prefix of the shape
+// [..., check, attempt:N, check] records, for either repair form, or nil.
+func (t *Tree) checkRerunOwner(tokens []prefixToken) *StepNode {
+	last := len(tokens) - 1
+	if last < 2 || tokens[last].stepID == "" || tokens[last].iteration != nil || tokens[last-1].attempt == nil {
+		return nil
+	}
+	check := t.resolve(tokens[:last-1], false)
+	if check == nil || check.ID != tokens[last].stepID {
+		return nil
+	}
+	return check
 }
 
 // inlineRepairChild resolves one execution recorded under an inline attempt.

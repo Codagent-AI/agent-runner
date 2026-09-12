@@ -131,6 +131,10 @@ Status glyphs SHALL remain `●` running, `○` pending, `✓` success, `✗` fa
 - **WHEN** a check with `max: 1` failed once and passed after an inline repair
 - **THEN** its row shows `✓`, the name, `(repaired 1/1)`, and its type glyph, and when selected expands to show `✗ attempt 1` with the repair-attempt glyph and `✓ repair 1` with the headless agent glyph
 
+#### Scenario: Repaired check output
+- **WHEN** a check failed once, was repaired, and passed on its rerun
+- **THEN** the check's detail pane shows the passing rerun's output under `Current output` while `attempt 1` shows the failing run's output
+
 #### Scenario: Blocked check row
 - **WHEN** a check failed because the guarded agent declared `REPAIR_BLOCKED`
 - **THEN** its row shows `✗`, the name, and `(blocked)`, with no attempt children
@@ -151,7 +155,7 @@ Current-step content SHALL be grouped into visually distinct, labeled rail secti
 
 - **Headless agent and agent call**: `Current prompt` and `Current response`. The response SHALL use the resolved adapter's ordinary filtered output.
 - **Interactive agent**: `Current prompt`; no response transcript SHALL be fabricated when terminal output was not captured.
-- **Shell**: `Current command` and `Current output`, with stdout and stderr distinguishable. A failed check with a failure record SHALL additionally show a `Failure evidence` section before `Current command`, containing the classified failure reason, the blocked declaration's explanation when present, and the guarded agent execution's final response. A check with `repair` SHALL show its repair form, target, and attempts used in its primary metadata.
+- **Shell**: `Current command` and `Current output`, with stdout and stderr distinguishable. A failed check with a failure record SHALL additionally show a `Failure evidence` section before `Current command`, containing the classified failure reason, the blocked declaration's explanation when present, and the guarded agent execution's final response. A check with `repair` SHALL show its repair form, target, and attempts used in its primary metadata, and its `Current output` SHALL be the output of the check run that decided its terminal outcome; earlier failing runs remain on their `attempt N` rows.
 - **Script**: `Current script` and `Current output`, with stdout and stderr distinguishable, with the same `Failure evidence` section and repair metadata as shell steps.
 - **UI**: `Current form` and `Current outcome`, integrated with the existing live UI behavior. When durable audit evidence identifies a historical UI execution but its workflow definition is unavailable, `Current form` SHALL explicitly state `definition unavailable` while `Current outcome` continues to show the recorded outcome.
 - **Sub-workflow, loop, iteration, and group**: `Current status`, containing identity, workflow params or loop counters, outcome, duration, and aggregate direct-child counts by status. Container detail SHALL NOT list child rows or render descendant detail.
