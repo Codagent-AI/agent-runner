@@ -585,9 +585,15 @@ func auditProfileSource(cfg *config.Config) string {
 }
 
 func executeSteps(rs *runState, startIndex int) WorkflowResult {
-	for i := startIndex; i < len(rs.workflow.Steps); i++ {
-		step := &rs.workflow.Steps[i]
-		result, terminal := executeTopLevelStep(rs, step, i)
+	steps := rs.workflow.Steps
+	basePath := rs.ctx.NestingPath
+	for i := startIndex; i < len(steps); i++ {
+		step := &steps[i]
+		result, terminal, rewound, nextIndex := executeTopLevelStep(rs, step, i, steps, basePath)
+		if rewound {
+			i = nextIndex - 1
+			continue
+		}
 		if terminal {
 			return result
 		}
@@ -596,36 +602,50 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 	return ResultSuccess
 }
 
-func executeTopLevelStep(rs *runState, step *model.Step, index int) (WorkflowResult, bool) {
+func executeTopLevelStep(rs *runState, step *model.Step, index int, steps []model.Step, basePath []model.NestingSegment) (result WorkflowResult, terminal, rewound bool, nextIndex int) {
 	skip, err := exec.ShouldSkipStep(step.SkipIf, rs.ctx.LastStepOutcome, rs.ctx, step.ID)
 	if err != nil {
 		rs.log.Printf("\nagent-runner: step %q skip_if evaluation failed: %v\n", step.ID, err)
-		return ResultFailed, true
+		return ResultFailed, true, false, 0
 	}
 	if skip {
 		emitSkippedStep(rs, step, index)
 		if step.ID == rs.until {
 			writeStepState(step, rs.ctx, &rs.workflow, rs.workflowHash, rs.sessionDir, nil, true)
 		}
-		return ResultSuccess, stopAfterUntil(rs, step.ID, index)
+		return ResultSuccess, stopAfterUntil(rs, step.ID, index), false, 0
 	}
 
 	outcome, err := runAndPersistTopLevelStep(rs, step)
 	if err != nil {
 		rs.log.Printf("\nagent-runner: step %q error: %v\n", step.ID, err)
-		return ResultFailed, true
+		return ResultFailed, true, false, 0
 	}
+
+	rw, absorbed := exec.AfterStepDispatch(rs.ctx, steps, index, basePath, outcome)
+	if rw.Stopped {
+		rs.log.Printf("\nagent-runner: step %q failed. Stopping.\n", step.ID)
+		return ResultFailed, true, false, 0
+	}
+	if rw.Rewound {
+		return ResultSuccess, false, true, rw.NextIndex
+	}
+	if absorbed {
+		return ResultSuccess, false, false, 0
+	}
+
 	if outcome == exec.OutcomeAborted {
 		rs.log.Println("\nagent-runner: workflow stopped.")
-		return ResultStopped, true
+		return ResultStopped, true, false, 0
 	}
 	if outcome == exec.OutcomeFailed {
-		return handleFailedTopLevelStep(rs, step, index)
+		result, terminal = handleFailedTopLevelStep(rs, step, index)
+		return result, terminal, false, 0
 	}
 
 	o := "success"
 	rs.ctx.LastStepOutcome = &o
-	return ResultSuccess, stopAfterUntil(rs, step.ID, index)
+	return ResultSuccess, stopAfterUntil(rs, step.ID, index), false, 0
 }
 
 func runAndPersistTopLevelStep(rs *runState, step *model.Step) (exec.StepOutcome, error) {
@@ -1034,6 +1054,7 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		Child:              child,
 		InteractiveAttempt: ctx.InteractiveAttempt,
 		LastAgent:          ctx.LastAgentRef(),
+		Repair:             ctx.RepairFrame,
 	}
 
 	state := model.RunState{

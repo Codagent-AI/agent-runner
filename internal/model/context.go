@@ -522,6 +522,62 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 	}
 }
 
+// NewRepairAttemptContext creates a child context for one repair attempt
+// (an inline repair agent step, or the replay of the rerun target and the
+// steps through the check) nested under checkID's owning scope. Unlike loop
+// and sub-workflow contexts, it shares SessionIDs, SessionProfiles,
+// LastSessionStepID, NamedSessions, NamedSessionDecls, and CapturedVariables
+// by reference with owner, so "session: resume" resolves to the scope's most
+// recent session and a session an attempt creates is visible to the scope
+// afterward. It starts with a nil LastAgentExecution so the attempt's own
+// agent response never overwrites the scope's guarded execution.
+func NewRepairAttemptContext(owner *ExecutionContext, checkID string, attempt int) *ExecutionContext {
+	segment := NestingSegment{StepID: checkID, RepairAttempt: &attempt}
+	nestingPath := make([]NestingSegment, len(owner.NestingPath)+1)
+	copy(nestingPath, owner.NestingPath)
+	nestingPath[len(owner.NestingPath)] = segment
+
+	return &ExecutionContext{
+		ExecutionSessionID:       owner.ExecutionSessionID,
+		Params:                   owner.Params,
+		SessionIDs:               owner.SessionIDs,
+		SessionProfiles:          owner.SessionProfiles,
+		CapturedVariables:        owner.CapturedVariables,
+		LastStepOutcome:          nil,
+		LastSessionStepID:        owner.LastSessionStepID,
+		NestingPath:              nestingPath,
+		ParentContext:            owner,
+		WorkflowFile:             owner.WorkflowFile,
+		WorkflowName:             owner.WorkflowName,
+		WorkflowDescription:      owner.WorkflowDescription,
+		ProjectRoot:              owner.ProjectRoot,
+		WorkingDir:               owner.WorkingDir,
+		AutonomousBackend:        owner.AutonomousBackend,
+		AutonomousPermissionMode: owner.AutonomousPermissionMode,
+		SessionDir:               owner.SessionDir,
+		IntakeHandoffContents:    owner.IntakeHandoffContents,
+		intakeHandoffState:       owner.intakeHandoffState,
+		IntakeParentRunID:        owner.IntakeParentRunID,
+		AgentOverride:            owner.AgentOverride,
+		EngineRef:                owner.EngineRef,
+		ProfileStore:             owner.ProfileStore,
+		AuditLogger:              owner.AuditLogger,
+		AgentDeprecations:        owner.AgentDeprecations,
+		WarningOrigins:           owner.WarningOrigins,
+		PullRequestCaptureState:  owner.PullRequestCaptureState,
+		Control:                  owner.Control,
+		InteractiveAttempt:       owner.InteractiveAttempt,
+		WorkflowResumed:          owner.WorkflowResumed,
+		FlushState:               owner.FlushState,
+		SuspendHook:              owner.SuspendHook,
+		ResumeHook:               owner.ResumeHook,
+		PrepareStepHook:          owner.PrepareStepHook,
+		UIStepHandler:            owner.UIStepHandler,
+		NamedSessions:            owner.NamedSessions,
+		NamedSessionDecls:        owner.NamedSessionDecls,
+	}
+}
+
 // SubWorkflowContextOptions configures a new sub-workflow context.
 type SubWorkflowContextOptions struct {
 	StepID          string

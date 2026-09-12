@@ -162,8 +162,9 @@ func executeChildSteps(
 	}
 
 	reached := resolvedStartID == ""
+	basePath := childCtx.NestingPath
 
-	for i := range workflow.Steps {
+	for i := 0; i < len(workflow.Steps); i++ {
 		if !reached {
 			if workflow.Steps[i].ID == resolvedStartID {
 				reached = true
@@ -187,6 +188,20 @@ func executeChildSteps(
 		if err != nil {
 			return OutcomeFailed, err
 		}
+
+		rw, absorbed := AfterStepDispatch(childCtx, workflow.Steps, i, basePath, outcome)
+		if rw.Stopped {
+			updateChildProgress(childCtx, workflow.Steps[i].ID, false)
+			return OutcomeFailed, nil
+		}
+		if rw.Rewound {
+			i = rw.NextIndex - 1
+			continue
+		}
+		if absorbed {
+			continue
+		}
+
 		completed := outcome != OutcomeFailed && outcome != OutcomeAborted
 		updateChildProgress(childCtx, workflow.Steps[i].ID, completed)
 
@@ -254,6 +269,7 @@ func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, c
 		LastSessionStepID: childCtx.LastSessionStepID,
 		Completed:         completed,
 		LastAgent:         childCtx.LastAgentRef(),
+		Repair:            childCtx.RepairFrame,
 	}
 	// When the deeper state already describes this same step (e.g. a loop step
 	// that has written its own iteration metadata into childCtx.LastSubWorkflowChild),

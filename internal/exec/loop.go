@@ -284,6 +284,7 @@ func newIterationBodyEntry(iterCtx *model.ExecutionContext, bodyStepID string, b
 		LastSessionStepID: iterCtx.LastSessionStepID,
 		Completed:         bodyCompleted,
 		LastAgent:         iterCtx.LastAgentRef(),
+		Repair:            iterCtx.RepairFrame,
 	}
 	if deeperChild != nil && deeperChild.StepID == bodyStepID {
 		entry.Iteration = deeperChild.Iteration
@@ -439,7 +440,9 @@ func executeIterationBody(
 	setBody, restoreFlush := installIterationFlush(iterCtx, loopStepID, iteration)
 	defer restoreFlush()
 
-	for i := range steps {
+	basePath := iterCtx.NestingPath
+
+	for i := 0; i < len(steps); i++ {
 		if !reached {
 			if steps[i].ID != resolvedStartID {
 				continue
@@ -474,33 +477,65 @@ func executeIterationBody(
 			return iterationResult{failed: true}, dispatchErr
 		}
 
-		bodyCompleted := outcome != OutcomeFailed && outcome != OutcomeAborted
-		setBody(bodyStepID, bodyCompleted)
-		if bodyCompleted && iterCtx.FlushState != nil {
-			iterCtx.FlushState()
-		}
-
-		if outcome == OutcomeAborted {
-			persistIterationFailState(iterCtx, loopStepID, iteration, bodyStepID, bodyCompleted)
-			return iterationResult{aborted: true}, nil
-		}
-
-		if flowctl.EvaluateBreakIf(steps[i].BreakIf, string(outcome)) {
-			return iterationResult{breakTriggered: true}, nil
-		}
-
-		recordLastStepOutcome(iterCtx, outcome)
-
-		if outcome == OutcomeFailed && !steps[i].ContinueOnFailure && !IsWarningOutcome(&steps[i], outcome) {
-			iterCtx.PropagateFailure()
-			persistIterationFailState(iterCtx, loopStepID, iteration, bodyStepID, bodyCompleted)
+		rw, absorbed := AfterStepDispatch(iterCtx, steps, i, basePath, outcome)
+		if rw.Stopped {
+			persistIterationFailState(iterCtx, loopStepID, iteration, bodyStepID, false)
 			return iterationResult{failed: true}, nil
 		}
-		if outcome == OutcomeFailed {
-			iterCtx.ClearInheritedFailure()
+		if rw.Rewound {
+			i = rw.NextIndex - 1
+			continue
+		}
+		if absorbed {
+			continue
+		}
+
+		if result, done := finishIterationBodyStep(iterCtx, loopStepID, iteration, bodyStepID, &steps[i], outcome, setBody); done {
+			return result, nil
 		}
 	}
 	return iterationResult{}, nil
+}
+
+// finishIterationBodyStep applies the ordinary per-step handling for one
+// loop-body step's outcome once repair/rewind bookkeeping has already ruled
+// out a replay-failure absorption. done is true when the caller should
+// return result immediately.
+func finishIterationBodyStep(
+	iterCtx *model.ExecutionContext,
+	loopStepID string,
+	iteration *int,
+	bodyStepID string,
+	step *model.Step,
+	outcome StepOutcome,
+	setBody func(stepID string, completed bool),
+) (result iterationResult, done bool) {
+	bodyCompleted := outcome != OutcomeFailed && outcome != OutcomeAborted
+	setBody(bodyStepID, bodyCompleted)
+	if bodyCompleted && iterCtx.FlushState != nil {
+		iterCtx.FlushState()
+	}
+
+	if outcome == OutcomeAborted {
+		persistIterationFailState(iterCtx, loopStepID, iteration, bodyStepID, bodyCompleted)
+		return iterationResult{aborted: true}, true
+	}
+
+	if flowctl.EvaluateBreakIf(step.BreakIf, string(outcome)) {
+		return iterationResult{breakTriggered: true}, true
+	}
+
+	recordLastStepOutcome(iterCtx, outcome)
+
+	if outcome == OutcomeFailed && !step.ContinueOnFailure && !IsWarningOutcome(step, outcome) {
+		iterCtx.PropagateFailure()
+		persistIterationFailState(iterCtx, loopStepID, iteration, bodyStepID, bodyCompleted)
+		return iterationResult{failed: true}, true
+	}
+	if outcome == OutcomeFailed {
+		iterCtx.ClearInheritedFailure()
+	}
+	return iterationResult{}, false
 }
 
 // resolveIterationResume extracts any resume state from iterCtx and resolves

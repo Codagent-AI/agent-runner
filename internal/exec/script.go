@@ -22,25 +22,45 @@ type scriptEnvironmentRunner interface {
 	RunScriptWithEnv(path string, stdin []byte, captureStdout bool, workdir string, environment []string) (ProcessResult, error)
 }
 
+// scriptCheckRun is the outcome of the audit-free script primitive.
+type scriptCheckRun struct {
+	Result  ProcessResult
+	Metrics *nestedMetricsCapture
+	RunErr  error
+}
+
+// runScriptCheck resolves the script path, builds its stdin, and executes it
+// exactly as ExecuteScriptStep does, but emits no audit events, adds no
+// warning origin, and writes no capture. Callers own audit emission and
+// ctx.CapturedVariables.
+func runScriptCheck(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner) scriptCheckRun {
+	scriptPath, err := resolveScriptPath(step.Script, ctx)
+	if err != nil {
+		return scriptCheckRun{RunErr: err}
+	}
+	stdin, err := buildScriptInput(step, ctx)
+	if err != nil {
+		return scriptCheckRun{RunErr: err}
+	}
+	metricsCapture, environment, err := prepareNestedMetricsEnvironment(step, ctx)
+	if err != nil {
+		return scriptCheckRun{RunErr: err}
+	}
+	var result ProcessResult
+	if len(environment) == 0 {
+		result, err = runner.RunScript(scriptPath, stdin, step.Capture != "", step.Workdir)
+	} else if environmentRunner, ok := runner.(scriptEnvironmentRunner); ok {
+		result, err = environmentRunner.RunScriptWithEnv(scriptPath, stdin, step.Capture != "", step.Workdir, environment)
+	} else {
+		err = fmt.Errorf("process runner does not support script environments")
+	}
+	return scriptCheckRun{Result: result, Metrics: metricsCapture, RunErr: err}
+}
+
 func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, log Logger) (StepOutcome, error) {
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
 	emitStepStart(ctx, prefix, startTime, map[string]any{"script": step.Script})
-
-	scriptPath, err := resolveScriptPath(step.Script, ctx)
-	if err != nil {
-		if rcErr := emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err, log); rcErr != nil {
-			return OutcomeFailed, rcErr
-		}
-		return OutcomeFailed, err
-	}
-	stdin, err := buildScriptInput(step, ctx)
-	if err != nil {
-		if rcErr := emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err, log); rcErr != nil {
-			return OutcomeFailed, rcErr
-		}
-		return OutcomeFailed, err
-	}
 
 	log.Printf("  script: %s\n", step.Script)
 	switch ps := runner.(type) {
@@ -51,29 +71,17 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 	case interface{ SetPrefix(string) }:
 		ps.SetPrefix(prefix)
 	}
-	metricsCapture, environment, err := prepareNestedMetricsEnvironment(step, ctx)
-	if err != nil {
-		if rcErr := emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err, log); rcErr != nil {
+
+	run := runScriptCheck(step, ctx, runner)
+	if run.RunErr != nil {
+		if rcErr := emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, run.RunErr, log); rcErr != nil {
 			return OutcomeFailed, rcErr
 		}
-		return OutcomeFailed, err
+		return OutcomeFailed, run.RunErr
 	}
-	var result ProcessResult
-	if len(environment) == 0 {
-		result, err = runner.RunScript(scriptPath, stdin, step.Capture != "", step.Workdir)
-	} else if environmentRunner, ok := runner.(scriptEnvironmentRunner); ok {
-		result, err = environmentRunner.RunScriptWithEnv(scriptPath, stdin, step.Capture != "", step.Workdir, environment)
-	} else {
-		err = fmt.Errorf("process runner does not support script environments")
-	}
+	result := run.Result
 	if step.MetricsSource != "" {
-		emitNestedMetricCapture(ctx, step, prefix, metricsCapture)
-	}
-	if err != nil {
-		if rcErr := emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err, log); rcErr != nil {
-			return OutcomeFailed, rcErr
-		}
-		return OutcomeFailed, err
+		emitNestedMetricCapture(ctx, step, prefix, run.Metrics)
 	}
 	if step.Capture != "" {
 		capturedOutput := result.Stdout

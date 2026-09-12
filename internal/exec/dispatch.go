@@ -113,13 +113,29 @@ func executeGroupStep(
 	// agent that only ran inside it.
 	originalLastAgentExecution := ctx.LastAgentExecution
 	defer func() { ctx.LastAgentExecution = originalLastAgentExecution }()
-	for i := range steps {
+	basePath := childNestingPath
+	for i := 0; i < len(steps); i++ {
 		outcome, err := DispatchStep(&steps[i], ctx, runner, glob, log)
 		if err != nil {
 			ctx.NestingPath = originalNestingPath
 			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), map[string]any{"error": err.Error()}, step)
 			return OutcomeFailed, err
 		}
+
+		rw, absorbed := AfterStepDispatch(ctx, steps, i, basePath, outcome)
+		if rw.Stopped {
+			ctx.NestingPath = originalNestingPath
+			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), nil, step)
+			return OutcomeFailed, nil
+		}
+		if rw.Rewound {
+			i = rw.NextIndex - 1
+			continue
+		}
+		if absorbed {
+			continue
+		}
+
 		if outcome == OutcomeAborted {
 			ctx.NestingPath = originalNestingPath
 			emitStepEnd(ctx, prefix, startTime, string(OutcomeAborted), nil, step)

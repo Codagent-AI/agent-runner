@@ -1192,6 +1192,11 @@ func buildAgentPrompt(step *model.Step, ctx *model.ExecutionContext, includeInta
 		prompt = "Context from the intake conversation (already provided by the user; do not ask them to repeat it):\n\n" + ctx.IntakeHandoffContents + "\n\n---\n\n" + prompt
 	}
 
+	if frame := ctx.RepairFrame; frame != nil && frame.Form == string(model.RepairRerun) && step.ID == frame.Target && ctx.LastFailure != nil {
+		evidence := buildRepairEvidenceBlock(ctx.LastFailure.Stdout, ctx.LastFailure.Stderr, guardedResponse(ctx.LastFailure))
+		prompt = evidence + "\n\n" + prompt
+	}
+
 	return prompt, enrichment, nil
 }
 

@@ -34,6 +34,14 @@ type NestedStepState struct {
 	Repair *RepairFrame `json:"repair,omitempty"`
 }
 
+// Repair phase constants, mirroring RepairFrame.Phase.
+const (
+	RepairPhaseChecking  = "checking"
+	RepairPhaseRepairing = "repairing"
+	RepairPhaseReplaying = "replaying"
+	RepairPhaseFailed    = "failed"
+)
+
 // RepairFrame tracks one check's repair lifecycle: which form applies, how
 // many attempts have run against its budget, and (for a rerun form) the
 // range of captures that must be replayed alongside the target step.

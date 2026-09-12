@@ -53,25 +53,6 @@ func parseAuditLine(line string) (rawAuditEvent, bool) {
 	return ev, true
 }
 
-// ExecuteCheckStep runs a shell or script check step and, on non-zero exit,
-// builds a FailureRecord from the process result plus the scope's guarded
-// execution (ctx.LastAgentExecution, or rebuilt from audit when only the
-// persisted reference survives an interruption), storing it on
-// ctx.LastFailure. Workflows without repair behave exactly as before; this
-// only adds richer failure evidence.
-func ExecuteCheckStep(
-	step *model.Step,
-	ctx *model.ExecutionContext,
-	runner ProcessRunner,
-	glob GlobExpander,
-	log Logger,
-) (StepOutcome, error) {
-	if step.Command != "" {
-		return ExecuteShellStep(step, ctx, runner, log)
-	}
-	return ExecuteScriptStep(step, ctx, runner, log)
-}
-
 // recordCheckFailure updates ctx.LastFailure from a shell or script check's
 // process result: on non-zero exit it builds a FailureRecord naming the
 // check (by its own audit prefix and attempt) and its guarded execution (if
