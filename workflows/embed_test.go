@@ -1611,233 +1611,6 @@ exit 0
 	}
 }
 
-func TestOpenSpecArchiveChangeUsesTicketSubjectFromChangeName(t *testing.T) {
-	script, err := ReadAsset("openspec/archive-change.sh")
-	if err != nil {
-		t.Fatalf("ReadAsset(openspec/archive-change.sh): %v", err)
-	}
-	validateScript, err := ReadAsset("openspec/validate-change-name.sh")
-	if err != nil {
-		t.Fatalf("ReadAsset(openspec/validate-change-name.sh): %v", err)
-	}
-
-	tempDir := t.TempDir()
-	scriptPath := filepath.Join(tempDir, "archive-change.sh")
-	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
-		t.Fatalf("write archive script: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(tempDir, "validate-change-name.sh"), validateScript, 0o700); err != nil {
-		t.Fatalf("write validation script: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(tempDir, "openspec", "changes", "plateng-1949-promote-to-eod"), 0o755); err != nil {
-		t.Fatalf("create active change: %v", err)
-	}
-
-	binDir := filepath.Join(tempDir, "bin")
-	if err := os.Mkdir(binDir, 0o755); err != nil {
-		t.Fatalf("create bin dir: %v", err)
-	}
-	fakeOpenSpec := `#!/bin/sh
-if [ "$1" = archive ]; then
-  mkdir -p openspec/changes/archive
-  mv "openspec/changes/$2" "openspec/changes/archive/2026-09-03-$2"
-fi
-exit 0
-`
-	if err := os.WriteFile(filepath.Join(binDir, "openspec"), []byte(fakeOpenSpec), 0o700); err != nil {
-		t.Fatalf("write fake openspec: %v", err)
-	}
-	gitArgs := filepath.Join(tempDir, "git-args")
-	fakeGit := `#!/bin/sh
-if [ "$1" = diff ]; then
-  exit 1
-fi
-if [ "$1" = commit ]; then
-  printf '%s\n' "$@" > "$GIT_ARGS"
-fi
-exit 0
-`
-	if err := os.WriteFile(filepath.Join(binDir, "git"), []byte(fakeGit), 0o700); err != nil {
-		t.Fatalf("write fake git: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(binDir, "agent-validator"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
-		t.Fatalf("write fake agent-validator: %v", err)
-	}
-
-	cmd := exec.Command("sh", scriptPath)
-	cmd.Dir = tempDir
-	cmd.Env = append(os.Environ(), "PATH="+binDir+":/usr/bin:/bin", "GIT_ARGS="+gitArgs)
-	cmd.Stdin = strings.NewReader(`{"change_name":"plateng-1949-promote-to-eod"}`)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("script failed: %v\n%s", err, out)
-	}
-	args, err := os.ReadFile(gitArgs)
-	if err != nil {
-		t.Fatalf("read git args: %v", err)
-	}
-	if !strings.Contains(string(args), "PLATENG-1949: Archive change") {
-		t.Fatalf("git args = %q, want ticket-style archive subject", args)
-	}
-}
-
-func TestOpenSpecArchiveChangeResumesAfterArchiveMove(t *testing.T) {
-	script, err := ReadAsset("openspec/archive-change.sh")
-	if err != nil {
-		t.Fatalf("ReadAsset(openspec/archive-change.sh): %v", err)
-	}
-	validateScript, err := ReadAsset("openspec/validate-change-name.sh")
-	if err != nil {
-		t.Fatalf("ReadAsset(openspec/validate-change-name.sh): %v", err)
-	}
-
-	tempDir := t.TempDir()
-	scriptPath := filepath.Join(tempDir, "archive-change.sh")
-	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
-		t.Fatalf("write archive script: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(tempDir, "validate-change-name.sh"), validateScript, 0o700); err != nil {
-		t.Fatalf("write validation script: %v", err)
-	}
-	archiveDir := filepath.Join(tempDir, "openspec", "changes", "archive", "2026-09-03-plateng-1949-promote-to-eod")
-	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
-		t.Fatalf("create archived change: %v", err)
-	}
-
-	binDir := filepath.Join(tempDir, "bin")
-	if err := os.Mkdir(binDir, 0o755); err != nil {
-		t.Fatalf("create bin dir: %v", err)
-	}
-	openSpecMarker := filepath.Join(tempDir, "openspec-called")
-	fakeOpenSpec := "#!/bin/sh\n: > " + strconv.Quote(openSpecMarker) + "\nexit 99\n"
-	if err := os.WriteFile(filepath.Join(binDir, "openspec"), []byte(fakeOpenSpec), 0o700); err != nil {
-		t.Fatalf("write fake openspec: %v", err)
-	}
-	gitArgs := filepath.Join(tempDir, "git-args")
-	fakeGit := `#!/bin/sh
-if [ "$1" = diff ] && [ "$4" = --diff-filter=D ]; then
-  printf 'openspec/changes/plateng-1949-promote-to-eod/proposal.md\n'
-  exit 0
-fi
-if [ "$1" = diff ] && [ "$4" = --diff-filter=A ]; then
-  printf 'openspec/changes/archive/2026-09-03-plateng-1949-promote-to-eod/proposal.md\n'
-  exit 0
-fi
-if [ "$1" = add ]; then
-  for arg in "$@"; do
-    if [ "$arg" = openspec/changes/plateng-1949-promote-to-eod ]; then
-      printf "fatal: pathspec '%s' did not match any files\n" "$arg" >&2
-      exit 128
-    fi
-  done
-fi
-if [ "$1" = diff ]; then
-  exit 1
-fi
-if [ "$1" = commit ]; then
-  printf '%s\n' "$@" > "$GIT_ARGS"
-fi
-exit 0
-`
-	if err := os.WriteFile(filepath.Join(binDir, "git"), []byte(fakeGit), 0o700); err != nil {
-		t.Fatalf("write fake git: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(binDir, "agent-validator"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
-		t.Fatalf("write fake agent-validator: %v", err)
-	}
-
-	cmd := exec.Command("sh", scriptPath)
-	cmd.Dir = tempDir
-	cmd.Env = append(os.Environ(), "PATH="+binDir+":/usr/bin:/bin", "GIT_ARGS="+gitArgs)
-	cmd.Stdin = strings.NewReader(`{"change_name":"plateng-1949-promote-to-eod"}`)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("script did not resume completed archive move: %v\n%s", err, out)
-	}
-	if _, err := os.Stat(openSpecMarker); !os.IsNotExist(err) {
-		t.Fatalf("openspec was invoked after the active change was already archived: %v", err)
-	}
-	args, err := os.ReadFile(gitArgs)
-	if err != nil {
-		t.Fatalf("read git args: %v", err)
-	}
-	if !strings.Contains(string(args), "openspec/changes/plateng-1949-promote-to-eod") {
-		t.Fatalf("git commit args = %q, want removed active change path", args)
-	}
-}
-
-func TestOpenSpecArchiveChangeRejectsUnprovenResume(t *testing.T) {
-	script, err := ReadAsset("openspec/archive-change.sh")
-	if err != nil {
-		t.Fatalf("ReadAsset(openspec/archive-change.sh): %v", err)
-	}
-	validateScript, err := ReadAsset("openspec/validate-change-name.sh")
-	if err != nil {
-		t.Fatalf("ReadAsset(openspec/validate-change-name.sh): %v", err)
-	}
-
-	for _, testCase := range []struct {
-		name        string
-		archiveName string
-		gitStatus   string
-	}{
-		{
-			name:        "historical exact archive",
-			archiveName: "2026-09-03-plateng-1949-promote-to-eod",
-		},
-		{
-			name:        "suffix collision",
-			archiveName: "2026-09-03-my-plateng-1949-promote-to-eod",
-		},
-		{
-			name:        "unrelated archive modification",
-			archiveName: "2026-09-03-plateng-1949-promote-to-eod",
-			gitStatus:   " M openspec/changes/archive/2026-09-03-plateng-1949-promote-to-eod/proposal.md",
-		},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			tempDir := t.TempDir()
-			scriptPath := filepath.Join(tempDir, "archive-change.sh")
-			if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
-				t.Fatalf("write archive script: %v", err)
-			}
-			if err := os.WriteFile(filepath.Join(tempDir, "validate-change-name.sh"), validateScript, 0o700); err != nil {
-				t.Fatalf("write validation script: %v", err)
-			}
-			archiveDir := filepath.Join(tempDir, "openspec", "changes", "archive", testCase.archiveName)
-			if err := os.MkdirAll(archiveDir, 0o755); err != nil {
-				t.Fatalf("create archived change: %v", err)
-			}
-
-			binDir := filepath.Join(tempDir, "bin")
-			if err := os.Mkdir(binDir, 0o755); err != nil {
-				t.Fatalf("create bin dir: %v", err)
-			}
-			fakeGit := "#!/bin/sh\nif [ \"$1\" = status ]; then\n  printf '%s\\n' " + strconv.Quote(testCase.gitStatus) + "\nfi\nexit 0\n"
-			if err := os.WriteFile(filepath.Join(binDir, "git"), []byte(fakeGit), 0o700); err != nil {
-				t.Fatalf("write fake git: %v", err)
-			}
-			if err := os.WriteFile(filepath.Join(binDir, "openspec"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
-				t.Fatalf("write fake openspec: %v", err)
-			}
-			validatorMarker := filepath.Join(tempDir, "agent-validator-called")
-			fakeValidator := "#!/bin/sh\n: > " + strconv.Quote(validatorMarker) + "\nexit 0\n"
-			if err := os.WriteFile(filepath.Join(binDir, "agent-validator"), []byte(fakeValidator), 0o700); err != nil {
-				t.Fatalf("write fake agent-validator: %v", err)
-			}
-
-			cmd := exec.Command("sh", scriptPath)
-			cmd.Dir = tempDir
-			cmd.Env = append(os.Environ(), "PATH="+binDir+":/usr/bin:/bin")
-			cmd.Stdin = strings.NewReader(`{"change_name":"plateng-1949-promote-to-eod"}`)
-			if out, err := cmd.CombinedOutput(); err == nil {
-				t.Fatalf("script accepted unproven archive resume:\n%s", out)
-			}
-			if _, err := os.Stat(validatorMarker); !os.IsNotExist(err) {
-				t.Fatalf("agent-validator ran after rejected archive resume: %v", err)
-			}
-		})
-	}
-}
-
 func TestCoreCommitChangePlanRejectsRepositoryRoot(t *testing.T) {
 	script, err := ReadAsset("core/commit-change-plan.sh")
 	if err != nil {
@@ -1879,6 +1652,98 @@ func TestCoreCommitChangePlanRejectsRepositoryRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(gitMarker); !os.IsNotExist(err) {
 		t.Fatalf("git was invoked for repository-root path: %v", err)
+	}
+}
+
+func TestCoreCommitChangePlanReplaysAsNoOpWhenAlreadyCommitted(t *testing.T) {
+	script, err := ReadAsset("core/commit-change-plan.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(core/commit-change-plan.sh): %v", err)
+	}
+
+	tempDir := t.TempDir()
+	scriptPath := filepath.Join(tempDir, "commit-change-plan.sh")
+	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.name", "Agent Runner Test"},
+		{"config", "user.email", "agent-runner@example.com"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = tempDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "README.md"), []byte("fixture\n"), 0o600); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	for _, args := range [][]string{{"add", "README.md"}, {"commit", "-m", "chore: initialize fixture"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = tempDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	changeDir := filepath.Join(tempDir, "openspec", "changes", "demo")
+	if err := os.MkdirAll(changeDir, 0o755); err != nil {
+		t.Fatalf("create change directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(changeDir, "proposal.md"), []byte("proposal\n"), 0o600); err != nil {
+		t.Fatalf("write proposal: %v", err)
+	}
+
+	binDir := filepath.Join(tempDir, "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatalf("create bin dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "agent-validator"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write fake agent-validator: %v", err)
+	}
+
+	run := func() (string, error) {
+		cmd := exec.Command("sh", scriptPath)
+		cmd.Dir = tempDir
+		cmd.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
+		cmd.Stdin = strings.NewReader(`{"change_name":"demo","change_dir":"openspec/changes/demo"}`)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+
+	if out, err := run(); err != nil {
+		t.Fatalf("first commit-change-plan run: %v\n%s", err, out)
+	}
+
+	headBefore := strings.TrimSpace(string(runGitOutput(t, tempDir, "rev-parse", "HEAD")))
+
+	if err := os.WriteFile(filepath.Join(tempDir, "unrelated.txt"), []byte("dirty\n"), 0o600); err != nil {
+		t.Fatalf("write unrelated file: %v", err)
+	}
+
+	out, err := run()
+	if err != nil {
+		t.Fatalf("replay commit-change-plan run failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "already committed") {
+		t.Fatalf("output = %q, want already-committed message", out)
+	}
+
+	headAfter := strings.TrimSpace(string(runGitOutput(t, tempDir, "rev-parse", "HEAD")))
+	if headBefore != headAfter {
+		t.Fatalf("replay created a new commit: before %s, after %s", headBefore, headAfter)
+	}
+
+	status := exec.Command("git", "status", "--porcelain", "--", "unrelated.txt")
+	status.Dir = tempDir
+	statusOut, err := status.Output()
+	if err != nil {
+		t.Fatalf("git status: %v", err)
+	}
+	if got, want := string(statusOut), "?? unrelated.txt\n"; got != want {
+		t.Fatalf("git status = %q, want %q", got, want)
 	}
 }
 
@@ -2166,4 +2031,246 @@ func TestCoreCIFixNeededGateScript(t *testing.T) {
 			t.Fatalf("exit code = %d, want 1", exitErr.ExitCode())
 		}
 	})
+}
+
+type repairYAML struct {
+	Prompt  string `yaml:"prompt"`
+	Session string `yaml:"session"`
+	Agent   string `yaml:"agent"`
+	Rerun   string `yaml:"rerun"`
+	Max     *int   `yaml:"max"`
+}
+
+type repairSiteStep struct {
+	ID     string           `yaml:"id"`
+	Prompt string           `yaml:"prompt"`
+	Repair *repairYAML      `yaml:"repair"`
+	Steps  []repairSiteStep `yaml:"steps"`
+}
+
+type repairSiteWorkflow struct {
+	Steps []repairSiteStep `yaml:"steps"`
+}
+
+func findRepairSiteStep(steps []repairSiteStep, id string) *repairSiteStep {
+	for i := range steps {
+		if steps[i].ID == id {
+			return &steps[i]
+		}
+		if found := findRepairSiteStep(steps[i].Steps, id); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+func loadRepairSiteWorkflow(t *testing.T, builtinRef string) repairSiteWorkflow {
+	t.Helper()
+	body, err := ReadFile(builtinRef)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", builtinRef, err)
+	}
+	var workflow repairSiteWorkflow
+	if err := yaml.Unmarshal(body, &workflow); err != nil {
+		t.Fatalf("unmarshal %s: %v", builtinRef, err)
+	}
+	return workflow
+}
+
+// TestMigratedRepairSitesLoadWithExpectedShape asserts every check site
+// migrated to the `repair` construct declares the expected form, target or
+// session, and budget, and that the sites intentionally left on plain
+// failure declare no `repair` block.
+func TestMigratedRepairSitesLoadWithExpectedShape(t *testing.T) {
+	t.Run("every inline repair prompt allows REPAIR_BLOCKED for human-only failures", func(t *testing.T) {
+		inlineRepairSites := []struct {
+			workflow string
+			stepID   string
+		}{
+			{"builtin:core/plan-change-v1.0.yaml", "check-plan"},
+			{"builtin:core/plan-change-v1.0.yaml", "commit-plan"},
+			{"builtin:core/implement-task-v1.0.yaml", "verify-task-commit"},
+			{"builtin:core/implement-change-v1.0.yaml", "verify-task-index"},
+			{"builtin:core/implement-change-v1.0.yaml", "verify-assumptions-handoff"},
+			{"builtin:core/implement-change-v1.0.yaml", "verify-clean-for-pr"},
+			{"builtin:openspec/simple-change-v2.0.yaml", "validate-openspec"},
+			{"builtin:openspec/archive-change-v1.0.yaml", "verify-archive-commit"},
+		}
+		for _, site := range inlineRepairSites {
+			workflow := loadRepairSiteWorkflow(t, site.workflow)
+			step := findRepairSiteStep(workflow.Steps, site.stepID)
+			if step == nil {
+				t.Fatalf("%s step not found in %s", site.stepID, site.workflow)
+			}
+			if step.Repair == nil || step.Repair.Prompt == "" {
+				t.Fatalf("%s in %s has no inline repair prompt", site.stepID, site.workflow)
+			}
+			if !strings.Contains(step.Repair.Prompt, "REPAIR_BLOCKED") {
+				t.Fatalf("%s in %s repair prompt must instruct REPAIR_BLOCKED for human-only failures", site.stepID, site.workflow)
+			}
+		}
+	})
+
+	t.Run("core/plan-change-v1.0.yaml check-plan is inline repair on planning-agent", func(t *testing.T) {
+		workflow := loadRepairSiteWorkflow(t, "builtin:core/plan-change-v1.0.yaml")
+		step := findRepairSiteStep(workflow.Steps, "check-plan")
+		if step == nil {
+			t.Fatal("check-plan step not found")
+		}
+		if step.Repair == nil || step.Repair.Session != "planning-agent" || step.Repair.Rerun != "" || step.Repair.Prompt == "" {
+			t.Fatalf("check-plan repair = %+v, want inline repair on planning-agent", step.Repair)
+		}
+		if step.Repair.Max != nil {
+			t.Fatalf("check-plan repair.max = %v, want default budget of 1", *step.Repair.Max)
+		}
+	})
+
+	t.Run("core/plan-change-v1.0.yaml commit-plan is inline repair on planning-agent", func(t *testing.T) {
+		workflow := loadRepairSiteWorkflow(t, "builtin:core/plan-change-v1.0.yaml")
+		step := findRepairSiteStep(workflow.Steps, "commit-plan")
+		if step == nil {
+			t.Fatal("commit-plan step not found")
+		}
+		if step.Repair == nil || step.Repair.Session != "planning-agent" || step.Repair.Rerun != "" || step.Repair.Prompt == "" {
+			t.Fatalf("commit-plan repair = %+v, want inline repair on planning-agent", step.Repair)
+		}
+	})
+
+	t.Run("core/commit-change-plan-v1.0.yaml commit-plan has no repair", func(t *testing.T) {
+		workflow := loadRepairSiteWorkflow(t, "builtin:core/commit-change-plan-v1.0.yaml")
+		step := findRepairSiteStep(workflow.Steps, "commit-plan")
+		if step == nil {
+			t.Fatal("commit-plan step not found")
+		}
+		if step.Repair != nil {
+			t.Fatalf("hidden commit-change-plan has repair = %+v, want none (no planning-agent session declared)", step.Repair)
+		}
+	})
+
+	t.Run("core/implement-task-v1.0.yaml verify-task-commit is inline repair on resume, max 1", func(t *testing.T) {
+		workflow := loadRepairSiteWorkflow(t, "builtin:core/implement-task-v1.0.yaml")
+		step := findRepairSiteStep(workflow.Steps, "verify-task-commit")
+		if step == nil {
+			t.Fatal("verify-task-commit step not found")
+		}
+		if step.Repair == nil || step.Repair.Session != "resume" || step.Repair.Rerun != "" || step.Repair.Prompt == "" {
+			t.Fatalf("verify-task-commit repair = %+v, want inline repair on resume", step.Repair)
+		}
+		if step.Repair.Max == nil || *step.Repair.Max != 1 {
+			t.Fatalf("verify-task-commit repair.max = %v, want 1", step.Repair.Max)
+		}
+		if !strings.Contains(step.Repair.Prompt, "REPAIR_BLOCKED") {
+			t.Fatal("verify-task-commit repair prompt must instruct REPAIR_BLOCKED for out-of-repository or unsafe cases")
+		}
+	})
+
+	t.Run("core/implement-change-v1.0.yaml verify-task-index is inline repair on lead-agent", func(t *testing.T) {
+		workflow := loadRepairSiteWorkflow(t, "builtin:core/implement-change-v1.0.yaml")
+		step := findRepairSiteStep(workflow.Steps, "verify-task-index")
+		if step == nil {
+			t.Fatal("verify-task-index step not found")
+		}
+		if step.Repair == nil || step.Repair.Session != "lead-agent" || step.Repair.Rerun != "" {
+			t.Fatalf("verify-task-index repair = %+v, want inline repair on lead-agent", step.Repair)
+		}
+	})
+
+	t.Run("core/implement-change-v1.0.yaml verify-assumptions-handoff is inline repair on lead-agent", func(t *testing.T) {
+		workflow := loadRepairSiteWorkflow(t, "builtin:core/implement-change-v1.0.yaml")
+		step := findRepairSiteStep(workflow.Steps, "verify-assumptions-handoff")
+		if step == nil {
+			t.Fatal("verify-assumptions-handoff step not found")
+		}
+		if step.Repair == nil || step.Repair.Session != "lead-agent" || step.Repair.Rerun != "" {
+			t.Fatalf("verify-assumptions-handoff repair = %+v, want inline repair on lead-agent", step.Repair)
+		}
+	})
+
+	t.Run("core/implement-change-v1.0.yaml verify-clean-for-pr is inline repair on lead-agent", func(t *testing.T) {
+		workflow := loadRepairSiteWorkflow(t, "builtin:core/implement-change-v1.0.yaml")
+		step := findRepairSiteStep(workflow.Steps, "verify-clean-for-pr")
+		if step == nil {
+			t.Fatal("verify-clean-for-pr step not found")
+		}
+		if step.Repair == nil || step.Repair.Session != "lead-agent" || step.Repair.Rerun != "" {
+			t.Fatalf("verify-clean-for-pr repair = %+v, want inline repair on lead-agent", step.Repair)
+		}
+	})
+
+	t.Run("core/implement-change-v1.0.yaml verify-draft-pr reruns open-draft-pr", func(t *testing.T) {
+		workflow := loadRepairSiteWorkflow(t, "builtin:core/implement-change-v1.0.yaml")
+		step := findRepairSiteStep(workflow.Steps, "verify-draft-pr")
+		if step == nil {
+			t.Fatal("verify-draft-pr step not found")
+		}
+		if step.Repair == nil || step.Repair.Rerun != "open-draft-pr" || step.Repair.Session != "" || step.Repair.Agent != "" {
+			t.Fatalf("verify-draft-pr repair = %+v, want rerun of open-draft-pr", step.Repair)
+		}
+
+		openDraftPR := findRepairSiteStep(workflow.Steps, "open-draft-pr")
+		if openDraftPR == nil {
+			t.Fatal("open-draft-pr step not found")
+		}
+		if !strings.Contains(openDraftPR.Prompt, "REPAIR_BLOCKED") {
+			t.Fatal("open-draft-pr prompt must instruct REPAIR_BLOCKED for credential, permission, and decision blocks")
+		}
+	})
+
+	t.Run("openspec/simple-change-v2.0.yaml validate-openspec is inline repair on lead-agent", func(t *testing.T) {
+		workflow := loadRepairSiteWorkflow(t, "builtin:openspec/simple-change-v2.0.yaml")
+		step := findRepairSiteStep(workflow.Steps, "validate-openspec")
+		if step == nil {
+			t.Fatal("validate-openspec step not found")
+		}
+		if step.Repair == nil || step.Repair.Session != "lead-agent" || step.Repair.Rerun != "" {
+			t.Fatalf("validate-openspec repair = %+v, want inline repair on lead-agent", step.Repair)
+		}
+	})
+
+	t.Run("openspec/archive-change-v1.0.yaml verify-archive-commit is inline repair on implementor, max 1", func(t *testing.T) {
+		workflow := loadRepairSiteWorkflow(t, "builtin:openspec/archive-change-v1.0.yaml")
+		step := findRepairSiteStep(workflow.Steps, "verify-archive-commit")
+		if step == nil {
+			t.Fatal("verify-archive-commit step not found")
+		}
+		if step.Repair == nil || step.Repair.Agent != "implementor" || step.Repair.Rerun != "" {
+			t.Fatalf("verify-archive-commit repair = %+v, want inline repair on implementor", step.Repair)
+		}
+		if step.Repair.Max == nil || *step.Repair.Max != 1 {
+			t.Fatalf("verify-archive-commit repair.max = %v, want 1", step.Repair.Max)
+		}
+	})
+
+	plainFailureSites := []struct {
+		workflow string
+		stepID   string
+	}{
+		{"builtin:core/validate-feature-branch-v1.0.yaml", "validate-feature-branch"},
+		{"builtin:core/implement-task-v1.0.yaml", "validate-skip-validator"},
+		{"builtin:core/implement-task-v1.0.yaml", "check-task-file"},
+		{"builtin:core/implement-task-v1.0.yaml", "check-clean-before-task"},
+		{"builtin:core/implement-task-v1.0.yaml", "check-clean"},
+		{"builtin:core/implement-change-v1.0.yaml", "validate-change-name"},
+		{"builtin:core/implement-change-v1.0.yaml", "validate-skip-validator"},
+		{"builtin:core/implement-change-v1.0.yaml", "run-validator"},
+		{"builtin:core/implement-change-v1.0.yaml", "verify-acceptance-handoff"},
+		{"builtin:core/plan-change-v1.0.yaml", "check-definition"},
+	}
+	for _, site := range plainFailureSites {
+		t.Run(site.workflow+" "+site.stepID+" has no repair", func(t *testing.T) {
+			workflow := loadRepairSiteWorkflow(t, site.workflow)
+			step := findRepairSiteStep(workflow.Steps, site.stepID)
+			if step == nil {
+				t.Fatalf("%s step not found in %s", site.stepID, site.workflow)
+			}
+			if step.Repair != nil {
+				t.Fatalf("%s in %s has repair = %+v, want plain failure", site.stepID, site.workflow, step.Repair)
+			}
+			for i := range step.Steps {
+				if step.Steps[i].Repair != nil && step.Steps[i].ID != "repair-definition" {
+					t.Fatalf("%s body step %s has repair = %+v, want plain failure", site.stepID, step.Steps[i].ID, step.Steps[i].Repair)
+				}
+			}
+		})
+	}
 }
