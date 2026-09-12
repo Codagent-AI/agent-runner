@@ -136,7 +136,7 @@ func TestClassifyFailure(t *testing.T) {
 	t.Run("falls back to exit code when stderr is empty", func(t *testing.T) {
 		record := &model.FailureRecord{StepID: "check-tests", ExitCode: 2}
 		got := ClassifyFailure(record)
-		want := "check-tests failed: with exit code 2"
+		want := "check-tests failed with exit code 2"
 		if got != want {
 			t.Fatalf("got %q, want %q", got, want)
 		}

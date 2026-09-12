@@ -267,7 +267,11 @@ func readAuditEvents(sessionDir string) ([]rawAuditEvent, error) {
 // a repair-attempts clause when the repair executor recorded them.
 func ClassifyFailure(record *model.FailureRecord) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "%s failed: %s", record.StepID, failureDetail(record))
+	if line := firstLine(record.Stderr); line != "" {
+		fmt.Fprintf(&sb, "%s failed: %s", record.StepID, line)
+	} else {
+		fmt.Fprintf(&sb, "%s failed with exit code %d", record.StepID, record.ExitCode)
+	}
 	if record.Blocked {
 		fmt.Fprintf(&sb, "; blocked: %s", firstLine(record.BlockedBy))
 	}
@@ -275,13 +279,6 @@ func ClassifyFailure(record *model.FailureRecord) string {
 		fmt.Fprintf(&sb, " after %d repair attempts", record.RepairAttempts)
 	}
 	return sb.String()
-}
-
-func failureDetail(record *model.FailureRecord) string {
-	if line := firstLine(record.Stderr); line != "" {
-		return line
-	}
-	return fmt.Sprintf("with exit code %d", record.ExitCode)
 }
 
 // firstLine returns the first non-empty (after trimming) line of s, skipping

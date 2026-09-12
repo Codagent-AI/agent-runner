@@ -198,6 +198,12 @@ func TestExecuteCheckStepGuardedBlockedBeforeAnyRepair(t *testing.T) {
 	if end.Data["exit_code"] != 1 || end.Data["stderr"] != "no open PR" {
 		t.Fatalf("expected blocked step_end to carry the check's exit code and stderr, got %+v", end.Data)
 	}
+	// The run view renders "N of M used" from the terminal step_end; a check
+	// blocked before any attempt never emits repair_attempt_start, so the
+	// budget must travel on step_end itself.
+	if end.Data["repair_max"] != 3 {
+		t.Fatalf("expected repair_max=3 on the blocked step_end, got %+v", end.Data)
+	}
 }
 
 func TestExecuteCheckStepInlineRepairAgentDeclaresBlocked(t *testing.T) {

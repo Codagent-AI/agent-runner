@@ -101,7 +101,7 @@ steps:
 	lines := strings.Split(firstOutput.text, "\n")
 	blockedIdx, resumeIdx := -1, -1
 	for i, line := range lines {
-		if strings.Contains(line, "verify failed:") && strings.Contains(line, "blocked:") {
+		if strings.Contains(line, "verify failed") && strings.Contains(line, "blocked:") {
 			blockedIdx = i
 		}
 		if strings.Contains(line, "to resume:") {
@@ -109,7 +109,7 @@ steps:
 		}
 	}
 	if blockedIdx == -1 {
-		t.Fatalf("missing 'verify failed: ... blocked: ...' line:\n%s", firstOutput.text)
+		t.Fatalf("missing 'verify failed ... blocked: ...' line:\n%s", firstOutput.text)
 	}
 	if resumeIdx == -1 || resumeIdx <= blockedIdx {
 		t.Fatalf("'to resume:' line missing or not after the blocked line:\n%s", firstOutput.text)

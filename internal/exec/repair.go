@@ -104,6 +104,7 @@ func armRerunReplay(ctx *model.ExecutionContext, frame *model.RepairFrame) {
 func repairEndData(data map[string]any, frame *model.RepairFrame, blocked bool) map[string]any {
 	data["repair_form"] = frame.Form
 	data["repair_target"] = frame.Target
+	data["repair_max"] = frame.Budget
 	data["repair_attempts"] = frame.Attempts
 	data["repair_blocked"] = blocked
 	return data
