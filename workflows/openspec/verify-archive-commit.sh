@@ -5,7 +5,9 @@ payload=$(cat)
 script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 change_name=$(printf '%s' "$payload" | "$script_dir/validate-change-name.sh")
 session_dir=$(printf '%s' "$payload" | jq -er '.session_dir | select(type == "string" and length > 0)')
-archive_state=$(printf '%s' "$payload" | jq -c '.archive_state')
+# The runner passes captured variables to script_inputs as strings, so the
+# transition's JSON usually arrives as text; accept an object too.
+archive_state=$(printf '%s' "$payload" | jq -c '.archive_state | if type == "string" then fromjson else . end')
 
 archive_dir=$(printf '%s' "$archive_state" | jq -er '.archive_dir')
 change_dir=$(printf '%s' "$archive_state" | jq -er '.change_dir')

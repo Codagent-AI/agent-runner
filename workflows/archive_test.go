@@ -448,3 +448,31 @@ func runGitCombined(t *testing.T, dir string, args ...string) (string, error) {
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
+
+// The runner passes captured variables to script_inputs as strings, so the
+// verifier receives archive_state as the JSON text the transition printed,
+// not as a nested object. It must accept both shapes.
+func TestVerifyArchiveCommitAcceptsArchiveStateAsString(t *testing.T) {
+	f := newArchiveTestFixture(t, "ticket-123-demo")
+	transitionOut, err := f.runTransition(t)
+	if err != nil {
+		t.Fatalf("archive-transition failed: %v\n%s", err, transitionOut)
+	}
+	archiveDir := archiveStateField(t, transitionOut, "archive_dir")
+	canonicalSpec := filepath.Join("openspec", "specs", "spec-a-canonical.md")
+	runGit(t, f.repo, "add", "--", f.changeDir, archiveDir, canonicalSpec)
+	runGit(t, f.repo, "commit", "-m", "TICKET-123: archive change", "--", f.changeDir, archiveDir, canonicalSpec)
+
+	stdin, err := json.Marshal(map[string]string{
+		"archive_state": strings.TrimSpace(transitionOut),
+		"change_name":   f.changeName,
+		"session_dir":   f.sessionDir,
+	})
+	if err != nil {
+		t.Fatalf("marshal verify input: %v", err)
+	}
+	out, err := f.run(t, "verify-archive-commit.sh", stdin)
+	if err != nil {
+		t.Fatalf("verify rejected archive_state passed as a string: %v\n%s", err, out)
+	}
+}
