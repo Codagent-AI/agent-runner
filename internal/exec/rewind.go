@@ -44,6 +44,45 @@ func inReplay(ctx *model.ExecutionContext, basePath []model.NestingSegment) bool
 		ctx.RepairFrame != nil && ctx.RepairFrame.Phase == model.RepairPhaseReplaying
 }
 
+// isBlockingOutcome reports whether outcome would ordinarily stop the
+// enclosing scope for step: an abort always blocks, and a failure blocks
+// unless the step's own continue_on_failure or warn_on_failure lets it
+// through. Only a blocking outcome inside a replay range counts as a failed
+// repair attempt; a replayed step whose own flow control tolerates its
+// failure proceeds through ordinary sequencing instead.
+func isBlockingOutcome(step *model.Step, outcome StepOutcome) bool {
+	if outcome == OutcomeAborted {
+		return true
+	}
+	return outcome == OutcomeFailed && !step.ContinueOnFailure && !IsWarningOutcome(step, outcome)
+}
+
+// terminalReplayBlocked marks the frame terminally blocked when the rerun
+// target's own response declares REPAIR_BLOCKED. It is tested immediately
+// after the target step completes and before any later replay step runs, so
+// a marker from an unrelated agent later in the replay range is never
+// consulted.
+func terminalReplayBlocked(ctx *model.ExecutionContext, response string) {
+	frame := ctx.RepairFrame
+	owningPrefix := audit.BuildPrefix(nestingSegmentsToAuditInfo(repairOwningNestingPath(ctx, frame.CheckID)), frame.CheckID)
+	emitAudit(ctx, audit.Event{
+		Timestamp: formatAuditTimestamp(time.Now()), Prefix: owningPrefix, Type: audit.EventRepairBlocked,
+		Data: map[string]any{"attempt": frame.Attempts, "response": truncateForAudit(response)},
+	})
+	frame.Phase = model.RepairPhaseFailed
+	record := &model.FailureRecord{
+		StepID: frame.CheckID, Prefix: owningPrefix, Blocked: true, BlockedBy: response, RepairAttempts: frame.Attempts,
+	}
+	if frame.Guarded != nil {
+		ref := *frame.Guarded
+		record.Guarded = &model.AgentExecutionRecord{Ref: ref}
+	}
+	ctx.LastFailure = record
+	if ctx.FlushState != nil {
+		ctx.FlushState()
+	}
+}
+
 // RewindOutcome tells a sequencer what to do after checking for a pending
 // rewind following one DispatchStep call.
 type RewindOutcome struct {
@@ -77,7 +116,15 @@ type RewindOutcome struct {
 //     concluded (the check's own re-entry cleared or terminally failed the
 //     frame), it is restored to basePath.
 func AfterStepDispatch(ctx *model.ExecutionContext, steps []model.Step, i int, basePath []model.NestingSegment, outcome StepOutcome) (result RewindOutcome, absorbed bool) {
-	if inReplay(ctx, basePath) && (outcome == OutcomeAborted || outcome == OutcomeFailed) {
+	if inReplay(ctx, basePath) && steps[i].ID == ctx.RepairFrame.Target && outcome == OutcomeSuccess {
+		if guarded := ctx.LastAgentExecution; guarded != nil && executionRefMatchesStep(guarded.Ref, ctx.RepairFrame.Target) && repairBlocked(guarded.Response) {
+			ctx.NestingPath = basePath
+			terminalReplayBlocked(ctx, guarded.Response)
+			return RewindOutcome{Stopped: true}, true
+		}
+	}
+
+	if inReplay(ctx, basePath) && isBlockingOutcome(&steps[i], outcome) {
 		absorbed = true
 		if stop := AbsorbReplayFailure(ctx, steps[i].ID, outcome); stop {
 			ctx.NestingPath = basePath
@@ -133,6 +180,9 @@ func AbsorbReplayFailure(ctx *model.ExecutionContext, failingStepID string, outc
 			record.Guarded = &model.AgentExecutionRecord{Ref: ref}
 		}
 		ctx.LastFailure = record
+		if ctx.FlushState != nil {
+			ctx.FlushState()
+		}
 		return true
 	}
 
@@ -144,5 +194,8 @@ func AbsorbReplayFailure(ctx *model.ExecutionContext, failingStepID string, outc
 	frame.Phase = model.RepairPhaseReplaying
 	clearRangeCaptures(ctx, frame.RangeCaptures)
 	ctx.PendingRewind = &model.RewindRequest{Target: frame.Target, CheckID: frame.CheckID}
+	if ctx.FlushState != nil {
+		ctx.FlushState()
+	}
 	return false
 }

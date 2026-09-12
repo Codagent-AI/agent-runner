@@ -29,32 +29,64 @@ type scriptCheckRun struct {
 	RunErr  error
 }
 
+// scriptCheckPrep is the result of resolving a script check's path, stdin,
+// and nested-metrics environment, before the process is spawned. Splitting
+// this from execution lets an audited caller set the runner's prefix and
+// emit step_start before the process starts.
+type scriptCheckPrep struct {
+	scriptPath  string
+	stdin       []byte
+	metrics     *nestedMetricsCapture
+	environment []string
+	Err         error
+}
+
+// prepareScriptCheck resolves the script path, builds its stdin, and
+// prepares its nested metrics environment. It runs nothing and emits no
+// audit events.
+func prepareScriptCheck(step *model.Step, ctx *model.ExecutionContext) scriptCheckPrep {
+	scriptPath, err := resolveScriptPath(step.Script, ctx)
+	if err != nil {
+		return scriptCheckPrep{Err: err}
+	}
+	stdin, err := buildScriptInput(step, ctx)
+	if err != nil {
+		return scriptCheckPrep{Err: err}
+	}
+	metricsCapture, environment, err := prepareNestedMetricsEnvironment(step, ctx)
+	if err != nil {
+		return scriptCheckPrep{Err: err}
+	}
+	return scriptCheckPrep{scriptPath: scriptPath, stdin: stdin, metrics: metricsCapture, environment: environment}
+}
+
+// runPreparedScriptCheck executes a script check from an already-prepared
+// path/stdin/environment, emitting no audit events, adding no warning
+// origin, and writing no capture. Callers own audit emission and
+// ctx.CapturedVariables.
+func runPreparedScriptCheck(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, prep *scriptCheckPrep) scriptCheckRun {
+	var result ProcessResult
+	var err error
+	if len(prep.environment) == 0 {
+		result, err = runner.RunScript(prep.scriptPath, prep.stdin, step.Capture != "", step.Workdir)
+	} else if environmentRunner, ok := runner.(scriptEnvironmentRunner); ok {
+		result, err = environmentRunner.RunScriptWithEnv(prep.scriptPath, prep.stdin, step.Capture != "", step.Workdir, prep.environment)
+	} else {
+		err = fmt.Errorf("process runner does not support script environments")
+	}
+	return scriptCheckRun{Result: result, Metrics: prep.metrics, RunErr: err}
+}
+
 // runScriptCheck resolves the script path, builds its stdin, and executes it
 // exactly as ExecuteScriptStep does, but emits no audit events, adds no
 // warning origin, and writes no capture. Callers own audit emission and
 // ctx.CapturedVariables.
 func runScriptCheck(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner) scriptCheckRun {
-	scriptPath, err := resolveScriptPath(step.Script, ctx)
-	if err != nil {
-		return scriptCheckRun{RunErr: err}
+	prep := prepareScriptCheck(step, ctx)
+	if prep.Err != nil {
+		return scriptCheckRun{RunErr: prep.Err}
 	}
-	stdin, err := buildScriptInput(step, ctx)
-	if err != nil {
-		return scriptCheckRun{RunErr: err}
-	}
-	metricsCapture, environment, err := prepareNestedMetricsEnvironment(step, ctx)
-	if err != nil {
-		return scriptCheckRun{RunErr: err}
-	}
-	var result ProcessResult
-	if len(environment) == 0 {
-		result, err = runner.RunScript(scriptPath, stdin, step.Capture != "", step.Workdir)
-	} else if environmentRunner, ok := runner.(scriptEnvironmentRunner); ok {
-		result, err = environmentRunner.RunScriptWithEnv(scriptPath, stdin, step.Capture != "", step.Workdir, environment)
-	} else {
-		err = fmt.Errorf("process runner does not support script environments")
-	}
-	return scriptCheckRun{Result: result, Metrics: metricsCapture, RunErr: err}
+	return runPreparedScriptCheck(step, ctx, runner, &prep)
 }
 
 func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, log Logger) (StepOutcome, error) {

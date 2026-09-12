@@ -479,6 +479,7 @@ func executeIterationBody(
 
 		rw, absorbed := AfterStepDispatch(iterCtx, steps, i, basePath, outcome)
 		if rw.Stopped {
+			iterCtx.PropagateFailure()
 			persistIterationFailState(iterCtx, loopStepID, iteration, bodyStepID, false)
 			return iterationResult{failed: true}, nil
 		}
@@ -511,6 +512,12 @@ func finishIterationBodyStep(
 	setBody func(stepID string, completed bool),
 ) (result iterationResult, done bool) {
 	bodyCompleted := outcome != OutcomeFailed && outcome != OutcomeAborted
+	if outcome == OutcomeFailed && (IsWarningOutcome(step, outcome) || step.ContinueOnFailure) {
+		// A failed check that flow control lets the scope advance past
+		// resumes at the next step, and its repair frame (if any) is done.
+		bodyCompleted = true
+		iterCtx.RepairFrame = nil
+	}
 	setBody(bodyStepID, bodyCompleted)
 	if bodyCompleted && iterCtx.FlushState != nil {
 		iterCtx.FlushState()

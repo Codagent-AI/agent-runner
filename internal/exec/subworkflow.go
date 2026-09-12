@@ -191,6 +191,7 @@ func executeChildSteps(
 
 		rw, absorbed := AfterStepDispatch(childCtx, workflow.Steps, i, basePath, outcome)
 		if rw.Stopped {
+			childCtx.PropagateFailure()
 			updateChildProgress(childCtx, workflow.Steps[i].ID, false)
 			return OutcomeFailed, nil
 		}
@@ -202,21 +203,8 @@ func executeChildSteps(
 			continue
 		}
 
-		completed := outcome != OutcomeFailed && outcome != OutcomeAborted
-		updateChildProgress(childCtx, workflow.Steps[i].ID, completed)
-
-		if outcome == OutcomeAborted {
-			return OutcomeAborted, nil
-		}
-
-		recordLastStepOutcome(childCtx, outcome)
-
-		if outcome == OutcomeFailed && !workflow.Steps[i].ContinueOnFailure && !IsWarningOutcome(&workflow.Steps[i], outcome) {
-			childCtx.PropagateFailure()
-			return OutcomeFailed, nil
-		}
-		if outcome == OutcomeFailed {
-			childCtx.ClearInheritedFailure()
+		if result, done := finishChildStep(childCtx, &workflow.Steps[i], outcome); done {
+			return result, nil
 		}
 	}
 
@@ -224,6 +212,36 @@ func executeChildSteps(
 		return OutcomeFailed, fmt.Errorf("resume step %q not found in sub-workflow", resolvedStartID)
 	}
 	return OutcomeSuccess, nil
+}
+
+// finishChildStep applies the ordinary per-step handling for one
+// sub-workflow child's outcome once repair/rewind bookkeeping has already
+// ruled out a replay-failure absorption. done is true when the caller
+// should return result immediately.
+func finishChildStep(childCtx *model.ExecutionContext, step *model.Step, outcome StepOutcome) (result StepOutcome, done bool) {
+	completed := outcome != OutcomeFailed && outcome != OutcomeAborted
+	if outcome == OutcomeFailed && (IsWarningOutcome(step, outcome) || step.ContinueOnFailure) {
+		// A failed check that flow control lets the scope advance past
+		// resumes at the next step, and its repair frame (if any) is done.
+		completed = true
+		childCtx.RepairFrame = nil
+	}
+	updateChildProgress(childCtx, step.ID, completed)
+
+	if outcome == OutcomeAborted {
+		return OutcomeAborted, true
+	}
+
+	recordLastStepOutcome(childCtx, outcome)
+
+	if outcome == OutcomeFailed && !step.ContinueOnFailure && !IsWarningOutcome(step, outcome) {
+		childCtx.PropagateFailure()
+		return OutcomeFailed, true
+	}
+	if outcome == OutcomeFailed {
+		childCtx.ClearInheritedFailure()
+	}
+	return OutcomeSuccess, false
 }
 
 func skipChildStep(childCtx *model.ExecutionContext, step *model.Step) {

@@ -177,20 +177,49 @@ type shellCheckRun struct {
 	RunErr     error
 }
 
-// runShellCheck interpolates step's command and executes it exactly as
-// ExecuteShellStep does, but emits no audit events, adds no warning origin,
-// and writes no capture. Callers own audit emission and ctx.CapturedVariables.
-func runShellCheck(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner) shellCheckRun {
+// shellCheckPrep is the result of interpolating a shell check's command and
+// preparing its nested-metrics environment, before the process is spawned.
+// Splitting this from execution lets an audited caller set the runner's
+// prefix and emit step_start before the process starts, so a hung or
+// streaming process is never unattributed and always leaves a step_start
+// audit event.
+type shellCheckPrep struct {
+	Command string // interpolated command, before metrics-environment wrapping
+	Metrics *nestedMetricsCapture
+	Err     error
+}
+
+// prepareShellCheck interpolates step's command and prepares its nested
+// metrics environment. It runs nothing and emits no audit events.
+func prepareShellCheck(step *model.Step, ctx *model.ExecutionContext) shellCheckPrep {
 	command, err := textfmt.InterpolateShellSafeTyped(step.Command, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
 	if err != nil {
-		return shellCheckRun{RunErr: err}
+		return shellCheckPrep{Err: err}
 	}
 	metricsCapture, err := prepareNestedMetrics(step, ctx, command)
 	if err != nil {
-		return shellCheckRun{Command: command, RunErr: err}
+		return shellCheckPrep{Command: command, Err: err}
 	}
-	result, useCapture, runErr := runShellProcess(step, ctx, runner, metricsCapture.command)
-	return shellCheckRun{Result: result, Command: command, UseCapture: useCapture, Metrics: metricsCapture, RunErr: runErr}
+	return shellCheckPrep{Command: command, Metrics: metricsCapture}
+}
+
+// runPreparedShellCheck executes a shell check from an already-prepared
+// command, emitting no audit events, adding no warning origin, and writing
+// no capture. Callers own audit emission and ctx.CapturedVariables.
+func runPreparedShellCheck(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, prep shellCheckPrep) shellCheckRun {
+	result, useCapture, runErr := runShellProcess(step, ctx, runner, prep.Metrics.command)
+	return shellCheckRun{Result: result, Command: prep.Command, UseCapture: useCapture, Metrics: prep.Metrics, RunErr: runErr}
+}
+
+// runShellCheck prepares and executes step's shell command in one call, for
+// callers that do not need to set the runner's prefix or emit step_start
+// before the process starts.
+func runShellCheck(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner) shellCheckRun {
+	prep := prepareShellCheck(step, ctx)
+	if prep.Err != nil {
+		return shellCheckRun{Command: prep.Command, RunErr: prep.Err}
+	}
+	return runPreparedShellCheck(step, ctx, runner, prep)
 }
 
 // ExecuteShellStep runs a shell command step.
@@ -204,17 +233,17 @@ func ExecuteShellStep(
 		return OutcomeFailed, nil
 	}
 
-	run := runShellCheck(step, ctx, runner)
-	if run.RunErr != nil && run.Metrics == nil {
+	prep := prepareShellCheck(step, ctx)
+	if prep.Err != nil && prep.Metrics == nil {
 		// Covers both an interpolation failure (Command unresolved) and a
 		// nested-metrics preparation failure (Command resolved but the
 		// process never ran): neither case ever reaches runShellProcess, so
 		// there is nothing more specific to report than the raw step command.
-		emitShellInterpolationFailure(ctx, step, run.RunErr)
-		return OutcomeFailed, run.RunErr
+		emitShellInterpolationFailure(ctx, step, prep.Err)
+		return OutcomeFailed, prep.Err
 	}
 
-	log.Printf("  command: %s\n", run.Command)
+	log.Printf("  command: %s\n", prep.Command)
 
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
@@ -224,8 +253,14 @@ func ExecuteShellStep(
 		ps.SetPrefix(prefix)
 	}
 
-	emitStepStart(ctx, prefix, startTime, map[string]any{"command": truncateForAudit(run.Command)})
+	emitStepStart(ctx, prefix, startTime, map[string]any{"command": truncateForAudit(prep.Command)})
 
+	if prep.Err != nil {
+		emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{"error": prep.Err.Error()}, step)
+		return OutcomeFailed, prep.Err
+	}
+
+	run := runPreparedShellCheck(step, ctx, runner, prep)
 	if step.MetricsSource != "" {
 		// Nested metric records are emitted even when the tool exits unsuccessfully:
 		// model usage is billable independently of the shell outcome.

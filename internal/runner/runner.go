@@ -661,6 +661,11 @@ func runAndPersistTopLevelStep(rs *runState, step *model.Step) (exec.StepOutcome
 	outcome, loopResult, err := runStep(step, rs)
 	rs.ctx.FlushState = nil
 	warning := exec.IsWarningOutcome(step, outcome)
+	if outcome == exec.OutcomeFailed && (warning || step.ContinueOnFailure) {
+		// A failed check that flow control lets the run advance past is
+		// done: its repair frame (if any) must not be persisted as open.
+		rs.ctx.RepairFrame = nil
+	}
 	completed := err == nil && outcome != exec.OutcomeAborted && (outcome != exec.OutcomeFailed || warning)
 	if !completed && rs.ctx.LastSubWorkflowChild == nil && resumeChild != nil {
 		// A resume can fail before any child step starts, for example when the
