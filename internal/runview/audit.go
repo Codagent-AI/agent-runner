@@ -1303,7 +1303,7 @@ func applyStepEnd(n *StepNode, data map[string]any) {
 			agentInvoked = v
 		}
 	}
-	metrics := AttemptMetrics{Attempt: attempt, Outcome: outcome, AgentInvoked: agentInvoked}
+	metrics := AttemptMetrics{Attempt: attempt, Outcome: outcome, AgentInvoked: agentInvoked, Stdout: n.Stdout, Stderr: n.Stderr}
 	if n.DurationMs != nil {
 		v := *n.DurationMs
 		metrics.DurationMs = &v

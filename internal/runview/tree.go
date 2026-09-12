@@ -218,6 +218,12 @@ type AttemptMetrics struct {
 	DurationMs   *int64
 	Outcome      string
 	AgentInvoked bool // whether this attempt actually launched an agent; gates mid-run coverage denominators
+	// Stdout and Stderr are this attempt's own output, preserved even after a
+	// later attempt overwrites the node's latest-wins Stdout/Stderr fields.
+	// Failure evidence recorded against an earlier attempt (guarded_attempt)
+	// must read from here, not from the node's current execution.
+	Stdout string
+	Stderr string
 }
 
 // NodeKey returns a stable key for a node based on its structural position in

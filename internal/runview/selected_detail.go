@@ -108,19 +108,28 @@ func (doc *detailDocument) addFailureEvidence(node *StepNode) {
 	if node == nil || node.Failure == nil {
 		return
 	}
-	lines := []string{classifiedFailureReason(node.Failure)}
-	if node.Failure.Blocked && strings.TrimSpace(node.Failure.BlockedBy) != "" {
-		lines = append(lines, "blocked: "+strings.TrimRight(node.Failure.BlockedBy, "\r\n"))
+	body := strings.Join(failureEvidenceLines(node.Failure), "\n")
+	doc.sections = append(doc.sections, detailSection{label: "Failure evidence", kind: detailRailError, body: body, copy: body})
+}
+
+// failureEvidenceLines renders a durable failure record's classified reason,
+// the blocked declaration's explanation when present, and the guarded
+// execution's final response. Shared by the current-node "Failure evidence"
+// section and the previous-execution rail, so a re-executed check still
+// exposes the earlier attempt's complete evidence, not just its reason.
+func failureEvidenceLines(evidence *FailureEvidence) []string {
+	lines := []string{classifiedFailureReason(evidence)}
+	if evidence.Blocked && strings.TrimSpace(evidence.BlockedBy) != "" {
+		lines = append(lines, "blocked: "+strings.TrimRight(evidence.BlockedBy, "\r\n"))
 	}
-	if response := strings.TrimRight(node.Failure.GuardedResponse, "\r\n"); response != "" {
+	if response := strings.TrimRight(evidence.GuardedResponse, "\r\n"); response != "" {
 		label := "guarded response"
-		if node.Failure.GuardedPrefix != "" {
-			label = "guarded response " + node.Failure.GuardedPrefix
+		if evidence.GuardedPrefix != "" {
+			label = "guarded response " + evidence.GuardedPrefix
 		}
 		lines = append(lines, label+":", response)
 	}
-	body := strings.Join(lines, "\n")
-	doc.sections = append(doc.sections, detailSection{label: "Failure evidence", kind: detailRailError, body: body, copy: body})
+	return lines
 }
 
 // classifiedFailureReason renders the same reason string the runner persists
@@ -160,9 +169,10 @@ func previousExecutionSection(node *StepNode, width int) (detailSection, bool) {
 	}
 	body := strings.Join(metadata, " · ")
 	if node.Failure != nil {
-		// A historical failed check keeps its classified reason in context, so
-		// a re-executed check still exposes the earlier attempt's evidence.
-		body += "\n" + classifiedFailureReason(node.Failure)
+		// A historical failed check keeps its full failure evidence in context
+		// (reason, blocked explanation, guarded response), so a re-executed
+		// check still exposes the earlier attempt's complete evidence.
+		body += "\n" + strings.Join(failureEvidenceLines(node.Failure), "\n")
 	}
 	switch {
 	case node.Status == StatusSkipped:

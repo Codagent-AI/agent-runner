@@ -230,6 +230,25 @@ func resumedPlainCheckAuditFixture() []string {
 	}
 }
 
+// guardedAttemptMismatchAuditFixture records a check whose failure record
+// references write-plan's first execution, followed by write-plan running
+// again (a later attempt with different output) before the run completes.
+// The failure record must keep pointing at the first attempt's response.
+func guardedAttemptMismatchAuditFixture() []string {
+	return []string{
+		`2026-09-01T00:00:00Z run_start {}`,
+		`2026-09-01T00:00:01Z [write-plan] step_start {"mode":"autonomous","prompt":"write the plan"}`,
+		`2026-09-01T00:00:02Z [write-plan] step_end {"outcome":"success","stdout":"plan draft one","identity":{"attempt":1}}`,
+		`2026-09-01T00:00:03Z [check-plan] step_start {"command":"validate-plan"}`,
+		`2026-09-01T00:00:04Z [check-plan] step_end {"outcome":"failed","exit_code":1,"stderr":"plan is missing a tasks section","guarded_prefix":"[write-plan]","guarded_attempt":1}`,
+		`2026-09-01T00:00:05Z [write-plan] step_start {"mode":"autonomous","prompt":"write the plan"}`,
+		`2026-09-01T00:00:06Z [write-plan] step_end {"outcome":"success","stdout":"plan draft two","identity":{"attempt":2}}`,
+		`2026-09-01T00:00:07Z [check-plan] step_start {"command":"validate-plan"}`,
+		`2026-09-01T00:00:08Z [check-plan] step_end {"outcome":"success","stdout":"plan ok"}`,
+		`2026-09-01T00:00:09Z run_end {"outcome":"success"}`,
+	}
+}
+
 // preRepairAuditFixture is a pre-change audit log: no repair events at all.
 // Its rendering must not move by a single byte.
 func preRepairAuditFixture() []string {

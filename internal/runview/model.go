@@ -1330,7 +1330,25 @@ func (m *Model) hydrateGuardedResponse(node *StepNode) {
 		return
 	}
 	m.loadHistoricalOutput(guarded)
-	node.Failure.GuardedResponse = firstNonEmpty(guarded.Stdout, guarded.Stderr)
+	node.Failure.GuardedResponse = guardedResponseForAttempt(guarded, node.Failure.GuardedAttempt)
+}
+
+// guardedResponseForAttempt returns the guarded node's response from the
+// specific attempt recorded on the failure evidence. A node re-executed since
+// that failure was recorded has overwritten its latest-wins Stdout/Stderr
+// fields, so the matching entry in the append-only Attempts history — not the
+// node's current output — is the only reliable source for that attempt's
+// response. Falls back to the node's current output when no matching attempt
+// is recorded (legacy audit logs with no identity/attempt data).
+func guardedResponseForAttempt(guarded *StepNode, attempt int) string {
+	if attempt > 0 {
+		for _, a := range guarded.Attempts {
+			if a.Attempt == attempt {
+				return firstNonEmpty(a.Stdout, a.Stderr)
+			}
+		}
+	}
+	return firstNonEmpty(guarded.Stdout, guarded.Stderr)
 }
 
 func (m *Model) toggleSelectedInputExpansion() {

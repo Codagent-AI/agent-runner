@@ -507,3 +507,61 @@ func TestDetailDocument_RepairPreviousExecutionShowsFailureReason(t *testing.T) 
 		t.Fatalf("previous-execution rail missing the classified failure reason:\n%s", plain)
 	}
 }
+
+// TestDetailDocument_RepairPreviousExecutionShowsFullFailureEvidence covers the
+// task-compliance finding that previousExecutionSection only surfaced the
+// classified reason, dropping the blocked explanation and guarded response
+// that addFailureEvidence renders for the current node.
+func TestDetailDocument_RepairPreviousExecutionShowsFullFailureEvidence(t *testing.T) {
+	previous := &StepNode{
+		ID: "verify-draft-pr", Type: NodeShell, Status: StatusFailed, StartOrdinal: 1,
+		Stderr: "no draft pull request found",
+		Failure: &FailureEvidence{
+			StepID: "verify-draft-pr", ExitCode: 1, Stderr: "no draft pull request found",
+			Blocked: true, BlockedBy: "push rejected: token lacks workflow scope",
+			GuardedPrefix: "[open-draft-pr]", GuardedAttempt: 1,
+			GuardedResponse: "push rejected: token lacks workflow scope\nREPAIR_BLOCKED",
+		},
+	}
+	node := &StepNode{ID: "next", Type: NodeShell, Status: StatusSuccess, StartOrdinal: 2}
+
+	doc := buildDetailDocument(node, detailBuildOptions{width: 80, previous: previous})
+	plain := stripANSI(strings.Join(doc.renderScreen(), "\n"))
+	for _, want := range []string{
+		"blocked: push rejected: token lacks workflow scope",
+		"guarded response [open-draft-pr]:",
+		"REPAIR_BLOCKED",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("previous-execution rail missing %q:\n%s", want, plain)
+		}
+	}
+}
+
+// TestHydrateGuardedResponse_UsesRecordedAttemptNotLatestExecution covers the
+// task-compliance finding that guarded-response hydration ignored
+// GuardedAttempt and always read the guarded node's current (latest) output,
+// which is wrong once the guarded step has re-executed since the failure was
+// recorded.
+func TestHydrateGuardedResponse_UsesRecordedAttemptNotLatestExecution(t *testing.T) {
+	wf := fixtureRepairPlanChange()
+	tree := BuildTree(&wf, fixturePath("openspec/plan-change-v1.0.yaml"))
+	applyFixtureAudit(t, tree, guardedAttemptMismatchAuditFixture())
+
+	check := childByID(tree.Root, "check-plan")
+	m := newTestModel(tree, FromList)
+	m.setSelected(check)
+	plain := stripANSI(strings.Join(m.selectedDetailDocument(80).renderScreen(), "\n"))
+
+	evidenceIdx := strings.Index(plain, "Failure evidence")
+	if evidenceIdx < 0 {
+		t.Fatalf("missing Failure evidence section:\n%s", plain)
+	}
+	evidence := plain[evidenceIdx:]
+	if !strings.Contains(evidence, "plan draft one") {
+		t.Fatalf("expected the recorded (attempt 1) guarded response in Failure evidence, got:\n%s", evidence)
+	}
+	if strings.Contains(evidence, "plan draft two") {
+		t.Fatalf("Failure evidence guarded response leaked write-plan's later (attempt 2) execution:\n%s", evidence)
+	}
+}
