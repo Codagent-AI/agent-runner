@@ -114,6 +114,7 @@ func executeGroupStep(
 	originalLastAgentExecution := ctx.LastAgentExecution
 	defer func() { ctx.LastAgentExecution = originalLastAgentExecution }()
 	basePath := childNestingPath
+	PrimeReplayResume(ctx, basePath)
 	for i := 0; i < len(steps); i++ {
 		outcome, err := DispatchStep(&steps[i], ctx, runner, glob, log)
 		if err != nil {

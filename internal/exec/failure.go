@@ -163,6 +163,55 @@ func LoadAgentExecution(sessionDir string, ref model.ExecutionRef) (*model.Agent
 	return record, nil
 }
 
+// RestoreLastFailureForResume rebuilds ctx.LastFailure from the audit log for
+// an open repair frame just restored on resume. ctx.LastFailure itself is
+// never persisted to state.json, but the repair evidence block (the check's
+// stdout/stderr and the guarded agent's response) is required again whenever
+// a resumed run re-enters the cycle: at the check for the inline and
+// checking/repairing phases, and at the rerun target for the replaying
+// phase. The check's own stdout/stderr/exit code are rebuilt from the most
+// recent repair_attempt_start event under the check's own owning audit
+// prefix, when one exists: a check that was blocked on its very first
+// failure never reaches the repair budget loop, so no such event exists, and
+// the record is built with empty output. The guarded execution named by
+// frame.Guarded is always rebuilt when present, since it is the evidence a
+// resumed rerun target's prompt actually needs.
+func RestoreLastFailureForResume(ctx *model.ExecutionContext) error {
+	frame := ctx.RepairFrame
+	if frame == nil {
+		return nil
+	}
+	owningPrefix := auditBuildPrefixForOwningCheck(ctx, frame.CheckID)
+
+	events, err := readAuditEvents(ctx.SessionDir)
+	if err != nil {
+		return fmt.Errorf("rebuild repair evidence for resumed check %q: %w", frame.CheckID, err)
+	}
+	record := &model.FailureRecord{StepID: frame.CheckID, Prefix: owningPrefix}
+	for _, event := range events {
+		if event.Type != "repair_attempt_start" || event.Prefix != owningPrefix {
+			continue
+		}
+		record.ExitCode = intFromAny(event.Data["exit_code"])
+		record.Stdout = stringFromAny(event.Data["stdout"])
+		record.Stderr = stringFromAny(event.Data["stderr"])
+	}
+	if frame.Guarded != nil {
+		guarded, err := LoadAgentExecution(ctx.SessionDir, *frame.Guarded)
+		if err != nil {
+			return fmt.Errorf("rebuild guarded execution for resumed repair: %w", err)
+		}
+		record.Guarded = guarded
+	}
+	ctx.LastFailure = record
+	return nil
+}
+
+func stringFromAny(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
 func intFromAny(v any) int {
 	switch n := v.(type) {
 	case int:

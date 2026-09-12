@@ -36,6 +36,32 @@ func extendedRepairNesting(basePath []model.NestingSegment, checkID string, atte
 	return extended
 }
 
+// PrimeReplayResume extends ctx.NestingPath for a repair frame that was
+// restored on resume in phase replaying, so the sequencer's own basePath
+// (captured just before this call by the caller) sees the same "currently
+// mid-replay" nesting a live run would have produced via AfterStepDispatch's
+// takeRewind handling. It is a no-op when there is no open frame, the frame
+// is not replaying, or the path is already extended (a live run reaching
+// this scope again with a still-open frame from an earlier call). The
+// resumed attempt is frame.Attempts+1, matching a fresh rewind.
+func PrimeReplayResume(ctx *model.ExecutionContext, basePath []model.NestingSegment) {
+	frame := ctx.RepairFrame
+	if frame == nil || frame.Phase != model.RepairPhaseReplaying {
+		return
+	}
+	if len(ctx.NestingPath) > len(basePath) {
+		return
+	}
+	attempt := frame.Attempts + 1
+	ctx.NestingPath = extendedRepairNesting(basePath, frame.CheckID, attempt)
+	// The rerun target executed next may need the repair evidence preface
+	// (see agent.go's ctx.LastFailure check), and ctx.LastFailure is never
+	// persisted, so it must be rebuilt from audit now, at the nesting depth
+	// (including any enclosing group/loop/sub-workflow) this scope actually
+	// owns the check at.
+	_ = RestoreLastFailureForResume(ctx)
+}
+
 // inReplay reports whether ctx is currently within a rerun-form replay
 // range: the sequencer has pushed an attempt-nesting segment beyond
 // basePath and the frame is still mid-replay.

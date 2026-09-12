@@ -449,7 +449,11 @@ func executeIterationBody(
 			}
 			reached = true
 			if resumeBody != nil {
-				applyIterationBodyResume(iterCtx, resumeBody)
+				if err := applyIterationBodyResume(iterCtx, resumeBody); err != nil {
+					persistIterationFailState(iterCtx, loopStepID, iteration, steps[i].ID, false)
+					return iterationResult{failed: true}, err
+				}
+				PrimeReplayResume(iterCtx, basePath)
 			}
 		}
 
@@ -560,9 +564,9 @@ func resolveIterationResume(iterCtx *model.ExecutionContext, steps []model.Step)
 	if resumeBody.StepID == "" {
 		return resumeBody, "", nil
 	}
-	resolved, err := model.ResolveResumeStep(steps, resumeBody.StepID, resumeBody.Completed)
+	resolved, err := model.ResolveResumeStep(steps, resumeBody.StepID, resumeBody.Completed, resumeBody.Repair)
 	if err != nil {
-		return resumeBody, "", fmt.Errorf("resume body step %q not found in loop: %w", resumeBody.StepID, err)
+		return resumeBody, "", fmt.Errorf("resume body step not found in loop: %w", err)
 	}
 	if resolved.AllDone {
 		return resumeBody, "", nil
@@ -728,9 +732,12 @@ func buildIterationFlushChain(
 // applyIterationBodyResume restores persisted iteration-scoped state
 // (sessions, captured variables, deeper resume pointer) into iterCtx so
 // the body step re-enters with the same context it had at flush time.
-func applyIterationBodyResume(iterCtx *model.ExecutionContext, resumeBody *model.NestedStepState) {
-	restorePersistedSessions(iterCtx, resumeBody)
+func applyIterationBodyResume(iterCtx *model.ExecutionContext, resumeBody *model.NestedStepState) error {
+	if err := restorePersistedSessions(iterCtx, resumeBody); err != nil {
+		return err
+	}
 	if resumeBody.Child != nil {
 		iterCtx.ResumeChildState = resumeBody.Child
 	}
+	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/model"
 )
 
@@ -233,6 +234,43 @@ func TestExecuteCheckStepMarkerOnPassingCheckHasNoEffect(t *testing.T) {
 	outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
 	if err != nil || outcome != OutcomeSuccess {
 		t.Fatalf("ExecuteCheckStep() = (%q, %v), want success", outcome, err)
+	}
+}
+
+// TestExecuteCheckStepInlineRepairResolvesProfileWithoutExplicitSession
+// covers the real invocation path (a configured *config.Config profile
+// store, as every actual run has via PrepareRun's config.LoadWithProfile
+// fallback): the inline repair block only names "agent" (repair.validate
+// forbids "session: new" for repair, directing callers to "agent" for a
+// fresh session instead), so the synthesized repair agent step must resolve
+// its profile as session:new, not fall through to the resume/inherit branch
+// (which requires a session-originating step that a synthesized step never
+// has).
+func TestExecuteCheckStepInlineRepairResolvesProfileWithoutExplicitSession(t *testing.T) {
+	ctx := makeCtx()
+	ctx.ProfileStore = &config.Config{ActiveAgents: map[string]*config.Agent{
+		"implementor": {CLI: "claude"},
+	}}
+	maxAttempts := 1
+	step := model.Step{
+		ID: "verify", Command: "exit 1",
+		Repair: &model.Repair{Prompt: "please fix it", Agent: "implementor", Max: &maxAttempts},
+	}
+	runner := &mockRunner{results: []ProcessResult{
+		{ExitCode: 1, Stderr: "no open PR"},
+		{ExitCode: 0, Stdout: claudeUsageOutput("fixed it", 0)},
+		{ExitCode: 0, Stdout: "pr opened"},
+	}}
+
+	outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if outcome != OutcomeSuccess {
+		t.Fatalf("expected success, got %q", outcome)
+	}
+	if len(runner.calls) != 3 {
+		t.Fatalf("expected 3 process calls (check, repair agent, rerun check), got %d: %v", len(runner.calls), runner.calls)
 	}
 }
 

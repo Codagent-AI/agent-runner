@@ -47,9 +47,9 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	resumeState := restoreResumeContext(&state)
 
 	// Resolve which step to actually resume from — advance past completed steps.
-	resolved, err := model.ResolveResumeStep(workflow.Steps, resumeState.fromStep, resumeState.completed)
+	resolved, err := model.ResolveResumeStep(workflow.Steps, resumeState.fromStep, resumeState.completed, resumeState.repairFrame)
 	if err != nil {
-		return nil, fmt.Errorf("step %q no longer exists in workflow", resumeState.fromStep)
+		return nil, fmt.Errorf("step no longer exists in workflow: %w", err)
 	}
 	if resolved.AllDone {
 		return nil, ErrAlreadyCompleted
@@ -85,6 +85,7 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		CapturedVariables:      resumeState.capturedVars,
 		LastSessionStepID:      resumeState.lastSessionStepID,
 		LastAgent:              resumeState.lastAgent,
+		RepairFrame:            resumeState.repairFrame,
 		NamedSessions:          resumeState.namedSessions,
 		NamedSessionDecls:      resumeState.namedSessionDecls,
 		ChildState:             resumeState.childState,
@@ -138,6 +139,7 @@ type restoredResumeContext struct {
 	childState        *model.NestedStepState
 	completed         bool
 	lastAgent         *model.ExecutionRef
+	repairFrame       *model.RepairFrame
 }
 
 func restoreResumeContext(state *model.RunState) restoredResumeContext {
@@ -155,6 +157,7 @@ func restoreResumeContext(state *model.RunState) restoredResumeContext {
 		namedSessionDecls: nested.NamedSessionDecls,
 		completed:         nested.Completed,
 		lastAgent:         nested.LastAgent,
+		repairFrame:       nested.Repair,
 	}
 	if nested.Iteration != nil {
 		// Top-level loop step captured mid-iteration. Carry the iteration (and

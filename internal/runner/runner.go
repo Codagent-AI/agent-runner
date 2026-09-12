@@ -61,7 +61,11 @@ type Options struct {
 	LastSessionStepID string
 	// LastAgent restores the top-level scope's guarded execution reference on
 	// --resume; the full response is rebuilt from audit on demand.
-	LastAgent          *model.ExecutionRef
+	LastAgent *model.ExecutionRef
+	// RepairFrame restores an open repair frame owned by the top-level scope
+	// on --resume. ResolveResumeStep has already applied any budget reset for
+	// a resumed terminal failure before this is set.
+	RepairFrame        *model.RepairFrame
 	ChildState         *model.NestedStepState
 	InteractiveAttempt *model.InteractiveAttemptMetadata
 	// NamedSessions and NamedSessionDecls are restored from state on --resume.
@@ -528,6 +532,9 @@ func buildExecutionContext(
 	if opts.LastAgent != nil {
 		ctx.LastAgentExecution = &model.AgentExecutionRecord{Ref: *opts.LastAgent}
 	}
+	if opts.RepairFrame != nil {
+		ctx.RepairFrame = opts.RepairFrame
+	}
 	ctx.InteractiveAttempt = opts.InteractiveAttempt
 	if opts.From != "" {
 		ctx.WorkflowResumed = true
@@ -587,6 +594,7 @@ func auditProfileSource(cfg *config.Config) string {
 func executeSteps(rs *runState, startIndex int) WorkflowResult {
 	steps := rs.workflow.Steps
 	basePath := rs.ctx.NestingPath
+	exec.PrimeReplayResume(rs.ctx, basePath)
 	for i := startIndex; i < len(steps); i++ {
 		step := &steps[i]
 		result, terminal, rewound, nextIndex := executeTopLevelStep(rs, step, i, steps, basePath)

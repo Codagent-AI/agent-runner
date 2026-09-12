@@ -52,6 +52,16 @@ func escapeEvidenceAngles(s string) string {
 	return strings.ReplaceAll(s, ">", "›")
 }
 
+// lastResultFromFailure rebuilds the ProcessResult shape runRepairAttempt
+// logs as the "last known" check outcome when reentering a resumed cycle,
+// from the failure record RestoreLastFailureForResume rebuilt from audit.
+func lastResultFromFailure(record *model.FailureRecord) ProcessResult {
+	if record == nil {
+		return ProcessResult{}
+	}
+	return ProcessResult{ExitCode: record.ExitCode, Stdout: record.Stdout, Stderr: record.Stderr}
+}
+
 func guardedResponse(record *model.FailureRecord) string {
 	if record == nil || record.Guarded == nil {
 		return ""
@@ -90,6 +100,13 @@ func repairOwningNestingPath(ctx *model.ExecutionContext, checkID string) []mode
 		}
 	}
 	return ctx.NestingPath
+}
+
+// auditBuildPrefixForOwningCheck returns the audit prefix under which
+// checkID's own step_start/step_end and repair_attempt_* events are audited,
+// regardless of whether ctx currently sits inside that check's replay range.
+func auditBuildPrefixForOwningCheck(ctx *model.ExecutionContext, checkID string) string {
+	return audit.BuildPrefix(nestingSegmentsToAuditInfo(repairOwningNestingPath(ctx, checkID)), checkID)
 }
 
 // checkPrimitiveRun unifies the shell and script audit-free primitives for
@@ -213,9 +230,25 @@ func executeCheckWithRepair(step *model.Step, ctx *model.ExecutionContext, runne
 	owningPrefix := audit.BuildPrefix(nestingSegmentsToAuditInfo(owningPath), checkID)
 	startTime := time.Now()
 
-	reentry := ctx.RepairFrame != nil && ctx.RepairFrame.CheckID == checkID && ctx.RepairFrame.Phase == model.RepairPhaseReplaying
-	if reentry {
-		return continueRepairCycle(step, ctx, runner, log, owningPrefix, startTime)
+	if frame := ctx.RepairFrame; frame != nil && frame.CheckID == checkID && frame.Phase == model.RepairPhaseFailed {
+		// Resumed after a terminal failure with the inline form. ResolveResumeStep
+		// already reset the budget; the check runs fresh here, exactly like a
+		// first-time failure, instead of reentering the exhausted cycle.
+		ctx.RepairFrame = nil
+	}
+
+	if frame := ctx.RepairFrame; frame != nil && frame.CheckID == checkID {
+		switch frame.Phase {
+		case model.RepairPhaseReplaying:
+			return continueRepairCycle(step, ctx, runner, log, owningPrefix, startTime)
+		case model.RepairPhaseRepairing, model.RepairPhaseChecking:
+			// ctx.LastFailure is never persisted; rebuild it from audit now, at
+			// ctx's current nesting, which by this point correctly reflects
+			// wherever the check actually lives (top level, loop iteration,
+			// sub-workflow, or enclosing group).
+			_ = RestoreLastFailureForResume(ctx)
+			return runRepairAttempt(step, ctx, runner, log, owningPrefix, startTime, lastResultFromFailure(ctx.LastFailure))
+		}
 	}
 
 	prep := prepareCheck(step, ctx)
@@ -461,9 +494,19 @@ func abortedEndData(frame *model.RepairFrame) map[string]any {
 func runInlineRepairAgent(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, log Logger, checkID string, attempt int) (response string, ref model.ExecutionRef, outcome StepOutcome, err error) {
 	attemptCtx := model.NewRepairAttemptContext(ctx, checkID, attempt)
 	evidence := buildRepairEvidenceBlock(ctx.LastFailure.Stdout, ctx.LastFailure.Stderr, guardedResponse(ctx.LastFailure))
+	session := step.Repair.Session
+	if session == "" {
+		// repair.validate rejects "session: new" directly (a fresh session
+		// must use "agent" instead), so an agent-only inline repair block
+		// means the synthesized step needs session:new semantics here to
+		// resolve a profile at all, and to let a resumed run reattach the
+		// same attempt's session via the persisted session ID (see
+		// resolveAdapterAndSession's session:new re-entry handling).
+		session = model.SessionNew
+	}
 	agentStep := &model.Step{
 		ID: "repair", Prompt: step.Repair.Prompt + "\n\n" + evidence,
-		Session: step.Repair.Session, Agent: step.Repair.Agent, Mode: model.ModeAutonomous,
+		Session: session, Agent: step.Repair.Agent, Mode: model.ModeAutonomous,
 	}
 
 	outcome, runErr := ExecuteAgentStep(agentStep, attemptCtx, runner, log)

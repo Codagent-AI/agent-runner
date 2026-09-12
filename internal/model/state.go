@@ -172,7 +172,32 @@ type ResolveResumeStepResult struct {
 // ResolveResumeStep determines which step to actually start executing on resume.
 // If the recorded step completed successfully, it advances to the next step.
 // If the recorded step did not complete, it returns that step (to re-run it).
-func ResolveResumeStep(steps []Step, recordedStepID string, completed bool) (ResolveResumeStepResult, error) {
+//
+// frame is the open repair frame restored at this scope, or nil when none is
+// open. A frame in phase checking, repairing, or replaying does not change
+// the resolution: the recorded step (the check, or a step inside its replay
+// range) is resumed as usual and its budget is kept. A frame in phase failed
+// re-enters the cycle with a fresh budget instead: at frame.Target for the
+// rerun form (frame is kept open, moved to phase replaying), or at the
+// recorded step for the inline form. frame is mutated in place to reflect
+// the reset.
+func ResolveResumeStep(steps []Step, recordedStepID string, completed bool, frame *RepairFrame) (ResolveResumeStepResult, error) {
+	if frame != nil && frame.Phase == RepairPhaseFailed {
+		if frame.Form == string(RepairRerun) {
+			if !stepExists(steps, frame.Target) {
+				return ResolveResumeStepResult{}, fmt.Errorf("step %q not found", frame.Target)
+			}
+			frame.Attempts = 0
+			frame.Phase = RepairPhaseReplaying
+			return ResolveResumeStepResult{StepID: frame.Target}, nil
+		}
+		if !stepExists(steps, recordedStepID) {
+			return ResolveResumeStepResult{}, fmt.Errorf("step %q not found", recordedStepID)
+		}
+		frame.Attempts = 0
+		return ResolveResumeStepResult{StepID: recordedStepID}, nil
+	}
+
 	for i := range steps {
 		if steps[i].ID == recordedStepID {
 			if completed {
@@ -185,4 +210,13 @@ func ResolveResumeStep(steps []Step, recordedStepID string, completed bool) (Res
 		}
 	}
 	return ResolveResumeStepResult{}, fmt.Errorf("step %q not found", recordedStepID)
+}
+
+func stepExists(steps []Step, id string) bool {
+	for i := range steps {
+		if steps[i].ID == id {
+			return true
+		}
+	}
+	return false
 }

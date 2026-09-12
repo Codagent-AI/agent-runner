@@ -51,7 +51,11 @@ func ExecuteSubWorkflowStep(
 		return OutcomeFailed, err
 	}
 
-	startFromStepID, startCompleted := applyResumeState(parentCtx, childCtx)
+	startFromStepID, startCompleted, err := applyResumeState(parentCtx, childCtx)
+	if err != nil {
+		emitSubEnd(parentCtx, prefix, startTime, step, "failed", err.Error())
+		return OutcomeFailed, err
+	}
 	childPrefix := buildNestingPrefix(childCtx.NestingPath)
 
 	subStart := time.Now()
@@ -151,9 +155,9 @@ func executeChildSteps(
 	// Resolve which step to actually start from, advancing past completed steps.
 	resolvedStartID := startFromStepID
 	if startFromStepID != "" {
-		resolved, err := model.ResolveResumeStep(workflow.Steps, startFromStepID, startCompleted)
+		resolved, err := model.ResolveResumeStep(workflow.Steps, startFromStepID, startCompleted, childCtx.RepairFrame)
 		if err != nil {
-			return OutcomeFailed, fmt.Errorf("resume step %q not found in sub-workflow", startFromStepID)
+			return OutcomeFailed, fmt.Errorf("resume %w in sub-workflow", err)
 		}
 		if resolved.AllDone {
 			return OutcomeSuccess, nil
@@ -163,6 +167,7 @@ func executeChildSteps(
 
 	reached := resolvedStartID == ""
 	basePath := childCtx.NestingPath
+	PrimeReplayResume(childCtx, basePath)
 
 	for i := 0; i < len(workflow.Steps); i++ {
 		if !reached {
@@ -303,14 +308,16 @@ func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, c
 	parent.LastSubWorkflowChild = entry
 }
 
-func applyResumeState(parentCtx, childCtx *model.ExecutionContext) (string, bool) {
+func applyResumeState(parentCtx, childCtx *model.ExecutionContext) (stepID string, completed bool, err error) {
 	resumeChild := parentCtx.ResumeChildState
 	parentCtx.ResumeChildState = nil
 	if resumeChild == nil {
-		return "", false
+		return "", false, nil
 	}
 
-	restorePersistedSessions(childCtx, resumeChild)
+	if err := restorePersistedSessions(childCtx, resumeChild); err != nil {
+		return "", false, err
+	}
 	if resumeChild.Iteration != nil {
 		// This entry describes a loop step that is being resumed mid-iteration.
 		// Keep the full entry on childCtx so the loop executor can read its
@@ -320,13 +327,13 @@ func applyResumeState(parentCtx, childCtx *model.ExecutionContext) (string, bool
 	} else if resumeChild.Child != nil {
 		childCtx.ResumeChildState = resumeChild.Child
 	}
-	return resumeChild.StepID, resumeChild.Completed
+	return resumeChild.StepID, resumeChild.Completed, nil
 }
 
 // restorePersistedSessions copies persisted session IDs, session profiles,
 // captured variables, and the last-session-step ID from src into ctx. Used
 // by both sub-workflow and loop-iteration resume paths.
-func restorePersistedSessions(ctx *model.ExecutionContext, src *model.NestedStepState) {
+func restorePersistedSessions(ctx *model.ExecutionContext, src *model.NestedStepState) error {
 	for k, v := range src.SessionIDs {
 		ctx.SessionIDs[k] = v
 	}
@@ -345,6 +352,10 @@ func restorePersistedSessions(ctx *model.ExecutionContext, src *model.NestedStep
 		// carry it.
 		ctx.LastAgentExecution = &model.AgentExecutionRecord{Ref: *src.LastAgent}
 	}
+	if src.Repair != nil {
+		ctx.RepairFrame = src.Repair
+	}
+	return nil
 }
 
 func buildNestingPrefix(nestingPath []model.NestingSegment) string {
