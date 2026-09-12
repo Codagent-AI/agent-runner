@@ -1,0 +1,5 @@
+- [ ] [Failure records, guarded-execution tracking, and the repair model](tasks/01-failure-evidence-foundation.md)
+- [ ] [Repair cycle executor and rewind across all sequencers](tasks/02-repair-cycle-executor.md)
+- [ ] [Resume from every repair frame phase](tasks/03-resume-from-repair-frame.md)
+- [ ] [Migrate built-in checks and split the archive flow](tasks/04-migrate-builtin-checks.md)
+- [ ] [Render repair attempts and failure evidence in the run view, run list, and live view](tasks/05-repair-run-view-surfaces.md)
