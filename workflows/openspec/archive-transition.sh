@@ -7,6 +7,7 @@ change_name=$(printf '%s' "$payload" | "$script_dir/validate-change-name.sh")
 session_dir=$(printf '%s' "$payload" | jq -er '.session_dir | select(type == "string" and length > 0)')
 
 change_dir="openspec/changes/$change_name"
+exclude_change=":(exclude)$change_dir :(exclude)$change_dir/*"
 archive_root="openspec/changes/archive"
 specs_dir="openspec/specs"
 
@@ -36,12 +37,17 @@ status_lines() {
 # is preserved-as-is state that verification must find untouched outside the
 # owned delta.
 repo_index_lines() {
-  git diff --no-renames --cached --name-status -- . ":(exclude)$change_dir" ":(exclude)$change_dir/*"
+  # shellcheck disable=SC2086
+  git diff --no-renames --cached --name-status -- . $exclude_change
 }
 
 repo_worktree_lines() {
-  git diff --no-renames --name-status -- . ":(exclude)$change_dir" ":(exclude)$change_dir/*"
-  git ls-files --others --exclude-standard -- . ":(exclude)$change_dir" ":(exclude)$change_dir/*" | sed 's/^/A\t/'
+  # shellcheck disable=SC2086
+  status_lines . $exclude_change
+}
+
+to_json_lines() {
+  jq -R -s 'split("\n") | map(select(length > 0))'
 }
 
 if [ -f "$snapshot_file" ]; then
@@ -50,8 +56,8 @@ if [ -f "$snapshot_file" ]; then
   prior_worktree_json=$(jq -c '.prior_worktree' "$snapshot_file")
 else
   start_head=$(git rev-parse --verify HEAD)
-  prior_index_json=$(repo_index_lines | jq -R -s 'split("\n") | map(select(length > 0))')
-  prior_worktree_json=$(repo_worktree_lines | jq -R -s 'split("\n") | map(select(length > 0))')
+  prior_index_json=$(repo_index_lines | to_json_lines)
+  prior_worktree_json=$(repo_worktree_lines | to_json_lines)
   jq -n \
     --arg start_head "$start_head" \
     --argjson prior_index "$prior_index_json" \
@@ -73,8 +79,7 @@ if [ -z "$archive_dir" ] || [ -n "$extra_archive" ] || [ ! -d "$archive_dir" ]; 
   exit 1
 fi
 
-current_worktree_json=$(status_lines "$change_dir" "$archive_dir" "$specs_dir" |
-  jq -R -s 'split("\n") | map(select(length > 0))')
+current_worktree_json=$(status_lines "$change_dir" "$archive_dir" "$specs_dir" | to_json_lines)
 
 # prior_worktree never contains a change_dir entry (excluded from the
 # baseline) and never contains an archive_dir entry (it did not exist yet),

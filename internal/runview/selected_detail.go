@@ -341,7 +341,7 @@ func repairMetadataLine(node *StepNode) string {
 	if node.RepairForm == "rerun" && node.RepairTarget != "" {
 		form += " " + node.RepairTarget
 	}
-	budget := max(node.RepairBudget, max(node.RepairAttempts, node.RepairActiveAttempt))
+	budget := node.repairBudgetShown()
 	parts := []string{"repair: " + form, fmt.Sprintf("%d of %d used", node.RepairAttempts, budget)}
 	if node.RepairBlocked {
 		parts = append(parts, "blocked")

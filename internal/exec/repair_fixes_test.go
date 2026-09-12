@@ -36,7 +36,7 @@ func TestExecuteCheckStepInlineRepairAgentAbortPropagates(t *testing.T) {
 	}
 	runner := &mockRunner{results: []ProcessResult{{ExitCode: 1, Stderr: "broken"}}}
 
-	outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+	outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockLogger{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestExecuteCheckStepGuardedBlockedCreatesFrame(t *testing.T) {
 	}
 	runner := &mockRunner{results: []ProcessResult{{ExitCode: 1, Stderr: "no open PR"}}}
 
-	outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+	outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockLogger{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -320,7 +320,7 @@ func TestInlineRepairSessionSharedBackToOwner(t *testing.T) {
 		{ExitCode: 0},
 	}}
 
-	if _, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, &mockLogger{}); err != nil {
+	if _, err := ExecuteCheckStep(&step, ctx, runner, &mockLogger{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if ctx.LastSessionStepID != "repair" {

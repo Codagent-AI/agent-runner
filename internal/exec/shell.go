@@ -234,7 +234,7 @@ func ExecuteShellStep(
 	}
 
 	prep := prepareShellCheck(step, ctx)
-	if prep.Err != nil && prep.Metrics == nil {
+	if prep.Err != nil {
 		// Covers both an interpolation failure (Command unresolved) and a
 		// nested-metrics preparation failure (Command resolved but the
 		// process never ran): neither case ever reaches runShellProcess, so
@@ -247,18 +247,8 @@ func ExecuteShellStep(
 
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
-
-	// Set the step prefix on the process runner if it supports it (TUI mode).
-	if ps, ok := runner.(interface{ SetPrefix(string) }); ok {
-		ps.SetPrefix(prefix)
-	}
-
+	setRunnerPrefix(runner, prefix)
 	emitStepStart(ctx, prefix, startTime, map[string]any{"command": truncateForAudit(prep.Command)})
-
-	if prep.Err != nil {
-		emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{"error": prep.Err.Error()}, step)
-		return OutcomeFailed, prep.Err
-	}
 
 	run := runPreparedShellCheck(step, ctx, runner, prep)
 	if step.MetricsSource != "" {
@@ -280,16 +270,9 @@ func ExecuteShellStep(
 		outcome = OutcomeFailed
 	}
 
-	endData := map[string]any{
-		"exit_code": run.Result.ExitCode,
-		"stderr":    truncateForAudit(run.Result.Stderr),
-	}
-	if step.Mode != model.ModeInteractive {
-		endData["stdout"] = truncateForAudit(run.Result.Stdout)
-	}
+	endData := checkEndData(step, run.Result)
 	addGuardedLinkage(endData, outcome, ctx)
-	checkIdentity := executionIdentity(ctx, step, "step", 0, false, "", "")
-	failureErr := recordCheckFailure(ctx, step, outcome, prefix, attemptForIdentity(ctx, &checkIdentity), run.Result.ExitCode, run.Result.Stdout, run.Result.Stderr, log)
+	failureErr := recordCheckFailure(ctx, step, outcome, prefix, checkAttempt(ctx, step), run.Result.ExitCode, run.Result.Stdout, run.Result.Stderr, log)
 
 	emitStepEnd(ctx, prefix, startTime, string(outcome), endData, step)
 

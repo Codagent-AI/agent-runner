@@ -383,8 +383,9 @@ func (m *Model) renderRunList(runList []runs.RunInfo, cursor int, offset *int) s
 	if m.termWidth == 0 {
 		avail = c.nameMax + c.wfMax + c.stepMax
 	}
-	c.fitTo(max(avail, 16))
-	c.fitReasonTo(max(avail, 16))
+	avail = max(avail, 16)
+	c.fitTo(avail)
+	c.fitReasonTo(avail)
 
 	maxRows := m.listMaxRows(true)
 	*offset = adjustOffset(cursor, *offset, maxRows, len(runList))

@@ -650,3 +650,9 @@ func (t *Tree) FindByPrefix(prefix string) *StepNode {
 	}
 	return t.resolve(tokens, false)
 }
+
+// repairBudgetShown is the repair budget to display for a check: the declared
+// budget when known, otherwise the highest attempt number seen so far.
+func (n *StepNode) repairBudgetShown() int {
+	return max(n.RepairBudget, n.RepairAttempts, n.RepairActiveAttempt)
+}

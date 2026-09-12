@@ -30,6 +30,22 @@ to_json_lines() {
   jq -R -s 'split("\n") | map(select(length > 0)) | sort'
 }
 
+# assert_same_set EXPECTED ACTUAL MISSING_MSG EXTRA_MSG: EXPECTED and ACTUAL
+# are JSON arrays; fails naming the first element missing from ACTUAL, then
+# the first element ACTUAL has beyond EXPECTED.
+assert_same_set() {
+  missing=$(jq -n --argjson a "$1" --argjson b "$2" '$a - $b | .[0] // empty' -r)
+  if [ -n "$missing" ]; then
+    printf 'verify-archive-commit: %s: %s\n' "$3" "$missing" >&2
+    exit 1
+  fi
+  extra=$(jq -n --argjson a "$1" --argjson b "$2" '$b - $a | .[0] // empty' -r)
+  if [ -n "$extra" ]; then
+    printf 'verify-archive-commit: %s: %s\n' "$4" "$extra" >&2
+    exit 1
+  fi
+}
+
 # Active change directory must be gone from both the worktree and the index.
 if [ -e "$change_dir" ]; then
   printf 'verify-archive-commit: active change directory still present in the worktree: %s\n' "$change_dir" >&2
@@ -56,16 +72,9 @@ fi
 # The committed delta start_head..HEAD, restricted to the allowed paths,
 # must equal the transition-owned delta exactly.
 committed=$(git diff --no-renames --name-status "$start_head" HEAD -- "$change_dir" "$archive_dir" "$specs_dir" | to_json_lines)
-missing=$(jq -n --argjson owned "$owned_delta" --argjson committed "$committed" '$owned - $committed | .[0] // empty' -r)
-if [ -n "$missing" ]; then
-  printf 'verify-archive-commit: owned change not found in start_head..HEAD: %s\n' "$missing" >&2
-  exit 1
-fi
-extra=$(jq -n --argjson owned "$owned_delta" --argjson committed "$committed" '$committed - $owned | .[0] // empty' -r)
-if [ -n "$extra" ]; then
-  printf 'verify-archive-commit: unexpected committed change outside the owned archive delta: %s\n' "$extra" >&2
-  exit 1
-fi
+assert_same_set "$owned_delta" "$committed" \
+  'owned change not found in start_head..HEAD' \
+  'unexpected committed change outside the owned archive delta'
 
 # The commit range must touch no path outside the allowed paths.
 outside=$(git diff --no-renames --name-only "$start_head" HEAD -- . \
@@ -81,31 +90,17 @@ fi
 # repo-wide: a repair that stages or unstages anything unrelated, anywhere in
 # the repository, must be caught, not just inside the allowed archive paths.
 current_index=$(git diff --no-renames --cached --name-status | to_json_lines)
-index_missing=$(jq -n --argjson prior "$prior_index" --argjson current "$current_index" '$prior - $current | .[0] // empty' -r)
-if [ -n "$index_missing" ]; then
-  printf 'verify-archive-commit: pre-existing staged change is missing from the index: %s\n' "$index_missing" >&2
-  exit 1
-fi
-index_extra=$(jq -n --argjson prior "$prior_index" --argjson current "$current_index" '$current - $prior | .[0] // empty' -r)
-if [ -n "$index_extra" ]; then
-  printf 'verify-archive-commit: unexpected staged change in the index: %s\n' "$index_extra" >&2
-  exit 1
-fi
+assert_same_set "$prior_index" "$current_index" \
+  'pre-existing staged change is missing from the index' \
+  'unexpected staged change in the index'
 
 # The worktree, repo-wide, must be clean apart from the pre-existing
 # unstaged and untracked state captured by the transition snapshot: a repair
 # that leaves stray uncommitted changes anywhere must be caught, and every
 # pre-existing edit outside the archived paths must remain exactly as it was.
 current_worktree=$(status_lines . | to_json_lines)
-worktree_missing=$(jq -n --argjson prior "$prior_worktree" --argjson current "$current_worktree" '$prior - $current | .[0] // empty' -r)
-if [ -n "$worktree_missing" ]; then
-  printf 'verify-archive-commit: pre-existing unstaged change is missing from the worktree: %s\n' "$worktree_missing" >&2
-  exit 1
-fi
-worktree_extra=$(jq -n --argjson prior "$prior_worktree" --argjson current "$current_worktree" '$current - $prior | .[0] // empty' -r)
-if [ -n "$worktree_extra" ]; then
-  printf 'verify-archive-commit: unexpected uncommitted change remains in the worktree: %s\n' "$worktree_extra" >&2
-  exit 1
-fi
+assert_same_set "$prior_worktree" "$current_worktree" \
+  'pre-existing unstaged change is missing from the worktree' \
+  'unexpected uncommitted change remains in the worktree'
 
 printf 'archive verified: %s committed to %s\n' "$change_dir" "$archive_dir"

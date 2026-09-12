@@ -226,13 +226,9 @@ func executeChildSteps(
 // ruled out a replay-failure absorption. done is true when the caller
 // should return result immediately.
 func finishChildStep(childCtx *model.ExecutionContext, step *model.Step, outcome StepOutcome) (result StepOutcome, done bool) {
-	completed := outcome != OutcomeFailed && outcome != OutcomeAborted
-	if outcome == OutcomeFailed && (IsWarningOutcome(step, outcome) || step.ContinueOnFailure) {
-		// A failed check that flow control lets the scope advance past
-		// resumes at the next step, and its repair frame (if any) is done.
-		completed = true
-		childCtx.RepairFrame = nil
-	}
+	// A tolerated failure resumes at the next step, so it counts as completed
+	// and its repair frame (if any) is done.
+	completed := (outcome != OutcomeFailed && outcome != OutcomeAborted) || closeToleratedFrame(childCtx, step, outcome)
 	updateChildProgress(childCtx, step.ID, completed)
 
 	if outcome == OutcomeAborted {
@@ -241,7 +237,7 @@ func finishChildStep(childCtx *model.ExecutionContext, step *model.Step, outcome
 
 	recordLastStepOutcome(childCtx, outcome)
 
-	if outcome == OutcomeFailed && !step.ContinueOnFailure && !IsWarningOutcome(step, outcome) {
+	if isBlockingOutcome(step, outcome) {
 		childCtx.PropagateFailure()
 		return OutcomeFailed, true
 	}
@@ -317,9 +313,7 @@ func applyResumeState(parentCtx, childCtx *model.ExecutionContext) (stepID strin
 		return "", false, nil
 	}
 
-	if err := restorePersistedSessions(childCtx, resumeChild); err != nil {
-		return "", false, err
-	}
+	restorePersistedSessions(childCtx, resumeChild)
 	if resumeChild.Iteration != nil {
 		// This entry describes a loop step that is being resumed mid-iteration.
 		// Keep the full entry on childCtx so the loop executor can read its
@@ -335,7 +329,7 @@ func applyResumeState(parentCtx, childCtx *model.ExecutionContext) (stepID strin
 // restorePersistedSessions copies persisted session IDs, session profiles,
 // captured variables, and the last-session-step ID from src into ctx. Used
 // by both sub-workflow and loop-iteration resume paths.
-func restorePersistedSessions(ctx *model.ExecutionContext, src *model.NestedStepState) error {
+func restorePersistedSessions(ctx *model.ExecutionContext, src *model.NestedStepState) {
 	for k, v := range src.SessionIDs {
 		ctx.SessionIDs[k] = v
 	}
@@ -357,7 +351,6 @@ func restorePersistedSessions(ctx *model.ExecutionContext, src *model.NestedStep
 	if src.Repair != nil {
 		ctx.RepairFrame = src.Repair
 	}
-	return nil
 }
 
 func buildNestingPrefix(nestingPath []model.NestingSegment) string {

@@ -35,14 +35,14 @@ func DispatchStep(
 		if ctx.PrepareStepHook != nil {
 			ctx.PrepareStepHook(step.Mode == model.ModeInteractive)
 		}
-		return ExecuteCheckStep(step, ctx, runner, glob, log)
+		return ExecuteCheckStep(step, ctx, runner, log)
 	}
 
 	if step.Script != "" {
 		if ctx.PrepareStepHook != nil {
 			ctx.PrepareStepHook(false)
 		}
-		return ExecuteCheckStep(step, ctx, runner, glob, log)
+		return ExecuteCheckStep(step, ctx, runner, log)
 	}
 
 	if step.Mode == model.ModeUI {
@@ -146,8 +146,9 @@ func executeGroupStep(
 			emitStepEnd(ctx, prefix, startTime, string(OutcomeAborted), nil, step)
 			return OutcomeAborted, nil
 		}
+		closeToleratedFrame(ctx, &steps[i], outcome)
 		recordLastStepOutcome(ctx, outcome)
-		if outcome == OutcomeFailed && !steps[i].ContinueOnFailure && !IsWarningOutcome(&steps[i], outcome) {
+		if isBlockingOutcome(&steps[i], outcome) {
 			ctx.NestingPath = originalNestingPath
 			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), nil, step)
 			return OutcomeFailed, nil

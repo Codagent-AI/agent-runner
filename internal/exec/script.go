@@ -115,20 +115,11 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 	if step.MetricsSource != "" {
 		emitNestedMetricCapture(ctx, step, prefix, run.Metrics)
 	}
-	if step.Capture != "" {
-		capturedOutput := result.Stdout
-		if step.CaptureStderr && result.ExitCode != 0 && result.Stderr != "" {
-			capturedOutput += "\n\nSTDERR:\n" + result.Stderr
+	if err := captureScriptStepOutput(step, ctx, result); err != nil {
+		if rcErr := emitScriptEnd(ctx, prefix, startTime, step, "failed", &result, err, log); rcErr != nil {
+			return OutcomeFailed, rcErr
 		}
-		captured, err := captureScriptOutput(step.CaptureFormat, capturedOutput)
-		if err != nil {
-			if rcErr := emitScriptEnd(ctx, prefix, startTime, step, "failed", &result, err, log); rcErr != nil {
-				return OutcomeFailed, rcErr
-			}
-			return OutcomeFailed, err
-		}
-		ctx.CapturedVariables[step.Capture] = captured
-		recordPullRequestCapture(ctx, step.ID, step.Capture, captured)
+		return OutcomeFailed, err
 	}
 	if result.ExitCode != 0 {
 		if rcErr := emitScriptEnd(ctx, prefix, startTime, step, "failed", &result, nil, log); rcErr != nil {
@@ -140,6 +131,26 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 		return OutcomeSuccess, rcErr
 	}
 	return OutcomeSuccess, nil
+}
+
+// captureScriptStepOutput writes step.Capture from a script result (stdout,
+// plus stderr on failure when capture_stderr is set). A step without capture
+// is a no-op.
+func captureScriptStepOutput(step *model.Step, ctx *model.ExecutionContext, result ProcessResult) error {
+	if step.Capture == "" {
+		return nil
+	}
+	capturedOutput := result.Stdout
+	if step.CaptureStderr && result.ExitCode != 0 && result.Stderr != "" {
+		capturedOutput += "\n\nSTDERR:\n" + result.Stderr
+	}
+	captured, err := captureScriptOutput(step.CaptureFormat, capturedOutput)
+	if err != nil {
+		return err
+	}
+	ctx.CapturedVariables[step.Capture] = captured
+	recordPullRequestCapture(ctx, step.ID, step.Capture, captured)
+	return nil
 }
 
 // emitScriptEnd emits the step_end audit event and updates ctx.LastFailure.
@@ -161,8 +172,7 @@ func emitScriptEnd(ctx *model.ExecutionContext, prefix string, startTime time.Ti
 	if result != nil {
 		exitCode, stdout, stderr = result.ExitCode, result.Stdout, result.Stderr
 	}
-	checkIdentity := executionIdentity(ctx, step, "step", 0, false, "", "")
-	failureErr := recordCheckFailure(ctx, step, StepOutcome(outcome), prefix, attemptForIdentity(ctx, &checkIdentity), exitCode, stdout, stderr, log)
+	failureErr := recordCheckFailure(ctx, step, StepOutcome(outcome), prefix, checkAttempt(ctx, step), exitCode, stdout, stderr, log)
 	emitStepEnd(ctx, prefix, startTime, outcome, data, step)
 	return failureErr
 }

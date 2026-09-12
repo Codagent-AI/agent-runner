@@ -54,10 +54,7 @@ func (r *Repair) validate(isCheckStep bool) error {
 
 	hasRerun := r.Rerun != ""
 	hasInline := r.Prompt != "" || r.Session != "" || r.Agent != ""
-	switch {
-	case hasRerun && hasInline:
-		return fmt.Errorf(`"repair" must use exactly one repair form: inline (prompt) or rerun`)
-	case !hasRerun && !hasInline:
+	if hasRerun == hasInline {
 		return fmt.Errorf(`"repair" must use exactly one repair form: inline (prompt) or rerun`)
 	}
 

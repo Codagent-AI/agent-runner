@@ -183,36 +183,26 @@ type ResolveResumeStepResult struct {
 // the reset.
 func ResolveResumeStep(steps []Step, recordedStepID string, completed bool, frame *RepairFrame) (ResolveResumeStepResult, error) {
 	if frame != nil && frame.Phase == RepairPhaseFailed {
-		if frame.Form == string(RepairRerun) {
-			if frame.CheckID != recordedStepID {
-				// The frame's own check is not recordedStepID itself: it is
-				// owned by a step nested inside recordedStepID (a group has no
-				// child-position state of its own, so its frame is recorded on
-				// the enclosing scope with the group as recordedStepID).
-				// frame.Target lives inside that nested step, not in this
-				// list, so resolving it here would search the wrong scope.
-				// Resume at recordedStepID with a fresh budget and let that
-				// step's own resolution (or, for a group, its ordinary
-				// from-scratch re-execution) reach the target.
-				if !stepExists(steps, recordedStepID) {
-					return ResolveResumeStepResult{}, fmt.Errorf("step %q not found", recordedStepID)
-				}
-				frame.Attempts = 0
-				frame.Phase = RepairPhaseReplaying
-				return ResolveResumeStepResult{StepID: recordedStepID}, nil
-			}
-			if !stepExists(steps, frame.Target) {
-				return ResolveResumeStepResult{}, fmt.Errorf("step %q not found", frame.Target)
-			}
-			frame.Attempts = 0
-			frame.Phase = RepairPhaseReplaying
-			return ResolveResumeStepResult{StepID: frame.Target}, nil
+		resumeAt := recordedStepID
+		rerun := frame.Form == string(RepairRerun)
+		// For the rerun form, resume at the target when the frame's own check
+		// is recordedStepID. Otherwise the check is owned by a step nested
+		// inside recordedStepID (a group has no child-position state of its
+		// own, so its frame is recorded on the enclosing scope with the group
+		// as recordedStepID) and frame.Target lives in that nested scope, not
+		// in this list: resume at recordedStepID and let its ordinary
+		// from-scratch re-execution reach the target.
+		if rerun && frame.CheckID == recordedStepID {
+			resumeAt = frame.Target
 		}
-		if !stepExists(steps, recordedStepID) {
-			return ResolveResumeStepResult{}, fmt.Errorf("step %q not found", recordedStepID)
+		if !stepExists(steps, resumeAt) {
+			return ResolveResumeStepResult{}, fmt.Errorf("step %q not found", resumeAt)
 		}
 		frame.Attempts = 0
-		return ResolveResumeStepResult{StepID: recordedStepID}, nil
+		if rerun {
+			frame.Phase = RepairPhaseReplaying
+		}
+		return ResolveResumeStepResult{StepID: resumeAt}, nil
 	}
 
 	for i := range steps {

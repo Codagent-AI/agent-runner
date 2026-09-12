@@ -783,6 +783,10 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 			rs.log.Printf("agent-runner: warning: close control endpoint: %v\n", err)
 		}
 	}
+	failureReason := ""
+	if result == ResultFailed {
+		failureReason = classifyRunFailure(rs)
+	}
 	switch result {
 	case ResultSuccess:
 		if !rs.untilLeavesRemaining {
@@ -791,7 +795,7 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 			}
 		}
 	case ResultFailed:
-		if failureReason := classifyRunFailure(rs); failureReason != "" {
+		if failureReason != "" {
 			if err := writeStateFailureReason(rs.sessionDir, failureReason); err != nil {
 				rs.log.Printf("agent-runner: warning: could not record failure reason: %v\n", err)
 			}
@@ -805,7 +809,7 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 		emitAudit(rs.ctx, audit.Event{
 			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 			Type:      audit.EventRunEnd,
-			Data:      runEndData(rs, result, &totals),
+			Data:      runEndData(rs, result, &totals, failureReason),
 		})
 		for _, metricsErr := range rs.metricsCollector.Errors() {
 			rs.log.Printf("agent-runner: warning: metrics: %v\n", metricsErr)
@@ -853,18 +857,22 @@ func classifyRunFailure(rs *runState) string {
 // writeStateFailureReason reads the run's state.json and rewrites it with
 // the classified failure reason for a failed run.
 func writeStateFailureReason(sessionDir, reason string) error {
-	statePath := filepath.Join(sessionDir, "state.json")
-	state, err := stateio.ReadState(statePath)
+	return updateState(sessionDir, func(state *model.RunState) { state.FailureReason = reason })
+}
+
+// updateState reads the run's state.json, applies mutate, and rewrites it.
+func updateState(sessionDir string, mutate func(*model.RunState)) error {
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
 	if err != nil {
 		return err
 	}
-	state.FailureReason = reason
+	mutate(&state)
 	return stateio.WriteState(&state, sessionDir)
 }
 
 // runEndData builds the run_end audit event's data, including the classified
 // failure_reason for a failed run.
-func runEndData(rs *runState, result WorkflowResult, totals *model.RunTotals) map[string]any {
+func runEndData(rs *runState, result WorkflowResult, totals *model.RunTotals, failureReason string) map[string]any {
 	data := map[string]any{
 		"outcome":                 string(result),
 		"completed_with_warnings": result == ResultSuccess && rs.ctx.WarningOrigins.Count() > 0,
@@ -872,10 +880,8 @@ func runEndData(rs *runState, result WorkflowResult, totals *model.RunTotals) ma
 		"duration_ms":             time.Since(rs.runStartTime).Milliseconds(),
 		metrics.DataTotals:        *totals,
 	}
-	if result == ResultFailed {
-		if reason := classifyRunFailure(rs); reason != "" {
-			data["failure_reason"] = reason
-		}
+	if result == ResultFailed && failureReason != "" {
+		data["failure_reason"] = failureReason
 	}
 	return data
 }
@@ -884,14 +890,10 @@ func runEndData(rs *runState, result WorkflowResult, totals *model.RunTotals) ma
 // rewrites it so the TUI can continue to display the run's metadata after it
 // finishes. The state file is intentionally preserved rather than deleted.
 func markStateCompleted(sessionDir string, warningCount int) error {
-	statePath := filepath.Join(sessionDir, "state.json")
-	state, err := stateio.ReadState(statePath)
-	if err != nil {
-		return err
-	}
-	state.Completed = true
-	state.WarningCount = warningCount
-	return stateio.WriteState(&state, sessionDir)
+	return updateState(sessionDir, func(state *model.RunState) {
+		state.Completed = true
+		state.WarningCount = warningCount
+	})
 }
 
 // PrepareRun initializes the session directory, writes the lock file, opens

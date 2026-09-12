@@ -61,7 +61,7 @@ func TestExecuteCheckStepInlineRepairRecoversFailedCheck(t *testing.T) {
 		{ExitCode: 0, Stdout: "pr opened"},                      // rerun check: passes
 	}}
 
-	outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+	outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockLogger{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestExecuteCheckStepInlineRepairExhaustsBudget(t *testing.T) {
 	}
 	runner := &mockRunner{results: results}
 
-	outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+	outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockLogger{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestExecuteCheckStepGuardedBlockedBeforeAnyRepair(t *testing.T) {
 	}
 	runner := &mockRunner{results: []ProcessResult{{ExitCode: 1, Stderr: "no open PR"}}}
 
-	outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+	outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockLogger{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestExecuteCheckStepInlineRepairAgentDeclaresBlocked(t *testing.T) {
 		{ExitCode: 0, Stdout: claudeUsageOutput("cannot fix this.\nREPAIR_BLOCKED", 0)},
 	}}
 
-	outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+	outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockLogger{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestExecuteCheckStepMarkerOnPassingCheckHasNoEffect(t *testing.T) {
 	}
 	runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 
-	outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+	outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockLogger{})
 	if err != nil || outcome != OutcomeSuccess {
 		t.Fatalf("ExecuteCheckStep() = (%q, %v), want success", outcome, err)
 	}
@@ -272,7 +272,7 @@ func TestExecuteCheckStepInlineRepairResolvesProfileWithoutExplicitSession(t *te
 		{ExitCode: 0, Stdout: "pr opened"},
 	}}
 
-	outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+	outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockLogger{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestExecuteCheckStepWithoutRepairDelegatesUnchanged(t *testing.T) {
 	step := model.Step{ID: "s", Command: "echo hi"}
 	runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 
-	outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+	outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockLogger{})
 	if err != nil || outcome != OutcomeSuccess {
 		t.Fatalf("ExecuteCheckStep() = (%q, %v), want success", outcome, err)
 	}

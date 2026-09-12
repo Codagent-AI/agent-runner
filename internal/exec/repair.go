@@ -81,6 +81,45 @@ func clearRangeCaptures(ctx *model.ExecutionContext, names []string) {
 	}
 }
 
+// flushState persists the current state when a FlushState hook is installed
+// (the runner installs one per top-level step; direct executor use has none).
+func flushState(ctx *model.ExecutionContext) {
+	if ctx.FlushState != nil {
+		ctx.FlushState()
+	}
+}
+
+// armRerunReplay puts frame into the replaying phase and arms the rewind the
+// enclosing sequencer consumes: the target through the check re-execute, and
+// captures owned by that range are cleared so the replay recomputes them.
+func armRerunReplay(ctx *model.ExecutionContext, frame *model.RepairFrame) {
+	frame.Phase = model.RepairPhaseReplaying
+	clearRangeCaptures(ctx, frame.RangeCaptures)
+	ctx.PendingRewind = &model.RewindRequest{Target: frame.Target, CheckID: frame.CheckID}
+	flushState(ctx)
+}
+
+// repairEndData adds the repair fields every owning-check step_end carries
+// to data and returns it.
+func repairEndData(data map[string]any, frame *model.RepairFrame, blocked bool) map[string]any {
+	data["repair_form"] = frame.Form
+	data["repair_target"] = frame.Target
+	data["repair_attempts"] = frame.Attempts
+	data["repair_blocked"] = blocked
+	return data
+}
+
+// targetDeclaredBlocked reports whether the scope's most recent agent
+// execution is the rerun target and its response declared REPAIR_BLOCKED,
+// returning that response.
+func targetDeclaredBlocked(ctx *model.ExecutionContext, frame *model.RepairFrame) (string, bool) {
+	guarded := ctx.LastAgentExecution
+	if guarded == nil || !executionRefMatchesStep(guarded.Ref, frame.Target) || !repairBlocked(guarded.Response) {
+		return "", false
+	}
+	return guarded.Response, true
+}
+
 func checkAttempt(ctx *model.ExecutionContext, step *model.Step) int {
 	identity := executionIdentity(ctx, step, "step", 0, false, "", "")
 	return attemptForIdentity(ctx, &identity)
@@ -113,7 +152,6 @@ func auditBuildPrefixForOwningCheck(ctx *model.ExecutionContext, checkID string)
 // the repair executor, which does not care which kind of check it is running.
 type checkPrimitiveRun struct {
 	Result  ProcessResult
-	Command string // shell only; empty for script
 	Metrics *nestedMetricsCapture
 	RunErr  error
 }
@@ -159,10 +197,9 @@ func (p *checkPreparation) startData(step *model.Step) map[string]any {
 func runPreparedCheck(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, prep *checkPreparation) checkPrimitiveRun {
 	if prep.isShell {
 		run := runPreparedShellCheck(step, ctx, runner, prep.shell)
-		return checkPrimitiveRun{Result: run.Result, Command: run.Command, Metrics: run.Metrics, RunErr: run.RunErr}
+		return checkPrimitiveRun{Result: run.Result, Metrics: run.Metrics, RunErr: run.RunErr}
 	}
-	run := runPreparedScriptCheck(step, ctx, runner, &prep.script)
-	return checkPrimitiveRun{Result: run.Result, Metrics: run.Metrics, RunErr: run.RunErr}
+	return checkPrimitiveRun(runPreparedScriptCheck(step, ctx, runner, &prep.script))
 }
 
 // setRunnerPrefix configures the process runner's TUI-attribution prefix, if
@@ -191,30 +228,14 @@ func commitCheckCapture(step *model.Step, ctx *model.ExecutionContext, result Pr
 		captureShellOutput(step, ctx, result)
 		return nil
 	}
-	capturedOutput := result.Stdout
-	if step.CaptureStderr && result.ExitCode != 0 && result.Stderr != "" {
-		capturedOutput += "\n\nSTDERR:\n" + result.Stderr
-	}
-	captured, err := captureScriptOutput(step.CaptureFormat, capturedOutput)
-	if err != nil {
-		return err
-	}
-	ctx.CapturedVariables[step.Capture] = captured
-	recordPullRequestCapture(ctx, step.ID, step.Capture, captured)
-	return nil
+	return captureScriptStepOutput(step, ctx, result)
 }
 
 // ExecuteCheckStep runs a shell or script check step. Without Repair it
 // delegates exactly as before. With Repair it owns exactly one step_start
 // and one terminal step_end for the check and runs the inline or rerun
 // repair cycle around it.
-func ExecuteCheckStep(
-	step *model.Step,
-	ctx *model.ExecutionContext,
-	runner ProcessRunner,
-	glob GlobExpander,
-	log Logger,
-) (StepOutcome, error) {
+func ExecuteCheckStep(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, log Logger) (StepOutcome, error) {
 	if step.Repair == nil {
 		if step.Command != "" {
 			return ExecuteShellStep(step, ctx, runner, log)
@@ -226,8 +247,7 @@ func ExecuteCheckStep(
 
 func executeCheckWithRepair(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, log Logger) (StepOutcome, error) {
 	checkID := step.ID
-	owningPath := repairOwningNestingPath(ctx, checkID)
-	owningPrefix := audit.BuildPrefix(nestingSegmentsToAuditInfo(owningPath), checkID)
+	owningPrefix := auditBuildPrefixForOwningCheck(ctx, checkID)
 	startTime := time.Now()
 
 	if frame := ctx.RepairFrame; frame != nil && frame.CheckID == checkID && frame.Phase == model.RepairPhaseFailed {
@@ -298,12 +318,9 @@ func executeCheckWithRepair(step *model.Step, ctx *model.ExecutionContext, runne
 	ctx.RepairFrame = frame
 
 	if guarded := ctx.LastFailure.Guarded; guarded != nil && repairBlocked(guarded.Response) {
-		return terminalBlocked(step, ctx, owningPrefix, startTime, guarded.Response, 0)
+		return terminalBlocked(step, ctx, owningPrefix, startTime, guarded.Response)
 	}
-
-	if ctx.FlushState != nil {
-		ctx.FlushState()
-	}
+	flushState(ctx)
 
 	return runRepairAttempt(step, ctx, runner, log, owningPrefix, startTime, run.Result)
 }
@@ -316,14 +333,13 @@ func executeCheckWithRepair(step *model.Step, ctx *model.ExecutionContext, runne
 // ExecuteCheckStep (continueRepairCycle) to continue the same cycle.
 func runRepairAttempt(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, log Logger, owningPrefix string, startTime time.Time, lastResult ProcessResult) (StepOutcome, error) {
 	frame := ctx.RepairFrame
-	checkID := step.ID
 
 	for frame.Attempts < frame.Budget {
 		attempt := frame.Attempts + 1
 		emitRepairAttemptStart(ctx, owningPrefix, frame, attempt, lastResult)
 
 		if frame.Form != string(model.RepairRerun) {
-			outcome, done, result, err := runInlineRepairIteration(step, ctx, runner, log, owningPrefix, startTime, checkID, attempt)
+			outcome, done, result, err := runInlineRepairIteration(step, ctx, runner, log, owningPrefix, startTime, attempt)
 			lastResult = result
 			if done {
 				return outcome, err
@@ -333,12 +349,7 @@ func runRepairAttempt(step *model.Step, ctx *model.ExecutionContext, runner Proc
 
 		// rerun form: the replay itself is the attempt; the sequencer
 		// carries it out and re-enters ExecuteCheckStep to continue.
-		frame.Phase = model.RepairPhaseReplaying
-		clearRangeCaptures(ctx, frame.RangeCaptures)
-		ctx.PendingRewind = &model.RewindRequest{Target: frame.Target, CheckID: checkID}
-		if ctx.FlushState != nil {
-			ctx.FlushState()
-		}
+		armRerunReplay(ctx, frame)
 		return OutcomeFailed, nil
 	}
 
@@ -353,15 +364,13 @@ func runRepairAttempt(step *model.Step, ctx *model.ExecutionContext, runner Proc
 // should continue the budget loop.
 func runInlineRepairIteration(
 	step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, log Logger,
-	owningPrefix string, startTime time.Time, checkID string, attempt int,
+	owningPrefix string, startTime time.Time, attempt int,
 ) (outcome StepOutcome, done bool, lastResult ProcessResult, err error) {
 	frame := ctx.RepairFrame
 	frame.Phase = model.RepairPhaseRepairing
-	if ctx.FlushState != nil {
-		ctx.FlushState()
-	}
+	flushState(ctx)
 
-	response, _, agentOutcome, runErr := runInlineRepairAgent(step, ctx, runner, log, checkID, attempt)
+	response, agentOutcome, runErr := runInlineRepairAgent(step, ctx, runner, log, attempt)
 	if runErr != nil {
 		emitStepEnd(ctx, owningPrefix, startTime, "failed", map[string]any{"error": runErr.Error()}, step)
 		return OutcomeFailed, true, ProcessResult{}, runErr
@@ -379,38 +388,47 @@ func runInlineRepairIteration(
 		return "", false, ProcessResult{}, nil
 	}
 	if repairBlocked(response) {
-		outcome, err = terminalBlocked(step, ctx, owningPrefix, startTime, response, frame.Attempts)
+		outcome, err = terminalBlocked(step, ctx, owningPrefix, startTime, response)
 		return outcome, true, ProcessResult{}, err
 	}
 
 	frame.Phase = model.RepairPhaseChecking
-	if ctx.FlushState != nil {
-		ctx.FlushState()
-	}
+	flushState(ctx)
 
-	result, checkErr := runInternalCheck(step, ctx, runner, checkID, attempt)
+	result, checkErr := runInternalCheck(step, ctx, runner, step.ID, attempt)
 	if checkErr != nil {
 		emitStepEnd(ctx, owningPrefix, startTime, "failed", map[string]any{"error": checkErr.Error()}, step)
 		return OutcomeFailed, true, result, checkErr
 	}
+	outcome, done, err = settleInternalCheck(step, ctx, log, owningPrefix, startTime, result)
+	return outcome, done, result, err
+}
+
+// settleInternalCheck records the outcome of one internal check run inside a
+// repair cycle: on exit 0 it commits the capture, closes the frame, and emits
+// the owning check's terminal success; otherwise it records the failure so
+// the cycle can continue. done is true when the check reached a terminal
+// outcome or an error occurred.
+func settleInternalCheck(step *model.Step, ctx *model.ExecutionContext, log Logger, owningPrefix string, startTime time.Time, result ProcessResult) (StepOutcome, bool, error) {
+	frame := ctx.RepairFrame
 	frame.Attempts++
 	emitRepairAttemptEnd(ctx, owningPrefix, frame.Form, frame.Attempts, result)
 
 	if result.ExitCode == 0 {
 		if err := commitCheckCapture(step, ctx, result); err != nil {
 			emitStepEnd(ctx, owningPrefix, startTime, "failed", map[string]any{"error": err.Error()}, step)
-			return OutcomeFailed, true, result, err
+			return OutcomeFailed, true, err
 		}
 		ctx.RepairFrame = nil
 		ctx.LastFailure = nil
-		emitStepEnd(ctx, owningPrefix, startTime, "success", successEndData(step, result, frame), step)
-		return OutcomeSuccess, true, result, nil
+		emitStepEnd(ctx, owningPrefix, startTime, "success", repairEndData(checkEndData(step, result), frame, false), step)
+		return OutcomeSuccess, true, nil
 	}
 	if err := recordCheckFailure(ctx, step, OutcomeFailed, owningPrefix, checkAttempt(ctx, step), result.ExitCode, result.Stdout, result.Stderr, log); err != nil {
 		emitStepEnd(ctx, owningPrefix, startTime, "failed", map[string]any{"error": err.Error()}, step)
-		return OutcomeFailed, true, result, err
+		return OutcomeFailed, true, err
 	}
-	return "", false, result, nil
+	return "", false, nil
 }
 
 // continueRepairCycle handles a check re-entering ExecuteCheckStep after the
@@ -420,10 +438,9 @@ func runInlineRepairIteration(
 // under [checkID, attempt:N, checkID] for free.
 func continueRepairCycle(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, log Logger, owningPrefix string, startTime time.Time) (StepOutcome, error) {
 	frame := ctx.RepairFrame
-	checkID := step.ID
 
-	if guarded := ctx.LastAgentExecution; guarded != nil && executionRefMatchesStep(guarded.Ref, frame.Target) && repairBlocked(guarded.Response) {
-		return terminalBlocked(step, ctx, owningPrefix, startTime, guarded.Response, frame.Attempts)
+	if response, blocked := targetDeclaredBlocked(ctx, frame); blocked {
+		return terminalBlocked(step, ctx, owningPrefix, startTime, response)
 	}
 
 	result, checkErr := runInternalCheckAtCurrentNesting(step, ctx, runner)
@@ -431,47 +448,17 @@ func continueRepairCycle(step *model.Step, ctx *model.ExecutionContext, runner P
 		emitStepEnd(ctx, owningPrefix, startTime, "failed", map[string]any{"error": checkErr.Error()}, step)
 		return OutcomeFailed, checkErr
 	}
-	frame.Attempts++
-	emitRepairAttemptEnd(ctx, owningPrefix, frame.Form, frame.Attempts, result)
-
-	if result.ExitCode == 0 {
-		if err := commitCheckCapture(step, ctx, result); err != nil {
-			emitStepEnd(ctx, owningPrefix, startTime, "failed", map[string]any{"error": err.Error()}, step)
-			return OutcomeFailed, err
-		}
-		ctx.RepairFrame = nil
-		ctx.LastFailure = nil
-		emitStepEnd(ctx, owningPrefix, startTime, "success", successEndData(step, result, frame), step)
-		return OutcomeSuccess, nil
-	}
-
-	if err := recordCheckFailure(ctx, step, OutcomeFailed, owningPrefix, checkAttempt(ctx, step), result.ExitCode, result.Stdout, result.Stderr, log); err != nil {
-		emitStepEnd(ctx, owningPrefix, startTime, "failed", map[string]any{"error": err.Error()}, step)
-		return OutcomeFailed, err
+	if outcome, done, err := settleInternalCheck(step, ctx, log, owningPrefix, startTime, result); done {
+		return outcome, err
 	}
 
 	if frame.Attempts >= frame.Budget {
 		return terminalExhausted(step, ctx, owningPrefix, startTime, result)
 	}
 
-	attempt := frame.Attempts + 1
-	emitRepairAttemptStart(ctx, owningPrefix, frame, attempt, result)
-	frame.Phase = model.RepairPhaseReplaying
-	clearRangeCaptures(ctx, frame.RangeCaptures)
-	ctx.PendingRewind = &model.RewindRequest{Target: frame.Target, CheckID: checkID}
-	if ctx.FlushState != nil {
-		ctx.FlushState()
-	}
+	emitRepairAttemptStart(ctx, owningPrefix, frame, frame.Attempts+1, result)
+	armRerunReplay(ctx, frame)
 	return OutcomeFailed, nil
-}
-
-func successEndData(step *model.Step, result ProcessResult, frame *model.RepairFrame) map[string]any {
-	data := checkEndData(step, result)
-	data["repair_form"] = frame.Form
-	data["repair_target"] = frame.Target
-	data["repair_attempts"] = frame.Attempts
-	data["repair_blocked"] = false
-	return data
 }
 
 // abortedEndData builds the owning check's step_end data when an inline
@@ -479,24 +466,17 @@ func successEndData(step *model.Step, result ProcessResult, frame *model.RepairF
 // check never reaches a pass/fail terminal outcome, so its own step_end
 // simply carries the repair progress made so far.
 func abortedEndData(frame *model.RepairFrame) map[string]any {
-	return map[string]any{
-		"repair_form": frame.Form, "repair_target": frame.Target,
-		"repair_attempts": frame.Attempts, "repair_blocked": false,
-	}
+	return repairEndData(map[string]any{}, frame, false)
 }
 
-// runInlineRepairAgent executes the synthesized inline repair agent step in
-// its own repair-attempt context and reports its final response plus
-// whether it declared REPAIR_BLOCKED.
 // runInlineRepairAgent executes the synthesized inline repair agent step and
-// reports its outcome, its final response, and its own execution reference.
-// The caller decides how to treat outcome: OutcomeAborted must propagate as
-// an abort of the whole run, any other non-success outcome is a failed
-// repair attempt (the check is not rerun for it), and only a successful
-// outcome's response is checked for REPAIR_BLOCKED and followed by a rerun
-// of the check.
-func runInlineRepairAgent(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, log Logger, checkID string, attempt int) (response string, ref model.ExecutionRef, outcome StepOutcome, err error) {
-	attemptCtx := model.NewRepairAttemptContext(ctx, checkID, attempt)
+// reports its outcome and its final response. The caller decides how to treat
+// outcome: OutcomeAborted must propagate as an abort of the whole run, any
+// other non-success outcome is a failed repair attempt (the check is not
+// rerun for it), and only a successful outcome's response is checked for
+// REPAIR_BLOCKED and followed by a rerun of the check.
+func runInlineRepairAgent(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, log Logger, attempt int) (response string, outcome StepOutcome, err error) {
+	attemptCtx := model.NewRepairAttemptContext(ctx, step.ID, attempt)
 	evidence := buildRepairEvidenceBlock(ctx.LastFailure.Stdout, ctx.LastFailure.Stderr, guardedResponse(ctx.LastFailure))
 	session := step.Repair.Session
 	if session == "" {
@@ -519,16 +499,15 @@ func runInlineRepairAgent(step *model.Step, ctx *model.ExecutionContext, runner 
 	// explicitly for a later "session: resume" in the owning scope to find it.
 	ctx.LastSessionStepID = attemptCtx.LastSessionStepID
 	if runErr != nil {
-		return "", model.ExecutionRef{}, OutcomeFailed, runErr
+		return "", OutcomeFailed, runErr
 	}
 	if outcome != OutcomeSuccess {
-		return "", model.ExecutionRef{}, outcome, nil
+		return "", outcome, nil
 	}
 	if attemptCtx.LastAgentExecution != nil {
 		response = attemptCtx.LastAgentExecution.Response
-		ref = attemptCtx.LastAgentExecution.Ref
 	}
-	return response, ref, OutcomeSuccess, nil
+	return response, OutcomeSuccess, nil
 }
 
 // runInternalCheck runs one internal check execution during an inline repair
@@ -609,56 +588,36 @@ func emitRepairBlocked(ctx *model.ExecutionContext, prefix string, attempt int, 
 	})
 }
 
-func terminalBlocked(step *model.Step, ctx *model.ExecutionContext, owningPrefix string, startTime time.Time, response string, attempts int) (StepOutcome, error) {
-	emitRepairBlocked(ctx, owningPrefix, attempts, response)
-
-	form, target := "", ""
-	if frame := ctx.RepairFrame; frame != nil {
-		frame.Phase = model.RepairPhaseFailed
-		form, target = frame.Form, frame.Target
-		attempts = frame.Attempts
-	} else if step.Repair != nil {
-		form, target = string(step.Repair.Form()), step.Repair.Rerun
-	}
-	if ctx.LastFailure == nil {
-		ctx.LastFailure = &model.FailureRecord{StepID: step.ID, Prefix: owningPrefix}
-	}
+// terminalBlocked ends the cycle because an agent declared REPAIR_BLOCKED.
+// Every caller runs with ctx.RepairFrame and ctx.LastFailure already set for
+// this check.
+func terminalBlocked(step *model.Step, ctx *model.ExecutionContext, owningPrefix string, startTime time.Time, response string) (StepOutcome, error) {
+	frame := ctx.RepairFrame
+	emitRepairBlocked(ctx, owningPrefix, frame.Attempts, response)
 	ctx.LastFailure.Blocked = true
 	ctx.LastFailure.BlockedBy = response
-	ctx.LastFailure.RepairAttempts = attempts
-	if ctx.FlushState != nil {
-		ctx.FlushState()
-	}
-
 	// A blocked check may never reach the repair budget loop, so its own
 	// step_end is the only durable record of the failing run's output. The
 	// failure record always holds the most recent failing run.
-	endData := checkEndData(step, ProcessResult{
-		ExitCode: ctx.LastFailure.ExitCode, Stdout: ctx.LastFailure.Stdout, Stderr: ctx.LastFailure.Stderr,
-	})
-	endData["repair_form"] = form
-	endData["repair_target"] = target
-	endData["repair_attempts"] = attempts
-	endData["repair_blocked"] = true
-	addGuardedLinkage(endData, OutcomeFailed, ctx)
-	emitStepEnd(ctx, owningPrefix, startTime, "failed", endData, step)
-	return OutcomeFailed, nil
+	return terminalFailed(step, ctx, owningPrefix, startTime, lastResultFromFailure(ctx.LastFailure), true)
 }
 
+// terminalExhausted ends the cycle because the repair budget is used up.
 func terminalExhausted(step *model.Step, ctx *model.ExecutionContext, owningPrefix string, startTime time.Time, lastResult ProcessResult) (StepOutcome, error) {
+	return terminalFailed(step, ctx, owningPrefix, startTime, lastResult, false)
+}
+
+// terminalFailed marks the frame failed, records the attempt count on the
+// failure record, persists state, and emits the owning check's terminal
+// failed step_end carrying the last failing run's output.
+func terminalFailed(step *model.Step, ctx *model.ExecutionContext, owningPrefix string, startTime time.Time, lastResult ProcessResult, blocked bool) (StepOutcome, error) {
 	frame := ctx.RepairFrame
 	frame.Phase = model.RepairPhaseFailed
 	if ctx.LastFailure != nil {
 		ctx.LastFailure.RepairAttempts = frame.Attempts
 	}
-	if ctx.FlushState != nil {
-		ctx.FlushState()
-	}
-	endData := checkEndData(step, lastResult)
-	endData["repair_form"] = frame.Form
-	endData["repair_target"] = frame.Target
-	endData["repair_attempts"] = frame.Attempts
-	endData["repair_blocked"] = false
+	flushState(ctx)
+	endData := repairEndData(checkEndData(step, lastResult), frame, blocked)
 	addGuardedLinkage(endData, OutcomeFailed, ctx)
 	emitStepEnd(ctx, owningPrefix, startTime, "failed", endData, step)
 	return OutcomeFailed, nil

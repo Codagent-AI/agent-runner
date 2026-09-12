@@ -128,7 +128,12 @@ func LoadAgentExecution(sessionDir string, ref model.ExecutionRef) (*model.Agent
 	if err != nil {
 		return nil, err
 	}
+	return agentExecutionFromEvents(events, ref)
+}
 
+// agentExecutionFromEvents is LoadAgentExecution over an already-parsed
+// audit log, so callers that have just read it do not read it again.
+func agentExecutionFromEvents(events []rawAuditEvent, ref model.ExecutionRef) (*model.AgentExecutionRecord, error) {
 	var record *model.AgentExecutionRecord
 	for _, event := range events {
 		if event.Type != "step_end" || event.Prefix != ref.Prefix {
@@ -210,7 +215,7 @@ func RestoreLastFailureForResume(ctx *model.ExecutionContext) error {
 		}
 	}
 	if frame.Guarded != nil {
-		guarded, err := LoadAgentExecution(ctx.SessionDir, *frame.Guarded)
+		guarded, err := agentExecutionFromEvents(events, *frame.Guarded)
 		if err != nil {
 			return fmt.Errorf("rebuild guarded execution for resumed repair: %w", err)
 		}

@@ -514,16 +514,12 @@ func finishIterationBodyStep(
 	outcome StepOutcome,
 	setBody func(stepID string, completed bool),
 ) (result iterationResult, done bool) {
-	bodyCompleted := outcome != OutcomeFailed && outcome != OutcomeAborted
-	if outcome == OutcomeFailed && (IsWarningOutcome(step, outcome) || step.ContinueOnFailure) {
-		// A failed check that flow control lets the scope advance past
-		// resumes at the next step, and its repair frame (if any) is done.
-		bodyCompleted = true
-		iterCtx.RepairFrame = nil
-	}
+	// A tolerated failure resumes at the next step, so it counts as completed
+	// and its repair frame (if any) is done.
+	bodyCompleted := (outcome != OutcomeFailed && outcome != OutcomeAborted) || closeToleratedFrame(iterCtx, step, outcome)
 	setBody(bodyStepID, bodyCompleted)
-	if bodyCompleted && iterCtx.FlushState != nil {
-		iterCtx.FlushState()
+	if bodyCompleted {
+		flushState(iterCtx)
 	}
 
 	if outcome == OutcomeAborted {
@@ -537,7 +533,7 @@ func finishIterationBodyStep(
 
 	recordLastStepOutcome(iterCtx, outcome)
 
-	if outcome == OutcomeFailed && !step.ContinueOnFailure && !IsWarningOutcome(step, outcome) {
+	if isBlockingOutcome(step, outcome) {
 		iterCtx.PropagateFailure()
 		persistIterationFailState(iterCtx, loopStepID, iteration, bodyStepID, bodyCompleted)
 		return iterationResult{failed: true}, true
@@ -731,22 +727,17 @@ func buildIterationFlushChain(
 // applyIterationBodyResume restores persisted iteration-scoped state
 // (sessions, captured variables, deeper resume pointer) into iterCtx so
 // the body step re-enters with the same context it had at flush time.
-func applyIterationBodyResume(iterCtx *model.ExecutionContext, resumeBody *model.NestedStepState) error {
-	if err := restorePersistedSessions(iterCtx, resumeBody); err != nil {
-		return err
-	}
+func applyIterationBodyResume(iterCtx *model.ExecutionContext, resumeBody *model.NestedStepState) {
+	restorePersistedSessions(iterCtx, resumeBody)
 	if resumeBody.Child != nil {
 		iterCtx.ResumeChildState = resumeBody.Child
 	}
-	return nil
 }
 
 // resumeIterationBodyAt restores the body step's persisted state and, for an
 // open replaying repair frame, extends the nesting path the same way a live
 // rewind would, rebuilding the evidence a resumed replay target needs.
 func resumeIterationBodyAt(iterCtx *model.ExecutionContext, resumeBody *model.NestedStepState, basePath []model.NestingSegment) error {
-	if err := applyIterationBodyResume(iterCtx, resumeBody); err != nil {
-		return err
-	}
+	applyIterationBodyResume(iterCtx, resumeBody)
 	return PrimeReplayResume(iterCtx, basePath)
 }

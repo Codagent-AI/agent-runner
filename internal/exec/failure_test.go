@@ -209,7 +209,7 @@ func TestExecuteCheckStepBuildsFailureRecordWithGuardedExecution(t *testing.T) {
 		step := model.Step{ID: "verify-draft-pr", Command: "exit 1"}
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1, Stderr: "expected one open PR"}}}
 
-		outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+		outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockLogger{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -247,7 +247,7 @@ func TestExecuteCheckStepBuildsFailureRecordWithGuardedExecution(t *testing.T) {
 		step := model.Step{ID: "verify-draft-pr", Command: "exit 1"}
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1, Stderr: "boom"}, {ExitCode: 1, Stderr: "boom again"}}}
 
-		if _, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, &mockLogger{}); err != nil {
+		if _, err := ExecuteCheckStep(&step, ctx, runner, &mockLogger{}); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if ctx.LastFailure.Attempt != 1 {
@@ -255,7 +255,7 @@ func TestExecuteCheckStepBuildsFailureRecordWithGuardedExecution(t *testing.T) {
 		}
 
 		// A second failure of the same check advances the attempt.
-		if _, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, &mockLogger{}); err != nil {
+		if _, err := ExecuteCheckStep(&step, ctx, runner, &mockLogger{}); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if ctx.LastFailure.Attempt != 2 {
@@ -270,7 +270,7 @@ func TestExecuteCheckStepBuildsFailureRecordWithGuardedExecution(t *testing.T) {
 		step := model.Step{ID: "check-clean", Command: "exit 1"}
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1, Stderr: "not clean"}}}
 
-		outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+		outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockLogger{})
 		if err != nil || outcome != OutcomeFailed {
 			t.Fatalf("ExecuteCheckStep() = (%q, %v)", outcome, err)
 		}
@@ -289,7 +289,7 @@ func TestExecuteCheckStepBuildsFailureRecordWithGuardedExecution(t *testing.T) {
 		step := model.Step{ID: "check", Command: "exit 0"}
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 
-		outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+		outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockLogger{})
 		if err != nil || outcome != OutcomeSuccess {
 			t.Fatalf("ExecuteCheckStep() = (%q, %v)", outcome, err)
 		}
@@ -311,7 +311,7 @@ func TestExecuteCheckStepBuildsFailureRecordWithGuardedExecution(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1, Stderr: "expected one open PR"}}}
 		log := &mockLogger{}
 
-		outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, log)
+		outcome, err := ExecuteCheckStep(&step, ctx, runner, log)
 		if outcome != OutcomeFailed {
 			t.Fatalf("outcome = %q, want failed", outcome)
 		}
@@ -344,7 +344,7 @@ func TestExecuteCheckStepBuildsFailureRecordWithGuardedExecution(t *testing.T) {
 		step := model.Step{ID: "s", Script: filepath.Base(script)}
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1, Stderr: "boom"}}}
 
-		outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+		outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockLogger{})
 		if err != nil || outcome != OutcomeFailed {
 			t.Fatalf("ExecuteCheckStep() = (%q, %v)", outcome, err)
 		}

@@ -68,10 +68,10 @@ type FailureRecord struct {
 	// sequential scope, if one ran.
 	Guarded *AgentExecutionRecord `json:"guarded,omitempty"`
 	// Blocked and BlockedBy are set by the repair executor when a declaring
-	// response reported REPAIR_BLOCKED; always false/empty here.
+	// response reported REPAIR_BLOCKED.
 	Blocked   bool   `json:"blocked,omitempty"`
 	BlockedBy string `json:"blockedBy,omitempty"`
 	// RepairAttempts is the number of repair attempts that ran before this
-	// failure was recorded terminal; always 0 here.
+	// failure was recorded terminal.
 	RepairAttempts int `json:"repairAttempts,omitempty"`
 }

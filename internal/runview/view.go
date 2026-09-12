@@ -115,10 +115,7 @@ func (m *Model) renderFailureReason() string {
 	if m.rootStatus() != StatusFailed {
 		return ""
 	}
-	reason := m.persistedFailureReason
-	if reason == "" {
-		reason = failureReason(m.tree.Root)
-	}
+	reason := m.failureReason()
 	if reason == "" {
 		reason = "workflow failed"
 	}
@@ -449,7 +446,7 @@ func repairSuffix(n *StepNode) string {
 	if n.RepairBlocked {
 		return " (blocked)"
 	}
-	budget := max(n.RepairBudget, max(n.RepairAttempts, n.RepairActiveAttempt))
+	budget := n.repairBudgetShown()
 	if budget == 0 {
 		return ""
 	}
