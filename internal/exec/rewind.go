@@ -44,22 +44,25 @@ func extendedRepairNesting(basePath []model.NestingSegment, checkID string, atte
 // is not replaying, or the path is already extended (a live run reaching
 // this scope again with a still-open frame from an earlier call). The
 // resumed attempt is frame.Attempts+1, matching a fresh rewind.
-func PrimeReplayResume(ctx *model.ExecutionContext, basePath []model.NestingSegment) {
+//
+// The rerun target executed next may need the repair evidence preface (see
+// agent.go's ctx.LastFailure check), and ctx.LastFailure is never persisted,
+// so it is rebuilt from audit here, at the nesting depth (including any
+// enclosing group/loop/sub-workflow) this scope actually owns the check at.
+// Callers must propagate a non-nil error instead of dispatching the replay
+// target: without the rebuilt evidence, a resumed agent would silently lose
+// the repair-evidence preface and could repeat the original failing action.
+func PrimeReplayResume(ctx *model.ExecutionContext, basePath []model.NestingSegment) error {
 	frame := ctx.RepairFrame
 	if frame == nil || frame.Phase != model.RepairPhaseReplaying {
-		return
+		return nil
 	}
 	if len(ctx.NestingPath) > len(basePath) {
-		return
+		return nil
 	}
 	attempt := frame.Attempts + 1
 	ctx.NestingPath = extendedRepairNesting(basePath, frame.CheckID, attempt)
-	// The rerun target executed next may need the repair evidence preface
-	// (see agent.go's ctx.LastFailure check), and ctx.LastFailure is never
-	// persisted, so it must be rebuilt from audit now, at the nesting depth
-	// (including any enclosing group/loop/sub-workflow) this scope actually
-	// owns the check at.
-	_ = RestoreLastFailureForResume(ctx)
+	return RestoreLastFailureForResume(ctx)
 }
 
 // inReplay reports whether ctx is currently within a rerun-form replay

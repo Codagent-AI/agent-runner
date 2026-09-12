@@ -449,11 +449,10 @@ func executeIterationBody(
 			}
 			reached = true
 			if resumeBody != nil {
-				if err := applyIterationBodyResume(iterCtx, resumeBody); err != nil {
+				if err := resumeIterationBodyAt(iterCtx, resumeBody, basePath); err != nil {
 					persistIterationFailState(iterCtx, loopStepID, iteration, steps[i].ID, false)
 					return iterationResult{failed: true}, err
 				}
-				PrimeReplayResume(iterCtx, basePath)
 			}
 		}
 
@@ -740,4 +739,14 @@ func applyIterationBodyResume(iterCtx *model.ExecutionContext, resumeBody *model
 		iterCtx.ResumeChildState = resumeBody.Child
 	}
 	return nil
+}
+
+// resumeIterationBodyAt restores the body step's persisted state and, for an
+// open replaying repair frame, extends the nesting path the same way a live
+// rewind would, rebuilding the evidence a resumed replay target needs.
+func resumeIterationBodyAt(iterCtx *model.ExecutionContext, resumeBody *model.NestedStepState, basePath []model.NestingSegment) error {
+	if err := applyIterationBodyResume(iterCtx, resumeBody); err != nil {
+		return err
+	}
+	return PrimeReplayResume(iterCtx, basePath)
 }

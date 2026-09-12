@@ -167,7 +167,9 @@ func executeChildSteps(
 
 	reached := resolvedStartID == ""
 	basePath := childCtx.NestingPath
-	PrimeReplayResume(childCtx, basePath)
+	if err := PrimeReplayResume(childCtx, basePath); err != nil {
+		return OutcomeFailed, err
+	}
 
 	for i := 0; i < len(workflow.Steps); i++ {
 		if !reached {

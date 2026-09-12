@@ -171,6 +171,23 @@ steps:
 	if !finalState.Completed {
 		t.Fatalf("expected resumed run to complete, got %+v", finalState)
 	}
+	if finalState.FailureReason != "" {
+		t.Fatalf("expected failureReason cleared on a completed run, got %q", finalState.FailureReason)
+	}
+
+	finalAuditData, err := os.ReadFile(filepath.Join(sessionDir, "audit.log"))
+	if err != nil {
+		t.Fatalf("read resumed audit.log: %v", err)
+	}
+	if !strings.Contains(string(finalAuditData), string(auditData)) {
+		t.Fatalf("audit log is not append-only: the original failed run's events are missing after resume\noriginal:\n%s\nfinal:\n%s", auditData, finalAuditData)
+	}
+	if !strings.Contains(string(finalAuditData), "missing token scope") {
+		t.Fatalf("the earlier blocked guarded evidence no longer appears in audit.log after resume:\n%s", finalAuditData)
+	}
+	if !strings.Contains(string(finalAuditData), "[verify] step_end") || !strings.Contains(string(finalAuditData), `"outcome":"success"`) {
+		t.Fatalf("resumed audit.log missing a successful verify step_end:\n%s", finalAuditData)
+	}
 }
 
 type repairBlockedCLIResult struct {

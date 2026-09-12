@@ -594,7 +594,10 @@ func auditProfileSource(cfg *config.Config) string {
 func executeSteps(rs *runState, startIndex int) WorkflowResult {
 	steps := rs.workflow.Steps
 	basePath := rs.ctx.NestingPath
-	exec.PrimeReplayResume(rs.ctx, basePath)
+	if err := exec.PrimeReplayResume(rs.ctx, basePath); err != nil {
+		rs.log.Printf("\nagent-runner: %v\n", err)
+		return ResultFailed
+	}
 	for i := startIndex; i < len(steps); i++ {
 		step := &steps[i]
 		result, terminal, rewound, nextIndex := executeTopLevelStep(rs, step, i, steps, basePath)

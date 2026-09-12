@@ -245,8 +245,12 @@ func executeCheckWithRepair(step *model.Step, ctx *model.ExecutionContext, runne
 			// ctx.LastFailure is never persisted; rebuild it from audit now, at
 			// ctx's current nesting, which by this point correctly reflects
 			// wherever the check actually lives (top level, loop iteration,
-			// sub-workflow, or enclosing group).
-			_ = RestoreLastFailureForResume(ctx)
+			// sub-workflow, or enclosing group). A failure to rebuild it must
+			// stop the resume rather than silently proceed with a nil or
+			// incomplete failure record.
+			if err := RestoreLastFailureForResume(ctx); err != nil {
+				return OutcomeFailed, err
+			}
 			return runRepairAttempt(step, ctx, runner, log, owningPrefix, startTime, lastResultFromFailure(ctx.LastFailure))
 		}
 	}
