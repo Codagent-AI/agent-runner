@@ -2,10 +2,14 @@
 
 ### Requirement: Poll until terminal result
 
-After a successful `call_agent` start, `codagent:call-agent` SHALL invoke `get_agent_call` with the returned `call_id` until the call is terminal. It MUST NOT treat a non-terminal status as success, MUST NOT start another child to collect the same result, and MUST NOT claim that child work completed while status is `accepted` or `running`. When the poll tool is missing after a start that returned a `call_id`, the skill SHALL report that as a blocker rather than waiting on `call_agent` or substituting another delegation path.
+When `call_agent` returns a terminal result, that result is the child's answer and `codagent:call-agent` SHALL use it directly. When `call_agent` instead returns a non-terminal status, the skill SHALL invoke `get_agent_call` with the returned `call_id` until the call is terminal. It MUST NOT treat a non-terminal status as success, MUST NOT start another child to collect the same result, and MUST NOT claim that child work completed while status is `accepted` or `running`. When the poll tool is missing after a start that returned a `call_id`, the skill SHALL report that as a blocker rather than waiting on `call_agent` or substituting another delegation path.
+
+#### Scenario: Waiting start needs no poll
+- **WHEN** `call_agent` returns a terminal success or structured failure
+- **THEN** the skill uses that result without polling `get_agent_call`
 
 #### Scenario: Long child is collected by polling
-- **WHEN** `call_agent` returns a `call_id` and the child is still running
+- **WHEN** `call_agent` returns a `call_id` with a non-terminal status
 - **THEN** the skill polls `get_agent_call` until it receives a terminal success or structured failure
 
 #### Scenario: In-progress status is not success
@@ -35,8 +39,9 @@ When the caller or lead aborts an in-flight child without ending the parent step
 For each invocation, `codagent:call-agent` MUST call the Runner-owned `call_agent` tool with a
 non-empty standalone prompt and exactly one target form: a profile through `agent` or a declared named
 session through `session`. It MUST NOT send both targets, invent an unavailable target, or invoke more
-children than the caller's explicit call budget permits. After `call_agent` returns a `call_id`, that
-invocation is not complete until `get_agent_call` returns a terminal result for that `call_id`. A later
+children than the caller's explicit call budget permits. After `call_agent` returns a non-terminal
+status, that invocation is not complete until `get_agent_call` returns a terminal result for that
+`call_id`. A later
 skill invocation MAY make another serial call when the enclosing workflow permits it and no child is
 in flight.
 

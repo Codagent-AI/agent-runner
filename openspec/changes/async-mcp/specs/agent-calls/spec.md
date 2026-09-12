@@ -2,13 +2,19 @@
 
 ### Requirement: Agent-call job identity
 
-After Agent Runner accepts a valid `call_agent` request, the `call_agent` MCP tool SHALL return a structured result that includes a stable `call_id` and a non-terminal status (`accepted` or `running`) without waiting for the child to finish. Validation, eligibility, target, safety, and concurrency rejections SHALL remain pre-acceptance structured errors with no `call_id` and MUST NOT spawn a child.
+After Agent Runner accepts a valid `call_agent` request, the accepted call SHALL have a stable `call_id`. `call_agent` SHALL wait for the child up to the parent's wait budget and then return either the terminal result or that `call_id` with a non-terminal status (`accepted` or `running`). Validation, eligibility, target, safety, and concurrency rejections SHALL remain pre-acceptance structured errors with no `call_id` and MUST NOT spawn a child.
 
-A retry of the same accepted `call_agent` request ID SHALL return that same `call_id` and MUST NOT spawn another child or wait for the existing child to finish.
+The wait budget SHALL be unbounded by default, so `call_agent` waits for the child and the parent cannot end its turn on a call it never collected. A parent CLI whose MCP client aborts a long `tools/call` SHALL instead have a positive budget shorter than that abort, and its parent collects the outcome by polling.
 
-#### Scenario: Accepted start returns a call id
-- **WHEN** an authenticated `call_agent` request passes Runner validation and is accepted
-- **THEN** the `call_agent` tool returns a `call_id` and a non-terminal status of `accepted` or `running` before the child reaches a terminal result
+A retry of the same accepted `call_agent` request ID SHALL return that same `call_id` and MUST NOT spawn another child.
+
+#### Scenario: Waiting parent receives the child result
+- **WHEN** an accepted `call_agent` request belongs to a parent whose wait budget is unbounded
+- **THEN** the tool holds the request open until the call is terminal and returns the child's structured result or error
+
+#### Scenario: Bounded parent receives a call id
+- **WHEN** an accepted `call_agent` request belongs to a parent with a positive wait budget and the child is still running when that budget expires
+- **THEN** the tool returns the `call_id` with a non-terminal status of `accepted` or `running` and the child keeps running
 
 #### Scenario: Rejected start has no call id
 - **WHEN** a `call_agent` request fails schema, eligibility, target, override, self-session, or concurrency validation
@@ -16,19 +22,19 @@ A retry of the same accepted `call_agent` request ID SHALL return that same `cal
 
 #### Scenario: Idempotent start retry
 - **WHEN** the same accepted `call_agent` request ID is retried while the child is still running
-- **THEN** Agent Runner returns the original `call_id` without spawning another child or waiting for completion
+- **THEN** Agent Runner returns the original `call_id` without spawning another child
 
 ### Requirement: Agent-call status retrieval
 
 When the agent-call integration is provisioned, Agent Runner SHALL expose `get_agent_call`. The tool MUST require the `call_id` returned by `call_agent` for the same parent attempt. An unknown `call_id` SHALL return a structured error and MUST NOT spawn a child.
 
-While the call is not terminal, `get_agent_call` SHALL return immediately with `call_id`, a non-terminal status (`accepted` or `running`), the requested target, and elapsed time, and MUST NOT include the child's final response or transcript. When the call is terminal, `get_agent_call` SHALL return immediately with `call_id`, a terminal status, and the same structured success or error that the blocking `call_agent` tool previously returned for that outcome. A later `get_agent_call` with that `call_id` SHALL return the cached terminal result.
+`get_agent_call` SHALL wait on the same budget as `call_agent`. When the call is terminal, it SHALL return `call_id`, a terminal status, and the same structured success or error `call_agent` would have returned for that outcome. When the child is still running at the end of the budget, it SHALL return `call_id`, a non-terminal status (`accepted` or `running`), the requested target, and elapsed time, and MUST NOT include the child's final response or transcript. A later `get_agent_call` with that `call_id` SHALL return the cached terminal result.
 
 `get_agent_call` MUST NOT count as a second in-flight agent call.
 
-#### Scenario: In-progress poll is immediate
-- **WHEN** the parent invokes `get_agent_call` with the `call_id` of a still-running child
-- **THEN** the tool returns immediately with non-terminal status, target, and elapsed time and does not include the child's final response
+#### Scenario: In-progress poll returns a snapshot at the budget
+- **WHEN** a parent with a positive wait budget invokes `get_agent_call` with the `call_id` of a child that is still running when the budget expires
+- **THEN** the tool returns non-terminal status, target, and elapsed time and does not include the child's final response
 
 #### Scenario: Terminal poll returns the child result
 - **WHEN** the parent invokes `get_agent_call` after the child succeeds
@@ -41,6 +47,18 @@ While the call is not terminal, `get_agent_call` SHALL return immediately with `
 #### Scenario: Unknown call id is rejected
 - **WHEN** `get_agent_call` receives a `call_id` that does not belong to the active parent attempt
 - **THEN** the tool returns a structured error and does not spawn a child
+
+### Requirement: Uncollected agent calls fail the parent step
+
+When a parent agent attempt ends while an accepted call is still non-terminal, Agent Runner SHALL record that step as failed and SHALL explain that the child was canceled and its result never collected. Agent Runner MUST NOT record such a step as a success, because attempt teardown kills the child and later steps would otherwise consume evidence the child never wrote.
+
+#### Scenario: Parent ends with a call still running
+- **WHEN** a parent agent process exits successfully while an accepted call has not reached a terminal status
+- **THEN** the step outcome is failed and its evidence names the uncollected `call_id`
+
+#### Scenario: Collected calls leave the outcome alone
+- **WHEN** a parent agent process exits successfully after every accepted call has reached a terminal status
+- **THEN** the step keeps its own outcome
 
 ### Requirement: Explicit agent-call cancellation
 
@@ -141,15 +159,15 @@ The called child SHALL receive its resolved profile system prompt and the suppli
 
 ### Requirement: Long-running MCP execution
 
-Agent Runner MUST NOT impose a fixed duration limit on a valid agent call. The process-local MCP tools `call_agent`, `get_agent_call`, and `cancel_agent_call` SHALL complete without waiting for the child to finish and MUST NOT depend on host MCP tool-execution timeout configuration or progress notifications to keep the child alive. When a supported host exposes a process-local MCP tool-execution timeout control, adapters MAY still raise or disable a generic short default; that configuration MUST NOT be required for a long child to complete. Progress notifications MUST NOT be treated as a substitute for start/poll/cancel or for client-side cancellation.
+Agent Runner MUST NOT impose a fixed duration limit on a valid agent call. A child's survival MUST NOT depend on any MCP request staying open, on host MCP tool-execution timeout configuration, or on progress notifications. When a supported host exposes a process-local MCP tool-execution timeout control, adapters SHALL raise or disable a generic short default so one waiting `call_agent` can cover a long child. Where a host enforces an unconfigurable `tools/call` abort, its parents SHALL receive a wait budget shorter than that abort and reach the result by polling. Progress notifications MUST NOT be treated as a substitute for either path.
 
-#### Scenario: Start does not wait for the child
-- **WHEN** a parent invokes `call_agent` for a child that will run longer than the host MCP `tools/call` wait
-- **THEN** `call_agent` returns a `call_id` before that host wait expires and the child remains running
+#### Scenario: Child outlives an aborted request
+- **WHEN** a host aborts an open `call_agent` request for a child that runs longer than its `tools/call` wait
+- **THEN** the child remains running and the parent can still reach its result with `get_agent_call`
 
-#### Scenario: Poll does not wait for the child
-- **WHEN** a parent invokes `get_agent_call` while the child is still running
-- **THEN** the poll returns immediately with non-terminal status even if the host has a short MCP `tools/call` wait
+#### Scenario: Bounded poll returns before the host abort
+- **WHEN** a parent whose host enforces a short `tools/call` wait invokes `get_agent_call` while the child is still running
+- **THEN** the poll returns a non-terminal status before that host wait expires
 
 #### Scenario: Host timeout settings are not required
 - **WHEN** an enabled parent uses a CLI without a supported MCP tool-execution timeout control

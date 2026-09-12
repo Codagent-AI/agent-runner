@@ -41,12 +41,15 @@ const (
 )
 
 const (
-	toolDescription = "Start one Agent Runner profile or declared named session. Returns a call_id immediately " +
-		"with a non-terminal status; poll get_agent_call until the call is terminal. Calls are serial: " +
-		"poll get_agent_call or cancel cancel_agent_call before starting another. " +
+	toolDescription = "Start one Agent Runner profile or declared named session and wait for it. Returns the " +
+		"child's terminal result when the child finishes first; otherwise returns a call_id with a " +
+		"non-terminal status, and you must then poll get_agent_call with that call_id until the call is " +
+		"terminal. A non-terminal status is never the child's answer. Calls are serial: finish or cancel " +
+		"the active call before starting another. " +
 		"The child receives the profile system prompt and supplied prompt without workflow-step enrichment."
-	getToolDescription = "Return the current status or cached terminal result for a call_id from this parent attempt. " +
-		"Does not wait for the child and does not start another call."
+	getToolDescription = "Return the terminal result for a call_id from this parent attempt, waiting for the child " +
+		"where the host allows it and otherwise returning the current non-terminal status. Repeat until the " +
+		"status is terminal. Does not start another call."
 	cancelToolDescription = "Terminate a running child for call_id. A finished call returns its cached terminal result. " +
 		"Does not start another call."
 	callIDSchema = `{

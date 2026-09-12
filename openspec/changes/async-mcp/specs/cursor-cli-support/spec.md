@@ -16,3 +16,15 @@ In interactive mode, the Cursor adapter SHALL discover the session ID by scannin
 - **WHEN** interactive Cursor discovery finds the parent chat and a nested agent-call chat for the same workspace
 - **AND** the nested chat ID is supplied as an excluded session ID
 - **THEN** the adapter returns the parent chat ID
+
+### Requirement: Cursor agent-call wait budget
+
+Because Cursor's MCP client aborts a `tools/call` at about 60 seconds regardless of progress notifications, a Cursor parent SHALL receive a positive agent-call wait budget shorter than that abort, and `call_agent` and `get_agent_call` SHALL return a non-terminal snapshot when that budget expires. Parents on CLIs that hold a long `tools/call` open SHALL keep an unbounded budget.
+
+#### Scenario: Cursor parent gets a bounded wait
+- **WHEN** the parent agent step runs on the Cursor CLI and its child is still running
+- **THEN** `call_agent` returns a `call_id` with a non-terminal status before the host abort
+
+#### Scenario: Other parents wait for the child
+- **WHEN** the parent agent step runs on a CLI that tolerates a long `tools/call`
+- **THEN** `call_agent` holds the request open until the call is terminal

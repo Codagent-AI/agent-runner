@@ -4,7 +4,8 @@ Cursor’s MCP client aborts a `tools/call` after about 60 seconds. Agent Runner
 
 ## What Changes
 
-- **BREAKING**: `call_agent` no longer waits for the child. After acceptance it returns a `call_id` immediately. The parent collects the terminal result with `get_agent_call` and may abort with `cancel_agent_call`.
+- `call_agent` keeps waiting for the child on every CLI that can hold a long `tools/call` open, so a waiting parent cannot end its turn on an uncollected call. A Cursor parent gets a wait budget under its 60-second abort: `call_agent` then returns a `call_id`, and the parent collects the terminal result with `get_agent_call`. Either parent may abort with `cancel_agent_call`.
+- A parent attempt that ends with an accepted call still running fails the step instead of recording a success on evidence the canceled child never wrote.
 - Lease the child to the parent attempt, not the live MCP request. Timing out, canceling, or restarting a start/poll MCP call after acceptance MUST NOT kill the child. Parent step cancel, stop, or exit still kills it.
 - Keep workflow YAML as `tools: [call_agent]`. That declaration provisions the three MCP tools; poll and cancel are not new YAML tool names.
 - Keep one-in-flight serial calls. `get_agent_call` and `cancel_agent_call` are not a second child.
@@ -18,7 +19,7 @@ Cursor’s MCP client aborts a `tools/call` after about 60 seconds. Agent Runner
 
 ### Modified Capabilities
 
-- `agent-calls`: Replace the blocking MCP wait with start/poll/cancel, change the execution lease, and return terminal results through `get_agent_call`.
+- `agent-calls`: Bound the MCP wait per parent CLI, add poll and cancel, change the execution lease, return terminal results through `get_agent_call`, and fail a parent step that leaves a call uncollected.
 - `cli-adapter`: Provision and (for autonomous parents) pre-authorize `call_agent`, `get_agent_call`, and `cancel_agent_call`.
 - `step-control-channel`: Stop leasing an accepted child to a single MCP/control connection; retries of `call_agent` return the same `call_id` without waiting for the child.
 - `call-agent-skill`: Drive the start → poll loop (and optional cancel) instead of treating `call_agent` as a synchronous result.
@@ -27,7 +28,7 @@ Cursor’s MCP client aborts a `tools/call` after about 60 seconds. Agent Runner
 
 - Raising or relying on a host MCP `tools/call` timeout, including Cursor settings that do not exist.
 - MCP experimental async / task-augmented execution.
-- Server-side long-poll on `get_agent_call`.
+- Unbounded server-side long-poll for hosts that abort a `tools/call`.
 - Streaming the child’s transcript through poll results.
 - Parallel or queued agent calls.
 - New workflow YAML tool names for poll or cancel.

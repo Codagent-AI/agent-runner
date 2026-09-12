@@ -16,3 +16,6 @@
 - [x] Make the new tests pass and keep existing agent-call coverage aligned with the non-blocking MCP contract
 - [x] Exclude nested agent-call session IDs from parent Cursor interactive discovery so a child chat cannot blank the parent session ID
 
+- [x] Measure the real host limit: a headless `cursor-agent` parent aborts an open `call_agent` at 60.3s with `MCP error -32001`, while a headless Claude parent returns the child result after a 93s wait
+- [x] Keep `call_agent` and `get_agent_call` waiting for the child by default and bound the wait only for Cursor parents
+- [x] Fail an agent step whose parent ended with an accepted call still non-terminal

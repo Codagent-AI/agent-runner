@@ -224,6 +224,11 @@ func ExecuteAgentStep(
 		buildWorkflowDirectInvocation(step, ctx, adapter, cliName, sessionID, spawnEnv, agentCallEligible, callHandler, routeEligible),
 		intakeDelivery.Started,
 	), runner, log)
+	if runErr == nil && invocation.Outcome == OutcomeSuccess {
+		if pending := callHandler.UncollectedCalls(); len(pending) > 0 {
+			failAgentStepForUncollectedCalls(&invocation, pending)
+		}
+	}
 	if runErr == nil {
 		if step.Capture != "" {
 			captureAgentResponse(step, ctx, invocation.Response)
@@ -236,6 +241,23 @@ func ExecuteAgentStep(
 		}
 	}
 	return finishAgentStep(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, &invocation, runErr, log)
+}
+
+// failAgentStepForUncollectedCalls turns a parent that ended its turn with a
+// child still running into a step failure. Attempt teardown kills that child,
+// so its evidence never lands, and recording the step as a success lets later
+// steps consume output that was never written.
+func failAgentStepForUncollectedCalls(invocation *AgentInvocationResult, callIDs []string) {
+	message := fmt.Sprintf(
+		"parent ended with %d agent call(s) still running (%s); each child was canceled and its result was never collected",
+		len(callIDs), strings.Join(callIDs, ", "),
+	)
+	invocation.Outcome = OutcomeFailed
+	if strings.TrimSpace(invocation.Stderr) == "" {
+		invocation.Stderr = message
+		return
+	}
+	invocation.Stderr = invocation.Stderr + "\n" + message
 }
 
 func finishAgentStep(
