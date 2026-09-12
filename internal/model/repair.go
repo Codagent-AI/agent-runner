@@ -18,6 +18,12 @@ type Repair struct {
 	Agent   string          `yaml:"agent,omitempty" json:"agent,omitempty"`
 	Rerun   string          `yaml:"rerun,omitempty" json:"rerun,omitempty"`
 	Max     *int            `yaml:"max,omitempty" json:"max,omitempty"`
+	// RangeCaptures is computed at load time (validateRepairTargets), not
+	// read from YAML: the names of every capture variable produced by a step
+	// in the rerun replay range (the target through the step before the
+	// check), in that order. The check executor replays these steps and
+	// re-captures these variables before re-running the check.
+	RangeCaptures []string `yaml:"-" json:"rangeCaptures,omitempty"`
 }
 
 // Form reports which repair shape this block uses. Callers should validate
@@ -119,6 +125,7 @@ func validateRerunTarget(steps []Step, checkIndex int) error {
 			steps[checkIndex].ID, target,
 		)
 	}
+	var rangeCaptures []string
 	for i := targetIndex; i < checkIndex; i++ {
 		if steps[i].BreakIf != "" {
 			return fmt.Errorf(
@@ -132,6 +139,10 @@ func validateRerunTarget(steps []Step, checkIndex int) error {
 				steps[checkIndex].ID, steps[i].ID,
 			)
 		}
+		if steps[i].Capture != "" {
+			rangeCaptures = append(rangeCaptures, steps[i].Capture)
+		}
 	}
+	steps[checkIndex].Repair.RangeCaptures = rangeCaptures
 	return nil
 }

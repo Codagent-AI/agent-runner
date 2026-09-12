@@ -3,6 +3,8 @@ package model
 import (
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestRepairFormAndBudget(t *testing.T) {
@@ -190,6 +192,36 @@ func TestValidateRepairTargets(t *testing.T) {
 		}}
 		if err := w.Validate(nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("computes RangeCaptures from the target through the step before the check", func(t *testing.T) {
+		w := Workflow{Name: "w", Steps: []Step{
+			{ID: "open-draft-pr", Command: "echo open", Capture: "pr_url"},
+			{ID: "wait", Command: "echo wait"},
+			{ID: "poll-checks", Command: "echo poll", Capture: "check_status"},
+			{ID: "verify-draft-pr", Command: "echo verify", Repair: &Repair{Rerun: "open-draft-pr"}},
+		}}
+		if err := w.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := []string{"pr_url", "check_status"}
+		if diff := cmp.Diff(want, w.Steps[3].Repair.RangeCaptures); diff != "" {
+			t.Fatalf("RangeCaptures mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("does not include the check's own capture in RangeCaptures", func(t *testing.T) {
+		w := Workflow{Name: "w", Steps: []Step{
+			{ID: "open", Command: "echo open", Capture: "pr_url"},
+			{ID: "verify", Command: "echo verify", Capture: "verify_out", Repair: &Repair{Rerun: "open"}},
+		}}
+		if err := w.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := []string{"pr_url"}
+		if diff := cmp.Diff(want, w.Steps[1].Repair.RangeCaptures); diff != "" {
+			t.Fatalf("RangeCaptures mismatch (-want +got):\n%s", diff)
 		}
 	})
 }

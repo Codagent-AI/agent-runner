@@ -29,12 +29,12 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 
 	scriptPath, err := resolveScriptPath(step.Script, ctx)
 	if err != nil {
-		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err)
+		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err, log)
 		return OutcomeFailed, err
 	}
 	stdin, err := buildScriptInput(step, ctx)
 	if err != nil {
-		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err)
+		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err, log)
 		return OutcomeFailed, err
 	}
 
@@ -49,7 +49,7 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 	}
 	metricsCapture, environment, err := prepareNestedMetricsEnvironment(step, ctx)
 	if err != nil {
-		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err)
+		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err, log)
 		return OutcomeFailed, err
 	}
 	var result ProcessResult
@@ -64,7 +64,7 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 		emitNestedMetricCapture(ctx, step, prefix, metricsCapture)
 	}
 	if err != nil {
-		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err)
+		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err, log)
 		return OutcomeFailed, err
 	}
 	if step.Capture != "" {
@@ -74,21 +74,21 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 		}
 		captured, err := captureScriptOutput(step.CaptureFormat, capturedOutput)
 		if err != nil {
-			emitScriptEnd(ctx, prefix, startTime, step, "failed", &result, err)
+			emitScriptEnd(ctx, prefix, startTime, step, "failed", &result, err, log)
 			return OutcomeFailed, err
 		}
 		ctx.CapturedVariables[step.Capture] = captured
 		recordPullRequestCapture(ctx, step.ID, step.Capture, captured)
 	}
 	if result.ExitCode != 0 {
-		emitScriptEnd(ctx, prefix, startTime, step, "failed", &result, nil)
+		emitScriptEnd(ctx, prefix, startTime, step, "failed", &result, nil, log)
 		return OutcomeFailed, nil
 	}
-	emitScriptEnd(ctx, prefix, startTime, step, "success", &result, nil)
+	emitScriptEnd(ctx, prefix, startTime, step, "success", &result, nil, log)
 	return OutcomeSuccess, nil
 }
 
-func emitScriptEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, step *model.Step, outcome string, result *ProcessResult, err error) {
+func emitScriptEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, step *model.Step, outcome string, result *ProcessResult, err error, log Logger) {
 	data := map[string]any{}
 	if result != nil {
 		data["exit_code"] = result.ExitCode
@@ -103,7 +103,8 @@ func emitScriptEnd(ctx *model.ExecutionContext, prefix string, startTime time.Ti
 	if result != nil {
 		exitCode, stdout, stderr = result.ExitCode, result.Stdout, result.Stderr
 	}
-	recordCheckFailure(ctx, step, StepOutcome(outcome), exitCode, stdout, stderr)
+	checkIdentity := executionIdentity(ctx, step, "step", 0, false, "", "")
+	recordCheckFailure(ctx, step, StepOutcome(outcome), prefix, attemptForIdentity(ctx, &checkIdentity), exitCode, stdout, stderr, log)
 	emitStepEnd(ctx, prefix, startTime, outcome, data, step)
 }
 

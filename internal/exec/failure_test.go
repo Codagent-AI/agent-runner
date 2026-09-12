@@ -3,11 +3,14 @@ package exec
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
 )
 
@@ -52,10 +55,10 @@ func TestLoadAgentExecutionRebuildsFromAudit(t *testing.T) {
 				"identity": map[string]any{"step_id": "agent-a", "attempt": 1},
 			}},
 			{Timestamp: "2026-07-17T00:00:01Z", Prefix: "[agent-b, call:call-1]", Type: audit.EventAgentCallEnd, Data: map[string]any{
-				"call_id": "call-1", "response": "first child response",
+				"call_id": "call-1", "response": "first child response", "parent_execution_attempt": 1,
 			}},
 			{Timestamp: "2026-07-17T00:00:02Z", Prefix: "[agent-b, call:call-2]", Type: audit.EventAgentCallEnd, Data: map[string]any{
-				"call_id": "call-2", "response": "second child response",
+				"call_id": "call-2", "response": "second child response", "parent_execution_attempt": 1,
 			}},
 			{Timestamp: "2026-07-17T00:00:03Z", Prefix: "[agent-b]", Type: audit.EventStepEnd, Data: map[string]any{
 				"outcome": "success", "stdout": "response from B",
@@ -78,6 +81,35 @@ func TestLoadAgentExecutionRebuildsFromAudit(t *testing.T) {
 			{CallID: "call-2", Response: "second child response"},
 		}
 		if diff := cmp.Diff(want, recordB.CallResponses); diff != "" {
+			t.Fatalf("mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("attributes calls to the exact parent attempt, not any attempt sharing the prefix", func(t *testing.T) {
+		sessionDir := t.TempDir()
+		writeAuditLog(t, sessionDir, []audit.Event{
+			// First attempt of "agent-b" makes a call, then fails and is rerun.
+			{Timestamp: "2026-07-17T00:00:00Z", Prefix: "[agent-b, call:call-old]", Type: audit.EventAgentCallEnd, Data: map[string]any{
+				"call_id": "call-old", "response": "stale response", "parent_execution_attempt": 1,
+			}},
+			{Timestamp: "2026-07-17T00:00:01Z", Prefix: "[agent-b]", Type: audit.EventStepEnd, Data: map[string]any{
+				"outcome": "failed", "identity": map[string]any{"step_id": "agent-b", "attempt": 1},
+			}},
+			// Second attempt of "agent-b" makes a different call and succeeds.
+			{Timestamp: "2026-07-17T00:00:02Z", Prefix: "[agent-b, call:call-new]", Type: audit.EventAgentCallEnd, Data: map[string]any{
+				"call_id": "call-new", "response": "fresh response", "parent_execution_attempt": 2,
+			}},
+			{Timestamp: "2026-07-17T00:00:03Z", Prefix: "[agent-b]", Type: audit.EventStepEnd, Data: map[string]any{
+				"outcome": "success", "stdout": "response from B attempt 2",
+				"identity": map[string]any{"step_id": "agent-b", "attempt": 2},
+			}},
+		})
+		record, err := LoadAgentExecution(sessionDir, model.ExecutionRef{Prefix: "[agent-b]", Attempt: 2})
+		if err != nil {
+			t.Fatalf("LoadAgentExecution: %v", err)
+		}
+		want := []model.CallResponse{{CallID: "call-new", Response: "fresh response"}}
+		if diff := cmp.Diff(want, record.CallResponses); diff != "" {
 			t.Fatalf("mismatch (-want +got):\n%s", diff)
 		}
 	})
@@ -132,6 +164,27 @@ func TestClassifyFailure(t *testing.T) {
 		}
 	})
 
+	t.Run("skips leading blank lines when finding the first non-empty stderr line", func(t *testing.T) {
+		record := &model.FailureRecord{StepID: "check-tests", Stderr: "\n\n  \nassertion failed\nmore detail"}
+		got := ClassifyFailure(record)
+		want := "check-tests failed: assertion failed"
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("skips leading blank lines in the blocked explanation", func(t *testing.T) {
+		record := &model.FailureRecord{
+			StepID: "check-plan", Stderr: "still failing",
+			Blocked: true, BlockedBy: "\n\nmanual review needed\nmore",
+		}
+		got := ClassifyFailure(record)
+		want := "check-plan failed: still failing; blocked: manual review needed"
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	})
+
 	t.Run("blocked and repair attempts combine", func(t *testing.T) {
 		record := &model.FailureRecord{
 			StepID: "check-plan", Stderr: "still failing",
@@ -169,6 +222,12 @@ func TestExecuteCheckStepBuildsFailureRecordWithGuardedExecution(t *testing.T) {
 		if ctx.LastFailure.StepID != "verify-draft-pr" || ctx.LastFailure.ExitCode != 1 || ctx.LastFailure.Stderr != "expected one open PR" {
 			t.Fatalf("failure record = %+v", ctx.LastFailure)
 		}
+		// attemptForIdentity falls back to identity.Attempt (0) when the audit
+		// logger isn't a real metrics collector, matching every other test in
+		// this package; the important assertion is that Prefix is populated.
+		if ctx.LastFailure.Prefix != "[verify-draft-pr]" {
+			t.Fatalf("expected the check's own prefix on the failure record, got %+v", ctx.LastFailure)
+		}
 		if ctx.LastFailure.Guarded == nil || ctx.LastFailure.Guarded.Response != "opened the PR" {
 			t.Fatalf("expected guarded execution attached, got %+v", ctx.LastFailure.Guarded)
 		}
@@ -176,6 +235,31 @@ func TestExecuteCheckStepBuildsFailureRecordWithGuardedExecution(t *testing.T) {
 		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
 		if end.Data["guarded_prefix"] != "[open-draft-pr]" || end.Data["guarded_attempt"] != 1 {
 			t.Fatalf("step_end guarded linkage = %+v", end.Data)
+		}
+	})
+
+	t.Run("failure record attempt matches the check's own audit identity.attempt", func(t *testing.T) {
+		sessionDir := t.TempDir()
+		collector := metrics.NewCollector(sessionDir, "run", "wf", time.Now())
+		pipeline := metrics.NewExecutionPipeline(collector, nil, sessionDir, "exec-1")
+		ctx := makeCtx()
+		ctx.AuditLogger = pipeline
+		step := model.Step{ID: "verify-draft-pr", Command: "exit 1"}
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1, Stderr: "boom"}, {ExitCode: 1, Stderr: "boom again"}}}
+
+		if _, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, &mockLogger{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ctx.LastFailure.Attempt != 1 {
+			t.Fatalf("attempt = %d, want 1", ctx.LastFailure.Attempt)
+		}
+
+		// A second failure of the same check advances the attempt.
+		if _, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, &mockLogger{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ctx.LastFailure.Attempt != 2 {
+			t.Fatalf("second attempt = %d, want 2", ctx.LastFailure.Attempt)
 		}
 	})
 
@@ -214,6 +298,34 @@ func TestExecuteCheckStepBuildsFailureRecordWithGuardedExecution(t *testing.T) {
 		}
 		if ctx.LastAgentExecution == nil {
 			t.Fatal("guarded execution should remain in scope after a passing check")
+		}
+	})
+
+	t.Run("logs a warning when the persisted guarded reference cannot be rebuilt from audit", func(t *testing.T) {
+		ctx := makeCtx()
+		ctx.SessionDir = t.TempDir() // no audit.log present: reconstruction will fail
+		ctx.LastAgentExecution = &model.AgentExecutionRecord{
+			Ref: model.ExecutionRef{Prefix: "[open-draft-pr]", Attempt: 1}, // Response empty: resume placeholder
+		}
+		step := model.Step{ID: "verify-draft-pr", Command: "exit 1"}
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 1, Stderr: "expected one open PR"}}}
+		log := &mockLogger{}
+
+		outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, log)
+		if err != nil || outcome != OutcomeFailed {
+			t.Fatalf("ExecuteCheckStep() = (%q, %v)", outcome, err)
+		}
+		if ctx.LastFailure == nil || ctx.LastFailure.Guarded == nil {
+			t.Fatal("expected the response-less placeholder to still be attached")
+		}
+		found := false
+		for _, line := range log.lines {
+			if strings.Contains(line, "could not rebuild guarded execution") {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected a warning about the failed reconstruction, got lines: %v", log.lines)
 		}
 	})
 

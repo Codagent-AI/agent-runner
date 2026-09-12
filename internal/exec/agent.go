@@ -374,11 +374,13 @@ func prepareAgentCallRuntime(
 		parentNamedSession = string(step.Session)
 	}
 	spawnTime := time.Now()
+	parentIdentity := executionIdentity(ctx, step, "step", 0, false, "", "")
 	options := &AgentCallHandlerOptions{
 		Context: ctx, Runner: runner, Log: log, Eligible: true,
 		Parent: AgentCallParent{
 			CLI: cliName, SessionID: sessionID, NamedSession: parentNamedSession,
 			Worktree: ctx.ProjectRoot, Workdir: parentWorkdir, Prefix: prefix,
+			Attempt: attemptForIdentity(ctx, &parentIdentity),
 		},
 	}
 	if notifier, ok := runner.(AgentCallLifecycleNotifier); ok {

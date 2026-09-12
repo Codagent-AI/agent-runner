@@ -74,23 +74,31 @@ func ExecuteCheckStep(
 
 // recordCheckFailure updates ctx.LastFailure from a shell or script check's
 // process result: on non-zero exit it builds a FailureRecord naming the
-// check and its guarded execution (if one ran earlier in this scope); on
-// success it clears any earlier failure record from this same check.
-func recordCheckFailure(ctx *model.ExecutionContext, step *model.Step, outcome StepOutcome, exitCode int, stdout, stderr string) {
+// check (by its own audit prefix and attempt) and its guarded execution (if
+// one ran earlier in this scope); on success it clears any earlier failure
+// record from this same check. prefix and attempt are the check's own audit
+// identity, matching the prefix and identity.attempt on its step_end.
+func recordCheckFailure(ctx *model.ExecutionContext, step *model.Step, outcome StepOutcome, prefix string, attempt, exitCode int, stdout, stderr string, log Logger) {
 	if outcome != OutcomeFailed {
 		ctx.LastFailure = nil
 		return
 	}
-	record := &model.FailureRecord{StepID: step.ID, ExitCode: exitCode, Stdout: stdout, Stderr: stderr}
-	record.Guarded = resolveGuardedExecution(ctx)
+	record := &model.FailureRecord{
+		StepID: step.ID, Prefix: prefix, Attempt: attempt,
+		ExitCode: exitCode, Stdout: stdout, Stderr: stderr,
+	}
+	record.Guarded = resolveGuardedExecution(ctx, log)
 	ctx.LastFailure = record
 }
 
 // resolveGuardedExecution returns the scope's guarded execution, rebuilding
 // it from audit when only the persisted reference survived an interruption
 // between the agent step and this check (the in-memory record carries no
-// response in that case).
-func resolveGuardedExecution(ctx *model.ExecutionContext) *model.AgentExecutionRecord {
+// response in that case). When reconstruction fails, the loss of durable
+// evidence is logged so it isn't silently mistaken for "no guarded agent
+// ran," and the response-less placeholder is returned so the caller can
+// still see which execution should have been guarding this check.
+func resolveGuardedExecution(ctx *model.ExecutionContext, log Logger) *model.AgentExecutionRecord {
 	guarded := ctx.LastAgentExecution
 	if guarded == nil {
 		return nil
@@ -100,6 +108,12 @@ func resolveGuardedExecution(ctx *model.ExecutionContext) *model.AgentExecutionR
 	}
 	rebuilt, err := LoadAgentExecution(ctx.SessionDir, guarded.Ref)
 	if err != nil {
+		if log != nil {
+			log.Errorf(
+				"agent-runner: warning: could not rebuild guarded execution %s (attempt %d) from audit: %v\n",
+				guarded.Ref.Prefix, guarded.Ref.Attempt, err,
+			)
+		}
 		return guarded
 	}
 	return rebuilt
@@ -145,6 +159,12 @@ func LoadAgentExecution(sessionDir string, ref model.ExecutionRef) (*model.Agent
 	callPrefix := strings.TrimSuffix(ref.Prefix, "]") + ", call:"
 	for _, event := range events {
 		if event.Type != "agent_call_end" || !strings.HasPrefix(event.Prefix, callPrefix) {
+			continue
+		}
+		// parent_execution_attempt attributes this call to one specific
+		// parent execution: without it, a resumed repair could pick up call
+		// evidence from an earlier or later attempt of the same-prefix step.
+		if intFromAny(event.Data["parent_execution_attempt"]) != ref.Attempt {
 			continue
 		}
 		callID, _ := event.Data["call_id"].(string)
@@ -208,7 +228,13 @@ func failureDetail(record *model.FailureRecord) string {
 	return fmt.Sprintf("with exit code %d", record.ExitCode)
 }
 
+// firstLine returns the first non-empty (after trimming) line of s, skipping
+// any leading blank lines. Returns "" when every line is blank.
 func firstLine(s string) string {
-	line, _, _ := strings.Cut(s, "\n")
-	return strings.TrimSpace(line)
+	for _, line := range strings.Split(s, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }

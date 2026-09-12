@@ -19,6 +19,7 @@ import (
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/control"
+	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runlock"
 )
@@ -557,6 +558,29 @@ func TestPrepareAgentCallRuntimeUsesEstablishedProjectRoot(t *testing.T) {
 	}
 	if handler.options.Parent.Worktree != projectRoot || handler.options.Parent.Workdir != workingDir {
 		t.Fatalf("parent paths = worktree %q workdir %q", handler.options.Parent.Worktree, handler.options.Parent.Workdir)
+	}
+}
+
+func TestPrepareAgentCallRuntimeStampsParentExecutionAttempt(t *testing.T) {
+	workdir := t.TempDir()
+	sessionDir := t.TempDir()
+	collector := metrics.NewCollector(sessionDir, "run", "wf", time.Now())
+	pipeline := metrics.NewExecutionPipeline(collector, nil, sessionDir, "exec-1")
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		WorkflowFile: "workflow.yaml", ProjectRoot: workdir, WorkingDir: workdir,
+	})
+	ctx.AuditLogger = pipeline
+	step := &model.Step{ID: "parent-agent", Session: model.SessionNew}
+
+	handler, _, _, err := prepareAgentCallRuntime(
+		true, cli.ContextInteractive, step, ctx, &callTestAdapter{}, nil, nil,
+		"test", "parent-session", "[parent-agent]", nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handler.options.Parent.Attempt != 1 {
+		t.Fatalf("Parent.Attempt = %d, want 1 (predicted first attempt)", handler.options.Parent.Attempt)
 	}
 }
 

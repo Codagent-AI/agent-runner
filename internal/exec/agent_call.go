@@ -32,6 +32,11 @@ type AgentCallParent struct {
 	Workdir          string
 	Prefix           string
 	ResolveSessionID func() string
+	// Attempt is the parent agent step's own predicted audit identity.attempt
+	// (see attemptForIdentity). Stamped on every agent_call_end this handler
+	// emits so a rebuild from audit can attribute calls to the exact parent
+	// execution instead of any step sharing the same prefix.
+	Attempt int
 }
 
 type AgentCallAccepted struct {
@@ -909,6 +914,12 @@ func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *res
 		Role: call.profileName, Tool: "agent-runner",
 	}
 	data := agentCallAuditData(record, call)
+	// parent_execution_attempt identifies the exact parent agent step
+	// execution this call belongs to (its own predicted identity.attempt),
+	// distinct from parent_attempt_id (the control-layer MCP attempt). A
+	// rebuild from audit requires this so calls from an earlier or later
+	// attempt of the same-prefix step are never attributed to the wrong one.
+	data["parent_execution_attempt"] = h.options.Parent.Attempt
 	data["outcome"] = string(invocation.Outcome)
 	data["duration_ms"] = duration.Milliseconds()
 	data["cli_launched"] = invocation.CLILaunched
