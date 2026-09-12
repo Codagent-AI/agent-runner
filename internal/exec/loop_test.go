@@ -56,6 +56,29 @@ func TestExecuteLoopStep(t *testing.T) {
 		}
 	})
 
+	t.Run("counted loop resolves max from a workflow param via max_param", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		ctx := model.NewRootContext(&model.RootContextOptions{
+			Params:       map[string]string{"ci_fix_cycles": "1"},
+			WorkflowFile: "test.yaml",
+		})
+		step := model.Step{
+			ID: "loop", Session: model.SessionNew,
+			Loop:  &model.Loop{MaxParam: "ci_fix_cycles"},
+			Steps: []model.Step{{ID: "a", Command: "echo", Session: model.SessionNew}},
+		}
+		result, err := ExecuteLoopStep(&step, ctx, runner, &mockGlob{}, &mockLogger{}, LoopExecuteOptions{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Outcome != OutcomeExhausted {
+			t.Fatalf("expected exhausted, got %q", result.Outcome)
+		}
+		if len(runner.calls) != 1 {
+			t.Fatalf("expected 1 call (max_param=1), got %d", len(runner.calls))
+		}
+	})
+
 	t.Run("counted loop with break_if success", func(t *testing.T) {
 		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
 		step := model.Step{
