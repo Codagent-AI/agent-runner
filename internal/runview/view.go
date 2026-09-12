@@ -115,7 +115,10 @@ func (m *Model) renderFailureReason() string {
 	if m.rootStatus() != StatusFailed {
 		return ""
 	}
-	reason := failureReason(m.tree.Root)
+	reason := m.persistedFailureReason
+	if reason == "" {
+		reason = failureReason(m.tree.Root)
+	}
 	if reason == "" {
 		reason = "workflow failed"
 	}

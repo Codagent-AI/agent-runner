@@ -2,6 +2,7 @@
 package model
 
 import (
+	"strconv"
 	"sync"
 
 	"github.com/codagent/agent-runner/internal/audit"
@@ -13,6 +14,9 @@ type NestingSegment struct {
 	Iteration       *int              `json:"iteration,omitempty"`
 	LoopVar         map[string]string `json:"loopVar,omitempty"`
 	SubWorkflowName string            `json:"subWorkflowName,omitempty"`
+	// RepairAttempt, when set, renders an "attempt:N" token in the audit
+	// prefix for a replayed rerun target or an inline repair agent.
+	RepairAttempt *int `json:"repairAttempt,omitempty"`
 }
 
 // AgentDeprecationState is shared by every execution context in one workflow
@@ -257,6 +261,25 @@ type ExecutionContext struct {
 	PrepareStepHook func(interactive bool)
 
 	UIStepHandler func(*UIStepRequest) (UIStepResult, error)
+
+	// LastAgentExecution identifies the most recent completed agent step in
+	// this sequential scope, published once when that step completes and
+	// left in place across later shell, script, sub-workflow, and skipped
+	// steps. Sub-workflow and loop-iteration contexts start with this nil;
+	// groups share the parent context and save/restore it around the body.
+	LastAgentExecution *AgentExecutionRecord
+	// LastFailure is the most recent failure record produced by a failed
+	// shell or script check in this scope. Nested scopes copy their failing
+	// check's record onto every parent context when a failure stops the
+	// scope and propagates upward as blocking, and clear it when the
+	// failure is absorbed instead.
+	LastFailure *FailureRecord
+	// RepairFrame carries the in-progress repair lifecycle for the check
+	// currently being repaired, when one is open.
+	RepairFrame *RepairFrame
+	// PendingRewind asks the sequencer to resume execution from an earlier
+	// step on behalf of a check's rerun-form repair attempt.
+	PendingRewind *RewindRequest
 }
 
 // RootContextOptions configures a new root execution context.
@@ -392,7 +415,26 @@ func (c *ExecutionContext) BuiltinVarsForStep(stepID string) map[string]string {
 	// It carries the handoff text, not its path, so a consumer workflow receives
 	// the context in its prompt instead of having to elect to read a file.
 	m[IntakeHandoffVar] = c.IntakeHandoffContents
+	c.addRepairVars(m)
 	return m
+}
+
+// addRepairVars exposes repair.attempt, repair.check_output,
+// repair.check_stderr, and repair.action_response when the context carries
+// an open repair frame with evidence to draw them from.
+func (c *ExecutionContext) addRepairVars(m map[string]string) {
+	if c.RepairFrame == nil {
+		return
+	}
+	m["repair.attempt"] = strconv.Itoa(c.RepairFrame.Attempts)
+	if c.LastFailure == nil {
+		return
+	}
+	m["repair.check_output"] = c.LastFailure.Stdout
+	m["repair.check_stderr"] = c.LastFailure.Stderr
+	if c.LastFailure.Guarded != nil {
+		m["repair.action_response"] = c.LastFailure.Guarded.Response
+	}
 }
 
 // LoopIterationOptions configures a new loop iteration context.

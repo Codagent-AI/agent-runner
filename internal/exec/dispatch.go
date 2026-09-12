@@ -35,14 +35,14 @@ func DispatchStep(
 		if ctx.PrepareStepHook != nil {
 			ctx.PrepareStepHook(step.Mode == model.ModeInteractive)
 		}
-		return ExecuteShellStep(step, ctx, runner, log)
+		return ExecuteCheckStep(step, ctx, runner, glob, log)
 	}
 
 	if step.Script != "" {
 		if ctx.PrepareStepHook != nil {
 			ctx.PrepareStepHook(false)
 		}
-		return ExecuteScriptStep(step, ctx, runner, log)
+		return ExecuteCheckStep(step, ctx, runner, glob, log)
 	}
 
 	if step.Mode == model.ModeUI {
@@ -107,6 +107,12 @@ func executeGroupStep(
 	childNestingPath[len(originalNestingPath)] = model.NestingSegment{StepID: step.ID}
 	ctx.NestingPath = childNestingPath
 	defer func() { ctx.NestingPath = originalNestingPath }()
+	// Groups share the parent context (no child ExecutionContext is created),
+	// so a check inside the group must not see an agent that ran after the
+	// group in a sibling scope, and a check after the group must not see an
+	// agent that only ran inside it.
+	originalLastAgentExecution := ctx.LastAgentExecution
+	defer func() { ctx.LastAgentExecution = originalLastAgentExecution }()
 	for i := range steps {
 		outcome, err := DispatchStep(&steps[i], ctx, runner, glob, log)
 		if err != nil {

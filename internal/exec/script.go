@@ -98,6 +98,12 @@ func emitScriptEnd(ctx *model.ExecutionContext, prefix string, startTime time.Ti
 	if err != nil {
 		data["error"] = err.Error()
 	}
+	addGuardedLinkage(data, StepOutcome(outcome), ctx)
+	exitCode, stdout, stderr := 0, "", ""
+	if result != nil {
+		exitCode, stdout, stderr = result.ExitCode, result.Stdout, result.Stderr
+	}
+	recordCheckFailure(ctx, step, StepOutcome(outcome), exitCode, stdout, stderr)
 	emitStepEnd(ctx, prefix, startTime, outcome, data, step)
 }
 

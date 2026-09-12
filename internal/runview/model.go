@@ -103,7 +103,12 @@ type Model struct {
 	showSummary   bool
 	summaryOffset int // scroll offset (in step rows) for the summary screen
 	loadErr       string
-	notice        string // transient message shown below the step list (e.g. spawn error)
+	// persistedFailureReason is state.json's classified failure reason, when
+	// present. It takes precedence over the tree-derived fallback so a
+	// blocked or repair-attempt reason survives even after the workflow file
+	// changes.
+	persistedFailureReason string
+	notice                 string // transient message shown below the step list (e.g. spawn error)
 
 	resolverCfg     ResolverConfig
 	startTime       time.Time
@@ -202,19 +207,20 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	tree, loadErr, workflowMissing := loadRunTree(sessionDir, entered, &state, resolved)
 
 	m := &Model{
-		tree:          tree,
-		sessionDir:    sessionDir,
-		projectDir:    projectDir,
-		originCwd:     resolved.OriginCwd,
-		entered:       entered,
-		path:          []*StepNode{tree.Root},
-		loadedFull:    make(map[string]bool),
-		inputExpanded: make(map[string]bool),
-		loadErr:       loadErr,
-		running:       entered == FromLiveRun,
-		followActive:  entered == FromLiveRun,
-		followTail:    entered == FromLiveRun,
-		altScreen:     entered != FromLiveRun,
+		tree:                   tree,
+		sessionDir:             sessionDir,
+		projectDir:             projectDir,
+		originCwd:              resolved.OriginCwd,
+		entered:                entered,
+		path:                   []*StepNode{tree.Root},
+		loadedFull:             make(map[string]bool),
+		inputExpanded:          make(map[string]bool),
+		loadErr:                loadErr,
+		running:                entered == FromLiveRun,
+		followActive:           entered == FromLiveRun,
+		followTail:             entered == FromLiveRun,
+		altScreen:              entered != FromLiveRun,
+		persistedFailureReason: state.FailureReason,
 	}
 	m.setSelected(firstRealChild(m.currentContainer()))
 	if entered == FromList || entered == FromInspect {

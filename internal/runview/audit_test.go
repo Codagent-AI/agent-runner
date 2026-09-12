@@ -126,6 +126,24 @@ func TestParsePrefix(t *testing.T) {
 				{stepID: "check"},
 			},
 		},
+		{
+			name:   "attempt token after check",
+			prefix: "[verify-draft-pr, attempt:1, open-draft-pr]",
+			want: []prefixToken{
+				{stepID: "verify-draft-pr"},
+				{attempt: iptr(1)},
+				{stepID: "open-draft-pr"},
+			},
+		},
+		{
+			name:   "attempt token before inline repair leaf",
+			prefix: "[check-plan, attempt:1, repair]",
+			want: []prefixToken{
+				{stepID: "check-plan"},
+				{attempt: iptr(1)},
+				{stepID: "repair"},
+			},
+		},
 	}
 
 	for _, c := range cases {
@@ -145,6 +163,11 @@ func TestParsePrefix(t *testing.T) {
 					t.Errorf("token %d iter presence mismatch", i)
 				} else if got[i].iteration != nil && *got[i].iteration != *c.want[i].iteration {
 					t.Errorf("token %d iter: want %d got %d", i, *c.want[i].iteration, *got[i].iteration)
+				}
+				if (got[i].attempt == nil) != (c.want[i].attempt == nil) {
+					t.Errorf("token %d attempt presence mismatch", i)
+				} else if got[i].attempt != nil && *got[i].attempt != *c.want[i].attempt {
+					t.Errorf("token %d attempt: want %d got %d", i, *c.want[i].attempt, *got[i].attempt)
 				}
 			}
 		})

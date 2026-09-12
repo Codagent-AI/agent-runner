@@ -13,7 +13,13 @@ func FailureReasonForSession(sessionDir string) string {
 	}
 	projectDir := filepath.Dir(filepath.Dir(sessionDir))
 	m, err := New(sessionDir, projectDir, FromInspect)
-	if err != nil || m == nil || m.tree == nil {
+	if err != nil || m == nil {
+		return ""
+	}
+	if m.persistedFailureReason != "" {
+		return m.persistedFailureReason
+	}
+	if m.tree == nil {
 		return ""
 	}
 	return failureReason(m.tree.Root)

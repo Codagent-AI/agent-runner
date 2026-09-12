@@ -197,7 +197,11 @@ func executeChildSteps(
 		recordLastStepOutcome(childCtx, outcome)
 
 		if outcome == OutcomeFailed && !workflow.Steps[i].ContinueOnFailure && !IsWarningOutcome(&workflow.Steps[i], outcome) {
+			childCtx.PropagateFailure()
 			return OutcomeFailed, nil
+		}
+		if outcome == OutcomeFailed {
+			childCtx.ClearInheritedFailure()
 		}
 	}
 
@@ -249,6 +253,7 @@ func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, c
 		CapturedVariables: copyMap(childCtx.CapturedVariables),
 		LastSessionStepID: childCtx.LastSessionStepID,
 		Completed:         completed,
+		LastAgent:         childCtx.LastAgentRef(),
 	}
 	// When the deeper state already describes this same step (e.g. a loop step
 	// that has written its own iteration metadata into childCtx.LastSubWorkflowChild),
@@ -299,6 +304,12 @@ func restorePersistedSessions(ctx *model.ExecutionContext, src *model.NestedStep
 	}
 	if src.LastSessionStepID != "" {
 		ctx.LastSessionStepID = src.LastSessionStepID
+	}
+	if src.LastAgent != nil {
+		// Only the identity survives resume; the response is rebuilt from
+		// audit on demand (see recordCheckFailure) since state.json does not
+		// carry it.
+		ctx.LastAgentExecution = &model.AgentExecutionRecord{Ref: *src.LastAgent}
 	}
 }
 

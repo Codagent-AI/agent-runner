@@ -26,6 +26,35 @@ type NestedStepState struct {
 	Iteration          *int                        `json:"iteration,omitempty"`
 	Child              *NestedStepState            `json:"child"`
 	InteractiveAttempt *InteractiveAttemptMetadata `json:"interactiveAttempt,omitempty"`
+	// LastAgent identifies the most recent completed agent execution in this
+	// scope by audit prefix and attempt, so it can be rebuilt from the audit
+	// log after an interruption between the agent step and a later check.
+	LastAgent *ExecutionRef `json:"lastAgent,omitempty"`
+	// Repair carries the in-progress repair frame for a check in this scope.
+	Repair *RepairFrame `json:"repair,omitempty"`
+}
+
+// RepairFrame tracks one check's repair lifecycle: which form applies, how
+// many attempts have run against its budget, and (for a rerun form) the
+// range of captures that must be replayed alongside the target step.
+type RepairFrame struct {
+	CheckID string `json:"checkId"`
+	// Form is "inline" or "rerun", mirroring model.RepairForm.
+	Form   string `json:"form"`
+	Target string `json:"target,omitempty"`
+	// Phase is one of "checking", "repairing", "replaying", or "failed".
+	Phase         string        `json:"phase"`
+	Attempts      int           `json:"attempts"`
+	Budget        int           `json:"budget"`
+	Guarded       *ExecutionRef `json:"guarded,omitempty"`
+	RangeCaptures []string      `json:"rangeCaptures,omitempty"`
+}
+
+// RewindRequest asks the sequencer to resume execution from an earlier step
+// (the rerun target) on behalf of a check's repair attempt.
+type RewindRequest struct {
+	Target  string `json:"target"`
+	CheckID string `json:"checkId"`
 }
 
 type InteractiveAttemptMetadata struct {
@@ -94,6 +123,9 @@ type RunState struct {
 	// RunKind identifies special persisted runs without changing how ordinary
 	// callers load them. Empty means an ordinary workflow execution.
 	RunKind string `json:"runKind,omitempty"`
+	// FailureReason is the classified root failure reason for a failed run,
+	// written by the top-level runner from the failing check's FailureRecord.
+	FailureReason string `json:"failureReason,omitempty"`
 	// Audit records reciprocal audit linkage. It is intentionally data-only so
 	// untagged binaries can safely list and inspect development audit history.
 	Audit *AuditMetadata `json:"audit,omitempty"`

@@ -84,6 +84,7 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		SessionProfiles:        resumeState.sessionProfiles,
 		CapturedVariables:      resumeState.capturedVars,
 		LastSessionStepID:      resumeState.lastSessionStepID,
+		LastAgent:              resumeState.lastAgent,
 		NamedSessions:          resumeState.namedSessions,
 		NamedSessionDecls:      resumeState.namedSessionDecls,
 		ChildState:             resumeState.childState,
@@ -136,6 +137,7 @@ type restoredResumeContext struct {
 	namedSessionDecls map[string]string
 	childState        *model.NestedStepState
 	completed         bool
+	lastAgent         *model.ExecutionRef
 }
 
 func restoreResumeContext(state *model.RunState) restoredResumeContext {
@@ -152,6 +154,7 @@ func restoreResumeContext(state *model.RunState) restoredResumeContext {
 		namedSessions:     nested.NamedSessions,
 		namedSessionDecls: nested.NamedSessionDecls,
 		completed:         nested.Completed,
+		lastAgent:         nested.LastAgent,
 	}
 	if nested.Iteration != nil {
 		// Top-level loop step captured mid-iteration. Carry the iteration (and

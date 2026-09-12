@@ -460,6 +460,129 @@ func shellStep(id, cmd string) model.Step {
 	return model.Step{ID: id, Command: cmd, Session: model.SessionNew}
 }
 
+func claudeAgentOutput(result string) string {
+	return `{"type":"result","result":` + fmt.Sprintf("%q", result) + `}` + "\n"
+}
+
+func TestRunWorkflowRecordsFailureReasonFromFailingCheck(t *testing.T) {
+	runner := &mockRunner{results: []exec.ProcessResult{
+		{ExitCode: 0, Stdout: claudeAgentOutput("opened the PR")},
+		{ExitCode: 1, Stderr: "expected one open PR\nmore detail"},
+	}}
+	w := model.Workflow{
+		Name: "test",
+		Steps: []model.Step{
+			{ID: "open-draft-pr", Mode: model.ModeAutonomous, Prompt: "open it", Agent: "test-agent", Session: model.SessionNew},
+			shellStep("verify-draft-pr", "exit 1"),
+		},
+	}
+	w.ApplyDefaults()
+	sessionDir := t.TempDir()
+	log := &mockLog{}
+	result, err := RunWorkflow(&w, map[string]string{}, &Options{
+		ProcessRunner: runner, GlobExpander: &mockGlob{}, Log: log, SessionDir: sessionDir,
+		ProfileStore: &config.Config{ActiveAgents: map[string]*config.Agent{"test-agent": {CLI: "claude"}}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != ResultFailed {
+		t.Fatalf("expected failed, got %q", result)
+	}
+
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "verify-draft-pr failed: expected one open PR"
+	if state.FailureReason != want {
+		t.Fatalf("state.FailureReason = %q, want %q", state.FailureReason, want)
+	}
+
+	printed := strings.Join(log.lines, "")
+	if !strings.Contains(printed, want) {
+		t.Fatalf("console output missing failure reason %q:\n%s", want, printed)
+	}
+	resumeIdx := strings.Index(printed, "to resume:")
+	reasonIdx := strings.Index(printed, want)
+	if resumeIdx < 0 || reasonIdx < 0 || reasonIdx > resumeIdx {
+		t.Fatalf("failure reason must print above the resume hint:\n%s", printed)
+	}
+
+	auditData, err := os.ReadFile(filepath.Join(sessionDir, "audit.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(auditData), `"failure_reason":"verify-draft-pr failed: expected one open PR"`) {
+		t.Fatalf("run_end missing failure_reason: %s", auditData)
+	}
+}
+
+func TestRunWorkflowResumeRebuildsGuardedResponseFromAuditAfterInterruption(t *testing.T) {
+	sessionDir := t.TempDir()
+	workflowPath := filepath.Join(t.TempDir(), "deploy-v1.0.yaml")
+	source := `name: deploy
+steps:
+  - id: open-draft-pr
+    prompt: open it
+    mode: autonomous
+    agent: test-agent
+    session: new
+  - id: verify-draft-pr
+    command: exit 1
+`
+	if err := os.WriteFile(workflowPath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate an interruption right after open-draft-pr completed, before
+	// verify-draft-pr ran: state.json carries lastAgent but the in-memory
+	// record is gone (fresh process), and the audit log holds the agent's
+	// step_end evidence.
+	state := model.RunState{
+		WorkflowFile: workflowPath,
+		WorkflowName: "deploy",
+		WorkflowHash: stateio.ComputeWorkflowHash(source),
+		CurrentStep: model.CurrentStep{
+			Nested: &model.NestedStepState{
+				StepID: "open-draft-pr", SessionIDs: map[string]string{}, CapturedVariables: map[string]model.CapturedValue{},
+				Completed: true,
+				LastAgent: &model.ExecutionRef{Prefix: "[open-draft-pr]", Attempt: 1},
+			},
+		},
+	}
+	if err := stateio.WriteState(&state, sessionDir); err != nil {
+		t.Fatal(err)
+	}
+	auditLogger, err := audit.NewLogger(filepath.Join(sessionDir, "audit.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditLogger.Emit(audit.Event{
+		Timestamp: "2026-07-17T00:00:00Z", Prefix: "[open-draft-pr]", Type: audit.EventStepEnd,
+		Data: map[string]any{"outcome": "success", "stdout": "opened the PR", "identity": map[string]any{"step_id": "open-draft-pr", "attempt": 1}},
+	})
+	auditLogger.Close()
+
+	runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 1, Stderr: "expected one open PR"}}}
+	handle, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+		ProcessRunner: runner, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareResume: %v", err)
+	}
+	result := ExecuteFromHandle(handle, nil)
+	if result != ResultFailed {
+		t.Fatalf("expected failed, got %q", result)
+	}
+	if handle.rs.ctx.LastFailure == nil || handle.rs.ctx.LastFailure.Guarded == nil {
+		t.Fatal("expected failure record with guarded execution")
+	}
+	if got := handle.rs.ctx.LastFailure.Guarded.Response; got != "opened the PR" {
+		t.Fatalf("guarded response = %q, want rebuilt from audit %q", got, "opened the PR")
+	}
+}
+
 func TestRunWorkflow_OptionalParamAvailableAsEmptyString(t *testing.T) {
 	optional := false
 	workflow := &model.Workflow{

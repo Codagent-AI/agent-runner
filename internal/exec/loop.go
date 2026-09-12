@@ -283,6 +283,7 @@ func newIterationBodyEntry(iterCtx *model.ExecutionContext, bodyStepID string, b
 		CapturedVariables: copyMap(iterCtx.CapturedVariables),
 		LastSessionStepID: iterCtx.LastSessionStepID,
 		Completed:         bodyCompleted,
+		LastAgent:         iterCtx.LastAgentRef(),
 	}
 	if deeperChild != nil && deeperChild.StepID == bodyStepID {
 		entry.Iteration = deeperChild.Iteration
@@ -491,8 +492,12 @@ func executeIterationBody(
 		recordLastStepOutcome(iterCtx, outcome)
 
 		if outcome == OutcomeFailed && !steps[i].ContinueOnFailure && !IsWarningOutcome(&steps[i], outcome) {
+			iterCtx.PropagateFailure()
 			persistIterationFailState(iterCtx, loopStepID, iteration, bodyStepID, bodyCompleted)
 			return iterationResult{failed: true}, nil
+		}
+		if outcome == OutcomeFailed {
+			iterCtx.ClearInheritedFailure()
 		}
 	}
 	return iterationResult{}, nil
@@ -665,6 +670,7 @@ func buildIterationFlushChain(
 			CapturedVariables: copyMap(parent.CapturedVariables),
 			LastSessionStepID: parent.LastSessionStepID,
 			Child:             chain,
+			LastAgent:         parent.LastAgentRef(),
 		}
 		if seg.Iteration != nil {
 			iter := *seg.Iteration

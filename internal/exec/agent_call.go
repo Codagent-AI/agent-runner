@@ -380,6 +380,39 @@ func (h *AgentCallHandler) ChildSessionIDs() []string {
 	return ids
 }
 
+// CollectedCallResponses returns the final response of every call that
+// reached a terminal state, ordered by acceptance time and labeled by call
+// ID. The parent agent step's executor reads this when it publishes its
+// AgentExecutionRecord at completion.
+func (h *AgentCallHandler) CollectedCallResponses() []model.CallResponse {
+	if h == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	records := make([]*acceptedAgentCall, 0, len(h.accepted))
+	for _, record := range h.accepted {
+		records = append(records, record)
+	}
+	sort.Slice(records, func(i, j int) bool { return records[i].started.Before(records[j].started) })
+	var out []model.CallResponse
+	for _, record := range records {
+		if len(record.response) == 0 {
+			continue
+		}
+		var response agentcall.Response
+		if err := json.Unmarshal(record.response, &response); err != nil {
+			continue
+		}
+		text := ""
+		if response.Result != nil {
+			text = response.Result.Response
+		}
+		out = append(out, model.CallResponse{CallID: record.callID, Response: text})
+	}
+	return out
+}
+
 func agentCallChildSessionIDs(handler control.AgentCallHandler) []string {
 	provider, ok := handler.(interface{ ChildSessionIDs() []string })
 	if !ok {
@@ -892,6 +925,12 @@ func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *res
 	}
 	if invocation.Stderr != "" {
 		data["stderr"] = invocation.Stderr
+	}
+	// The response is durable evidence for a guarded execution: a check that
+	// fails after this call's parent must be able to rebuild the call's
+	// final response from audit alone if interrupted before it ran.
+	if invocation.Response != "" {
+		data["response"] = truncateForAudit(invocation.Response)
 	}
 	if invocation.UsageError != nil {
 		data["usage_error"] = invocation.UsageError.Error()

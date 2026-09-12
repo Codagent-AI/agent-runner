@@ -49,16 +49,19 @@ type Options struct {
 	AgentOverride          *model.AgentOverride
 	// ProjectRoot and WorkingDir may be supplied by embedding callers. When
 	// empty, PrepareRun discovers and canonicalizes them once for the run.
-	ProjectRoot        string
-	WorkingDir         string
-	SessionDir         string // Override session directory (for testing); computed automatically if empty.
-	Engine             engine.Engine
-	ProfileStore       *config.Config
-	ProfileOverride    config.ProfileOverride
-	SessionIDs         map[string]string
-	SessionProfiles    map[string]string
-	CapturedVariables  map[string]model.CapturedValue
-	LastSessionStepID  string
+	ProjectRoot       string
+	WorkingDir        string
+	SessionDir        string // Override session directory (for testing); computed automatically if empty.
+	Engine            engine.Engine
+	ProfileStore      *config.Config
+	ProfileOverride   config.ProfileOverride
+	SessionIDs        map[string]string
+	SessionProfiles   map[string]string
+	CapturedVariables map[string]model.CapturedValue
+	LastSessionStepID string
+	// LastAgent restores the top-level scope's guarded execution reference on
+	// --resume; the full response is rebuilt from audit on demand.
+	LastAgent          *model.ExecutionRef
 	ChildState         *model.NestedStepState
 	InteractiveAttempt *model.InteractiveAttemptMetadata
 	// NamedSessions and NamedSessionDecls are restored from state on --resume.
@@ -522,6 +525,9 @@ func buildExecutionContext(
 	if opts.LastSessionStepID != "" {
 		ctx.LastSessionStepID = opts.LastSessionStepID
 	}
+	if opts.LastAgent != nil {
+		ctx.LastAgentExecution = &model.AgentExecutionRecord{Ref: *opts.LastAgent}
+	}
 	ctx.InteractiveAttempt = opts.InteractiveAttempt
 	if opts.From != "" {
 		ctx.WorkflowResumed = true
@@ -749,6 +755,12 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 			}
 		}
 	case ResultFailed:
+		if failureReason := classifyRunFailure(rs); failureReason != "" {
+			if err := writeStateFailureReason(rs.sessionDir, failureReason); err != nil {
+				rs.log.Printf("agent-runner: warning: could not record failure reason: %v\n", err)
+			}
+			rs.log.Printf("\n%s\n", failureReason)
+		}
 		rs.log.Printf("\nto resume: agent-runner --resume %s\n", rs.sessionID)
 	}
 
@@ -757,13 +769,7 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 		emitAudit(rs.ctx, audit.Event{
 			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 			Type:      audit.EventRunEnd,
-			Data: map[string]any{
-				"outcome":                 string(result),
-				"completed_with_warnings": result == ResultSuccess && rs.ctx.WarningOrigins.Count() > 0,
-				"warning_count":           rs.ctx.WarningOrigins.Count(),
-				"duration_ms":             time.Since(rs.runStartTime).Milliseconds(),
-				metrics.DataTotals:        totals,
-			},
+			Data:      runEndData(rs, result, &totals),
 		})
 		for _, metricsErr := range rs.metricsCollector.Errors() {
 			rs.log.Printf("agent-runner: warning: metrics: %v\n", metricsErr)
@@ -792,6 +798,50 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 	}
 
 	runlock.Delete(rs.sessionDir)
+}
+
+// classifyRunFailure returns the classified root failure reason for a failed
+// run, derived from the failing check's FailureRecord. A nested check's
+// failure has already been copied onto rs.ctx by ExecutionContext.PropagateFailure
+// as its scope unwound, so rs.ctx.LastFailure always names the actual
+// failing check rather than a container. Returns "" when the run failed for
+// a reason other than a classified check failure (e.g. an agent step error),
+// so callers fall back to their own derivation.
+func classifyRunFailure(rs *runState) string {
+	if rs.ctx.LastFailure == nil {
+		return ""
+	}
+	return exec.ClassifyFailure(rs.ctx.LastFailure)
+}
+
+// writeStateFailureReason reads the run's state.json and rewrites it with
+// the classified failure reason for a failed run.
+func writeStateFailureReason(sessionDir, reason string) error {
+	statePath := filepath.Join(sessionDir, "state.json")
+	state, err := stateio.ReadState(statePath)
+	if err != nil {
+		return err
+	}
+	state.FailureReason = reason
+	return stateio.WriteState(&state, sessionDir)
+}
+
+// runEndData builds the run_end audit event's data, including the classified
+// failure_reason for a failed run.
+func runEndData(rs *runState, result WorkflowResult, totals *model.RunTotals) map[string]any {
+	data := map[string]any{
+		"outcome":                 string(result),
+		"completed_with_warnings": result == ResultSuccess && rs.ctx.WarningOrigins.Count() > 0,
+		"warning_count":           rs.ctx.WarningOrigins.Count(),
+		"duration_ms":             time.Since(rs.runStartTime).Milliseconds(),
+		metrics.DataTotals:        *totals,
+	}
+	if result == ResultFailed {
+		if reason := classifyRunFailure(rs); reason != "" {
+			data["failure_reason"] = reason
+		}
+	}
+	return data
 }
 
 // markStateCompleted reads the run's state.json, sets Completed=true, and
@@ -983,6 +1033,7 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		Iteration:          iteration,
 		Child:              child,
 		InteractiveAttempt: ctx.InteractiveAttempt,
+		LastAgent:          ctx.LastAgentRef(),
 	}
 
 	state := model.RunState{

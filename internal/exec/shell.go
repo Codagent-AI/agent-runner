@@ -84,6 +84,7 @@ func nestingToAudit(ctx *model.ExecutionContext) []audit.NestingInfo {
 			StepID:          seg.StepID,
 			Iteration:       seg.Iteration,
 			SubWorkflowName: seg.SubWorkflowName,
+			RepairAttempt:   seg.RepairAttempt,
 		}
 	}
 	return result
@@ -224,6 +225,8 @@ func ExecuteShellStep(
 	if step.Mode != model.ModeInteractive {
 		endData["stdout"] = truncateForAudit(result.Stdout)
 	}
+	addGuardedLinkage(endData, outcome, ctx)
+	recordCheckFailure(ctx, step, outcome, result.ExitCode, result.Stdout, result.Stderr)
 
 	emitStepEnd(ctx, prefix, startTime, string(outcome), endData, step)
 

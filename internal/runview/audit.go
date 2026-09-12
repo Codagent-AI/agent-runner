@@ -80,6 +80,7 @@ type prefixToken struct {
 	iteration *int
 	subName   string
 	callID    string
+	attempt   *int
 }
 
 // parsePrefix splits a bracketed prefix like "[task-loop:2, verify, sub:verify-task, check]"
@@ -105,6 +106,13 @@ func parsePrefix(prefix string) []prefixToken {
 		if strings.HasPrefix(p, "call:") {
 			tokens = append(tokens, prefixToken{callID: strings.TrimPrefix(p, "call:")})
 			continue
+		}
+		if strings.HasPrefix(p, "attempt:") {
+			if n, err := strconv.Atoi(strings.TrimPrefix(p, "attempt:")); err == nil {
+				v := n
+				tokens = append(tokens, prefixToken{attempt: &v})
+				continue
+			}
 		}
 		if colon := strings.LastIndexByte(p, ':'); colon > 0 {
 			if n, err := strconv.Atoi(p[colon+1:]); err == nil {
@@ -629,6 +637,10 @@ func (t *Tree) resolve(tokens []prefixToken, createIterations bool) *StepNode {
 	current := t.Root
 	for _, tok := range tokens {
 		switch {
+		case tok.attempt != nil:
+			// Repair-attempt tokens do not descend the tree; rendering is
+			// separate work. Skip without disturbing the current node.
+			continue
 		case tok.callID != "":
 			current = callChildByID(current, tok.callID)
 			if current == nil {
