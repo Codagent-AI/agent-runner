@@ -106,3 +106,26 @@ func TestFinalizePRCIFixCyclesDefaultsToThree(t *testing.T) {
 	}
 	t.Fatal("finalize-pr-v1.0.yaml has no ci_fix_cycles param")
 }
+
+func TestFactoryFixAnnotatesThePRWithTheIssueReferenceAndClaimMarker(t *testing.T) {
+	data, err := ReadFile("builtin:core/factory-fix-v1.0.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Steps []minimalStep `yaml:"steps"`
+	}
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	step := findStep(workflow.Steps, "annotate-pr")
+	if step == nil {
+		t.Fatal("expected an annotate-pr step so the factory can find its PR by marker")
+	}
+	text := string(data)
+	for _, needle := range []string{"Refs #", "agent-factory:claim:", "gh pr edit"} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("factory-fix workflow does not contain %q", needle)
+		}
+	}
+}

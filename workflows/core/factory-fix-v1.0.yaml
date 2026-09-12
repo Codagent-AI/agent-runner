@@ -211,6 +211,32 @@ steps:
         capture: pr_details
         continue_on_failure: true
 
+      - id: annotate-pr
+        continue_on_failure: true
+        command: |
+          # The factory's reconciliation and merge sync read the issue reference and the
+          # claim marker from the PR body; "Refs" links without closing the issue, since
+          # the factory closes it itself after the merge sync succeeds.
+          if ! command -v gh >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+            exit 0
+          fi
+          branch=$(git branch --show-current) || exit 0
+          number=$(gh pr list --head "$branch" --state open --json number --limit 1 \
+            | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v[0]["number"] if v else "")')
+          [ -n "$number" ] || exit 0
+          body=$(gh pr view "$number" --json body -q .body)
+          case "$body" in
+            *"agent-factory:claim:"*) exit 0 ;;
+          esac
+          header=$(python3 - "{{issue_file}}" <<'PY'
+          import json, sys
+          issue = json.load(open(sys.argv[1]))
+          print(f"Refs #{issue.get('number', '')}")
+          print(f"<!-- agent-factory:claim:{issue.get('claim_id', '')} -->")
+          PY
+          )
+          printf '%s\n\n%s\n' "$header" "$body" | gh pr edit "$number" --body-file -
+
   - id: record-outcome
     script: record-outcome.sh
     skip_if: 'sh: test {{fixable}} != true'
