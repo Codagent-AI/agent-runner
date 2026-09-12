@@ -301,7 +301,7 @@ func TestExecuteCheckStepBuildsFailureRecordWithGuardedExecution(t *testing.T) {
 		}
 	})
 
-	t.Run("logs a warning when the persisted guarded reference cannot be rebuilt from audit", func(t *testing.T) {
+	t.Run("propagates an error and logs a warning when the persisted guarded reference cannot be rebuilt from audit", func(t *testing.T) {
 		ctx := makeCtx()
 		ctx.SessionDir = t.TempDir() // no audit.log present: reconstruction will fail
 		ctx.LastAgentExecution = &model.AgentExecutionRecord{
@@ -312,15 +312,20 @@ func TestExecuteCheckStepBuildsFailureRecordWithGuardedExecution(t *testing.T) {
 		log := &mockLogger{}
 
 		outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockGlob{}, log)
-		if err != nil || outcome != OutcomeFailed {
-			t.Fatalf("ExecuteCheckStep() = (%q, %v)", outcome, err)
+		if outcome != OutcomeFailed {
+			t.Fatalf("outcome = %q, want failed", outcome)
 		}
-		if ctx.LastFailure == nil || ctx.LastFailure.Guarded == nil {
-			t.Fatal("expected the response-less placeholder to still be attached")
+		if err == nil || !strings.Contains(err.Error(), "rebuild guarded execution") {
+			t.Fatalf("expected a reconstruction error to be returned, got %v", err)
+		}
+		// Reconstruction failed, so no repair should proceed on incomplete
+		// evidence: LastFailure must not be populated with a false guarantee.
+		if ctx.LastFailure != nil {
+			t.Fatalf("expected no failure record to be committed when guarded evidence is missing, got %+v", ctx.LastFailure)
 		}
 		found := false
 		for _, line := range log.lines {
-			if strings.Contains(line, "could not rebuild guarded execution") {
+			if strings.Contains(line, "rebuild guarded execution") {
 				found = true
 			}
 		}

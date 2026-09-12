@@ -78,45 +78,53 @@ func ExecuteCheckStep(
 // one ran earlier in this scope); on success it clears any earlier failure
 // record from this same check. prefix and attempt are the check's own audit
 // identity, matching the prefix and identity.attempt on its step_end.
-func recordCheckFailure(ctx *model.ExecutionContext, step *model.Step, outcome StepOutcome, prefix string, attempt, exitCode int, stdout, stderr string, log Logger) {
+//
+// Returns an error when a guarded execution reference exists but could not
+// be rebuilt from audit: repair evidence would otherwise be materially
+// incomplete (an empty guarded response), so the caller must not proceed as
+// if nothing was guarding this check.
+func recordCheckFailure(ctx *model.ExecutionContext, step *model.Step, outcome StepOutcome, prefix string, attempt, exitCode int, stdout, stderr string, log Logger) error {
 	if outcome != OutcomeFailed {
 		ctx.LastFailure = nil
-		return
+		return nil
 	}
 	record := &model.FailureRecord{
 		StepID: step.ID, Prefix: prefix, Attempt: attempt,
 		ExitCode: exitCode, Stdout: stdout, Stderr: stderr,
 	}
-	record.Guarded = resolveGuardedExecution(ctx, log)
+	guarded, err := resolveGuardedExecution(ctx, log)
+	if err != nil {
+		return err
+	}
+	record.Guarded = guarded
 	ctx.LastFailure = record
+	return nil
 }
 
 // resolveGuardedExecution returns the scope's guarded execution, rebuilding
 // it from audit when only the persisted reference survived an interruption
 // between the agent step and this check (the in-memory record carries no
-// response in that case). When reconstruction fails, the loss of durable
-// evidence is logged so it isn't silently mistaken for "no guarded agent
-// ran," and the response-less placeholder is returned so the caller can
-// still see which execution should have been guarding this check.
-func resolveGuardedExecution(ctx *model.ExecutionContext, log Logger) *model.AgentExecutionRecord {
+// response in that case). When reconstruction fails, the caller must not
+// silently proceed with an empty guarded response: durable evidence for the
+// declared guarded execution is missing, which would make any repair attempt
+// act on incomplete information.
+func resolveGuardedExecution(ctx *model.ExecutionContext, log Logger) (*model.AgentExecutionRecord, error) {
 	guarded := ctx.LastAgentExecution
 	if guarded == nil {
-		return nil
+		return nil, nil
 	}
 	if guarded.Response != "" || ctx.SessionDir == "" {
-		return guarded
+		return guarded, nil
 	}
 	rebuilt, err := LoadAgentExecution(ctx.SessionDir, guarded.Ref)
 	if err != nil {
+		wrapped := fmt.Errorf("rebuild guarded execution %s attempt %d: %w", guarded.Ref.Prefix, guarded.Ref.Attempt, err)
 		if log != nil {
-			log.Errorf(
-				"agent-runner: warning: could not rebuild guarded execution %s (attempt %d) from audit: %v\n",
-				guarded.Ref.Prefix, guarded.Ref.Attempt, err,
-			)
+			log.Errorf("agent-runner: %v\n", wrapped)
 		}
-		return guarded
+		return nil, wrapped
 	}
-	return rebuilt
+	return rebuilt, nil
 }
 
 // addGuardedLinkage adds guarded_prefix and guarded_attempt to a failed

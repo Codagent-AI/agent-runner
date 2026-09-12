@@ -29,12 +29,16 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 
 	scriptPath, err := resolveScriptPath(step.Script, ctx)
 	if err != nil {
-		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err, log)
+		if rcErr := emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err, log); rcErr != nil {
+			return OutcomeFailed, rcErr
+		}
 		return OutcomeFailed, err
 	}
 	stdin, err := buildScriptInput(step, ctx)
 	if err != nil {
-		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err, log)
+		if rcErr := emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err, log); rcErr != nil {
+			return OutcomeFailed, rcErr
+		}
 		return OutcomeFailed, err
 	}
 
@@ -49,7 +53,9 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 	}
 	metricsCapture, environment, err := prepareNestedMetricsEnvironment(step, ctx)
 	if err != nil {
-		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err, log)
+		if rcErr := emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err, log); rcErr != nil {
+			return OutcomeFailed, rcErr
+		}
 		return OutcomeFailed, err
 	}
 	var result ProcessResult
@@ -64,7 +70,9 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 		emitNestedMetricCapture(ctx, step, prefix, metricsCapture)
 	}
 	if err != nil {
-		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err, log)
+		if rcErr := emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err, log); rcErr != nil {
+			return OutcomeFailed, rcErr
+		}
 		return OutcomeFailed, err
 	}
 	if step.Capture != "" {
@@ -74,21 +82,31 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 		}
 		captured, err := captureScriptOutput(step.CaptureFormat, capturedOutput)
 		if err != nil {
-			emitScriptEnd(ctx, prefix, startTime, step, "failed", &result, err, log)
+			if rcErr := emitScriptEnd(ctx, prefix, startTime, step, "failed", &result, err, log); rcErr != nil {
+				return OutcomeFailed, rcErr
+			}
 			return OutcomeFailed, err
 		}
 		ctx.CapturedVariables[step.Capture] = captured
 		recordPullRequestCapture(ctx, step.ID, step.Capture, captured)
 	}
 	if result.ExitCode != 0 {
-		emitScriptEnd(ctx, prefix, startTime, step, "failed", &result, nil, log)
+		if rcErr := emitScriptEnd(ctx, prefix, startTime, step, "failed", &result, nil, log); rcErr != nil {
+			return OutcomeFailed, rcErr
+		}
 		return OutcomeFailed, nil
 	}
-	emitScriptEnd(ctx, prefix, startTime, step, "success", &result, nil, log)
+	if rcErr := emitScriptEnd(ctx, prefix, startTime, step, "success", &result, nil, log); rcErr != nil {
+		return OutcomeSuccess, rcErr
+	}
 	return OutcomeSuccess, nil
 }
 
-func emitScriptEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, step *model.Step, outcome string, result *ProcessResult, err error, log Logger) {
+// emitScriptEnd emits the step_end audit event and updates ctx.LastFailure.
+// Returns an error when the check failed and its guarded execution reference
+// could not be rebuilt from audit; the audit event is still emitted in that
+// case so the check's own evidence is never lost.
+func emitScriptEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, step *model.Step, outcome string, result *ProcessResult, err error, log Logger) error {
 	data := map[string]any{}
 	if result != nil {
 		data["exit_code"] = result.ExitCode
@@ -104,8 +122,9 @@ func emitScriptEnd(ctx *model.ExecutionContext, prefix string, startTime time.Ti
 		exitCode, stdout, stderr = result.ExitCode, result.Stdout, result.Stderr
 	}
 	checkIdentity := executionIdentity(ctx, step, "step", 0, false, "", "")
-	recordCheckFailure(ctx, step, StepOutcome(outcome), prefix, attemptForIdentity(ctx, &checkIdentity), exitCode, stdout, stderr, log)
+	failureErr := recordCheckFailure(ctx, step, StepOutcome(outcome), prefix, attemptForIdentity(ctx, &checkIdentity), exitCode, stdout, stderr, log)
 	emitStepEnd(ctx, prefix, startTime, outcome, data, step)
+	return failureErr
 }
 
 func resolveScriptPath(script string, ctx *model.ExecutionContext) (string, error) {

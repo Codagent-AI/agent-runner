@@ -227,9 +227,9 @@ func ExecuteShellStep(
 	}
 	addGuardedLinkage(endData, outcome, ctx)
 	checkIdentity := executionIdentity(ctx, step, "step", 0, false, "", "")
-	recordCheckFailure(ctx, step, outcome, prefix, attemptForIdentity(ctx, &checkIdentity), result.ExitCode, result.Stdout, result.Stderr, log)
+	failureErr := recordCheckFailure(ctx, step, outcome, prefix, attemptForIdentity(ctx, &checkIdentity), result.ExitCode, result.Stdout, result.Stderr, log)
 
 	emitStepEnd(ctx, prefix, startTime, string(outcome), endData, step)
 
-	return outcome, nil
+	return outcome, failureErr
 }
