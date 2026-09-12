@@ -206,6 +206,12 @@ steps:
           max: 1
 `
 
+const topLevelSubWorkflowRerunRepairParentYAML = `name: parent
+steps:
+  - id: child
+    workflow: %s
+`
+
 const nestedRerunRepairChildYAML = `name: child
 steps:
   - id: act
@@ -858,5 +864,55 @@ func TestResumeRepairGuardedEvidenceSurvivesInterruptionBetweenActionAndCheck(t 
 	replayArgs := fmt.Sprintf("%v", runner2.calls[1])
 	if !strings.Contains(replayArgs, "opened (draft)") {
 		t.Fatalf("act's replay prompt does not carry act's own rebuilt guarded response:\n%s", replayArgs)
+	}
+}
+
+func TestResumeRepairTopLevelSubWorkflowReplay(t *testing.T) {
+	dir := t.TempDir()
+	writeWorkflowFile(t, dir, "child-v1.0.yaml", nestedRerunRepairChildYAML)
+	parentYAML := fmt.Sprintf(topLevelSubWorkflowRerunRepairParentYAML, "child-v1.0.yaml")
+	sessionDir := t.TempDir()
+	workflowPath := writeWorkflowFile(t, dir, "parent-v1.0.yaml", parentYAML)
+
+	// Calls: act (ok), verify (fails, rewinds), act replay -- abort here.
+	runInterrupted(t, workflowPath, sessionDir, &abortingRunner{
+		mockRunner: mockRunner{results: []exec.ProcessResult{
+			{ExitCode: 0, Stdout: claudeAgentOutput("opened (draft)")},
+			{ExitCode: 1, Stderr: "not ready"},
+		}},
+		abortOnCall: 3,
+	}, &Options{ProfileStore: testAgentProfileStore()})
+
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	nested := state.CurrentStep.Nested
+	if nested == nil || nested.StepID != "child" {
+		t.Fatalf("expected recorded top-level step 'child', got %+v", nested)
+	}
+	child := nested.Child
+	if child == nil || child.StepID != "act" {
+		t.Fatalf("expected sub-workflow position 'act', got %+v", child)
+	}
+	if child.Repair == nil || child.Repair.Phase != model.RepairPhaseReplaying {
+		t.Fatalf("expected open frame phase replaying, got %+v", child.Repair)
+	}
+
+	runner2 := &mockRunner{results: []exec.ProcessResult{
+		{ExitCode: 0, Stdout: claudeAgentOutput("opened (ready)")},
+		{ExitCode: 0, Stdout: "pr is open"},
+	}}
+	result, err := ResumeWorkflow(filepath.Join(sessionDir, "state.json"), &Options{
+		ProcessRunner: runner2, GlobExpander: &mockGlob{}, Log: &mockLog{}, ProfileStore: testAgentProfileStore(),
+	})
+	if err != nil {
+		t.Fatalf("resume error: %v", err)
+	}
+	if result != ResultSuccess {
+		t.Fatalf("expected success, got %q", result)
+	}
+	if len(runner2.calls) != 2 {
+		t.Fatalf("expected 2 calls (act replay, verify), got %d: %v", len(runner2.calls), runner2.calls)
 	}
 }

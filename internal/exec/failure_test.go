@@ -353,3 +353,35 @@ func TestExecuteCheckStepBuildsFailureRecordWithGuardedExecution(t *testing.T) {
 		}
 	})
 }
+
+func TestRestoreLastFailureForResumeFallsBackToBlockedStepEnd(t *testing.T) {
+	sessionDir := t.TempDir()
+	writeAuditLog(t, sessionDir, []audit.Event{
+		{Timestamp: "2026-07-17T00:00:00Z", Prefix: "[open-draft-pr]", Type: audit.EventStepEnd, Data: map[string]any{
+			"outcome": "success", "stdout": "push rejected\nREPAIR_BLOCKED",
+			"identity": map[string]any{"step_id": "open-draft-pr", "attempt": 1},
+		}},
+		{Timestamp: "2026-07-17T00:00:01Z", Prefix: "[verify-draft-pr]", Type: audit.EventStepEnd, Data: map[string]any{
+			"outcome": "failed", "exit_code": 1, "stdout": "", "stderr": "found 0 pull requests",
+			"repair_blocked": true, "identity": map[string]any{"step_id": "verify-draft-pr", "attempt": 1},
+		}},
+	})
+	ctx := makeCtx()
+	ctx.SessionDir = sessionDir
+	ctx.RepairFrame = &model.RepairFrame{
+		CheckID: "verify-draft-pr", Form: "rerun", Target: "open-draft-pr", Phase: model.RepairPhaseFailed,
+		Guarded: &model.ExecutionRef{Prefix: "[open-draft-pr]", Attempt: 1},
+	}
+	if err := RestoreLastFailureForResume(ctx); err != nil {
+		t.Fatalf("RestoreLastFailureForResume: %v", err)
+	}
+	if ctx.LastFailure == nil {
+		t.Fatal("expected a restored failure record")
+	}
+	if ctx.LastFailure.ExitCode != 1 || ctx.LastFailure.Stderr != "found 0 pull requests" {
+		t.Fatalf("expected check output restored from the blocked step_end, got %+v", ctx.LastFailure)
+	}
+	if ctx.LastFailure.Guarded == nil || ctx.LastFailure.Guarded.Response != "push rejected\nREPAIR_BLOCKED" {
+		t.Fatalf("expected guarded response restored, got %+v", ctx.LastFailure.Guarded)
+	}
+}

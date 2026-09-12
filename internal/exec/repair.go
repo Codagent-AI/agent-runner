@@ -630,10 +630,16 @@ func terminalBlocked(step *model.Step, ctx *model.ExecutionContext, owningPrefix
 		ctx.FlushState()
 	}
 
-	endData := map[string]any{
-		"repair_form": form, "repair_target": target,
-		"repair_attempts": attempts, "repair_blocked": true,
-	}
+	// A blocked check may never reach the repair budget loop, so its own
+	// step_end is the only durable record of the failing run's output. The
+	// failure record always holds the most recent failing run.
+	endData := checkEndData(step, ProcessResult{
+		ExitCode: ctx.LastFailure.ExitCode, Stdout: ctx.LastFailure.Stdout, Stderr: ctx.LastFailure.Stderr,
+	})
+	endData["repair_form"] = form
+	endData["repair_target"] = target
+	endData["repair_attempts"] = attempts
+	endData["repair_blocked"] = true
 	addGuardedLinkage(endData, OutcomeFailed, ctx)
 	emitStepEnd(ctx, owningPrefix, startTime, "failed", endData, step)
 	return OutcomeFailed, nil

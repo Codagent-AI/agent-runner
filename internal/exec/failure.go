@@ -171,9 +171,10 @@ func LoadAgentExecution(sessionDir string, ref model.ExecutionRef) (*model.Agent
 // checking/repairing phases, and at the rerun target for the replaying
 // phase. The check's own stdout/stderr/exit code are rebuilt from the most
 // recent repair_attempt_start event under the check's own owning audit
-// prefix, when one exists: a check that was blocked on its very first
-// failure never reaches the repair budget loop, so no such event exists, and
-// the record is built with empty output. The guarded execution named by
+// prefix, when one exists. A check that was blocked on its very first
+// failure never reaches the repair budget loop, so no such event exists; in
+// that case the output is taken from the check's own most recent failed
+// step_end, which carries the same fields. The guarded execution named by
 // frame.Guarded is always rebuilt when present, since it is the evidence a
 // resumed rerun target's prompt actually needs.
 func RestoreLastFailureForResume(ctx *model.ExecutionContext) error {
@@ -188,13 +189,25 @@ func RestoreLastFailureForResume(ctx *model.ExecutionContext) error {
 		return fmt.Errorf("rebuild repair evidence for resumed check %q: %w", frame.CheckID, err)
 	}
 	record := &model.FailureRecord{StepID: frame.CheckID, Prefix: owningPrefix}
+	found := false
 	for _, event := range events {
 		if event.Type != "repair_attempt_start" || event.Prefix != owningPrefix {
 			continue
 		}
+		found = true
 		record.ExitCode = intFromAny(event.Data["exit_code"])
 		record.Stdout = stringFromAny(event.Data["stdout"])
 		record.Stderr = stringFromAny(event.Data["stderr"])
+	}
+	if !found {
+		for _, event := range events {
+			if event.Type != "step_end" || event.Prefix != owningPrefix || stringFromAny(event.Data["outcome"]) != "failed" {
+				continue
+			}
+			record.ExitCode = intFromAny(event.Data["exit_code"])
+			record.Stdout = stringFromAny(event.Data["stdout"])
+			record.Stderr = stringFromAny(event.Data["stderr"])
+		}
 	}
 	if frame.Guarded != nil {
 		guarded, err := LoadAgentExecution(ctx.SessionDir, *frame.Guarded)
