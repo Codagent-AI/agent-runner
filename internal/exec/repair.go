@@ -578,7 +578,7 @@ func emitRepairAttemptStart(ctx *model.ExecutionContext, prefix string, frame *m
 	emitAudit(ctx, audit.Event{
 		Timestamp: formatAuditTimestamp(time.Now()), Prefix: prefix, Type: audit.EventRepairAttemptStart,
 		Data: map[string]any{
-			"attempt": attempt, "form": frame.Form, "target": frame.Target,
+			"attempt": attempt, "max": frame.Budget, "form": frame.Form, "target": frame.Target,
 			"exit_code": lastResult.ExitCode, "stdout": truncateForAudit(lastResult.Stdout), "stderr": truncateForAudit(lastResult.Stderr),
 		},
 	})

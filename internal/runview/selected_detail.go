@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/codagent/agent-runner/internal/exec"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/tuistyle"
 	"github.com/mattn/go-runewidth"
@@ -68,10 +69,14 @@ func buildDetailDocument(node *StepNode, options detailBuildOptions) detailDocum
 
 	switch node.Type {
 	case NodeShell:
+		doc.addFailureEvidence(node)
 		doc.addInput("Current command", currentCommand(node), options)
 		doc.addOutput("Current output", streamsText(node.Stdout, node.Stderr, options.loadedFull))
 	case NodeScript:
+		doc.addFailureEvidence(node)
 		doc.addInput("Current script", node.StaticScript, options)
+		doc.addOutput("Current output", streamsText(node.Stdout, node.Stderr, options.loadedFull))
+	case NodeRepairAttempt:
 		doc.addOutput("Current output", streamsText(node.Stdout, node.Stderr, options.loadedFull))
 	case NodeHeadlessAgent, NodeAgentCall:
 		doc.addInput("Current prompt", currentPrompt(node), options)
@@ -94,6 +99,47 @@ func buildDetailDocument(node *StepNode, options detailBuildOptions) detailDocum
 	return doc
 }
 
+// addFailureEvidence renders the durable failure record of a check: the
+// classified reason, the blocked declaration when one stopped the repair
+// cycle, and the guarded agent execution's final response. It is deliberately
+// still shown for a check that passed on resume, so the earlier attempt's
+// evidence stays inspectable.
+func (doc *detailDocument) addFailureEvidence(node *StepNode) {
+	if node == nil || node.Failure == nil {
+		return
+	}
+	lines := []string{classifiedFailureReason(node.Failure)}
+	if node.Failure.Blocked && strings.TrimSpace(node.Failure.BlockedBy) != "" {
+		lines = append(lines, "blocked: "+strings.TrimRight(node.Failure.BlockedBy, "\r\n"))
+	}
+	if response := strings.TrimRight(node.Failure.GuardedResponse, "\r\n"); response != "" {
+		label := "guarded response"
+		if node.Failure.GuardedPrefix != "" {
+			label = "guarded response " + node.Failure.GuardedPrefix
+		}
+		lines = append(lines, label+":", response)
+	}
+	body := strings.Join(lines, "\n")
+	doc.sections = append(doc.sections, detailSection{label: "Failure evidence", kind: detailRailError, body: body, copy: body})
+}
+
+// classifiedFailureReason renders the same reason string the runner persists
+// for a failed run, so the detail pane and the run list never disagree.
+func classifiedFailureReason(evidence *FailureEvidence) string {
+	if evidence == nil {
+		return ""
+	}
+	return exec.ClassifyFailure(&model.FailureRecord{
+		StepID:         evidence.StepID,
+		ExitCode:       evidence.ExitCode,
+		Stdout:         evidence.Stdout,
+		Stderr:         evidence.Stderr,
+		Blocked:        evidence.Blocked,
+		BlockedBy:      evidence.BlockedBy,
+		RepairAttempts: evidence.RepairAttempts,
+	})
+}
+
 func previousExecutionSection(node *StepNode, width int) (detailSection, bool) {
 	if node == nil {
 		return detailSection{}, false
@@ -113,6 +159,11 @@ func previousExecutionSection(node *StepNode, width int) (detailSection, bool) {
 		metadata = append(metadata, "duration: "+formatDuration(*duration))
 	}
 	body := strings.Join(metadata, " · ")
+	if node.Failure != nil {
+		// A historical failed check keeps its classified reason in context, so
+		// a re-executed check still exposes the earlier attempt's evidence.
+		body += "\n" + classifiedFailureReason(node.Failure)
+	}
 	switch {
 	case node.Status == StatusSkipped:
 		if skipIf := firstNonEmpty(node.TriggeredSkipIf, node.StaticSkipIf); skipIf != "" {
@@ -250,10 +301,13 @@ func detailHeader(node *StepNode, options detailBuildOptions) []string {
 
 func detailExecutionMetadata(node *StepNode) []string {
 	var lines []string
-	if node.Type == NodeShell || node.Type == NodeScript {
+	if node.Type == NodeShell || node.Type == NodeScript || node.Type == NodeRepairAttempt {
 		if node.ExitCode != nil {
 			lines = append(lines, fmt.Sprintf("exit: %d", *node.ExitCode))
 		}
+	}
+	if line := repairMetadataLine(node); line != "" {
+		lines = append(lines, line)
 	}
 	if node.CaptureName != "" {
 		lines = append(lines, "capture: "+node.CaptureName)
@@ -265,6 +319,24 @@ func detailExecutionMetadata(node *StepNode) []string {
 		lines = append(lines, "break_if: "+node.StaticBreakIf)
 	}
 	return lines
+}
+
+// repairMetadataLine renders a check's repair configuration and progress, e.g.
+// "repair: rerun open-draft-pr · 0 of 1 used · blocked".
+func repairMetadataLine(node *StepNode) string {
+	if node == nil || node.RepairForm == "" {
+		return ""
+	}
+	form := node.RepairForm
+	if node.RepairForm == "rerun" && node.RepairTarget != "" {
+		form += " " + node.RepairTarget
+	}
+	budget := max(node.RepairBudget, max(node.RepairAttempts, node.RepairActiveAttempt))
+	parts := []string{"repair: " + form, fmt.Sprintf("%d of %d used", node.RepairAttempts, budget)}
+	if node.RepairBlocked {
+		parts = append(parts, "blocked")
+	}
+	return strings.Join(parts, " · ")
 }
 
 func detailAgentMetadata(node *StepNode, options detailBuildOptions) []string {
@@ -575,6 +647,8 @@ func nodeTypeLabel(t NodeType) string {
 		return "iteration"
 	case NodeGroup:
 		return "group"
+	case NodeRepairAttempt:
+		return "repair attempt"
 	}
 	return "step"
 }

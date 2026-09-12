@@ -1090,3 +1090,141 @@ func TestApplyEvent_IterationStart_ClearsAborted(t *testing.T) {
 		t.Errorf("status after restart: want in-progress, got %v", iter0.Status)
 	}
 }
+
+func TestApplyEvent_RepairInlineAttemptChildrenFromAuditAlone(t *testing.T) {
+	wf := fixtureRepairPlanChange()
+	tree := BuildTree(&wf, fixturePath("openspec/plan-change-v1.0.yaml"))
+	applyFixtureAudit(t, tree, repairedInlineAuditFixture())
+
+	check := childByID(tree.Root, "check-plan")
+	if check == nil {
+		t.Fatal("check-plan node missing")
+	}
+	if check.Status != StatusSuccess {
+		t.Fatalf("check status = %v, want success", check.Status)
+	}
+	if check.RepairAttempts != 1 || check.RepairBudget != 1 || check.RepairForm != "inline" {
+		t.Fatalf("repair metadata = form %q attempts %d budget %d",
+			check.RepairForm, check.RepairAttempts, check.RepairBudget)
+	}
+	if len(check.Children) != 2 {
+		t.Fatalf("check children = %d, want attempt + repair: %#v", len(check.Children), check.Children)
+	}
+	attempt := check.Children[0]
+	if attempt.ID != "attempt 1" || attempt.Type != NodeRepairAttempt || attempt.Status != StatusFailed {
+		t.Fatalf("attempt node = id %q type %v status %v", attempt.ID, attempt.Type, attempt.Status)
+	}
+	if attempt.Stderr != "plan is missing a tasks section" {
+		t.Fatalf("attempt stderr = %q", attempt.Stderr)
+	}
+	if attempt.ExitCode == nil || *attempt.ExitCode != 1 {
+		t.Fatalf("attempt exit code = %v", attempt.ExitCode)
+	}
+	repair := check.Children[1]
+	if repair.ID != "repair 1" || repair.Type != NodeHeadlessAgent || repair.Status != StatusSuccess {
+		t.Fatalf("repair node = id %q type %v status %v", repair.ID, repair.Type, repair.Status)
+	}
+	if repair.Stdout != "added the tasks section" {
+		t.Fatalf("repair stdout = %q", repair.Stdout)
+	}
+	if got := tree.FindByPrefix("[check-plan, attempt:1, repair]"); got != repair {
+		t.Fatalf("FindByPrefix for the repair agent = %v", got)
+	}
+}
+
+func TestApplyEvent_RepairRerunAttemptBuildsRerunContainer(t *testing.T) {
+	wf := fixtureRepairImplementChange()
+	tree := BuildTree(&wf, fixturePath("openspec/implement-change-v1.0.yaml"))
+	applyFixtureAudit(t, tree, inProgressRerunAuditFixture())
+
+	check := childByID(tree.Root, "verify-draft-pr")
+	if len(check.Children) != 2 {
+		t.Fatalf("check children = %d, want attempt + rerun: %#v", len(check.Children), check.Children)
+	}
+	if check.Children[0].ID != "attempt 1" || check.Children[0].Type != NodeRepairAttempt {
+		t.Fatalf("first child = %q type %v", check.Children[0].ID, check.Children[0].Type)
+	}
+	rerun := check.Children[1]
+	if rerun.ID != "rerun 1" || !rerun.IsContainer() {
+		t.Fatalf("rerun container = id %q type %v", rerun.ID, rerun.Type)
+	}
+	if len(rerun.Children) != 1 || rerun.Children[0].ID != "open-draft-pr" {
+		t.Fatalf("rerun children = %#v", rerun.Children)
+	}
+	replayed := rerun.Children[0]
+	if replayed.Status != StatusInProgress {
+		t.Fatalf("replayed step status = %v, want in progress", replayed.Status)
+	}
+	if got := tree.FindByPrefix("[verify-draft-pr, attempt:1, open-draft-pr]"); got != replayed {
+		t.Fatalf("FindByPrefix for the replayed step = %v", got)
+	}
+
+	applyFixtureAudit(t, tree, recoveredRerunAuditFixture()[len(inProgressRerunAuditFixture()):])
+	if len(rerun.Children) != 2 || rerun.Children[1].ID != "verify-draft-pr" {
+		t.Fatalf("rerun children after replayed check = %#v", rerun.Children)
+	}
+	if check.Status != StatusSuccess || check.RepairAttempts != 1 {
+		t.Fatalf("recovered check = status %v attempts %d", check.Status, check.RepairAttempts)
+	}
+}
+
+func TestApplyEvent_RepairBlockedRecordsDeclarationWithoutAttemptChildren(t *testing.T) {
+	wf := fixtureRepairImplementChange()
+	tree := BuildTree(&wf, fixturePath("openspec/implement-change-v1.0.yaml"))
+	applyFixtureAudit(t, tree, blockedRerunAuditFixture())
+
+	check := childByID(tree.Root, "verify-draft-pr")
+	if len(check.Children) != 0 {
+		t.Fatalf("blocked check should have no attempt children: %#v", check.Children)
+	}
+	if !check.RepairBlocked {
+		t.Fatal("check should be marked blocked")
+	}
+	if check.Failure == nil {
+		t.Fatal("blocked check should carry a failure record")
+	}
+	if check.Failure.GuardedPrefix != "[open-draft-pr]" || check.Failure.GuardedAttempt != 1 {
+		t.Fatalf("guarded linkage = %q attempt %d", check.Failure.GuardedPrefix, check.Failure.GuardedAttempt)
+	}
+	if !strings.Contains(check.Failure.BlockedBy, "token lacks workflow scope") {
+		t.Fatalf("blocked explanation = %q", check.Failure.BlockedBy)
+	}
+	if check.RepairBudget != 1 || check.RepairAttempts != 0 || check.RepairTarget != "open-draft-pr" {
+		t.Fatalf("repair metadata = budget %d attempts %d target %q",
+			check.RepairBudget, check.RepairAttempts, check.RepairTarget)
+	}
+}
+
+func TestApplyEvent_RepairFailureRecordSurvivesResumedSuccess(t *testing.T) {
+	wf := fixtureRepairPlanChange()
+	tree := BuildTree(&wf, fixturePath("openspec/plan-change-v1.0.yaml"))
+	applyFixtureAudit(t, tree, resumedPlainCheckAuditFixture())
+
+	check := childByID(tree.Root, "check-plan")
+	if check.Status != StatusSuccess {
+		t.Fatalf("resumed check status = %v, want success", check.Status)
+	}
+	if check.Failure == nil {
+		t.Fatal("earlier failure record was erased by the resumed success")
+	}
+	if check.Failure.Stderr != "plan is missing a tasks section" || check.Failure.ExitCode != 1 {
+		t.Fatalf("retained failure record = %+v", check.Failure)
+	}
+}
+
+func TestApplyEvent_PreRepairAuditLogCreatesNoRepairState(t *testing.T) {
+	wf := fixtureRepairPlanChange()
+	tree := BuildTree(&wf, fixturePath("openspec/plan-change-v1.0.yaml"))
+	applyFixtureAudit(t, tree, preRepairAuditFixture())
+
+	check := childByID(tree.Root, "check-plan")
+	if len(check.Children) != 0 {
+		t.Fatalf("pre-change audit created attempt children: %#v", check.Children)
+	}
+	if check.RepairAttempts != 0 || check.RepairBudget != 0 || check.RepairBlocked || check.RepairForm != "" {
+		t.Fatalf("pre-change audit created repair state: %+v", check)
+	}
+	if check.Failure != nil {
+		t.Fatalf("pre-change failure without guarded linkage recorded evidence: %+v", check.Failure)
+	}
+}

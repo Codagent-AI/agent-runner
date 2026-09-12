@@ -1303,6 +1303,8 @@ func (m *Model) selectedDetailDocument(width int) detailDocument {
 	if node != nil && m.inputExpanded != nil {
 		expanded = m.inputExpanded[node.NodeKey()]
 	}
+	m.hydrateGuardedResponse(node)
+	m.hydrateGuardedResponse(previous)
 	return buildDetailDocument(node, detailBuildOptions{
 		width:         width,
 		loadedFull:    node != nil && m.loadedFull[node.NodeKey()],
@@ -1313,6 +1315,22 @@ func (m *Model) selectedDetailDocument(width int) detailDocument {
 		resumeReady:   m.canResumeAgentSession(node),
 		resolverCfg:   m.resolverCfg,
 	})
+}
+
+// hydrateGuardedResponse resolves the final response of the agent execution
+// named by node's failure record. The response is never copied into the
+// check's own audit event, so it is looked up in the tree by the recorded
+// prefix and cached on the record for the renderers.
+func (m *Model) hydrateGuardedResponse(node *StepNode) {
+	if node == nil || node.Failure == nil || node.Failure.GuardedPrefix == "" || m.tree == nil {
+		return
+	}
+	guarded := m.tree.FindByPrefix(node.Failure.GuardedPrefix)
+	if guarded == nil {
+		return
+	}
+	m.loadHistoricalOutput(guarded)
+	node.Failure.GuardedResponse = firstNonEmpty(guarded.Stdout, guarded.Stderr)
 }
 
 func (m *Model) toggleSelectedInputExpansion() {

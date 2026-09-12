@@ -27,6 +27,10 @@ const (
 	NodeGroup
 	NodeAgentCall
 	NodeParentTurn
+	// NodeRepairAttempt is one recorded repair attempt of a check: the failed
+	// check run that opened the attempt. Its siblings are the repair work that
+	// followed (an inline repair agent, or a rerun container).
+	NodeRepairAttempt
 )
 
 // NodeStatus is the visual status of a StepNode.
@@ -122,6 +126,24 @@ type StepNode struct {
 	// durable failure record. Equal-depth failure selection uses it when both
 	// candidates have ordering evidence; zero preserves workflow-order fallback.
 	FailureOrdinal uint64
+	// Repair fields (on a check that declares repair). They are populated from
+	// audit alone so a historical run renders without its workflow definition.
+	RepairForm     string // "inline" or "rerun"
+	RepairTarget   string // rerun target step ID
+	RepairBudget   int    // max attempts
+	RepairAttempts int    // attempts completed
+	RepairBlocked  bool   // a REPAIR_BLOCKED declaration stopped the cycle
+	// RepairActiveAttempt is the 1-based attempt currently in flight, or zero.
+	RepairActiveAttempt int
+	// RepairDynamic marks a node materialized from a repair-scoped audit
+	// prefix rather than from the workflow definition, so its type is taken
+	// from the audit event that created it.
+	RepairDynamic bool
+	// Failure retains the most recent durable failure record for this node.
+	// It is deliberately never cleared by a later successful execution, so a
+	// check that passed on resume still exposes the earlier evidence.
+	Failure *FailureEvidence
+
 	// TriggeredSkipIf is the recorded skip expression that caused a skipped
 	// execution. StaticSkipIf is the configured expression and may differ after
 	// interpolation.
@@ -157,6 +179,33 @@ type StepNode struct {
 	// FlattenTarget (on iteration nodes): when set, drill-in should skip this
 	// iteration and enter FlattenTarget's children (the sub-workflow body).
 	FlattenTarget *StepNode
+}
+
+// FailureEvidence is the durable failure record a failed shell or script
+// step_end carries: the failing run's output, the guarded agent execution that
+// preceded it, and any repair outcome recorded against it.
+type FailureEvidence struct {
+	StepID         string
+	ExitCode       int
+	Stdout         string
+	Stderr         string
+	GuardedPrefix  string
+	GuardedAttempt int
+	// GuardedResponse is the guarded execution's final response, resolved from
+	// the tree by prefix when the detail pane needs it. Audit never duplicates
+	// it into the check's own event.
+	GuardedResponse string
+	Blocked         bool
+	BlockedBy       string
+	RepairAttempts  int
+}
+
+// ensureFailure returns the node's failure record, creating it if needed.
+func (n *StepNode) ensureFailure() *FailureEvidence {
+	if n.Failure == nil {
+		n.Failure = &FailureEvidence{StepID: n.ID}
+	}
+	return n.Failure
 }
 
 // AttemptMetrics contains the metrics for one execution of a logical step.
@@ -283,15 +332,21 @@ func (t *Tree) PreviousExecution(selected *StepNode) *StepNode {
 }
 
 func isTerminalExecution(node *StepNode) bool {
-	if node == nil || node.StartOrdinal == 0 || node.IsContainer() {
+	if node == nil || node.StartOrdinal == 0 {
 		return false
 	}
 	switch node.Type {
-	case NodeShell, NodeScript, NodeHeadlessAgent, NodeInteractiveAgent, NodeAgentCall, NodeUI:
-		return node.Aborted || node.Status == StatusSuccess || node.Status == StatusWarning || node.Status == StatusFailed || node.Status == StatusSkipped
+	case NodeShell, NodeScript, NodeUI:
+		// A check stays its own terminal execution even when repair attempts
+		// hang beneath it: the attempts describe that same execution.
+	case NodeHeadlessAgent, NodeInteractiveAgent, NodeAgentCall:
+		if node.IsContainer() {
+			return false
+		}
 	default:
 		return false
 	}
+	return node.Aborted || node.Status == StatusSuccess || node.Status == StatusWarning || node.Status == StatusFailed || node.Status == StatusSkipped
 }
 
 // BuildTree constructs a static tree from the top-level workflow.
@@ -427,6 +482,9 @@ func (n *StepNode) IsContainer() bool {
 	case NodeRoot, NodeLoop, NodeSubWorkflow, NodeIteration, NodeGroup:
 		return true
 	case NodeHeadlessAgent, NodeInteractiveAgent:
+		return len(n.Children) > 0
+	case NodeShell, NodeScript:
+		// Only a check with recorded repair attempts has children.
 		return len(n.Children) > 0
 	}
 	return false

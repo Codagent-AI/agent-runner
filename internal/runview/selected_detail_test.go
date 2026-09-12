@@ -401,3 +401,109 @@ func TestModelInputExpansionIsStableByNodeKeyAndResetsDetailScrollOnSelection(t 
 		t.Fatal("input expansion was discarded after changing selection")
 	}
 }
+
+func TestDetailDocument_RepairFailedCheckShowsEvidenceAndMetadata(t *testing.T) {
+	wf := fixtureRepairImplementChange()
+	tree := BuildTree(&wf, fixturePath("openspec/implement-change-v1.0.yaml"))
+	applyFixtureAudit(t, tree, blockedRerunAuditFixture())
+
+	m := newTestModel(tree, FromList)
+	check := childByID(tree.Root, "verify-draft-pr")
+	m.setSelected(check)
+	doc := m.selectedDetailDocument(80)
+	plain := stripANSI(strings.Join(doc.renderScreen(), "\n"))
+	// The reason is asserted on the unwrapped copy text: the screen render
+	// wraps it to the pane width.
+	copyText := stripANSI(doc.renderCopy())
+	if !strings.Contains(copyText, "verify-draft-pr failed: no draft pull request found; blocked: push rejected: token lacks workflow scope") {
+		t.Errorf("detail missing the classified reason:\n%s", copyText)
+	}
+
+	for _, want := range []string{
+		"exit: 1",
+		"repair: rerun open-draft-pr · 0 of 1 used · blocked",
+		"Failure evidence",
+		"token lacks workflow scope",
+		"Current command",
+		"Current output",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("detail missing %q:\n%s", want, plain)
+		}
+	}
+	if strings.Index(plain, "Failure evidence") > strings.Index(plain, "Current command") {
+		t.Fatalf("Failure evidence must precede Current command:\n%s", plain)
+	}
+}
+
+func TestDetailDocument_RepairAttemptRowRendersFailedRunOutput(t *testing.T) {
+	wf := fixtureRepairPlanChange()
+	tree := BuildTree(&wf, fixturePath("openspec/plan-change-v1.0.yaml"))
+	applyFixtureAudit(t, tree, repairedInlineAuditFixture())
+
+	check := childByID(tree.Root, "check-plan")
+	m := newTestModel(tree, FromList)
+	m.setSelected(check.Children[0])
+	plain := stripANSI(strings.Join(m.selectedDetailDocument(80).renderScreen(), "\n"))
+
+	for _, want := range []string{"attempt 1", "repair attempt", "exit: 1", "Current output", "plan is missing a tasks section"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("attempt detail missing %q:\n%s", want, plain)
+		}
+	}
+}
+
+func TestDetailDocument_RepairAgentRowRendersAsHeadlessAgent(t *testing.T) {
+	wf := fixtureRepairPlanChange()
+	tree := BuildTree(&wf, fixturePath("openspec/plan-change-v1.0.yaml"))
+	applyFixtureAudit(t, tree, repairedInlineAuditFixture())
+
+	check := childByID(tree.Root, "check-plan")
+	m := newTestModel(tree, FromList)
+	m.setSelected(check.Children[1])
+	plain := stripANSI(strings.Join(m.selectedDetailDocument(80).renderScreen(), "\n"))
+
+	for _, want := range []string{"repair 1", "agent", "Current prompt", "fix the plan", "Current response", "added the tasks section"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("repair agent detail missing %q:\n%s", want, plain)
+		}
+	}
+}
+
+func TestDetailDocument_RepairEvidenceSurvivesResume(t *testing.T) {
+	wf := fixtureRepairPlanChange()
+	tree := BuildTree(&wf, fixturePath("openspec/plan-change-v1.0.yaml"))
+	applyFixtureAudit(t, tree, resumedPlainCheckAuditFixture())
+
+	check := childByID(tree.Root, "check-plan")
+	m := newTestModel(tree, FromList)
+	m.setSelected(check)
+	plain := stripANSI(strings.Join(m.selectedDetailDocument(80).renderScreen(), "\n"))
+
+	if !strings.Contains(plain, "Failure evidence") ||
+		!strings.Contains(plain, "check-plan failed: plan is missing a tasks section") {
+		t.Fatalf("resumed check lost the earlier failure record:\n%s", plain)
+	}
+	if !strings.Contains(plain, "plan written") {
+		t.Fatalf("resumed check lost the guarded agent response:\n%s", plain)
+	}
+}
+
+func TestDetailDocument_RepairPreviousExecutionShowsFailureReason(t *testing.T) {
+	previous := &StepNode{
+		ID: "check-plan", Type: NodeShell, Status: StatusFailed, StartOrdinal: 1,
+		Stderr: "plan is missing a tasks section",
+		Failure: &FailureEvidence{
+			StepID: "check-plan", ExitCode: 1, Stderr: "plan is missing a tasks section",
+			GuardedPrefix: "[write-plan]", GuardedAttempt: 1,
+		},
+	}
+	node := &StepNode{ID: "next", Type: NodeShell, Status: StatusSuccess, StartOrdinal: 2}
+
+	doc := buildDetailDocument(node, detailBuildOptions{width: 80, previous: previous})
+	plain := stripANSI(strings.Join(doc.renderScreen(), "\n"))
+	if !strings.Contains(plain, "Previous: check-plan") ||
+		!strings.Contains(plain, "check-plan failed: plan is missing a tasks section") {
+		t.Fatalf("previous-execution rail missing the classified failure reason:\n%s", plain)
+	}
+}

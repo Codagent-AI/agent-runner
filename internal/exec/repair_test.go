@@ -96,6 +96,11 @@ func TestExecuteCheckStepInlineRepairRecoversFailedCheck(t *testing.T) {
 	if attemptStart.Data["attempt"] != 1 || attemptStart.Data["form"] != "inline" {
 		t.Fatalf("repair_attempt_start data = %+v", attemptStart.Data)
 	}
+	// The run view renders "(repaired N/M)" from audit alone, so the budget
+	// must be durable on the attempt event.
+	if attemptStart.Data["max"] != 1 {
+		t.Fatalf("repair_attempt_start missing budget: %+v", attemptStart.Data)
+	}
 	attemptEnd := findAuditEvent(auditLog.events, audit.EventRepairAttemptEnd)
 	if attemptEnd.Data["attempt"] != 1 || attemptEnd.Data["outcome"] != "success" {
 		t.Fatalf("repair_attempt_end data = %+v", attemptEnd.Data)
