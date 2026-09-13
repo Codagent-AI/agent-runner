@@ -68,6 +68,14 @@ The full child response MUST NOT be duplicated in `audit.log`; only the truncate
 - **WHEN** an agent-call request fails before reaching the acceptance boundary
 - **THEN** Agent Runner records the rejection through existing control-rejection auditing and emits no agent-call start/end pair
 
+#### Scenario: Full response omitted from audit entries
+- **WHEN** a called child produces a final response longer than the audit limit and process output
+- **THEN** the agent-call audit entries contain execution metadata and the truncated final response but not the full response text or process output
+
+#### Scenario: Persisted output remains distinguishable
+- **WHEN** the ordinary headless execution path persists output for multiple calls beneath one parent
+- **THEN** each call's output is distinguishable by its call identity
+
 ### Requirement: Shell step-specific data
 
 Shell step entries SHALL include the interpolated command on `step_start`, and exit code, captured stdout (if capture set), and stderr on `step_end`. A failed shell or script `step_end` SHALL also include the failure record: the guarded agent execution's prefix and attempt when one exists, and, for a step with `repair`, the repair form, target, attempts used, and whether repair ended blocked. Each internal check run inside a repair cycle SHALL be recorded as its own step execution under the attempt prefix (`[<check>, attempt:N, <check>]`) with ordinary shell or script start and end data; `repair_attempt_end` SHALL summarize the attempt with its number, form, and the internal run's outcome and exit code. The owning check SHALL emit exactly one `step_start` and one `step_end`.
