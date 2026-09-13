@@ -91,7 +91,7 @@ func isBlockingOutcome(step *model.Step, outcome StepOutcome) bool {
 // after the target step completes and before any later replay step runs, so
 // a marker from an unrelated agent later in the replay range is never
 // consulted.
-func terminalReplayBlocked(ctx *model.ExecutionContext, response string) {
+func terminalReplayBlocked(ctx *model.ExecutionContext, checkStep *model.Step, response string) {
 	frame := ctx.RepairFrame
 	owningPrefix := auditBuildPrefixForOwningCheck(ctx, frame.CheckID)
 	emitRepairBlocked(ctx, owningPrefix, frame.Attempts, response)
@@ -99,20 +99,55 @@ func terminalReplayBlocked(ctx *model.ExecutionContext, response string) {
 	record.Blocked = true
 	record.BlockedBy = response
 	flushState(ctx)
+	emitReplayTerminalEnd(ctx, checkStep, owningPrefix, true)
 }
 
-// failFrame marks frame terminally failed and installs a fresh failure
-// record for the owning check, carrying the guarded execution's identity.
-// Callers add blocked details when relevant and flush state afterwards.
+// failFrame marks frame terminally failed and installs the owning check's
+// failure record on ctx, updated with the attempt count and the guarded
+// execution's identity. The record keeps the check's own failing output:
+// ctx.LastFailure when it still belongs to the check, otherwise one rebuilt
+// from audit (a replayed step's own failure may have replaced it), and only
+// as a last resort a bare record. Callers add blocked details when relevant
+// and flush state afterwards.
 func failFrame(ctx *model.ExecutionContext, frame *model.RepairFrame, owningPrefix string) *model.FailureRecord {
 	frame.Phase = model.RepairPhaseFailed
-	record := &model.FailureRecord{StepID: frame.CheckID, Prefix: owningPrefix, RepairAttempts: frame.Attempts}
-	if frame.Guarded != nil {
+	record := ctx.LastFailure
+	if record == nil || record.StepID != frame.CheckID || record.Prefix != owningPrefix {
+		record = nil
+		if err := RestoreLastFailureForResume(ctx); err == nil {
+			record = ctx.LastFailure
+		}
+	}
+	if record == nil {
+		record = &model.FailureRecord{StepID: frame.CheckID, Prefix: owningPrefix}
+	}
+	record.RepairAttempts = frame.Attempts
+	if record.Guarded == nil && frame.Guarded != nil {
 		ref := *frame.Guarded
 		record.Guarded = &model.AgentExecutionRecord{Ref: ref}
 	}
 	ctx.LastFailure = record
 	return record
+}
+
+// emitReplayTerminalEnd closes the owning check when a rerun-form replay
+// stops before the check reruns (the target declared blocked, or a replayed
+// step's failure used up the budget): the check's single step_start already
+// exists, so this is its one terminal step_end, carrying the check's own
+// failing run and the repair fields exactly as the check's own terminal
+// path would.
+func emitReplayTerminalEnd(ctx *model.ExecutionContext, checkStep *model.Step, owningPrefix string, blocked bool) {
+	frame := ctx.RepairFrame
+	if checkStep == nil || frame == nil {
+		return
+	}
+	startTime := frame.StartedAt
+	if startTime.IsZero() {
+		startTime = time.Now()
+	}
+	endData := repairEndData(checkEndData(checkStep, lastResultFromFailure(ctx.LastFailure)), frame, blocked)
+	addGuardedLinkage(endData, OutcomeFailed, ctx)
+	emitStepEnd(ctx, owningPrefix, startTime, "failed", endData, checkStep)
 }
 
 // RewindOutcome tells a sequencer what to do after checking for a pending
@@ -149,17 +184,23 @@ type RewindOutcome struct {
 //     frame), it is restored to basePath.
 func AfterStepDispatch(ctx *model.ExecutionContext, steps []model.Step, i int, basePath []model.NestingSegment, outcome StepOutcome) (result RewindOutcome, absorbed bool) {
 	replaying := inReplay(ctx, basePath)
+	var checkStep *model.Step
+	if replaying {
+		if idx := indexOfStep(steps, ctx.RepairFrame.CheckID); idx >= 0 {
+			checkStep = &steps[idx]
+		}
+	}
 	if replaying && steps[i].ID == ctx.RepairFrame.Target && outcome == OutcomeSuccess {
 		if response, blocked := targetDeclaredBlocked(ctx, ctx.RepairFrame); blocked {
 			ctx.NestingPath = basePath
-			terminalReplayBlocked(ctx, response)
+			terminalReplayBlocked(ctx, checkStep, response)
 			return RewindOutcome{Stopped: true}, true
 		}
 	}
 
 	if replaying && isBlockingOutcome(&steps[i], outcome) {
 		absorbed = true
-		if stop := AbsorbReplayFailure(ctx, steps[i].ID, outcome); stop {
+		if stop := AbsorbReplayFailure(ctx, checkStep, steps[i].ID, outcome); stop {
 			ctx.NestingPath = basePath
 			return RewindOutcome{Stopped: true}, true
 		}
@@ -186,10 +227,12 @@ func AfterStepDispatch(ctx *model.ExecutionContext, steps []model.Step, i int, b
 // instead of letting the sequencer terminate the scope directly. It emits
 // repair_attempt_end for the failed step, increments the frame's completed
 // attempt count, and either re-arms ctx.PendingRewind for another attempt
-// (returns false) or marks the frame terminally failed and commits
-// ctx.LastFailure (returns true — the sequencer must stop the scope with a
-// failed outcome for the owning check).
-func AbsorbReplayFailure(ctx *model.ExecutionContext, failingStepID string, outcome StepOutcome) (stop bool) {
+// (returns false) or marks the frame terminally failed, commits
+// ctx.LastFailure, and emits the owning check's terminal step_end (returns
+// true — the sequencer must stop the scope with a failed outcome for the
+// owning check). checkStep is the owning check's definition, used for that
+// terminal step_end.
+func AbsorbReplayFailure(ctx *model.ExecutionContext, checkStep *model.Step, failingStepID string, outcome StepOutcome) (stop bool) {
 	frame := ctx.RepairFrame
 	if frame == nil {
 		return true
@@ -208,6 +251,7 @@ func AbsorbReplayFailure(ctx *model.ExecutionContext, failingStepID string, outc
 	if frame.Attempts >= frame.Budget {
 		failFrame(ctx, frame, owningPrefix)
 		flushState(ctx)
+		emitReplayTerminalEnd(ctx, checkStep, owningPrefix, false)
 		return true
 	}
 

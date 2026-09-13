@@ -32,6 +32,9 @@ if [ ! -f "$snapshot_file" ]; then
   exit 1
 fi
 prior_worktree=$(jq -c '.prior_worktree | sort' "$snapshot_file")
+# Older snapshots carry no content lines; verification then covers status
+# and path only, as before.
+prior_content=$(jq -c '.prior_content // [] | sort' "$snapshot_file")
 
 status_lines() {
   git diff --no-renames --name-status -- "$@"
@@ -124,5 +127,17 @@ current_worktree=$(status_lines . | to_json_lines)
 assert_same_set "$prior_worktree" "$current_worktree" \
   'pre-existing unstaged change is missing from the worktree' \
   'unexpected uncommitted change remains in the worktree'
+
+# Pre-existing edits must also keep their content: a repair that rewrites an
+# already-dirty file leaves its status and path unchanged, so compare the
+# blob of every path the snapshot recorded.
+current_content=$(printf '%s' "$prior_content" | jq -r '.[]' | while IFS="$(printf '\t')" read -r path _blob; do
+  [ -n "$path" ] || continue
+  [ -f "$path" ] || continue
+  printf '%s\t%s\n' "$path" "$(git hash-object -- "$path")"
+done | to_json_lines)
+assert_same_set "$prior_content" "$current_content" \
+  'pre-existing unstaged edit content changed' \
+  'pre-existing unstaged edit content changed'
 
 printf 'archive verified: %s committed to %s\n' "$change_dir" "$archive_dir"

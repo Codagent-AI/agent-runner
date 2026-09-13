@@ -330,3 +330,154 @@ func TestInlineRepairSessionSharedBackToOwner(t *testing.T) {
 		t.Fatalf("expected the repair agent's session to be visible on the owner's SessionIDs, got %+v", ctx.SessionIDs)
 	}
 }
+
+// owningCheckStepEnds returns the step_end events recorded for the owning
+// check itself: prefix ends with the check ID and carries no attempt token.
+func owningCheckStepEnds(events []audit.Event, checkID string) []audit.Event {
+	var out []audit.Event
+	for _, e := range events {
+		if e.Type != audit.EventStepEnd || strings.Contains(e.Prefix, "attempt:") {
+			continue
+		}
+		if strings.HasSuffix(e.Prefix, checkID+"]") {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// TestRerunReplayTargetBlockedEmitsOwningCheckTerminalEnd verifies that a
+// target declaring REPAIR_BLOCKED during a replay still closes the owning
+// check with one terminal step_end carrying the check's own failing output
+// and the blocked repair fields, and that the failure record keeps that
+// output rather than being replaced by a bare one.
+func TestRerunReplayTargetBlockedEmitsOwningCheckTerminalEnd(t *testing.T) {
+	maxAttempts := 1
+	steps := []model.Step{
+		{ID: "open-draft-pr", Mode: model.ModeAutonomous, Prompt: "open it", Session: model.SessionNew},
+		{ID: "verify-draft-pr", Command: "exit 1", Repair: &model.Repair{Rerun: "open-draft-pr", Max: &maxAttempts}},
+	}
+	auditLog := &mockAuditLogger{}
+	ctx := makeCtx()
+	ctx.AuditLogger = auditLog
+	runner := &mockRunner{results: []ProcessResult{
+		{ExitCode: 0, Stdout: claudeUsageOutput("opened draft", 0)},
+		{ExitCode: 1, Stderr: "not open"},
+		{ExitCode: 0, Stdout: claudeUsageOutput("cannot open a PR here.\nREPAIR_BLOCKED", 0)},
+	}}
+
+	outcome, err := DispatchStep(&model.Step{ID: "g", Steps: steps}, ctx, runner, &mockGlob{}, &mockLogger{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if outcome != OutcomeFailed {
+		t.Fatalf("expected failed, got %q", outcome)
+	}
+	if ctx.LastFailure == nil || !ctx.LastFailure.Blocked || ctx.LastFailure.Stderr != "not open" || ctx.LastFailure.ExitCode != 1 {
+		t.Fatalf("expected the check's own failing output on the blocked failure record, got %+v", ctx.LastFailure)
+	}
+	ends := owningCheckStepEnds(auditLog.events, "verify-draft-pr")
+	if len(ends) != 1 {
+		t.Fatalf("expected exactly one terminal step_end for the owning check, got %d", len(ends))
+	}
+	data := ends[0].Data
+	if data["outcome"] != "failed" || data["exit_code"] != 1 || data["stderr"] != "not open" {
+		t.Fatalf("terminal step_end should carry the check's failing run, got %+v", data)
+	}
+	if data["repair_blocked"] != true || data["repair_form"] != "rerun" || data["repair_target"] != "open-draft-pr" || data["repair_max"] != 1 {
+		t.Fatalf("terminal step_end should carry the repair fields, got %+v", data)
+	}
+}
+
+// TestRerunReplayExhaustedByIntermediateFailureEmitsOwningCheckTerminalEnd
+// verifies that when a replayed step's blocking failure uses up the budget,
+// the owning check gets its terminal step_end and its failure record is
+// rebuilt from audit with the check's own output, even though the replayed
+// step's failure had replaced ctx.LastFailure in the meantime.
+func TestRerunReplayExhaustedByIntermediateFailureEmitsOwningCheckTerminalEnd(t *testing.T) {
+	maxAttempts := 1
+	steps := []model.Step{
+		{ID: "open-draft-pr", Mode: model.ModeAutonomous, Prompt: "open it", Session: model.SessionNew},
+		{ID: "prepare", Command: "prepare"},
+		{ID: "verify-draft-pr", Command: "exit 1", Repair: &model.Repair{Rerun: "open-draft-pr", Max: &maxAttempts}},
+	}
+	sessionDir := t.TempDir()
+	fileLog, err := audit.NewLogger(filepath.Join(sessionDir, "audit.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fileLog.Close()
+	recorder := &mockAuditLogger{}
+	ctx := makeCtx()
+	ctx.SessionDir = sessionDir
+	ctx.AuditLogger = teeAuditLogger{fileLog, recorder}
+	runner := &mockRunner{results: []ProcessResult{
+		{ExitCode: 0, Stdout: claudeUsageOutput("opened draft", 0)}, // open-draft-pr
+		{ExitCode: 0},                     // prepare
+		{ExitCode: 1, Stderr: "not open"}, // verify-draft-pr fails
+		{ExitCode: 0, Stdout: claudeUsageOutput("opened again", 0)}, // replayed open-draft-pr
+		{ExitCode: 1, Stderr: "prepare broke"},                      // replayed prepare fails: budget exhausted
+	}}
+
+	outcome, err := DispatchStep(&model.Step{ID: "g", Steps: steps}, ctx, runner, &mockGlob{}, &mockLogger{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if outcome != OutcomeFailed {
+		t.Fatalf("expected failed, got %q", outcome)
+	}
+	if ctx.LastFailure == nil || ctx.LastFailure.StepID != "verify-draft-pr" || ctx.LastFailure.Stderr != "not open" || ctx.LastFailure.RepairAttempts != 1 {
+		t.Fatalf("expected the check's own failing output on the exhausted failure record, got %+v", ctx.LastFailure)
+	}
+	ends := owningCheckStepEnds(recorder.events, "verify-draft-pr")
+	if len(ends) != 1 {
+		t.Fatalf("expected exactly one terminal step_end for the owning check, got %d", len(ends))
+	}
+	data := ends[0].Data
+	if data["outcome"] != "failed" || data["exit_code"] != 1 || data["stderr"] != "not open" || data["repair_attempts"] != 1 {
+		t.Fatalf("terminal step_end should carry the check's failing run and attempts, got %+v", data)
+	}
+}
+
+type teeAuditLogger struct {
+	file     *audit.Logger
+	recorder *mockAuditLogger
+}
+
+func (t teeAuditLogger) Emit(e audit.Event) {
+	t.file.Emit(e)
+	t.recorder.Emit(e)
+}
+
+// TestInlineRepairAgentFailureKeepsCheckResultOnExhaustion verifies that a
+// repair agent that fails to run does not erase the check's last failing
+// result: the exhausted terminal step_end still describes the check.
+func TestInlineRepairAgentFailureKeepsCheckResultOnExhaustion(t *testing.T) {
+	auditLog := &mockAuditLogger{}
+	ctx := makeCtx()
+	ctx.AuditLogger = auditLog
+	maxAttempts := 1
+	step := model.Step{
+		ID: "check", Command: "check-it",
+		Repair: &model.Repair{Prompt: "fix it", Agent: "implementor", Max: &maxAttempts},
+	}
+	runner := &mockRunner{results: []ProcessResult{
+		{ExitCode: 1, Stderr: "still broken"},
+		{ExitCode: 1, Stderr: "agent crashed"}, // the repair agent itself fails
+	}}
+
+	outcome, err := ExecuteCheckStep(&step, ctx, runner, &mockLogger{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if outcome != OutcomeFailed {
+		t.Fatalf("expected failed, got %q", outcome)
+	}
+	ends := owningCheckStepEnds(auditLog.events, "check")
+	if len(ends) != 1 {
+		t.Fatalf("expected exactly one terminal step_end, got %d", len(ends))
+	}
+	if data := ends[0].Data; data["exit_code"] != 1 || data["stderr"] != "still broken" {
+		t.Fatalf("terminal step_end should keep the check's failing run, got %+v", data)
+	}
+}

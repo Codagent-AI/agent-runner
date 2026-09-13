@@ -600,3 +600,34 @@ func TestVerifyArchiveCommitToleratesSeparateUnrelatedCommit(t *testing.T) {
 		t.Fatalf("verify rejected a separate unrelated commit: %v\n%s", err, out)
 	}
 }
+
+// TestVerifyArchiveCommitRejectsRewrittenPreExistingEdit covers a repair that
+// rewrites an already-dirty unrelated file: its status and path are unchanged,
+// so only a content comparison against the snapshot can catch it.
+func TestVerifyArchiveCommitRejectsRewrittenPreExistingEdit(t *testing.T) {
+	f := newArchiveTestFixture(t, "ticket-123-demo")
+	notes := filepath.Join(f.repo, "openspec", "specs", "spec-b.md")
+	mustWriteFile(t, notes, "spec B with a pre-existing unstaged edit\n")
+
+	transitionOut, err := f.runTransition(t)
+	if err != nil {
+		t.Fatalf("archive-transition failed: %v\n%s", err, transitionOut)
+	}
+	archiveDir := archiveStateField(t, transitionOut, "archive_dir")
+	canonicalSpec := filepath.Join("openspec", "specs", "spec-a-canonical.md")
+	runGit(t, f.repo, "add", "--", f.changeDir, archiveDir, canonicalSpec)
+	runGit(t, f.repo, "commit", "-m", "TICKET-123: archive change", "--", f.changeDir, archiveDir, canonicalSpec)
+
+	if out, err := f.runVerify(t, transitionOut); err != nil {
+		t.Fatalf("verify rejected an untouched pre-existing edit: %v\n%s", err, out)
+	}
+
+	mustWriteFile(t, notes, "spec B silently rewritten by the repair\n")
+	out, err := f.runVerify(t, transitionOut)
+	if err == nil {
+		t.Fatalf("verify succeeded after a pre-existing edit was rewritten:\n%s", out)
+	}
+	if !strings.Contains(out, "spec-b.md") {
+		t.Fatalf("output = %q, want the rewritten path named", out)
+	}
+}

@@ -311,6 +311,7 @@ func executeCheckWithRepair(step *model.Step, ctx *model.ExecutionContext, runne
 	frame := &model.RepairFrame{
 		CheckID: checkID, Form: string(step.Repair.Form()), Target: step.Repair.Rerun,
 		Phase: model.RepairPhaseChecking, Budget: step.Repair.Budget(), RangeCaptures: step.Repair.RangeCaptures,
+		StartedAt: startTime,
 	}
 	if guarded := ctx.LastFailure.Guarded; guarded != nil {
 		ref := guarded.Ref
@@ -340,7 +341,7 @@ func runRepairAttempt(step *model.Step, ctx *model.ExecutionContext, runner Proc
 		emitRepairAttemptStart(ctx, owningPrefix, frame, attempt, lastResult)
 
 		if frame.Form != string(model.RepairRerun) {
-			outcome, done, result, err := runInlineRepairIteration(step, ctx, runner, log, owningPrefix, startTime, attempt)
+			outcome, done, result, err := runInlineRepairIteration(step, ctx, runner, log, owningPrefix, startTime, attempt, lastResult)
 			lastResult = result
 			if done {
 				return outcome, err
@@ -362,11 +363,13 @@ func runRepairAttempt(step *model.Step, ctx *model.ExecutionContext, runner Proc
 // REPAIR_BLOCKED) a rerun of the check. done reports whether the cycle has
 // reached a terminal outcome (success, blocked, aborted, or an error) that
 // runRepairAttempt should return immediately, versus a failed attempt that
-// should continue the budget loop.
+// should continue the budget loop. lastResult is the check's most recent
+// failing run; it is returned unchanged when this attempt never reran the
+// check, so an exhausted cycle still reports the run that actually failed.
 func runInlineRepairIteration(
 	step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, log Logger,
-	owningPrefix string, startTime time.Time, attempt int,
-) (outcome StepOutcome, done bool, lastResult ProcessResult, err error) {
+	owningPrefix string, startTime time.Time, attempt int, lastResult ProcessResult,
+) (outcome StepOutcome, done bool, checkResult ProcessResult, err error) {
 	frame := ctx.RepairFrame
 	frame.Phase = model.RepairPhaseRepairing
 	flushState(ctx)
@@ -374,11 +377,11 @@ func runInlineRepairIteration(
 	response, agentOutcome, runErr := runInlineRepairAgent(step, ctx, runner, log, attempt)
 	if runErr != nil {
 		emitStepEnd(ctx, owningPrefix, startTime, "failed", map[string]any{"error": runErr.Error()}, step)
-		return OutcomeFailed, true, ProcessResult{}, runErr
+		return OutcomeFailed, true, lastResult, runErr
 	}
 	if agentOutcome == OutcomeAborted {
 		emitStepEnd(ctx, owningPrefix, startTime, "aborted", abortedEndData(frame), step)
-		return OutcomeAborted, true, ProcessResult{}, nil
+		return OutcomeAborted, true, lastResult, nil
 	}
 	if agentOutcome != OutcomeSuccess {
 		// The repair agent itself failed to run (not a REPAIR_BLOCKED
@@ -386,11 +389,11 @@ func runInlineRepairIteration(
 		// check is not rerun on incomplete evidence.
 		frame.Attempts++
 		emitRepairAttemptEndRaw(ctx, owningPrefix, frame.Form, frame.Attempts, "failed", 0)
-		return "", false, ProcessResult{}, nil
+		return "", false, lastResult, nil
 	}
 	if repairBlocked(response) {
 		outcome, err = terminalBlocked(step, ctx, owningPrefix, startTime, response)
-		return outcome, true, ProcessResult{}, err
+		return outcome, true, lastResult, err
 	}
 
 	frame.Phase = model.RepairPhaseChecking

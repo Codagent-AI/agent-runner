@@ -50,6 +50,17 @@ to_json_lines() {
   jq -R -s 'split("\n") | map(select(length > 0))'
 }
 
+# Emits "PATH<TAB>BLOB" for every path in the given "STATUS<TAB>PATH" lines
+# that still exists in the worktree, so verification can prove pre-existing
+# edits kept their content, not just their status.
+content_lines() {
+  while IFS="$(printf '\t')" read -r _status path; do
+    [ -n "$path" ] || continue
+    [ -f "$path" ] || continue
+    printf '%s\t%s\n' "$path" "$(git hash-object -- "$path")"
+  done
+}
+
 if [ -f "$snapshot_file" ]; then
   start_head=$(jq -r '.start_head' "$snapshot_file")
   prior_index_json=$(jq -c '.prior_index' "$snapshot_file")
@@ -58,11 +69,13 @@ else
   start_head=$(git rev-parse --verify HEAD)
   prior_index_json=$(repo_index_lines | to_json_lines)
   prior_worktree_json=$(repo_worktree_lines | to_json_lines)
+  prior_content_json=$(repo_worktree_lines | content_lines | to_json_lines)
   jq -n \
     --arg start_head "$start_head" \
     --argjson prior_index "$prior_index_json" \
     --argjson prior_worktree "$prior_worktree_json" \
-    '{start_head: $start_head, prior_index: $prior_index, prior_worktree: $prior_worktree}' \
+    --argjson prior_content "$prior_content_json" \
+    '{start_head: $start_head, prior_index: $prior_index, prior_worktree: $prior_worktree, prior_content: $prior_content}' \
     > "$snapshot_file"
 fi
 

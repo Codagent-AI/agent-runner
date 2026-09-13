@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // NestedStepState tracks execution position within nested workflows/loops.
@@ -56,6 +57,10 @@ type RepairFrame struct {
 	Budget        int           `json:"budget"`
 	Guarded       *ExecutionRef `json:"guarded,omitempty"`
 	RangeCaptures []string      `json:"rangeCaptures,omitempty"`
+	// StartedAt is when the owning check's step_start was emitted, so a
+	// terminal step_end emitted outside the check's own call (a replay that
+	// stops before the check reruns) reports the check's full duration.
+	StartedAt time.Time `json:"startedAt,omitempty"`
 }
 
 // RewindRequest asks the sequencer to resume execution from an earlier step
