@@ -13,6 +13,17 @@ steps:
       change_name: "{{change_name}}"
       session_dir: "{{session_dir}}"
     capture: archive_state
+    repair:
+      agent: implementor
+      max: 1
+      prompt: |
+        The OpenSpec archive transition for change "{{change_name}}" failed before it could move the change. The failure evidence above is the output of `openspec validate` and `openspec archive`; the most common cause is that a delta under `openspec/changes/{{change_name}}/specs/` no longer matches the current spec in `openspec/specs/`: a MODIFIED requirement block that omits scenarios the current spec still has, a requirement header that no longer matches, or a delta that fails validation.
+
+        You may edit only files under `openspec/changes/{{change_name}}/`. Never edit anything under `openspec/specs/`, never run `openspec archive`, never move or delete directories, and do not commit. When a MODIFIED block omits scenarios from the current spec, carry every current scenario into the block (reworded only where the change's requirement text demands it) rather than dropping any. Confirm with `openspec validate --type change "{{change_name}}"` and by comparing the scenario headers of each MODIFIED requirement against the current spec.
+
+        If the failure is not a delta authoring problem (a missing tool, an existing archive directory for this change, a permission error, or a spec conflict that needs a human decision), make no change, explain the verified blocker, and end your response with the line `REPAIR_BLOCKED`.
+
+        Never declare success yourself; the check that runs after you decides.
 
   - id: verify-archive-commit
     script: verify-archive-commit.sh

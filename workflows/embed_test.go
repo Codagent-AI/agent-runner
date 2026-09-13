@@ -2094,6 +2094,7 @@ func TestMigratedRepairSitesLoadWithExpectedShape(t *testing.T) {
 			{"builtin:core/implement-change-v1.0.yaml", "verify-assumptions-handoff"},
 			{"builtin:core/implement-change-v1.0.yaml", "verify-clean-for-pr"},
 			{"builtin:openspec/simple-change-v2.0.yaml", "validate-openspec"},
+			{"builtin:openspec/archive-change-v1.0.yaml", "archive-transition"},
 			{"builtin:openspec/archive-change-v1.0.yaml", "verify-archive-commit"},
 		}
 		for _, site := range inlineRepairSites {
@@ -2224,6 +2225,25 @@ func TestMigratedRepairSitesLoadWithExpectedShape(t *testing.T) {
 		}
 		if step.Repair == nil || step.Repair.Session != "lead-agent" || step.Repair.Rerun != "" {
 			t.Fatalf("validate-openspec repair = %+v, want inline repair on lead-agent", step.Repair)
+		}
+	})
+
+	t.Run("openspec/archive-change-v1.0.yaml archive-transition is inline repair on implementor, max 1", func(t *testing.T) {
+		workflow := loadRepairSiteWorkflow(t, "builtin:openspec/archive-change-v1.0.yaml")
+		step := findRepairSiteStep(workflow.Steps, "archive-transition")
+		if step == nil {
+			t.Fatal("archive-transition step not found")
+		}
+		if step.Repair == nil || step.Repair.Agent != "implementor" || step.Repair.Rerun != "" {
+			t.Fatalf("archive-transition repair = %+v, want inline repair on implementor", step.Repair)
+		}
+		if step.Repair.Max == nil || *step.Repair.Max != 1 {
+			t.Fatalf("archive-transition repair.max = %v, want 1", step.Repair.Max)
+		}
+		for _, want := range []string{"openspec/changes/{{change_name}}/", "Never edit anything under `openspec/specs/`", "never run `openspec archive`", "REPAIR_BLOCKED"} {
+			if !strings.Contains(step.Repair.Prompt, want) {
+				t.Errorf("archive-transition repair prompt missing %q", want)
+			}
 		}
 	})
 
