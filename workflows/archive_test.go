@@ -476,3 +476,102 @@ func TestVerifyArchiveCommitAcceptsArchiveStateAsString(t *testing.T) {
 		t.Fatalf("verify rejected archive_state passed as a string: %v\n%s", err, out)
 	}
 }
+
+// chattyOpenSpec replaces the fixture's silent fake with one that prints
+// progress on stdout, as the real CLI does for validate and archive.
+func (f *archiveTestFixture) chattyOpenSpec(t *testing.T) {
+	t.Helper()
+	binDir := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("create bin dir: %v", err)
+	}
+	script := `#!/bin/sh
+set -eu
+if [ "$1" = "validate" ]; then
+  echo "Change '$3' is valid"
+  echo ""
+  echo "Proposal warnings in proposal.md (non-blocking):"
+  exit 0
+fi
+if [ "$1" = "archive" ]; then
+  name="$2"
+  echo "Specs to update:"
+  echo "  spec-a: update"
+  mkdir -p openspec/changes/archive
+  mv "openspec/changes/$name" "openspec/changes/archive/2026-09-03-$name"
+  printf 'spec A merged for %s\n' "$name" > openspec/specs/spec-a-canonical.md
+  echo "Change '$name' archived as '2026-09-03-$name'."
+  exit 0
+fi
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(binDir, "openspec"), []byte(script), 0o700); err != nil {
+		t.Fatalf("write chatty openspec: %v", err)
+	}
+	f.env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
+}
+
+func (f *archiveTestFixture) runStdout(t *testing.T, script string, stdin []byte) (string, string, error) {
+	t.Helper()
+	cmd := exec.Command("sh", filepath.Join(f.scriptsDir, script))
+	cmd.Dir = f.repo
+	cmd.Env = f.env
+	cmd.Stdin = strings.NewReader(string(stdin))
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stdout.String(), stderr.String(), err
+}
+
+// TestArchiveTransitionStdoutIsOnlyTheStateJSON proves that the openspec
+// CLI's own progress output never reaches the captured archive_state: the
+// verify step parses that capture as JSON.
+func TestArchiveTransitionStdoutIsOnlyTheStateJSON(t *testing.T) {
+	f := newArchiveTestFixture(t, "ticket-123-demo")
+	f.chattyOpenSpec(t)
+	stdin, err := json.Marshal(map[string]string{"change_name": f.changeName, "session_dir": f.sessionDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, err := f.runStdout(t, "archive-transition.sh", stdin)
+	if err != nil {
+		t.Fatalf("archive-transition failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if got := archiveStateField(t, stdout, "archive_dir"); got == "" {
+		t.Fatal("archive_dir missing from stdout JSON")
+	}
+	if !strings.Contains(stderr, "archived as") {
+		t.Fatalf("openspec progress should go to stderr, got:\n%s", stderr)
+	}
+}
+
+// TestVerifyArchiveCommitAcceptsStateWithLeadingOutput covers a capture
+// recorded before the transition sent openspec output to stderr: the JSON
+// object at the end of the text is still the state.
+func TestVerifyArchiveCommitAcceptsStateWithLeadingOutput(t *testing.T) {
+	f := newArchiveTestFixture(t, "ticket-123-demo")
+	transitionOut, err := f.runTransition(t)
+	if err != nil {
+		t.Fatalf("archive-transition failed: %v\n%s", err, transitionOut)
+	}
+	archiveDir := archiveStateField(t, transitionOut, "archive_dir")
+	canonicalSpec := filepath.Join("openspec", "specs", "spec-a-canonical.md")
+	runGit(t, f.repo, "add", "--", f.changeDir, archiveDir, canonicalSpec)
+	runGit(t, f.repo, "commit", "-m", "TICKET-123: archive change", "--", f.changeDir, archiveDir, canonicalSpec)
+
+	// The real CLI prints multi-byte glyphs, which break any byte-offset slicing.
+	polluted := "Change 'ticket-123-demo' is valid\n\nProposal warnings:\n  ⚠ Why section too long\nTask status: ✓ Complete\nChange 'ticket-123-demo' archived as '2026-09-03-ticket-123-demo'.\n" + transitionOut
+	stdin, err := json.Marshal(map[string]string{
+		"archive_state": polluted,
+		"change_name":   f.changeName,
+		"session_dir":   f.sessionDir,
+	})
+	if err != nil {
+		t.Fatalf("marshal verify input: %v", err)
+	}
+	out, err := f.run(t, "verify-archive-commit.sh", stdin)
+	if err != nil {
+		t.Fatalf("verify rejected archive_state with leading output: %v\n%s", err, out)
+	}
+}

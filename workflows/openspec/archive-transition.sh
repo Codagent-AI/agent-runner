@@ -66,9 +66,11 @@ else
     > "$snapshot_file"
 fi
 
+# stdout is the captured archive_state that verify-archive-commit parses as
+# JSON, so the CLI's own progress output must go to stderr.
 if [ -d "$change_dir" ]; then
-  openspec validate --type change "$change_name"
-  openspec archive "$change_name" --yes
+  openspec validate --type change "$change_name" >&2
+  openspec archive "$change_name" --yes >&2
 fi
 
 archive_candidates=$(find_archive_dirs)

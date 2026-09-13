@@ -7,7 +7,17 @@ change_name=$(printf '%s' "$payload" | "$script_dir/validate-change-name.sh")
 session_dir=$(printf '%s' "$payload" | jq -er '.session_dir | select(type == "string" and length > 0)')
 # The runner passes captured variables to script_inputs as strings, so the
 # transition's JSON usually arrives as text; accept an object too.
-archive_state=$(printf '%s' "$payload" | jq -c '.archive_state | if type == "string" then fromjson else . end')
+# archive_state arrives as the transition's captured stdout. A capture recorded
+# before openspec output was sent to stderr carries that text ahead of the
+# JSON, so fall back to the object that starts at the last line-initial "{".
+archive_state=$(printf '%s' "$payload" | jq -c '
+  .archive_state
+  | if type == "string" then
+      (. as $s
+       | try fromjson
+         catch (($s | split("\n{")) as $parts
+                | if ($parts | length) < 2 then error("archive_state is not JSON") else ("{" + ($parts | last) | fromjson) end))
+    else . end')
 
 archive_dir=$(printf '%s' "$archive_state" | jq -er '.archive_dir')
 change_dir=$(printf '%s' "$archive_state" | jq -er '.change_dir')
