@@ -2228,14 +2228,14 @@ func TestMigratedRepairSitesLoadWithExpectedShape(t *testing.T) {
 		}
 	})
 
-	t.Run("openspec/archive-change-v1.0.yaml archive-transition is inline repair on implementor, max 1", func(t *testing.T) {
+	t.Run("openspec/archive-change-v1.0.yaml archive-transition is inline repair on lead-agent, max 1", func(t *testing.T) {
 		workflow := loadRepairSiteWorkflow(t, "builtin:openspec/archive-change-v1.0.yaml")
 		step := findRepairSiteStep(workflow.Steps, "archive-transition")
 		if step == nil {
 			t.Fatal("archive-transition step not found")
 		}
-		if step.Repair == nil || step.Repair.Agent != "implementor" || step.Repair.Rerun != "" {
-			t.Fatalf("archive-transition repair = %+v, want inline repair on implementor", step.Repair)
+		if step.Repair == nil || step.Repair.Session != "lead-agent" || step.Repair.Agent != "" || step.Repair.Rerun != "" {
+			t.Fatalf("archive-transition repair = %+v, want inline repair on lead-agent", step.Repair)
 		}
 		if step.Repair.Max == nil || *step.Repair.Max != 1 {
 			t.Fatalf("archive-transition repair.max = %v, want 1", step.Repair.Max)
@@ -2247,14 +2247,14 @@ func TestMigratedRepairSitesLoadWithExpectedShape(t *testing.T) {
 		}
 	})
 
-	t.Run("openspec/archive-change-v1.0.yaml verify-archive-commit is inline repair on implementor, max 1", func(t *testing.T) {
+	t.Run("openspec/archive-change-v1.0.yaml verify-archive-commit is inline repair on lead-agent, max 1", func(t *testing.T) {
 		workflow := loadRepairSiteWorkflow(t, "builtin:openspec/archive-change-v1.0.yaml")
 		step := findRepairSiteStep(workflow.Steps, "verify-archive-commit")
 		if step == nil {
 			t.Fatal("verify-archive-commit step not found")
 		}
-		if step.Repair == nil || step.Repair.Agent != "implementor" || step.Repair.Rerun != "" {
-			t.Fatalf("verify-archive-commit repair = %+v, want inline repair on implementor", step.Repair)
+		if step.Repair == nil || step.Repair.Session != "lead-agent" || step.Repair.Agent != "" || step.Repair.Rerun != "" {
+			t.Fatalf("verify-archive-commit repair = %+v, want inline repair on lead-agent", step.Repair)
 		}
 		if step.Repair.Max == nil || *step.Repair.Max != 1 {
 			t.Fatalf("verify-archive-commit repair.max = %v, want 1", step.Repair.Max)

@@ -6,6 +6,10 @@ params:
   - name: change_name
     required: true
 
+sessions:
+  - name: lead-agent
+    agent: lead
+
 steps:
   - id: archive-transition
     script: archive-transition.sh
@@ -14,10 +18,10 @@ steps:
       session_dir: "{{session_dir}}"
     capture: archive_state
     repair:
-      agent: implementor
+      session: lead-agent
       max: 1
       prompt: |
-        The OpenSpec archive transition for change "{{change_name}}" failed before it could move the change. The failure evidence above is the output of `openspec validate` and `openspec archive`; the most common cause is that a delta under `openspec/changes/{{change_name}}/specs/` no longer matches the current spec in `openspec/specs/`: a MODIFIED requirement block that omits scenarios the current spec still has, a requirement header that no longer matches, or a delta that fails validation.
+        The OpenSpec archive transition for change "{{change_name}}" failed before it could move the change. The failure evidence above is the output of `openspec validate` and `openspec archive`; the most common cause is that a delta under `openspec/changes/{{change_name}}/specs/` no longer matches the current spec in `openspec/specs/`: a MODIFIED requirement block that omits scenarios the current spec still has, a requirement header that no longer matches, or a delta that fails validation. You led this change, so use what you know about its decisions when reconciling the delta.
 
         You may edit only files under `openspec/changes/{{change_name}}/`. Never edit anything under `openspec/specs/`, never run `openspec archive`, never move or delete directories, and do not commit. When a MODIFIED block omits scenarios from the current spec, carry every current scenario into the block (reworded only where the change's requirement text demands it) rather than dropping any. Confirm with `openspec validate --type change "{{change_name}}"` and by comparing the scenario headers of each MODIFIED requirement against the current spec.
 
@@ -32,7 +36,7 @@ steps:
       change_name: "{{change_name}}"
       session_dir: "{{session_dir}}"
     repair:
-      agent: implementor
+      session: lead-agent
       max: 1
       prompt: |
         The OpenSpec archive commit for change "{{change_name}}" failed verification. The transition's captured state below names the exact paths you may stage and commit:
