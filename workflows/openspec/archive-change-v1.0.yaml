@@ -1,0 +1,55 @@
+name: archive-change
+description: "Move an approved OpenSpec change into the archive, verify the commit, and advance the Validator baseline."
+hidden: true
+
+params:
+  - name: change_name
+    required: true
+
+sessions:
+  - name: lead-agent
+    agent: lead
+
+steps:
+  - id: archive-transition
+    script: archive-transition.sh
+    script_inputs:
+      change_name: "{{change_name}}"
+      session_dir: "{{session_dir}}"
+    capture: archive_state
+    repair:
+      session: lead-agent
+      max: 1
+      prompt: |
+        The OpenSpec archive transition for change "{{change_name}}" failed before it could move the change. The failure evidence above is the output of `openspec validate` and `openspec archive`; the most common cause is that a delta under `openspec/changes/{{change_name}}/specs/` no longer matches the current spec in `openspec/specs/`: a MODIFIED requirement block that omits scenarios the current spec still has, a requirement header that no longer matches, or a delta that fails validation. You led this change, so use what you know about its decisions when reconciling the delta.
+
+        You may edit only files under `openspec/changes/{{change_name}}/`. Never edit anything under `openspec/specs/`, never run `openspec archive`, never move or delete directories, and do not commit. When a MODIFIED block omits scenarios from the current spec, carry every current scenario into the block (reworded only where the change's requirement text demands it) rather than dropping any. Confirm with `openspec validate --type change "{{change_name}}"` and by comparing the scenario headers of each MODIFIED requirement against the current spec.
+
+        If the failure is not a delta authoring problem (a missing tool, an existing archive directory for this change, a permission error, or a spec conflict that needs a human decision), make no change, explain the verified blocker, and end your response with the line `REPAIR_BLOCKED`.
+
+        Never declare success yourself; the check that runs after you decides.
+
+  - id: verify-archive-commit
+    script: verify-archive-commit.sh
+    script_inputs:
+      archive_state: "{{archive_state}}"
+      change_name: "{{change_name}}"
+      session_dir: "{{session_dir}}"
+    repair:
+      session: lead-agent
+      max: 1
+      prompt: |
+        The OpenSpec archive commit for change "{{change_name}}" failed verification. The transition's captured state below names the exact paths you may stage and commit:
+
+        <archive-state>
+        {{archive_state}}
+        </archive-state>
+
+        You may stage and commit only the paths named by `archive_dir` and the file paths listed in `owned_delta` in that JSON. Do not stage or commit anything else, including unrelated files or other pre-existing staged or unstaged edits, even inside `openspec/specs`.
+
+        Follow the repository's commit message conventions. If the change name begins with a ticket prefix and numeric identifier (for example "proj-123-some-change"), a subject like `PROJ-123: Archive change` is a reasonable hint; otherwise `[archive] chore: archive openspec documents for {{change_name}}` is a reasonable default. If the commit is rejected by a repository hook (subject format, length, or another convention), read the hook's output and adjust the commit message to comply, then retry the commit.
+
+        Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure (a missing credential, permission, or a decision you cannot make safely), make no unsafe change, explain the verified blocker, and end your response with the line `REPAIR_BLOCKED`.
+
+  - id: advance-validator-baseline
+    command: agent-validator skip

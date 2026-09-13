@@ -66,6 +66,17 @@ steps:
     script: verify-task-commit.sh
     script_inputs:
       starting_head: "{{task_start_head}}"
+    repair:
+      session: resume
+      max: 1
+      prompt: |
+        This repository shows no commit for the task since {{task_start_head}}. First inspect `git status --porcelain`, `git diff --cached --stat`, and `git diff --stat`.
+
+        If the task's deliverable belongs in this repository and is present in the worktree, commit only an explicit list of task-related paths (`git commit -- <paths>`), leaving every unrelated staged or unstaged file exactly as it is, following project conventions with the `[verify-task-commit]` prefix. Do not create an empty or placeholder commit.
+
+        If the work was legitimately delivered elsewhere, the task conflicts with this repository, or task-related changes cannot be isolated safely from unrelated ones, make no commit; report only facts you have verified (repository, branch, commit, whether pushed), writing `unknown` for anything unverified, explain why, and end your response with the line `REPAIR_BLOCKED`.
+
+        Never declare success yourself; the check that runs after you decides.
 
   - id: session-report
     session: resume

@@ -32,6 +32,11 @@ type AgentCallParent struct {
 	Workdir          string
 	Prefix           string
 	ResolveSessionID func() string
+	// Attempt is the parent agent step's own predicted audit identity.attempt
+	// (see attemptForIdentity). Stamped on every agent_call_end this handler
+	// emits so a rebuild from audit can attribute calls to the exact parent
+	// execution instead of any step sharing the same prefix.
+	Attempt int
 }
 
 type AgentCallAccepted struct {
@@ -378,6 +383,39 @@ func (h *AgentCallHandler) ChildSessionIDs() []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+// CollectedCallResponses returns the final response of every call that
+// reached a terminal state, ordered by acceptance time and labeled by call
+// ID. The parent agent step's executor reads this when it publishes its
+// AgentExecutionRecord at completion.
+func (h *AgentCallHandler) CollectedCallResponses() []model.CallResponse {
+	if h == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	records := make([]*acceptedAgentCall, 0, len(h.accepted))
+	for _, record := range h.accepted {
+		records = append(records, record)
+	}
+	sort.Slice(records, func(i, j int) bool { return records[i].started.Before(records[j].started) })
+	var out []model.CallResponse
+	for _, record := range records {
+		if len(record.response) == 0 {
+			continue
+		}
+		var response agentcall.Response
+		if err := json.Unmarshal(record.response, &response); err != nil {
+			continue
+		}
+		text := ""
+		if response.Result != nil {
+			text = response.Result.Response
+		}
+		out = append(out, model.CallResponse{CallID: record.callID, Response: text})
+	}
+	return out
 }
 
 func agentCallChildSessionIDs(handler control.AgentCallHandler) []string {
@@ -876,6 +914,12 @@ func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *res
 		Role: call.profileName, Tool: "agent-runner",
 	}
 	data := agentCallAuditData(record, call)
+	// parent_execution_attempt identifies the exact parent agent step
+	// execution this call belongs to (its own predicted identity.attempt),
+	// distinct from parent_attempt_id (the control-layer MCP attempt). A
+	// rebuild from audit requires this so calls from an earlier or later
+	// attempt of the same-prefix step are never attributed to the wrong one.
+	data["parent_execution_attempt"] = h.options.Parent.Attempt
 	data["outcome"] = string(invocation.Outcome)
 	data["duration_ms"] = duration.Milliseconds()
 	data["cli_launched"] = invocation.CLILaunched
@@ -892,6 +936,12 @@ func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *res
 	}
 	if invocation.Stderr != "" {
 		data["stderr"] = invocation.Stderr
+	}
+	// The response is durable evidence for a guarded execution: a check that
+	// fails after this call's parent must be able to rebuild the call's
+	// final response from audit alone if interrupted before it ran.
+	if invocation.Response != "" {
+		data["response"] = truncateForAudit(invocation.Response)
 	}
 	if invocation.UsageError != nil {
 		data["usage_error"] = invocation.UsageError.Error()

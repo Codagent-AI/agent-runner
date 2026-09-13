@@ -34,7 +34,7 @@ The CLI SHALL provide two entry points to the run view: a `--inspect <run-id>` f
 
 The run view SHALL render the current manual drill scope as a selectable workflow tree on the left and the selected row's detail on the right. The panes SHALL be separated by whitespace; the run view SHALL NOT render a full-height vertical separator between them.
 
-Each real tree row SHALL display, in order: indentation for its tree depth, a status indicator, the step name, and the type glyph. Loop rows SHALL additionally display an iteration counter in the form `(N/M)`. Iteration rows SHALL NOT display binding values, per-iteration parameters, or arguments.
+Each real tree row SHALL display, in order: indentation for its tree depth, a status indicator, the step name, and the type glyph. Loop rows SHALL additionally display an iteration counter in the form `(N/M)`. A check row with `repair` SHALL display a repair suffix once any attempt has run: `(repairing N/M)` while an attempt is active, `(repaired N/M)` after recovery, `(blocked)` after a blocked declaration, and `(N/M)` after exhaustion, where N is attempts used and M is `max`. Each repair attempt SHALL be a child row of the check: a failed check run labeled `attempt N`, followed by either the inline repair agent row or a `rerun N` container whose children are the replayed steps. Attempt children SHALL be shown through the existing inline expansion of direct children when the check is selected or active. Iteration rows SHALL NOT display binding values, per-iteration parameters, or arguments.
 
 Step statuses SHALL be `pending`, `in-progress`, `success`, `warning`, `failed`, and `skipped`. The deepest visible active row's `in-progress` indicator SHALL blink only while the run is active. Visible in-progress ancestor containers SHALL retain a static in-progress indicator while the active leaf blinks. An interrupted step in an inactive run SHALL render a static in-progress indicator. Loop exhaustion SHALL render as success unless that exhaustion was explicitly classified as a non-blocking warning. An otherwise successful container with warning descendants SHALL visibly indicate warning ancestry without becoming an additional warning origin.
 
@@ -44,7 +44,7 @@ When the terminal is too narrow to fit minimum tree chrome, the whitespace gap, 
 
 Within one run-view entry, sidebar width MAY grow when a newly visible row needs more space but SHALL NOT shrink until the terminal is resized or the user exits and re-enters the run view. A terminal resize SHALL recompute the pane widths from the new available width.
 
-Status glyphs SHALL remain `●` running, `○` pending, `✓` success, `✗` failed, and `⇥` skipped. Warning status SHALL use a distinct amber warning indicator. Every supported row type, including shell, script, UI, headless agent, interactive agent, agent call, sub-workflow, loop, iteration, and group, SHALL have a type glyph. Exact type glyphs, warning glyph shape, rail glyphs, colors other than the warning's amber distinction, padding, and whitespace are design decisions.
+Status glyphs SHALL remain `●` running, `○` pending, `✓` success, `✗` failed, and `⇥` skipped. Warning status SHALL use a distinct amber warning indicator. Every supported row type, including shell, script, UI, headless agent, interactive agent, agent call, sub-workflow, loop, iteration, group, and repair attempt, SHALL have a type glyph. Exact type glyphs, warning glyph shape, rail glyphs, colors other than the warning's amber distinction, padding, and whitespace are design decisions.
 
 #### Scenario: Shell step row
 
@@ -150,6 +150,22 @@ Status glyphs SHALL remain `●` running, `○` pending, `✓` success, `✗` fa
 
 - **WHEN** a warning origin is nested beneath a container whose children are not visible
 - **THEN** the container visibly indicates that its ancestry contains a warning without increasing the run's warning count
+
+#### Scenario: Repaired check row
+- **WHEN** a check with `max: 1` failed once and passed after an inline repair
+- **THEN** its row shows `✓`, the name, `(repaired 1/1)`, and its type glyph, and when selected expands to show `✗ attempt 1` with the repair-attempt glyph and `✓ repair 1` with the headless agent glyph
+
+#### Scenario: Repaired check output
+- **WHEN** a check failed once, was repaired, and passed on its rerun
+- **THEN** the check's detail pane shows the passing rerun's output under `Current output` while `attempt 1` shows the failing run's output
+
+#### Scenario: Blocked check row
+- **WHEN** a check failed because the guarded agent declared `REPAIR_BLOCKED`
+- **THEN** its row shows `✗`, the name, and `(blocked)`, with no attempt children
+
+#### Scenario: Rerun attempt children
+- **WHEN** a check with `repair: {rerun: open-draft-pr}` is on its first rerun
+- **THEN** the check row expands to `✗ attempt 1` and a `● rerun 1` container whose children are `open-draft-pr` and the replayed check
 
 ### Requirement: Drill-in navigation with breadcrumbs
 
@@ -265,8 +281,8 @@ Current-step content SHALL be grouped into visually distinct, labeled rail secti
 
 - **Headless agent and agent call**: `Current prompt` and `Current response`. The response SHALL use the resolved adapter's ordinary filtered output.
 - **Interactive agent**: `Current prompt`; no response transcript SHALL be fabricated when terminal output was not captured.
-- **Shell**: `Current command` and `Current output`, with stdout and stderr distinguishable.
-- **Script**: `Current script` and `Current output`, with stdout and stderr distinguishable.
+- **Shell**: `Current command` and `Current output`, with stdout and stderr distinguishable. A failed check with a failure record SHALL additionally show a `Failure evidence` section before `Current command`, containing the classified failure reason, the blocked declaration's explanation when present, and the guarded agent execution's final response. A check with `repair` SHALL show its repair form, target, and attempts used in its primary metadata, and its `Current output` SHALL be the output of the check run that decided its terminal outcome; earlier failing runs remain on their `attempt N` rows.
+- **Script**: `Current script` and `Current output`, with stdout and stderr distinguishable, with the same `Failure evidence` section and repair metadata as shell steps.
 - **UI**: `Current form` and `Current outcome`, integrated with the existing live UI behavior. When durable audit evidence identifies a historical UI execution but its workflow definition is unavailable, `Current form` SHALL explicitly state `definition unavailable` while `Current outcome` continues to show the recorded outcome.
 - **Sub-workflow, loop, iteration, and group**: `Current status`, containing identity, workflow params or loop counters, outcome, duration, and aggregate direct-child counts by status. Container detail SHALL NOT list child rows or render descendant detail.
 
@@ -369,6 +385,18 @@ Completed agent and call detail SHALL retain explicit metrics semantics. Collect
 #### Scenario: Agent block shows unknown model as explicit fallback
 - **WHEN** no model can be resolved for a selected agent or call
 - **THEN** the model value displays `(unknown)`
+
+#### Scenario: Failed check detail shows evidence
+- **WHEN** a failed `verify-draft-pr` row is selected after `open-draft-pr` declared blocked
+- **THEN** the pane shows exit status, `repair: rerun open-draft-pr · 0 of 1 used · blocked`, a `Failure evidence` section with the reason and the `open-draft-pr` response, then `Current command` and `Current output`
+
+#### Scenario: Repair attempt detail
+- **WHEN** an `attempt 1` child row is selected
+- **THEN** the pane shows that run's exit status and output as a shell or script detail
+
+#### Scenario: Repair agent detail
+- **WHEN** a `repair 1` child row is selected
+- **THEN** the pane shows the repair agent's profile, CLI, model, prompt including the evidence block, and response, as for any headless agent
 
 ### Requirement: Large output lazy loading
 Shell stdout or stderr exceeding 2000 lines or 256 KB (whichever comes first) SHALL be rendered with the tail portion only, together with a persistent banner stating the total and current shown line counts and indicating that the `g` key loads the full output on demand.
@@ -520,7 +548,7 @@ The run view SHALL provide a `?` key that toggles a modal legend overlay showing
 
 #### Scenario: Toggle legend overlay on
 - **WHEN** the user presses `?` and the legend is not visible
-- **THEN** a modal overlay appears showing status glyphs (`●` running, `○` pending, `✓` success, `✗` failed, `⇥` skipped) and type glyphs (`$` shell, ⚙️ headless agent, 💬 interactive agent, ↳ sub-workflow, the loop glyph, and the iteration glyph)
+- **THEN** a modal overlay appears showing status glyphs (`●` running, `○` pending, `✓` success, `✗` failed, `⇥` skipped) and type glyphs (`$` shell, ⚙️ headless agent, 💬 interactive agent, ↳ sub-workflow, the loop glyph, the iteration glyph, and the repair-attempt glyph)
 
 #### Scenario: Toggle legend overlay off
 - **WHEN** the user presses `?` or Escape while the legend overlay is visible

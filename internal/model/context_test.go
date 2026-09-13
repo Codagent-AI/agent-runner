@@ -231,6 +231,38 @@ func TestBuiltinVarsForStep(t *testing.T) {
 			t.Fatal("expected session_dir to be absent")
 		}
 	})
+
+	t.Run("omits repair vars when no repair frame is open", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{WorkflowFile: "test.yaml"})
+		vars := ctx.BuiltinVarsForStep("check")
+		for _, key := range []string{"repair.attempt", "repair.check_output", "repair.check_stderr", "repair.action_response"} {
+			if _, ok := vars[key]; ok {
+				t.Fatalf("expected %q to be absent without an open repair frame", key)
+			}
+		}
+	})
+
+	t.Run("exposes repair vars when a repair frame carries evidence", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{WorkflowFile: "test.yaml"})
+		ctx.RepairFrame = &RepairFrame{CheckID: "check", Attempts: 1}
+		ctx.LastFailure = &FailureRecord{
+			StepID: "check", Stdout: "checked out", Stderr: "expected one PR",
+			Guarded: &AgentExecutionRecord{Response: "opened the PR"},
+		}
+		vars := ctx.BuiltinVarsForStep("check")
+		if vars["repair.attempt"] != "1" {
+			t.Fatalf("repair.attempt = %q, want %q", vars["repair.attempt"], "1")
+		}
+		if vars["repair.check_output"] != "checked out" {
+			t.Fatalf("repair.check_output = %q", vars["repair.check_output"])
+		}
+		if vars["repair.check_stderr"] != "expected one PR" {
+			t.Fatalf("repair.check_stderr = %q", vars["repair.check_stderr"])
+		}
+		if vars["repair.action_response"] != "opened the PR" {
+			t.Fatalf("repair.action_response = %q", vars["repair.action_response"])
+		}
+	})
 }
 
 func TestIntakeHandoffPropagatesToNestedContexts(t *testing.T) {

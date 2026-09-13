@@ -12,11 +12,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/codagent/agent-runner/internal/agentcall"
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/control"
+	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runlock"
 )
@@ -327,6 +330,35 @@ func TestAgentCallHandlerRunsFreshProfileAutonomousHeadless(t *testing.T) {
 	}
 }
 
+func TestAgentCallHandlerAccumulatesCollectedCallResponsesInOrder(t *testing.T) {
+	workdir := t.TempDir()
+	adapter := &callTestAdapter{discovered: "fresh-session"}
+	runner := &callTestRunner{result: ProcessResult{Started: true, Stdout: "raw"}}
+	options := testAgentCallOptions(workdir, runner, adapter)
+	handler := NewAgentCallHandler(options)
+
+	payload1, _ := json.Marshal(agentcall.Request{Prompt: "first task", Agent: stringPointer("implementor")})
+	first := startAndAwaitAgentCall(t, handler, control.AgentCallRequest{RequestID: "request-1", Payload: payload1})
+	if first.Error != nil {
+		t.Fatalf("first call failed: %#v", first)
+	}
+
+	payload2, _ := json.Marshal(agentcall.Request{Prompt: "second task", Agent: stringPointer("implementor")})
+	second := startAndAwaitAgentCall(t, handler, control.AgentCallRequest{RequestID: "request-2", Payload: payload2})
+	if second.Error != nil {
+		t.Fatalf("second call failed: %#v", second)
+	}
+
+	got := handler.CollectedCallResponses()
+	want := []model.CallResponse{
+		{CallID: first.CallID, Response: "filtered:raw"},
+		{CallID: second.CallID, Response: "filtered:raw"},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("collected call responses mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestAgentCallHandlerExposesDiscoveredChildSessionIDs(t *testing.T) {
 	handler := NewAgentCallHandler(testAgentCallOptions(
 		t.TempDir(),
@@ -392,7 +424,7 @@ func TestAgentCallHandlerExposesInFlightChildSessionIDsForParentDiscovery(t *tes
 	}
 }
 
-func TestAgentCallHandlerEmitsSuccessfulEvidencePairWithoutResponse(t *testing.T) {
+func TestAgentCallHandlerEmitsSuccessfulEvidencePairWithDurableResponse(t *testing.T) {
 	workdir := t.TempDir()
 	cost := 0.42
 	adapter := &evidenceCallAdapter{
@@ -459,10 +491,13 @@ func TestAgentCallHandlerEmitsSuccessfulEvidencePairWithoutResponse(t *testing.T
 	if _, ok := end.Data["duration_ms"].(int64); !ok {
 		t.Fatalf("duration_ms = %#v, want int64", end.Data["duration_ms"])
 	}
-	for _, forbidden := range []string{"stdout", "response", "prompt"} {
+	for _, forbidden := range []string{"stdout", "prompt"} {
 		if _, exists := end.Data[forbidden]; exists {
 			t.Fatalf("agent_call_end duplicated %s: %+v", forbidden, end.Data)
 		}
+	}
+	if got := end.Data["response"]; got != "filtered:full child response" {
+		t.Fatalf("response = %q, want the child's filtered response so it can be rebuilt from audit", got)
 	}
 }
 
@@ -523,6 +558,29 @@ func TestPrepareAgentCallRuntimeUsesEstablishedProjectRoot(t *testing.T) {
 	}
 	if handler.options.Parent.Worktree != projectRoot || handler.options.Parent.Workdir != workingDir {
 		t.Fatalf("parent paths = worktree %q workdir %q", handler.options.Parent.Worktree, handler.options.Parent.Workdir)
+	}
+}
+
+func TestPrepareAgentCallRuntimeStampsParentExecutionAttempt(t *testing.T) {
+	workdir := t.TempDir()
+	sessionDir := t.TempDir()
+	collector := metrics.NewCollector(sessionDir, "run", "wf", time.Now())
+	pipeline := metrics.NewExecutionPipeline(collector, nil, sessionDir, "exec-1")
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		WorkflowFile: "workflow.yaml", ProjectRoot: workdir, WorkingDir: workdir,
+	})
+	ctx.AuditLogger = pipeline
+	step := &model.Step{ID: "parent-agent", Session: model.SessionNew}
+
+	handler, _, _, err := prepareAgentCallRuntime(
+		true, cli.ContextInteractive, step, ctx, &callTestAdapter{}, nil, nil,
+		"test", "parent-session", "[parent-agent]", nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handler.options.Parent.Attempt != 1 {
+		t.Fatalf("Parent.Attempt = %d, want 1 (predicted first attempt)", handler.options.Parent.Attempt)
 	}
 }
 

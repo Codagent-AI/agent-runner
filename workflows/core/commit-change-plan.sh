@@ -44,6 +44,15 @@ case "$change_dir" in
     ;;
 esac
 
+if git diff --cached --quiet -- "$change_dir" &&
+   git diff --quiet -- "$change_dir" &&
+   [ -z "$(git ls-files --others --exclude-standard -- "$change_dir")" ] &&
+   git cat-file -e "HEAD:$change_dir" 2>/dev/null; then
+  printf 'commit-change-plan: %s is already committed\n' "$change_name"
+  agent-validator skip
+  exit 0
+fi
+
 git add -A -- "$change_dir"
 openspec_config=""
 if [ "$change_dir" = "openspec/changes/$change_name" ]; then

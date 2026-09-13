@@ -119,6 +119,64 @@ func TestDispatchStep(t *testing.T) {
 	})
 }
 
+func TestGroupSavesAndRestoresLastAgentExecutionAroundBody(t *testing.T) {
+	ctx := makeCtx()
+	ctx.LastAgentExecution = &model.AgentExecutionRecord{
+		Ref: model.ExecutionRef{Prefix: "[before-group]", Attempt: 1}, Response: "before group",
+	}
+	runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
+	step := model.Step{
+		ID: "g", Session: model.SessionNew,
+		Steps: []model.Step{
+			{ID: "inner-agent", Mode: model.ModeAutonomous, Prompt: "do it", Session: model.SessionNew},
+			{ID: "inner-check", Command: "echo b", Session: model.SessionNew},
+		},
+	}
+	outcome, err := DispatchStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+	if err != nil || outcome != OutcomeSuccess {
+		t.Fatalf("DispatchStep() = (%q, %v), want success", outcome, err)
+	}
+	if ctx.LastAgentExecution == nil || ctx.LastAgentExecution.Ref.Prefix != "[before-group]" {
+		t.Fatalf("expected parent's guarded execution restored after group, got %+v", ctx.LastAgentExecution)
+	}
+}
+
+func TestGroupBoundaryScopesGuardedExecutionVisibility(t *testing.T) {
+	ctx := makeCtx()
+	auditLog := &mockAuditLogger{}
+	ctx.AuditLogger = auditLog
+	runner := &mockRunner{results: []ProcessResult{
+		{ExitCode: 0, Stdout: claudeUsageOutput("outer agent response", 0)},
+		{ExitCode: 0, Stdout: claudeUsageOutput("group agent response", 0)},
+		{ExitCode: 0},
+		{ExitCode: 0},
+	}}
+	steps := []model.Step{
+		{ID: "outer-agent", Mode: model.ModeAutonomous, Prompt: "do it", Session: model.SessionNew},
+		{
+			ID: "g", Session: model.SessionNew,
+			Steps: []model.Step{
+				{ID: "group-agent", Mode: model.ModeAutonomous, Prompt: "do it too", Session: model.SessionNew},
+				{ID: "check-in-group", Command: "echo b", Session: model.SessionNew},
+			},
+		},
+		{ID: "check-after-group", Command: "echo c", Session: model.SessionNew},
+	}
+	var lastAgentWhenCheckAfterGroupRan *model.AgentExecutionRecord
+	for i := range steps {
+		if steps[i].ID == "check-after-group" {
+			lastAgentWhenCheckAfterGroupRan = ctx.LastAgentExecution
+		}
+		outcome, err := DispatchStep(&steps[i], ctx, runner, &mockGlob{}, &mockLogger{})
+		if err != nil || outcome != OutcomeSuccess {
+			t.Fatalf("step %q: DispatchStep() = (%q, %v), want success", steps[i].ID, outcome, err)
+		}
+	}
+	if lastAgentWhenCheckAfterGroupRan == nil || lastAgentWhenCheckAfterGroupRan.Response != "outer agent response" {
+		t.Fatalf("check after group should see outer agent, got %+v", lastAgentWhenCheckAfterGroupRan)
+	}
+}
+
 func TestGroupMembersIncludeGroupInAuditIdentity(t *testing.T) {
 	recorder := &mockAuditLogger{}
 	ctx := makeCtx()

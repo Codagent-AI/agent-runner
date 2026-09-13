@@ -27,6 +27,14 @@ func NewExecutionPipeline(collector *Collector, sink audit.EventLogger, projectR
 	}
 }
 
+// AttemptFor reports the attempt number the collector will assign to
+// identity's next terminal event. Callers that need to publish an
+// execution's identity (e.g. a guarded-execution record) before its terminal
+// event reaches this pipeline call this immediately beforehand.
+func (p *Pipeline) AttemptFor(identity *model.ExecutionIdentity) int {
+	return p.collector.AttemptFor(identity)
+}
+
 func (p *Pipeline) Emit(event audit.Event) {
 	if event.Data == nil {
 		event.Data = map[string]any{}

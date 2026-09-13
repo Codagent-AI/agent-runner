@@ -22,21 +22,77 @@ type scriptEnvironmentRunner interface {
 	RunScriptWithEnv(path string, stdin []byte, captureStdout bool, workdir string, environment []string) (ProcessResult, error)
 }
 
+// scriptCheckRun is the outcome of the audit-free script primitive.
+type scriptCheckRun struct {
+	Result  ProcessResult
+	Metrics *nestedMetricsCapture
+	RunErr  error
+}
+
+// scriptCheckPrep is the result of resolving a script check's path, stdin,
+// and nested-metrics environment, before the process is spawned. Splitting
+// this from execution lets an audited caller set the runner's prefix and
+// emit step_start before the process starts.
+type scriptCheckPrep struct {
+	scriptPath  string
+	stdin       []byte
+	metrics     *nestedMetricsCapture
+	environment []string
+	Err         error
+}
+
+// prepareScriptCheck resolves the script path, builds its stdin, and
+// prepares its nested metrics environment. It runs nothing and emits no
+// audit events.
+func prepareScriptCheck(step *model.Step, ctx *model.ExecutionContext) scriptCheckPrep {
+	scriptPath, err := resolveScriptPath(step.Script, ctx)
+	if err != nil {
+		return scriptCheckPrep{Err: err}
+	}
+	stdin, err := buildScriptInput(step, ctx)
+	if err != nil {
+		return scriptCheckPrep{Err: err}
+	}
+	metricsCapture, environment, err := prepareNestedMetricsEnvironment(step, ctx)
+	if err != nil {
+		return scriptCheckPrep{Err: err}
+	}
+	return scriptCheckPrep{scriptPath: scriptPath, stdin: stdin, metrics: metricsCapture, environment: environment}
+}
+
+// runPreparedScriptCheck executes a script check from an already-prepared
+// path/stdin/environment, emitting no audit events, adding no warning
+// origin, and writing no capture. Callers own audit emission and
+// ctx.CapturedVariables.
+func runPreparedScriptCheck(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, prep *scriptCheckPrep) scriptCheckRun {
+	var result ProcessResult
+	var err error
+	if len(prep.environment) == 0 {
+		result, err = runner.RunScript(prep.scriptPath, prep.stdin, step.Capture != "", step.Workdir)
+	} else if environmentRunner, ok := runner.(scriptEnvironmentRunner); ok {
+		result, err = environmentRunner.RunScriptWithEnv(prep.scriptPath, prep.stdin, step.Capture != "", step.Workdir, prep.environment)
+	} else {
+		err = fmt.Errorf("process runner does not support script environments")
+	}
+	return scriptCheckRun{Result: result, Metrics: prep.metrics, RunErr: err}
+}
+
+// runScriptCheck resolves the script path, builds its stdin, and executes it
+// exactly as ExecuteScriptStep does, but emits no audit events, adds no
+// warning origin, and writes no capture. Callers own audit emission and
+// ctx.CapturedVariables.
+func runScriptCheck(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner) scriptCheckRun {
+	prep := prepareScriptCheck(step, ctx)
+	if prep.Err != nil {
+		return scriptCheckRun{RunErr: prep.Err}
+	}
+	return runPreparedScriptCheck(step, ctx, runner, &prep)
+}
+
 func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, log Logger) (StepOutcome, error) {
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
 	emitStepStart(ctx, prefix, startTime, map[string]any{"script": step.Script})
-
-	scriptPath, err := resolveScriptPath(step.Script, ctx)
-	if err != nil {
-		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err)
-		return OutcomeFailed, err
-	}
-	stdin, err := buildScriptInput(step, ctx)
-	if err != nil {
-		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err)
-		return OutcomeFailed, err
-	}
 
 	log.Printf("  script: %s\n", step.Script)
 	switch ps := runner.(type) {
@@ -47,48 +103,61 @@ func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner Pro
 	case interface{ SetPrefix(string) }:
 		ps.SetPrefix(prefix)
 	}
-	metricsCapture, environment, err := prepareNestedMetricsEnvironment(step, ctx)
-	if err != nil {
-		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err)
-		return OutcomeFailed, err
+
+	run := runScriptCheck(step, ctx, runner)
+	if run.RunErr != nil {
+		if rcErr := emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, run.RunErr, log); rcErr != nil {
+			return OutcomeFailed, rcErr
+		}
+		return OutcomeFailed, run.RunErr
 	}
-	var result ProcessResult
-	if len(environment) == 0 {
-		result, err = runner.RunScript(scriptPath, stdin, step.Capture != "", step.Workdir)
-	} else if environmentRunner, ok := runner.(scriptEnvironmentRunner); ok {
-		result, err = environmentRunner.RunScriptWithEnv(scriptPath, stdin, step.Capture != "", step.Workdir, environment)
-	} else {
-		err = fmt.Errorf("process runner does not support script environments")
-	}
+	result := run.Result
 	if step.MetricsSource != "" {
-		emitNestedMetricCapture(ctx, step, prefix, metricsCapture)
+		emitNestedMetricCapture(ctx, step, prefix, run.Metrics)
 	}
-	if err != nil {
-		emitScriptEnd(ctx, prefix, startTime, step, "failed", nil, err)
+	if err := captureScriptStepOutput(step, ctx, result); err != nil {
+		if rcErr := emitScriptEnd(ctx, prefix, startTime, step, "failed", &result, err, log); rcErr != nil {
+			return OutcomeFailed, rcErr
+		}
 		return OutcomeFailed, err
-	}
-	if step.Capture != "" {
-		capturedOutput := result.Stdout
-		if step.CaptureStderr && result.ExitCode != 0 && result.Stderr != "" {
-			capturedOutput += "\n\nSTDERR:\n" + result.Stderr
-		}
-		captured, err := captureScriptOutput(step.CaptureFormat, capturedOutput)
-		if err != nil {
-			emitScriptEnd(ctx, prefix, startTime, step, "failed", &result, err)
-			return OutcomeFailed, err
-		}
-		ctx.CapturedVariables[step.Capture] = captured
-		recordPullRequestCapture(ctx, step.ID, step.Capture, captured)
 	}
 	if result.ExitCode != 0 {
-		emitScriptEnd(ctx, prefix, startTime, step, "failed", &result, nil)
+		if rcErr := emitScriptEnd(ctx, prefix, startTime, step, "failed", &result, nil, log); rcErr != nil {
+			return OutcomeFailed, rcErr
+		}
 		return OutcomeFailed, nil
 	}
-	emitScriptEnd(ctx, prefix, startTime, step, "success", &result, nil)
+	if rcErr := emitScriptEnd(ctx, prefix, startTime, step, "success", &result, nil, log); rcErr != nil {
+		return OutcomeSuccess, rcErr
+	}
 	return OutcomeSuccess, nil
 }
 
-func emitScriptEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, step *model.Step, outcome string, result *ProcessResult, err error) {
+// captureScriptStepOutput writes step.Capture from a script result (stdout,
+// plus stderr on failure when capture_stderr is set). A step without capture
+// is a no-op.
+func captureScriptStepOutput(step *model.Step, ctx *model.ExecutionContext, result ProcessResult) error {
+	if step.Capture == "" {
+		return nil
+	}
+	capturedOutput := result.Stdout
+	if step.CaptureStderr && result.ExitCode != 0 && result.Stderr != "" {
+		capturedOutput += "\n\nSTDERR:\n" + result.Stderr
+	}
+	captured, err := captureScriptOutput(step.CaptureFormat, capturedOutput)
+	if err != nil {
+		return err
+	}
+	ctx.CapturedVariables[step.Capture] = captured
+	recordPullRequestCapture(ctx, step.ID, step.Capture, captured)
+	return nil
+}
+
+// emitScriptEnd emits the step_end audit event and updates ctx.LastFailure.
+// Returns an error when the check failed and its guarded execution reference
+// could not be rebuilt from audit; the audit event is still emitted in that
+// case so the check's own evidence is never lost.
+func emitScriptEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, step *model.Step, outcome string, result *ProcessResult, err error, log Logger) error {
 	data := map[string]any{}
 	if result != nil {
 		data["exit_code"] = result.ExitCode
@@ -98,7 +167,14 @@ func emitScriptEnd(ctx *model.ExecutionContext, prefix string, startTime time.Ti
 	if err != nil {
 		data["error"] = err.Error()
 	}
+	addGuardedLinkage(data, StepOutcome(outcome), ctx)
+	exitCode, stdout, stderr := 0, "", ""
+	if result != nil {
+		exitCode, stdout, stderr = result.ExitCode, result.Stdout, result.Stderr
+	}
+	failureErr := recordCheckFailure(ctx, step, StepOutcome(outcome), prefix, checkAttempt(ctx, step), exitCode, stdout, stderr, log)
 	emitStepEnd(ctx, prefix, startTime, outcome, data, step)
+	return failureErr
 }
 
 func resolveScriptPath(script string, ctx *model.ExecutionContext) (string, error) {

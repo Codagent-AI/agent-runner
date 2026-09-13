@@ -51,8 +51,8 @@ steps:
       artifact_validation_instruction: 'If a specification changed, run `openspec validate --type change "{{change_name}}"`.'
 
   - id: archive
-    script: archive-change.sh
-    script_inputs:
+    workflow: archive-change-v1.0.yaml
+    params:
       change_name: "{{change_name}}"
 
   - id: finalize

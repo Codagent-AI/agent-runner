@@ -2,9 +2,7 @@
 
 ## Purpose
 Define run-list navigation, run actions, filtering, and transitions into run inspection.
-
 ## Requirements
-
 ### Requirement: Open run from TUI
 Pressing Enter on a run in the TUI SHALL navigate from the list view to the run view for that run. The list view's state (cursor, tab, scroll offsets) SHALL be preserved so that returning from the run view restores it. Runs of any status (active, inactive, completed) SHALL be selectable. Resume is no longer triggered directly from the list — it becomes an action inside the run view (see `view-run` spec).
 
@@ -81,3 +79,16 @@ The list's help bar SHALL include `s settings` whenever `s` would currently open
 #### Scenario: Help bar advertises the shortcut
 - **WHEN** the run list is visible and `s` would open the editor
 - **THEN** the help bar includes a `s settings` entry
+
+### Requirement: Failed run rows show the failure reason
+
+A failed run row in the list SHALL display the run's classified failure reason after its status, truncated with an ellipsis to the available column width. Runs with no failure record SHALL show the existing failure reason string.
+
+#### Scenario: Blocked failure in list
+- **WHEN** a run failed at `verify-draft-pr` with a blocked declaration
+- **THEN** its row shows `failed` followed by `verify-draft-pr failed: … blocked: push rejected: token lacks workflow scope`, truncated to fit
+
+#### Scenario: Reason truncates without breaking columns
+- **WHEN** the failure reason is longer than the available width
+- **THEN** it is cut with an ellipsis and the other columns keep their positions
+

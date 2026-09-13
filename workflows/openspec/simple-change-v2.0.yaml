@@ -62,6 +62,10 @@ steps:
     script: validate-change.sh
     script_inputs:
       change_name: "{{change_name}}"
+    repair:
+      session: lead-agent
+      prompt: |
+        `openspec validate --type change "{{change_name}}"` failed for OpenSpec change "{{change_name}}". Fix mechanical artifact errors under `openspec/changes/{{change_name}}/` only. Do not invent a product, scope, or design decision. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
 
   - id: commit-plan
     workflow: ../core/commit-change-plan-v1.0.yaml
@@ -77,6 +81,6 @@ steps:
       change_label: "OpenSpec change"
 
   - id: archive
-    script: archive-change.sh
-    script_inputs:
+    workflow: archive-change-v1.0.yaml
+    params:
       change_name: "{{change_name}}"
