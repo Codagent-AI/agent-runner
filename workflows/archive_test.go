@@ -511,17 +511,17 @@ exit 0
 	f.env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
 }
 
-func (f *archiveTestFixture) runStdout(t *testing.T, script string, stdin []byte) (string, string, error) {
+func (f *archiveTestFixture) runStdout(t *testing.T, script string, stdin []byte) (stdout, stderr string, err error) {
 	t.Helper()
 	cmd := exec.Command("sh", filepath.Join(f.scriptsDir, script))
 	cmd.Dir = f.repo
 	cmd.Env = f.env
 	cmd.Stdin = strings.NewReader(string(stdin))
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	return stdout.String(), stderr.String(), err
+	var outBuf, errBuf strings.Builder
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	err = cmd.Run()
+	return outBuf.String(), errBuf.String(), err
 }
 
 // TestArchiveTransitionStdoutIsOnlyTheStateJSON proves that the openspec
