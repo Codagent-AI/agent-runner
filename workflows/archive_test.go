@@ -631,3 +631,45 @@ func TestVerifyArchiveCommitRejectsRewrittenPreExistingEdit(t *testing.T) {
 		t.Fatalf("output = %q, want the rewritten path named", out)
 	}
 }
+
+// TestArchiveTransitionRefusesUnsnapshottablePreExistingPath covers a
+// pre-existing dirty path Git can only print quoted (a control character,
+// a quote, or a backslash): its content cannot be snapshotted reliably, so
+// the transition must refuse loudly instead of silently skipping the file.
+func TestArchiveTransitionRefusesUnsnapshottablePreExistingPath(t *testing.T) {
+	f := newArchiveTestFixture(t, "ticket-123-demo")
+	oddName := "odd" + string('"') + "name.md"
+	odd := filepath.Join(f.repo, "openspec", "specs", oddName)
+	mustWriteFile(t, odd, "dirty\n")
+
+	out, err := f.runTransition(t)
+	if err == nil {
+		t.Fatalf("archive-transition succeeded with an unsnapshottable dirty path:\n%s", out)
+	}
+	if !strings.Contains(out, "odd") || !strings.Contains(out, "commit or stash") {
+		t.Fatalf("output = %q, want the path named with guidance", out)
+	}
+	if _, statErr := os.Stat(filepath.Join(f.repo, f.changeDir)); statErr != nil {
+		t.Fatalf("change directory should be untouched when the transition refuses: %v", statErr)
+	}
+}
+
+// TestArchiveTransitionSnapshotsNonASCIIPreExistingPath proves ordinary
+// non-ASCII file names are snapshotted unquoted and verified by content.
+func TestArchiveTransitionSnapshotsNonASCIIPreExistingPath(t *testing.T) {
+	f := newArchiveTestFixture(t, "ticket-123-demo")
+	accented := filepath.Join(f.repo, "openspec", "specs", "résumé.md")
+	mustWriteFile(t, accented, "dirty\n")
+
+	transitionOut, err := f.runTransition(t)
+	if err != nil {
+		t.Fatalf("archive-transition failed: %v\n%s", err, transitionOut)
+	}
+	snapshot, err := os.ReadFile(filepath.Join(f.sessionDir, "output", "archive-transition", f.changeName+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(snapshot), "openspec/specs/résumé.md\\t") {
+		t.Fatalf("snapshot should record the non-ASCII path unquoted with its blob:\n%s", snapshot)
+	}
+}

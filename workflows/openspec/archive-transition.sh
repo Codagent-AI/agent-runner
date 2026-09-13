@@ -22,6 +22,11 @@ find_archive_dirs() {
   fi
 }
 
+# Paths are printed unquoted for non-ASCII names so they can be hashed and
+# compared as-is; Git still quotes names holding control characters, quotes,
+# or backslashes, and those are refused below rather than parsed.
+git() { command git -c core.quotePath=false "$@"; }
+
 status_lines() {
   # Emits "STATUS<TAB>PATH" for tracked worktree changes and "A<TAB>PATH"
   # for untracked files, restricted to the given paths.
@@ -56,6 +61,12 @@ to_json_lines() {
 content_lines() {
   while IFS="$(printf '\t')" read -r _status path; do
     [ -n "$path" ] || continue
+    case "$path" in
+      \"*)
+        printf 'archive-transition: cannot snapshot the content of pre-existing dirty path %s (its name needs quoting); commit or stash it before archiving\n' "$path" >&2
+        exit 1
+        ;;
+    esac
     [ -f "$path" ] || continue
     printf '%s\t%s\n' "$path" "$(git hash-object -- "$path")"
   done
@@ -69,7 +80,8 @@ else
   start_head=$(git rev-parse --verify HEAD)
   prior_index_json=$(repo_index_lines | to_json_lines)
   prior_worktree_json=$(repo_worktree_lines | to_json_lines)
-  prior_content_json=$(repo_worktree_lines | content_lines | to_json_lines)
+  prior_content_lines=$(repo_worktree_lines | content_lines) || exit 1
+  prior_content_json=$(printf '%s\n' "$prior_content_lines" | to_json_lines)
   jq -n \
     --arg start_head "$start_head" \
     --argjson prior_index "$prior_index_json" \

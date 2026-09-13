@@ -36,6 +36,10 @@ prior_worktree=$(jq -c '.prior_worktree | sort' "$snapshot_file")
 # and path only, as before.
 prior_content=$(jq -c '.prior_content // [] | sort' "$snapshot_file")
 
+# Match the transition's unquoted non-ASCII paths so status and content
+# lines compare against the snapshot as-is.
+git() { command git -c core.quotePath=false "$@"; }
+
 status_lines() {
   git diff --no-renames --name-status -- "$@"
   git ls-files --others --exclude-standard -- "$@" | sed 's/^/A\t/'
