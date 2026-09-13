@@ -575,3 +575,28 @@ func TestVerifyArchiveCommitAcceptsStateWithLeadingOutput(t *testing.T) {
 		t.Fatalf("verify rejected archive_state with leading output: %v\n%s", err, out)
 	}
 }
+
+// TestVerifyArchiveCommitToleratesSeparateUnrelatedCommit covers a fix
+// committed between a failed verification and its resume: a commit that
+// touches no archive path is not part of the archive delta and must not fail
+// verification, while the archive commit itself stays pure.
+func TestVerifyArchiveCommitToleratesSeparateUnrelatedCommit(t *testing.T) {
+	f := newArchiveTestFixture(t, "ticket-123-demo")
+	transitionOut, err := f.runTransition(t)
+	if err != nil {
+		t.Fatalf("archive-transition failed: %v\n%s", err, transitionOut)
+	}
+	archiveDir := archiveStateField(t, transitionOut, "archive_dir")
+	canonicalSpec := filepath.Join("openspec", "specs", "spec-a-canonical.md")
+	runGit(t, f.repo, "add", "--", f.changeDir, archiveDir, canonicalSpec)
+	runGit(t, f.repo, "commit", "-m", "TICKET-123: archive change", "--", f.changeDir, archiveDir, canonicalSpec)
+
+	mustWriteFile(t, filepath.Join(f.repo, "tooling.sh"), "echo fixed\n")
+	runGit(t, f.repo, "add", "tooling.sh")
+	runGit(t, f.repo, "commit", "-m", "TICKET-123: fix tooling", "--", "tooling.sh")
+
+	out, err := f.runVerify(t, transitionOut)
+	if err != nil {
+		t.Fatalf("verify rejected a separate unrelated commit: %v\n%s", err, out)
+	}
+}

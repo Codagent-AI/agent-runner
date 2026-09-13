@@ -88,15 +88,25 @@ assert_same_set "$owned_delta" "$committed" \
   'owned change not found in start_head..HEAD' \
   'unexpected committed change outside the owned archive delta'
 
-# The commit range must touch no path outside the allowed paths.
-outside=$(git diff --no-renames --name-only "$start_head" HEAD -- . \
-  ":(exclude)$change_dir" ":(exclude)$change_dir/*" \
-  ":(exclude)$archive_dir" ":(exclude)$archive_dir/*" \
-  ":(exclude)$specs_dir" ":(exclude)$specs_dir/*" | sed -n '1p')
-if [ -n "$outside" ]; then
-  printf 'verify-archive-commit: commit range touched a path outside the allowed archive paths: %s\n' "$outside" >&2
-  exit 1
-fi
+# Every commit in the range that touches an archive path must touch nothing
+# else, so a repair cannot bundle unrelated files into the archive commit. A
+# commit that touches no archive path at all (a fix landed between a failed
+# verification and its resume) is not part of the archive and is tolerated.
+for commit in $(git rev-list --reverse "$start_head..HEAD"); do
+  touches_archive=$(git diff-tree --no-commit-id --no-renames --name-only -r "$commit" -- \
+    "$change_dir" "$archive_dir" "$specs_dir" | sed -n '1p')
+  if [ -z "$touches_archive" ]; then
+    continue
+  fi
+  outside=$(git diff-tree --no-commit-id --no-renames --name-only -r "$commit" -- . \
+    ":(exclude)$change_dir" ":(exclude)$change_dir/*" \
+    ":(exclude)$archive_dir" ":(exclude)$archive_dir/*" \
+    ":(exclude)$specs_dir" ":(exclude)$specs_dir/*" | sed -n '1p')
+  if [ -n "$outside" ]; then
+    printf 'verify-archive-commit: archive commit %s touched a path outside the allowed archive paths: %s\n' "$(git rev-parse --short "$commit")" "$outside" >&2
+    exit 1
+  fi
+done
 
 # The index outside the owned delta must equal the pre-existing staged state,
 # repo-wide: a repair that stages or unstages anything unrelated, anywhere in
