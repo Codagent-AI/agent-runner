@@ -924,3 +924,130 @@ func TestRenderExpansionRow_UsesDefaultTextColor(t *testing.T) {
 		t.Errorf("expansion-row label should not use DimStyle, got:\n%q", rendered)
 	}
 }
+
+func TestStepRowLabel_RepairSuffixes(t *testing.T) {
+	cases := []struct {
+		name string
+		node *StepNode
+		want string
+	}{
+		{
+			name: "repairing while an attempt is active",
+			node: &StepNode{ID: "check", Type: NodeShell, Status: StatusInProgress, RepairActiveAttempt: 1, RepairBudget: 1},
+			want: " (repairing 1/1)",
+		},
+		{
+			name: "repaired after recovery",
+			node: &StepNode{ID: "check", Type: NodeShell, Status: StatusSuccess, RepairAttempts: 1, RepairBudget: 1},
+			want: " (repaired 1/1)",
+		},
+		{
+			name: "blocked declaration",
+			node: &StepNode{ID: "check", Type: NodeShell, Status: StatusFailed, RepairBlocked: true, RepairBudget: 1},
+			want: " (blocked)",
+		},
+		{
+			name: "exhausted budget",
+			node: &StepNode{ID: "check", Type: NodeShell, Status: StatusFailed, RepairAttempts: 2, RepairBudget: 2},
+			want: " (2/2)",
+		},
+		{
+			name: "no attempt has run",
+			node: &StepNode{ID: "check", Type: NodeShell, Status: StatusFailed, RepairBudget: 1},
+			want: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			label, suffix := stepRowLabel(tc.node)
+			if label != "check" {
+				t.Fatalf("label = %q, want check", label)
+			}
+			if suffix != tc.want {
+				t.Fatalf("suffix = %q, want %q", suffix, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildStepRows_RepairedCheckExpandsAttemptAndRepairRows(t *testing.T) {
+	wf := fixtureRepairPlanChange()
+	tree := BuildTree(&wf, fixturePath("openspec/plan-change-v1.0.yaml"))
+	applyFixtureAudit(t, tree, repairedInlineAuditFixture())
+
+	m := newTestModel(tree, FromList)
+	m.cursor = 1 // check-plan
+
+	rows := m.buildStepRows(tree.Root.Children)
+	plain := make([]string, len(rows))
+	for i, row := range rows {
+		plain[i] = stripANSI(row)
+	}
+	joined := strings.Join(plain, "\n")
+
+	if !strings.Contains(plain[1], "✓") || !strings.Contains(plain[1], "check-plan (repaired 1/1)") {
+		t.Fatalf("check row = %q", plain[1])
+	}
+	if len(plain) < 4 {
+		t.Fatalf("expected attempt children rows, got:\n%s", joined)
+	}
+	if !strings.Contains(plain[2], "✗") || !strings.Contains(plain[2], "⟳") || !strings.Contains(plain[2], "attempt 1") {
+		t.Fatalf("attempt row = %q", plain[2])
+	}
+	if !strings.Contains(plain[3], "✓") || !strings.Contains(plain[3], "⚙") || !strings.Contains(plain[3], "repair 1") {
+		t.Fatalf("repair row = %q", plain[3])
+	}
+}
+
+func TestBuildStepRows_BlockedRepairCheckHasNoAttemptChildren(t *testing.T) {
+	wf := fixtureRepairImplementChange()
+	tree := BuildTree(&wf, fixturePath("openspec/implement-change-v1.0.yaml"))
+	applyFixtureAudit(t, tree, blockedRerunAuditFixture())
+
+	m := newTestModel(tree, FromList)
+	m.cursor = 1 // verify-draft-pr
+
+	rows := m.buildStepRows(tree.Root.Children)
+	if len(rows) != len(tree.Root.Children) {
+		t.Fatalf("blocked check should expand to nothing, got rows %#v", rows)
+	}
+	row := stripANSI(rows[1])
+	if !strings.Contains(row, "✗") || !strings.Contains(row, "verify-draft-pr (blocked)") {
+		t.Fatalf("blocked check row = %q", row)
+	}
+}
+
+func TestBuildStepRows_RepairRerunAttemptShowsContainerRow(t *testing.T) {
+	wf := fixtureRepairImplementChange()
+	tree := BuildTree(&wf, fixturePath("openspec/implement-change-v1.0.yaml"))
+	applyFixtureAudit(t, tree, inProgressRerunAuditFixture())
+
+	m := newTestModel(tree, FromList)
+	m.cursor = 1 // verify-draft-pr
+
+	plain := []string{}
+	for _, row := range m.buildStepRows(tree.Root.Children) {
+		plain = append(plain, stripANSI(row))
+	}
+	joined := strings.Join(plain, "\n")
+	if !strings.Contains(plain[1], "verify-draft-pr (repairing 1/1)") {
+		t.Fatalf("check row = %q", plain[1])
+	}
+	if len(plain) < 4 {
+		t.Fatalf("expected attempt and rerun rows:\n%s", joined)
+	}
+	if !strings.Contains(plain[2], "attempt 1") || !strings.Contains(plain[2], "⟳") {
+		t.Fatalf("attempt row = %q", plain[2])
+	}
+	if !strings.Contains(plain[3], "rerun 1") {
+		t.Fatalf("rerun container row = %q", plain[3])
+	}
+}
+
+func TestLegendListsRepairAttemptGlyph(t *testing.T) {
+	m := newTestModel(&Tree{Root: &StepNode{ID: "wf", Type: NodeRoot}}, FromList)
+	legend := stripANSI(m.renderLegend())
+	if !strings.Contains(legend, "⟳  repair attempt") {
+		t.Fatalf("legend missing repair-attempt glyph:\n%s", legend)
+	}
+}

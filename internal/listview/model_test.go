@@ -2,15 +2,20 @@ package listview
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/codagent/agent-runner/internal/discovery"
+	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runs"
 	"github.com/codagent/agent-runner/internal/settingseditor"
+	"github.com/codagent/agent-runner/internal/stateio"
 	"github.com/codagent/agent-runner/internal/usersettings"
 )
 
@@ -1399,5 +1404,104 @@ func TestListView_HelpAdvertisesSettingsOnRunLists(t *testing.T) {
 				t.Fatalf("help = %q, did not expect s settings", got)
 			}
 		})
+	}
+}
+
+func TestListView_RepairFailedRunShowsFailureReason(t *testing.T) {
+	run := inactiveRun()
+	run.CurrentStep = "verify-draft-pr"
+	run.FailureReason = "verify-draft-pr failed: no draft pr; blocked: push rejected"
+	m := newTestListModel([]runs.RunInfo{run})
+	m.termWidth = 160
+
+	view := sanitize(m.renderRunList(m.currentRuns, 0, &m.currentDirOffset))
+	if !strings.Contains(view, "verify-draft-pr failed: no draft pr; blocked: push rejected") {
+		t.Fatalf("run list = %q, want the classified failure reason", view)
+	}
+}
+
+func TestListView_RepairFailureReasonTruncatesWithoutMovingColumns(t *testing.T) {
+	plain := inactiveRun()
+	plain.CurrentStep = "verify-draft-pr"
+	withReason := inactiveRun()
+	withReason.SessionID = "other-run-2026-04-19T10-00-00Z"
+	withReason.CurrentStep = "verify-draft-pr"
+	withReason.FailureReason = strings.Repeat("a very long classified failure reason ", 10)
+
+	m := newTestListModel([]runs.RunInfo{plain, withReason})
+	m.termWidth = 100
+	lines := strings.Split(strings.TrimRight(sanitize(m.renderRunList(m.currentRuns, 0, &m.currentDirOffset)), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected a header and two rows, got %d lines: %q", len(lines), lines)
+	}
+	if !strings.Contains(lines[2], "…") {
+		t.Fatalf("long reason was not truncated with an ellipsis: %q", lines[2])
+	}
+	for _, line := range lines[1:] {
+		if runewidth.StringWidth(line) > m.termWidth {
+			t.Fatalf("row overflowed the terminal width: %q", line)
+		}
+	}
+	// Compare display columns, not byte offsets: the cursor glyph is wider in
+	// bytes than the unselected prefix.
+	stepColumn := func(line string) int {
+		index := strings.Index(line, "verify-draft-pr")
+		if index < 0 {
+			t.Fatalf("row is missing the step column: %q", line)
+		}
+		return runewidth.StringWidth(line[:index])
+	}
+	if stepColumn(lines[1]) != stepColumn(lines[2]) {
+		t.Fatalf("failure reason moved the step column: %q vs %q", lines[1], lines[2])
+	}
+}
+
+func TestListView_RepairRunWithoutFailureReasonIsUnchanged(t *testing.T) {
+	run := inactiveRun()
+	run.CurrentStep = "build"
+	m := newTestListModel([]runs.RunInfo{run})
+	m.termWidth = 120
+	before := sanitize(m.renderRunList(m.currentRuns, 0, &m.currentDirOffset))
+
+	if strings.Contains(before, "failed:") {
+		t.Fatalf("row without a failure record gained failure text: %q", before)
+	}
+}
+
+// TestRepairRunListRowINT005 projects a persisted failure reason from
+// state.json all the way into a rendered run-list row.
+func TestRepairRunListRowINT005(t *testing.T) {
+	projectDir := t.TempDir()
+	sessionDir := filepath.Join(projectDir, "runs", "implement-change-2026-09-01T09-14-00-000000000Z")
+	if err := os.MkdirAll(sessionDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	reason := "verify-draft-pr failed: no draft pull request found; blocked: push rejected: token lacks workflow scope"
+	state := model.RunState{
+		WorkflowName:  "implement-change",
+		CurrentStep:   model.CurrentStep{StepID: "verify-draft-pr"},
+		Params:        map[string]string{},
+		FailureReason: reason,
+	}
+	if err := stateio.WriteState(&state, sessionDir); err != nil {
+		t.Fatal(err)
+	}
+
+	runList, err := runs.ListForDir(projectDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runList) != 1 || runList[0].FailureReason != reason {
+		t.Fatalf("run info = %+v", runList)
+	}
+
+	m := newTestListModel(runList)
+	m.termWidth = 90
+	view := sanitize(m.renderRunList(m.currentRuns, 0, &m.currentDirOffset))
+	if !strings.Contains(view, "verify-draft-pr failed: no") {
+		t.Fatalf("run list row missing the failure reason:\n%s", view)
+	}
+	if !strings.Contains(view, "…") {
+		t.Fatalf("long reason was not truncated to the available width:\n%s", view)
 	}
 }

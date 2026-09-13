@@ -282,6 +282,49 @@ break_if: failure
 
 It is only valid inside a loop body.
 
+## Recoverable Checks
+
+A shell or script step (a check) may declare `repair` so a failed check does not abort the run outright. When the check fails, the Runner runs the repair, reruns the same check, and only the check's result decides whether the workflow continues. A repair agent never declares success itself.
+
+There are two forms. Inline repair runs an agent step (naming an existing `session` or a fresh `agent`, never `session: new`) with a prompt, then reruns the check:
+
+```yaml
+- id: check-plan
+  script: validate-planning-artifacts.sh
+  script_inputs:
+    change_dir: "{{change_dir}}"
+  repair:
+    session: planning-agent
+    prompt: Apply only mechanical fixes to satisfy the reported conformance problems.
+```
+
+Rerun repair replays an earlier step in the same sequential scope forward through the check, for cases where the correct repair is to redo the mutation:
+
+```yaml
+- id: verify-draft-pr
+  command: gh pr list --head "$(git branch --show-current)" ...
+  repair:
+    rerun: open-draft-pr
+```
+
+The rerun target must be an earlier step in the same scope, and the replay range (target through the step before the check) must contain no `break_if` and no outcome-relative `skip_if: previous_success`; the loader rejects a workflow that violates either rule.
+
+`max` sets the repair attempt budget; it defaults to `1`. Budgets reset on `--resume`, on the premise that something changed since the failure.
+
+The inline repair prompt automatically receives a `<repair-evidence>` block containing the check's stdout and stderr and the final response of the most recent agent step in the same scope, wrapped with an untrusted-input notice. The same variables are available directly: `{{repair.check_output}}`, `{{repair.check_stderr}}`, `{{repair.action_response}}`, and `{{repair.attempt}}`.
+
+An agent whose final response ends with the exact line `REPAIR_BLOCKED` declares that the failure needs a human, not another repair attempt: a missing credential, an insufficient permission or token scope, or a decision only a human can make. Both the guarded action's agent and an inline repair agent may emit it. The marker only ever stops repair; it can never mark the check passed.
+
+Choose plain failure over `repair` for precondition guards, invalid input, and internal invariants; save `repair` for failures an agent can plausibly fix or explain:
+
+| Failure kind | Policy |
+| --- | --- |
+| Agent-incomplete output (missing commit, missing artifact) | Inline repair |
+| Repository-specific rejection (commit hook, convention mismatch) | Inline agent repair |
+| External credential or permission precondition | Blocked (`REPAIR_BLOCKED`) |
+| Precondition guards, invalid input, internal invariants | Plain failure |
+| Transient failure (flaky network, tool hiccup) | Out of scope; use `continue_on_failure` or a manual retry loop |
+
 ## Capture And Interpolation
 
 Captured values are available to later steps with `{{name}}`.

@@ -85,6 +85,10 @@ steps:
       change_dir: "{{change_dir}}"
       change_kind: "{{change_kind}}"
       require_tasks: "true"
+    repair:
+      session: planning-agent
+      prompt: |
+        The task plan for {{change_label}} "{{change_name}}" failed deterministic validation. Apply only mechanical fixes to the existing artifacts under `{{change_dir}}/` to satisfy the reported conformance problems. Do not re-plan, redesign, or add or remove tasks. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
 
   - id: commit-plan
     script: commit-change-plan.sh
@@ -92,3 +96,6 @@ steps:
       change_name: "{{change_name}}"
       change_dir: "{{change_dir}}"
     skip_if: 'sh: test {{change_kind}} = spec-driven'
+    repair:
+      session: planning-agent
+      prompt: commit only {{change_dir}} following repository conventions. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.

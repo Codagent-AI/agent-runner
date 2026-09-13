@@ -12,11 +12,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/codagent/agent-runner/internal/agentcall"
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/control"
+	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runlock"
 )
@@ -327,6 +330,35 @@ func TestAgentCallHandlerRunsFreshProfileAutonomousHeadless(t *testing.T) {
 	}
 }
 
+func TestAgentCallHandlerAccumulatesCollectedCallResponsesInOrder(t *testing.T) {
+	workdir := t.TempDir()
+	adapter := &callTestAdapter{discovered: "fresh-session"}
+	runner := &callTestRunner{result: ProcessResult{Started: true, Stdout: "raw"}}
+	options := testAgentCallOptions(workdir, runner, adapter)
+	handler := NewAgentCallHandler(options)
+
+	payload1, _ := json.Marshal(agentcall.Request{Prompt: "first task", Agent: stringPointer("implementor")})
+	first := startAndAwaitAgentCall(t, handler, control.AgentCallRequest{RequestID: "request-1", Payload: payload1})
+	if first.Error != nil {
+		t.Fatalf("first call failed: %#v", first)
+	}
+
+	payload2, _ := json.Marshal(agentcall.Request{Prompt: "second task", Agent: stringPointer("implementor")})
+	second := startAndAwaitAgentCall(t, handler, control.AgentCallRequest{RequestID: "request-2", Payload: payload2})
+	if second.Error != nil {
+		t.Fatalf("second call failed: %#v", second)
+	}
+
+	got := handler.CollectedCallResponses()
+	want := []model.CallResponse{
+		{CallID: first.CallID, Response: "filtered:raw"},
+		{CallID: second.CallID, Response: "filtered:raw"},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("collected call responses mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestAgentCallHandlerExposesDiscoveredChildSessionIDs(t *testing.T) {
 	handler := NewAgentCallHandler(testAgentCallOptions(
 		t.TempDir(),
@@ -355,7 +387,7 @@ func TestAgentCallHandlerExposesInFlightChildSessionIDsForParentDiscovery(t *tes
 		release: make(chan struct{}),
 		result:  ProcessResult{Started: true, Stdout: "done"},
 	}
-	ctx := testAgentCallOptions(workdir, runner, adapter).Context
+	ctx := pollingAgentCallOptions(workdir, runner, adapter).Context
 	ctx.ProjectRoot = workdir
 	ctx.WorkingDir = workdir
 	handler, _, _, err := prepareAgentCallRuntime(
@@ -367,6 +399,7 @@ func TestAgentCallHandlerExposesInFlightChildSessionIDsForParentDiscovery(t *tes
 	}
 	handler.options.Adapter = func(string) (cli.Adapter, error) { return adapter, nil }
 	handler.options.Runner = runner
+	handler.options.WaitBudget = time.Millisecond
 	start := startAgentCall(t, handler, control.AgentCallRequest{
 		RequestID: "nested", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`),
 	})
@@ -391,7 +424,7 @@ func TestAgentCallHandlerExposesInFlightChildSessionIDsForParentDiscovery(t *tes
 	}
 }
 
-func TestAgentCallHandlerEmitsSuccessfulEvidencePairWithoutResponse(t *testing.T) {
+func TestAgentCallHandlerEmitsSuccessfulEvidencePairWithDurableResponse(t *testing.T) {
 	workdir := t.TempDir()
 	cost := 0.42
 	adapter := &evidenceCallAdapter{
@@ -458,10 +491,13 @@ func TestAgentCallHandlerEmitsSuccessfulEvidencePairWithoutResponse(t *testing.T
 	if _, ok := end.Data["duration_ms"].(int64); !ok {
 		t.Fatalf("duration_ms = %#v, want int64", end.Data["duration_ms"])
 	}
-	for _, forbidden := range []string{"stdout", "response", "prompt"} {
+	for _, forbidden := range []string{"stdout", "prompt"} {
 		if _, exists := end.Data[forbidden]; exists {
 			t.Fatalf("agent_call_end duplicated %s: %+v", forbidden, end.Data)
 		}
+	}
+	if got := end.Data["response"]; got != "filtered:full child response" {
+		t.Fatalf("response = %q, want the child's filtered response so it can be rebuilt from audit", got)
 	}
 }
 
@@ -522,6 +558,29 @@ func TestPrepareAgentCallRuntimeUsesEstablishedProjectRoot(t *testing.T) {
 	}
 	if handler.options.Parent.Worktree != projectRoot || handler.options.Parent.Workdir != workingDir {
 		t.Fatalf("parent paths = worktree %q workdir %q", handler.options.Parent.Worktree, handler.options.Parent.Workdir)
+	}
+}
+
+func TestPrepareAgentCallRuntimeStampsParentExecutionAttempt(t *testing.T) {
+	workdir := t.TempDir()
+	sessionDir := t.TempDir()
+	collector := metrics.NewCollector(sessionDir, "run", "wf", time.Now())
+	pipeline := metrics.NewExecutionPipeline(collector, nil, sessionDir, "exec-1")
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		WorkflowFile: "workflow.yaml", ProjectRoot: workdir, WorkingDir: workdir,
+	})
+	ctx.AuditLogger = pipeline
+	step := &model.Step{ID: "parent-agent", Session: model.SessionNew}
+
+	handler, _, _, err := prepareAgentCallRuntime(
+		true, cli.ContextInteractive, step, ctx, &callTestAdapter{}, nil, nil,
+		"test", "parent-session", "[parent-agent]", nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handler.options.Parent.Attempt != 1 {
+		t.Fatalf("Parent.Attempt = %d, want 1 (predicted first attempt)", handler.options.Parent.Attempt)
 	}
 }
 
@@ -868,8 +927,8 @@ func TestAgentCallHandlerRejectsObviouslyOversizedResultBeforeEncodingIt(t *test
 		Payload:   json.RawMessage(`{"prompt":"large result","agent":"implementor"}`),
 	}
 	start := decodeCallResponse(t, handler.HandleAgentCall(context.Background(), request))
-	if start.Error != nil || start.CallID == "" {
-		t.Fatalf("start = %#v, want accepted call_id", start)
+	if start.CallID == "" {
+		t.Fatalf("start = %#v, want a call_id", start)
 	}
 	terminal := awaitAgentCall(t, handler, start.CallID)
 	if terminal.Error == nil || terminal.Error.Code != agentcall.CodeResultTooLarge {
@@ -898,8 +957,8 @@ func TestAgentCallHandlerCachesAcceptedLaunchFailure(t *testing.T) {
 	handler := NewAgentCallHandler(options)
 	request := control.AgentCallRequest{RequestID: "same", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`)}
 	first := decodeCallResponse(t, handler.HandleAgentCall(context.Background(), request))
-	if first.Error != nil || first.CallID == "" {
-		t.Fatalf("start = %#v, want accepted call_id", first)
+	if first.CallID == "" {
+		t.Fatalf("start = %#v, want a call_id", first)
 	}
 	second := decodeCallResponse(t, handler.HandleAgentCall(context.Background(), request))
 	if second.CallID != first.CallID || second.Result != nil {
@@ -991,7 +1050,7 @@ func TestAgentCallHandlerSeparateCallsEmitDistinctPairs(t *testing.T) {
 
 func TestAgentCallHandlerRejectsDistinctConcurrentCallAndReusesSlot(t *testing.T) {
 	runner := &callTestRunner{started: make(chan AgentProcessOptions, 2), release: make(chan struct{}), result: ProcessResult{Started: true, Stdout: "done"}}
-	handler := NewAgentCallHandler(testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
+	handler := NewAgentCallHandler(pollingAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
 	first := startAgentCall(t, handler, control.AgentCallRequest{RequestID: "first", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`)})
 	<-runner.started
 	second := startAgentCall(t, handler, control.AgentCallRequest{RequestID: "second", Payload: json.RawMessage(`{"prompt":"y","agent":"implementor"}`)})
@@ -1011,7 +1070,7 @@ func TestAgentCallHandlerRejectsDistinctConcurrentCallAndReusesSlot(t *testing.T
 
 func TestAgentCallHandlerDuplicateStartReturnsSameCallIDWithoutWaiting(t *testing.T) {
 	runner := &callTestRunner{started: make(chan AgentProcessOptions, 1), release: make(chan struct{}), result: ProcessResult{Started: true, Stdout: "done"}}
-	callOptions := testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{})
+	callOptions := pollingAgentCallOptions(t.TempDir(), runner, &callTestAdapter{})
 	logger := &recordingAuditLogger{}
 	callOptions.Context.AuditLogger = logger
 	handler := NewAgentCallHandler(callOptions)
@@ -1037,7 +1096,7 @@ func TestAgentCallHandlerDuplicateStartReturnsSameCallIDWithoutWaiting(t *testin
 
 func TestAgentCallHandlerCanceledDuplicateDoesNotChangeStoredResult(t *testing.T) {
 	runner := &callTestRunner{started: make(chan AgentProcessOptions, 1), release: make(chan struct{}), result: ProcessResult{Started: true, Stdout: "done"}}
-	handler := NewAgentCallHandler(testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
+	handler := NewAgentCallHandler(pollingAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
 	request := control.AgentCallRequest{RequestID: "same", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`)}
 	original := startAgentCall(t, handler, request)
 	<-runner.started
@@ -1117,7 +1176,7 @@ func TestAgentCallHandlerStoredResultWinsWhenCompletionAndCancellationBecomeRead
 
 func TestAgentCallHandlerAcceptedStartReturnsCallIDWithoutWaiting(t *testing.T) {
 	runner := &callTestRunner{started: make(chan AgentProcessOptions, 1), release: make(chan struct{}), result: ProcessResult{Started: true, Stdout: "done"}}
-	handler := NewAgentCallHandler(testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
+	handler := NewAgentCallHandler(pollingAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
 	start := startAgentCall(t, handler, control.AgentCallRequest{
 		RequestID: "start", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`),
 	})
@@ -1133,7 +1192,7 @@ func TestAgentCallHandlerAcceptedStartReturnsCallIDWithoutWaiting(t *testing.T) 
 
 func TestAgentCallHandlerGetReturnsImmediateInProgressSnapshot(t *testing.T) {
 	runner := &callTestRunner{started: make(chan AgentProcessOptions, 1), release: make(chan struct{}), result: ProcessResult{Started: true, Stdout: "secret child response"}}
-	handler := NewAgentCallHandler(testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
+	handler := NewAgentCallHandler(pollingAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
 	start := startAgentCall(t, handler, control.AgentCallRequest{
 		RequestID: "start", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`),
 	})
@@ -1186,8 +1245,8 @@ func TestAgentCallHandlerGetReturnsCachedTerminalResultAndLaunchFailure(t *testi
 		handler := NewAgentCallHandler(testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
 		request := control.AgentCallRequest{RequestID: "same", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`)}
 		start := decodeCallResponse(t, handler.HandleAgentCall(context.Background(), request))
-		if start.Error != nil || start.CallID == "" {
-			t.Fatalf("start = %#v, want call_id after accept", start)
+		if start.CallID == "" {
+			t.Fatalf("start = %#v, want a call_id", start)
 		}
 		retry := decodeCallResponse(t, handler.HandleAgentCall(context.Background(), request))
 		if retry.CallID != start.CallID || retry.Result != nil {
@@ -1206,7 +1265,7 @@ func TestAgentCallHandlerGetReturnsCachedTerminalResultAndLaunchFailure(t *testi
 
 func TestAgentCallHandlerExplicitCancelTerminatesChildAndUnknownIDsAreRejected(t *testing.T) {
 	runner := &callTestRunner{started: make(chan AgentProcessOptions, 2), release: make(chan struct{}), result: ProcessResult{Started: true, Stdout: "done"}}
-	handler := NewAgentCallHandler(testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
+	handler := NewAgentCallHandler(pollingAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
 	start := startAgentCall(t, handler, control.AgentCallRequest{
 		RequestID: "cancel-me", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`),
 	})
@@ -1258,7 +1317,7 @@ func TestAgentCallHandlerCancelReturnsWhenRequestContextEndsEvenIfChildIgnoresCa
 		ignoreCancel: true,
 		result:       ProcessResult{Started: true, Stdout: "stuck"},
 	}
-	handler := NewAgentCallHandler(testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
+	handler := NewAgentCallHandler(pollingAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
 	start := startAgentCall(t, handler, control.AgentCallRequest{
 		RequestID: "stuck-child", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`),
 	})
@@ -1288,7 +1347,7 @@ func TestAgentCallHandlerCancelReturnsWhenRequestContextEndsEvenIfChildIgnoresCa
 
 func TestAgentCallHandlerCallInProgressIncludesCallID(t *testing.T) {
 	runner := &callTestRunner{started: make(chan AgentProcessOptions, 1), release: make(chan struct{}), result: ProcessResult{Started: true, Stdout: "done"}}
-	handler := NewAgentCallHandler(testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
+	handler := NewAgentCallHandler(pollingAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
 	first := startAgentCall(t, handler, control.AgentCallRequest{
 		RequestID: "first", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`),
 	})
@@ -1314,7 +1373,7 @@ func TestAgentCallHandlerCallInProgressIncludesCallID(t *testing.T) {
 
 func TestAgentCallHandlerStartRequestCancelDoesNotKillChild(t *testing.T) {
 	runner := &callTestRunner{started: make(chan AgentProcessOptions, 1), release: make(chan struct{}), result: ProcessResult{Started: true, Stdout: "done"}}
-	options := testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{})
+	options := pollingAgentCallOptions(t.TempDir(), runner, &callTestAdapter{})
 	options.AttemptContext = context.Background()
 	handler := NewAgentCallHandler(options)
 	reqCtx, cancel := context.WithCancel(context.Background())
@@ -1349,7 +1408,7 @@ func TestAgentCallHandlerStartRequestCancelDoesNotKillChild(t *testing.T) {
 
 func TestAgentCallHandlerCancellationIsCachedAndReleasesSlot(t *testing.T) {
 	runner := &callTestRunner{started: make(chan AgentProcessOptions, 2), release: make(chan struct{}), result: ProcessResult{Started: true, Stdout: "done"}}
-	options := testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{})
+	options := pollingAgentCallOptions(t.TempDir(), runner, &callTestAdapter{})
 	logger := &recordingAuditLogger{}
 	options.Context.AuditLogger = logger
 	handler := NewAgentCallHandler(options)
@@ -1554,6 +1613,15 @@ func testAgentCallOptions(workdir string, runner ProcessRunner, adapter cli.Adap
 	}
 }
 
+// pollingAgentCallOptions shapes the handler like a Cursor parent: the one
+// supported parent whose MCP client aborts a long tools/call, so call_agent
+// returns a call_id and the parent must poll get_agent_call.
+func pollingAgentCallOptions(workdir string, runner ProcessRunner, adapter cli.Adapter) *AgentCallHandlerOptions {
+	options := testAgentCallOptions(workdir, runner, adapter)
+	options.WaitBudget = time.Millisecond
+	return options
+}
+
 func startAndAwaitAgentCall(t *testing.T, handler *AgentCallHandler, request control.AgentCallRequest) agentcall.Response {
 	t.Helper()
 	start := decodeCallResponse(t, handler.HandleAgentCall(context.Background(), request))
@@ -1669,4 +1737,135 @@ func agentCallAuditEvents(events []audit.Event) []audit.Event {
 		}
 	}
 	return calls
+}
+
+func TestAgentCallWaitBudgetBoundsOnlyCursorParents(t *testing.T) {
+	for _, parent := range []string{"claude", "codex", "copilot", "opencode", "", "unknown"} {
+		if budget := agentCallWaitBudget(parent); budget != 0 {
+			t.Fatalf("agentCallWaitBudget(%q) = %s, want 0 so the request waits for the child", parent, budget)
+		}
+	}
+	budget := agentCallWaitBudget("cursor")
+	if budget <= 0 || budget >= time.Minute {
+		t.Fatalf("agentCallWaitBudget(cursor) = %s, want a positive budget under the 60s host abort", budget)
+	}
+	if agentCallWaitBudget(" Cursor ") != budget {
+		t.Fatal("cursor budget should not depend on spacing or case")
+	}
+}
+
+func TestAgentCallStartWaitsForTerminalResultWhenParentHasNoBudget(t *testing.T) {
+	runner := &callTestRunner{
+		started: make(chan AgentProcessOptions, 1),
+		release: make(chan struct{}),
+		result:  ProcessResult{Started: true, Stdout: "child answer"},
+	}
+	handler := NewAgentCallHandler(testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
+	responses := make(chan agentcall.Response, 1)
+	go func() {
+		responses <- decodeCallResponse(t, handler.HandleAgentCall(context.Background(), control.AgentCallRequest{
+			RequestID: "start", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`),
+		}))
+	}()
+
+	<-runner.started
+	select {
+	case early := <-responses:
+		t.Fatalf("call_agent returned %#v before the child finished; a parent with no budget must not be able to move on", early)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(runner.release)
+	got := <-responses
+	if got.Error != nil || got.Result == nil || got.Result.Response != "filtered:child answer" {
+		t.Fatalf("call_agent = %#v, want the child's terminal result", got)
+	}
+	if got.Status != agentcall.StatusSucceeded {
+		t.Fatalf("status = %q, want %q", got.Status, agentcall.StatusSucceeded)
+	}
+	if len(handler.UncollectedCalls()) != 0 {
+		t.Fatalf("UncollectedCalls = %v, want none after a terminal start", handler.UncollectedCalls())
+	}
+}
+
+func TestAgentCallStartReturnsCallIDWhenParentBudgetExpires(t *testing.T) {
+	runner := &callTestRunner{
+		started: make(chan AgentProcessOptions, 1),
+		release: make(chan struct{}),
+		result:  ProcessResult{Started: true, Stdout: "child answer"},
+	}
+	handler := NewAgentCallHandler(pollingAgentCallOptions(t.TempDir(), runner, &callTestAdapter{}))
+	start := startAgentCall(t, handler, control.AgentCallRequest{
+		RequestID: "start", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`),
+	})
+	if start.Error != nil || start.CallID == "" || start.Result != nil {
+		t.Fatalf("start = %#v, want a call_id with no terminal result", start)
+	}
+	<-runner.started
+	if pending := handler.UncollectedCalls(); len(pending) != 1 || pending[0] != start.CallID {
+		t.Fatalf("UncollectedCalls = %v, want [%s] while the child runs", pending, start.CallID)
+	}
+
+	close(runner.release)
+	terminal := awaitAgentCall(t, handler, start.CallID)
+	if terminal.Result == nil || terminal.Result.Response != "filtered:child answer" {
+		t.Fatalf("poll = %#v, want the child's terminal result", terminal)
+	}
+	if len(handler.UncollectedCalls()) != 0 {
+		t.Fatalf("UncollectedCalls = %v, want none once the call is terminal", handler.UncollectedCalls())
+	}
+}
+
+func TestAgentCallGetWaitsForTerminalResultWhenParentHasNoBudget(t *testing.T) {
+	runner := &callTestRunner{
+		started: make(chan AgentProcessOptions, 1),
+		release: make(chan struct{}),
+		result:  ProcessResult{Started: true, Stdout: "child answer"},
+	}
+	options := testAgentCallOptions(t.TempDir(), runner, &callTestAdapter{})
+	handler := NewAgentCallHandler(options)
+	starts := make(chan agentcall.Response, 1)
+	go func() {
+		starts <- decodeCallResponse(t, handler.HandleAgentCall(context.Background(), control.AgentCallRequest{
+			RequestID: "start", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`),
+		}))
+	}()
+	<-runner.started
+
+	pending := handler.UncollectedCalls()
+	if len(pending) != 1 {
+		t.Fatalf("UncollectedCalls = %v, want one running call", pending)
+	}
+	polls := make(chan agentcall.Response, 1)
+	go func() { polls <- getAgentCall(t, handler, pending[0]) }()
+	select {
+	case early := <-polls:
+		t.Fatalf("get_agent_call returned %#v while the child was running", early)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(runner.release)
+	if got := <-polls; got.Result == nil || got.Status != agentcall.StatusSucceeded {
+		t.Fatalf("get_agent_call = %#v, want the terminal result", got)
+	}
+	<-starts
+}
+
+func TestFailAgentStepForUncollectedCallsMarksTheStepFailed(t *testing.T) {
+	invocation := &AgentInvocationResult{Outcome: OutcomeSuccess}
+	failAgentStepForUncollectedCalls(invocation, []string{"call-1", "call-2"})
+	if invocation.Outcome != OutcomeFailed {
+		t.Fatalf("outcome = %q, want %q", invocation.Outcome, OutcomeFailed)
+	}
+	for _, want := range []string{"call-1", "call-2", "never collected"} {
+		if !strings.Contains(invocation.Stderr, want) {
+			t.Fatalf("stderr = %q, want it to mention %q", invocation.Stderr, want)
+		}
+	}
+
+	withStderr := &AgentInvocationResult{Outcome: OutcomeSuccess, Stderr: "existing detail"}
+	failAgentStepForUncollectedCalls(withStderr, []string{"call-1"})
+	if !strings.HasPrefix(withStderr.Stderr, "existing detail\n") {
+		t.Fatalf("stderr = %q, want the existing detail preserved", withStderr.Stderr)
+	}
 }

@@ -51,7 +51,11 @@ func ExecuteSubWorkflowStep(
 		return OutcomeFailed, err
 	}
 
-	startFromStepID, startCompleted := applyResumeState(parentCtx, childCtx)
+	startFromStepID, startCompleted, err := applyResumeState(parentCtx, childCtx)
+	if err != nil {
+		emitSubEnd(parentCtx, prefix, startTime, step, "failed", err.Error())
+		return OutcomeFailed, err
+	}
 	childPrefix := buildNestingPrefix(childCtx.NestingPath)
 
 	subStart := time.Now()
@@ -151,9 +155,9 @@ func executeChildSteps(
 	// Resolve which step to actually start from, advancing past completed steps.
 	resolvedStartID := startFromStepID
 	if startFromStepID != "" {
-		resolved, err := model.ResolveResumeStep(workflow.Steps, startFromStepID, startCompleted)
+		resolved, err := model.ResolveResumeStep(workflow.Steps, startFromStepID, startCompleted, childCtx.RepairFrame)
 		if err != nil {
-			return OutcomeFailed, fmt.Errorf("resume step %q not found in sub-workflow", startFromStepID)
+			return OutcomeFailed, fmt.Errorf("resume %w in sub-workflow", err)
 		}
 		if resolved.AllDone {
 			return OutcomeSuccess, nil
@@ -162,8 +166,12 @@ func executeChildSteps(
 	}
 
 	reached := resolvedStartID == ""
+	basePath := childCtx.NestingPath
+	if err := PrimeReplayResume(childCtx, basePath); err != nil {
+		return OutcomeFailed, err
+	}
 
-	for i := range workflow.Steps {
+	for i := 0; i < len(workflow.Steps); i++ {
 		if !reached {
 			if workflow.Steps[i].ID == resolvedStartID {
 				reached = true
@@ -187,17 +195,23 @@ func executeChildSteps(
 		if err != nil {
 			return OutcomeFailed, err
 		}
-		completed := outcome != OutcomeFailed && outcome != OutcomeAborted
-		updateChildProgress(childCtx, workflow.Steps[i].ID, completed)
 
-		if outcome == OutcomeAborted {
-			return OutcomeAborted, nil
+		rw, absorbed := AfterStepDispatch(childCtx, workflow.Steps, i, basePath, outcome)
+		if rw.Stopped {
+			childCtx.PropagateFailure()
+			updateChildProgress(childCtx, workflow.Steps[i].ID, false)
+			return OutcomeFailed, nil
+		}
+		if rw.Rewound {
+			i = rw.NextIndex - 1
+			continue
+		}
+		if absorbed {
+			continue
 		}
 
-		recordLastStepOutcome(childCtx, outcome)
-
-		if outcome == OutcomeFailed && !workflow.Steps[i].ContinueOnFailure && !IsWarningOutcome(&workflow.Steps[i], outcome) {
-			return OutcomeFailed, nil
+		if result, done := finishChildStep(childCtx, &workflow.Steps[i], outcome); done {
+			return result, nil
 		}
 	}
 
@@ -205,6 +219,32 @@ func executeChildSteps(
 		return OutcomeFailed, fmt.Errorf("resume step %q not found in sub-workflow", resolvedStartID)
 	}
 	return OutcomeSuccess, nil
+}
+
+// finishChildStep applies the ordinary per-step handling for one
+// sub-workflow child's outcome once repair/rewind bookkeeping has already
+// ruled out a replay-failure absorption. done is true when the caller
+// should return result immediately.
+func finishChildStep(childCtx *model.ExecutionContext, step *model.Step, outcome StepOutcome) (result StepOutcome, done bool) {
+	// A tolerated failure resumes at the next step, so it counts as completed
+	// and its repair frame (if any) is done.
+	completed := (outcome != OutcomeFailed && outcome != OutcomeAborted) || closeToleratedFrame(childCtx, step, outcome)
+	updateChildProgress(childCtx, step.ID, completed)
+
+	if outcome == OutcomeAborted {
+		return OutcomeAborted, true
+	}
+
+	recordLastStepOutcome(childCtx, outcome)
+
+	if isBlockingOutcome(step, outcome) {
+		childCtx.PropagateFailure()
+		return OutcomeFailed, true
+	}
+	if outcome == OutcomeFailed {
+		childCtx.ClearInheritedFailure()
+	}
+	return OutcomeSuccess, false
 }
 
 func skipChildStep(childCtx *model.ExecutionContext, step *model.Step) {
@@ -249,6 +289,8 @@ func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, c
 		CapturedVariables: copyMap(childCtx.CapturedVariables),
 		LastSessionStepID: childCtx.LastSessionStepID,
 		Completed:         completed,
+		LastAgent:         childCtx.LastAgentRef(),
+		Repair:            childCtx.RepairFrame,
 	}
 	// When the deeper state already describes this same step (e.g. a loop step
 	// that has written its own iteration metadata into childCtx.LastSubWorkflowChild),
@@ -264,11 +306,11 @@ func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, c
 	parent.LastSubWorkflowChild = entry
 }
 
-func applyResumeState(parentCtx, childCtx *model.ExecutionContext) (string, bool) {
+func applyResumeState(parentCtx, childCtx *model.ExecutionContext) (stepID string, completed bool, err error) {
 	resumeChild := parentCtx.ResumeChildState
 	parentCtx.ResumeChildState = nil
 	if resumeChild == nil {
-		return "", false
+		return "", false, nil
 	}
 
 	restorePersistedSessions(childCtx, resumeChild)
@@ -281,7 +323,7 @@ func applyResumeState(parentCtx, childCtx *model.ExecutionContext) (string, bool
 	} else if resumeChild.Child != nil {
 		childCtx.ResumeChildState = resumeChild.Child
 	}
-	return resumeChild.StepID, resumeChild.Completed
+	return resumeChild.StepID, resumeChild.Completed, nil
 }
 
 // restorePersistedSessions copies persisted session IDs, session profiles,
@@ -299,6 +341,15 @@ func restorePersistedSessions(ctx *model.ExecutionContext, src *model.NestedStep
 	}
 	if src.LastSessionStepID != "" {
 		ctx.LastSessionStepID = src.LastSessionStepID
+	}
+	if src.LastAgent != nil {
+		// Only the identity survives resume; the response is rebuilt from
+		// audit on demand (see recordCheckFailure) since state.json does not
+		// carry it.
+		ctx.LastAgentExecution = &model.AgentExecutionRecord{Ref: *src.LastAgent}
+	}
+	if src.Repair != nil {
+		ctx.RepairFrame = src.Repair
 	}
 }
 

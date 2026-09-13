@@ -32,6 +32,11 @@ type AgentCallParent struct {
 	Workdir          string
 	Prefix           string
 	ResolveSessionID func() string
+	// Attempt is the parent agent step's own predicted audit identity.attempt
+	// (see attemptForIdentity). Stamped on every agent_call_end this handler
+	// emits so a rebuild from audit can attribute calls to the exact parent
+	// execution instead of any step sharing the same prefix.
+	Attempt int
 }
 
 type AgentCallAccepted struct {
@@ -59,6 +64,13 @@ type AgentCallHandlerOptions struct {
 	Eligible bool
 	Parent   AgentCallParent
 
+	// WaitBudget caps how long call_agent and get_agent_call hold one open
+	// request while the child runs. Zero waits for the child, which keeps a
+	// parent from ending its turn on a call it never collected. Only a parent
+	// whose MCP client aborts a long tools/call needs a budget; the default is
+	// derived from the parent CLI.
+	WaitBudget time.Duration
+
 	Adapter        func(string) (cli.Adapter, error)
 	NewID          func() string
 	Now            func() time.Time
@@ -84,6 +96,23 @@ type agentCallExecution struct {
 	response     agentcall.Response
 	invocation   AgentInvocationResult
 	errorMessage string
+}
+
+// cursorAgentCallWaitBudget keeps one open request inside the roughly 60s
+// tools/call limit Cursor's MCP client enforces. Measured against a headless
+// cursor-agent parent: an open call fails with "MCP error -32001: Request timed
+// out" at 60.3s, and Runner's progress notifications do not extend it.
+const cursorAgentCallWaitBudget = 45 * time.Second
+
+// agentCallWaitBudget reports how long a parent CLI can hold one MCP request
+// open while a child runs. Zero, the default, waits for the child so the parent
+// cannot proceed on a result it never collected. Cursor is the one supported
+// parent that aborts a long tools/call, so it trades that safety for polling.
+func agentCallWaitBudget(parentCLI string) time.Duration {
+	if strings.EqualFold(strings.TrimSpace(parentCLI), "cursor") {
+		return cursorAgentCallWaitBudget
+	}
+	return 0
 }
 
 // AgentCallHandler is attempt-scoped. It owns validation, acceptance,
@@ -119,6 +148,9 @@ func NewAgentCallHandler(input *AgentCallHandlerOptions) *AgentCallHandler {
 	if options.Log == nil {
 		options.Log = discardLogger{}
 	}
+	if options.WaitBudget <= 0 {
+		options.WaitBudget = agentCallWaitBudget(options.Parent.CLI)
+	}
 	return &AgentCallHandler{
 		options: options, accepted: make(map[string]*acceptedAgentCall), byCallID: make(map[string]*acceptedAgentCall),
 		parentSessionID: options.Parent.SessionID,
@@ -130,9 +162,8 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 	// different payload. Check the registry before repeating validation.
 	h.mu.Lock()
 	if existing := h.accepted[envelope.RequestID]; existing != nil {
-		raw := h.marshalSnapshotLocked(existing)
 		h.mu.Unlock()
-		return raw
+		return h.awaitAgentCallResult(ctx, existing)
 	}
 	h.mu.Unlock()
 
@@ -145,9 +176,8 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 	// Recheck after resolution because another delivery of this request may
 	// have reserved it while profile/model/workdir validation ran.
 	if existing := h.accepted[envelope.RequestID]; existing != nil {
-		raw := h.marshalSnapshotLocked(existing)
 		h.mu.Unlock()
-		return raw
+		return h.awaitAgentCallResult(ctx, existing)
 	}
 	if h.active != nil {
 		active := h.active
@@ -171,7 +201,6 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 	h.accepted[envelope.RequestID] = record
 	h.byCallID[record.callID] = record
 	h.active = record
-	raw := h.marshalSnapshotLocked(record)
 	h.mu.Unlock()
 	h.emitAgentCallStart(record, resolved)
 
@@ -180,10 +209,34 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 	}
 
 	go h.finishAccepted(childCtx, record, resolved)
-	return raw
+	return h.awaitAgentCallResult(ctx, record)
 }
 
-func (h *AgentCallHandler) HandleGetAgentCall(_ context.Context, envelope control.AgentCallRequest) json.RawMessage {
+// awaitAgentCallResult blocks until the call is terminal, the wait budget
+// expires, or the requesting context ends, then returns the current snapshot.
+// Ending the request never cancels the child, which is leased to the parent
+// attempt rather than to one MCP request.
+func (h *AgentCallHandler) awaitAgentCallResult(ctx context.Context, record *acceptedAgentCall) json.RawMessage {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var expired <-chan time.Time
+	if budget := h.options.WaitBudget; budget > 0 {
+		timer := time.NewTimer(budget)
+		defer timer.Stop()
+		expired = timer.C
+	}
+	select {
+	case <-record.done:
+	case <-ctx.Done():
+	case <-expired:
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.marshalSnapshotLocked(record)
+}
+
+func (h *AgentCallHandler) HandleGetAgentCall(ctx context.Context, envelope control.AgentCallRequest) json.RawMessage {
 	request, failure := agentcall.DecodeCallIDRequest(envelope.Payload)
 	if failure != nil {
 		return marshalAgentCallResponse(agentcall.Response{Error: failure})
@@ -196,9 +249,8 @@ func (h *AgentCallHandler) HandleGetAgentCall(_ context.Context, envelope contro
 			Code: agentcall.CodeUnknownCall, Message: "call_id does not belong to the active parent attempt",
 		}})
 	}
-	raw := h.marshalSnapshotLocked(record)
 	h.mu.Unlock()
-	return raw
+	return h.awaitAgentCallResult(ctx, record)
 }
 
 func (h *AgentCallHandler) HandleCancelAgentCall(ctx context.Context, envelope control.AgentCallRequest) json.RawMessage {
@@ -286,6 +338,30 @@ func (h *AgentCallHandler) finalizeExecution(record *acceptedAgentCall, resolved
 	h.mu.Unlock()
 }
 
+// UncollectedCalls returns the ids of accepted calls that never reached a
+// terminal status, oldest first. A parent that ends its turn with one
+// outstanding leaves the child to be killed at attempt teardown, so its work
+// never reaches the workflow.
+func (h *AgentCallHandler) UncollectedCalls() []string {
+	if h == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var pending []*acceptedAgentCall
+	for _, record := range h.accepted {
+		if len(record.response) == 0 {
+			pending = append(pending, record)
+		}
+	}
+	sort.Slice(pending, func(i, j int) bool { return pending[i].started.Before(pending[j].started) })
+	ids := make([]string, 0, len(pending))
+	for _, record := range pending {
+		ids = append(ids, record.callID)
+	}
+	return ids
+}
+
 func (h *AgentCallHandler) ChildSessionIDs() []string {
 	if h == nil {
 		return nil
@@ -307,6 +383,39 @@ func (h *AgentCallHandler) ChildSessionIDs() []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+// CollectedCallResponses returns the final response of every call that
+// reached a terminal state, ordered by acceptance time and labeled by call
+// ID. The parent agent step's executor reads this when it publishes its
+// AgentExecutionRecord at completion.
+func (h *AgentCallHandler) CollectedCallResponses() []model.CallResponse {
+	if h == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	records := make([]*acceptedAgentCall, 0, len(h.accepted))
+	for _, record := range h.accepted {
+		records = append(records, record)
+	}
+	sort.Slice(records, func(i, j int) bool { return records[i].started.Before(records[j].started) })
+	var out []model.CallResponse
+	for _, record := range records {
+		if len(record.response) == 0 {
+			continue
+		}
+		var response agentcall.Response
+		if err := json.Unmarshal(record.response, &response); err != nil {
+			continue
+		}
+		text := ""
+		if response.Result != nil {
+			text = response.Result.Response
+		}
+		out = append(out, model.CallResponse{CallID: record.callID, Response: text})
+	}
+	return out
 }
 
 func agentCallChildSessionIDs(handler control.AgentCallHandler) []string {
@@ -805,6 +914,12 @@ func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *res
 		Role: call.profileName, Tool: "agent-runner",
 	}
 	data := agentCallAuditData(record, call)
+	// parent_execution_attempt identifies the exact parent agent step
+	// execution this call belongs to (its own predicted identity.attempt),
+	// distinct from parent_attempt_id (the control-layer MCP attempt). A
+	// rebuild from audit requires this so calls from an earlier or later
+	// attempt of the same-prefix step are never attributed to the wrong one.
+	data["parent_execution_attempt"] = h.options.Parent.Attempt
 	data["outcome"] = string(invocation.Outcome)
 	data["duration_ms"] = duration.Milliseconds()
 	data["cli_launched"] = invocation.CLILaunched
@@ -821,6 +936,12 @@ func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *res
 	}
 	if invocation.Stderr != "" {
 		data["stderr"] = invocation.Stderr
+	}
+	// The response is durable evidence for a guarded execution: a check that
+	// fails after this call's parent must be able to rebuild the call's
+	// final response from audit alone if interrupted before it ran.
+	if invocation.Response != "" {
+		data["response"] = truncateForAudit(invocation.Response)
 	}
 	if invocation.UsageError != nil {
 		data["usage_error"] = invocation.UsageError.Error()

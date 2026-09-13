@@ -2,12 +2,12 @@
 title: Agent Calls
 group: Guides
 order: 6
-description: Let an agent step start a nested Agent Runner profile or named session and collect the result by polling.
+description: Let an agent step run a nested Agent Runner profile or named session and collect the result, waiting where the host allows it and polling where it does not.
 ---
 
 # Agent Calls
 
-Agent calls let an agent delegate a task discovered during its turn while Agent Runner keeps session resolution, execution controls, output, and metrics outside the model. The parent invokes the Runner-owned `call_agent` tool, which returns a `call_id` immediately, then collects the child's response or a structured failure with `get_agent_call`. `cancel_agent_call` aborts a running child without ending the parent step.
+Agent calls let an agent delegate a task discovered during its turn while Agent Runner keeps session resolution, execution controls, output, and metrics outside the model. The parent invokes the Runner-owned `call_agent` tool, which waits for the child and returns its response or a structured failure. Where the parent's MCP client cannot hold a request open that long, `call_agent` returns a `call_id` instead and the parent collects the outcome with `get_agent_call`. `cancel_agent_call` aborts a running child without ending the parent step.
 
 An agent call is a nested execution beneath its parent attempt. It is not a workflow step and does not change workflow sequencing.
 
@@ -65,17 +65,20 @@ The agent CLI presents `call_agent` as a tool; these objects document its fields
 
 ## Start, Poll, And Cancel
 
-`call_agent` returns as soon as Agent Runner accepts the request. The structured start result includes a stable `call_id` and a non-terminal status (`accepted` or `running`). It does not wait for the child, so a host MCP `tools/call` timeout cannot abort a long child by itself.
+`call_agent` holds its request open until the child is terminal, then returns the child's response or a structured error. A parent that waits cannot end its turn on a call it never collected, so this is the default for every CLI whose MCP client tolerates a long `tools/call`.
+
+Cursor is the exception. Its MCP client aborts any `tools/call` at about 60 seconds and ignores progress notifications, so a Cursor parent gets a bounded wait instead: `call_agent` returns a stable `call_id` and a non-terminal status (`accepted` or `running`) once that budget expires, and the parent must poll. The child keeps running either way, because it is leased to the parent attempt rather than to one MCP request.
 
 Collect the outcome with `get_agent_call` and the same `call_id`:
 
-- While the child is running, the poll returns immediately with `call_id`, status, target, and elapsed time. It does not include the child's final response.
+- `get_agent_call` waits on the same budget as `call_agent`, so it returns the terminal result directly unless the parent's budget expires first.
+- While the child is still running at the end of that budget, the poll returns `call_id`, status, target, and elapsed time. It does not include the child's final response.
 - When the child is terminal, the poll returns that cached success or structured error, including `call_id` and status. Later polls return the same cached result.
 - An unknown `call_id` is a structured error and does not spawn a child.
 
 `cancel_agent_call` signals termination of a running child for that `call_id` and leaves the parent attempt active. It can return a still-running snapshot if its request ends before cancellation finishes. Poll `get_agent_call` until the call is terminal before treating the slot as free or starting another call. Canceling an already-finished call returns the cached terminal result. `get_agent_call` and `cancel_agent_call` are not a second in-flight child.
 
-Do not treat an `accepted` or `running` start or poll as success. A parent that never polls still leaves the child running until the parent attempt ends; it just never sees the result.
+Do not treat an `accepted` or `running` start or poll as success. A parent that ends its turn with a call still running fails the step: attempt teardown kills that child, so its work never reaches the workflow and later steps must not consume evidence it never wrote.
 
 ## Execution And Safety
 
@@ -90,7 +93,7 @@ Calls are serial per parent attempt:
 
 A call is accepted only after authentication, schema and target validation, safety checks, and request-ID reservation. Rejections before that boundary create no child execution and have no `call_id`. Once accepted, the call remains visible even if the CLI fails to launch. Retrying the same request ID returns the same `call_id` without waiting; `get_agent_call` returns the cached result, including a post-accept launch failure.
 
-Autonomous parents receive pre-authorized access only to the Runner-owned `call_agent`, `get_agent_call`, and `cancel_agent_call` tools. Interactive parents use their CLI's normal MCP approval flow. Agent Runner imposes no fixed child duration limit. Where a CLI supports a process-local MCP timeout setting, Runner may still raise a generic short default; that setting is not required for a long child to complete through start/poll.
+Autonomous parents receive pre-authorized access only to the Runner-owned `call_agent`, `get_agent_call`, and `cancel_agent_call` tools. Interactive parents use their CLI's normal MCP approval flow. Agent Runner imposes no fixed child duration limit. Where a CLI supports a process-local MCP timeout setting, Runner raises it so a long child can complete inside one waiting `call_agent`. Cursor exposes no such setting, which is why it polls instead.
 
 The child is leased to the parent attempt. Canceling or stopping the parent, or parent exit, terminates the child and retains terminal evidence. Timing out, canceling, or restarting a `call_agent` / `get_agent_call` MCP request after acceptance, or losing the stdio bridge or one control connection, does not kill the child. A later authenticated poll or cancel with the same `call_id` still works. A child failure returns control to the parent as a structured error; it does not automatically fail the parent step or retry the call.
 
@@ -134,7 +137,7 @@ The run view reads full child output from the output files. It does not rebuild 
 - If the tools are absent, confirm the active parent agent step declares `tools: [call_agent]`. Mentioning `call_agent` in the prompt does not enable them.
 - If an interactive call waits, complete the CLI's normal tool-approval prompt. Autonomous parents pre-authorize only these Runner-owned tools.
 - If `call_agent` returns a `call_id` with status `accepted` or `running`, poll `get_agent_call` until the call is terminal. Do not treat that start result as the child's response.
-- If a host reports `MCP error -32001: Request timed out` on `call_agent`, the start should already have returned a `call_id`. Poll `get_agent_call`; do not assume the child died. Cursor and similar hosts time out a single `tools/call` around 60 seconds, and progress notifications do not extend that wait.
+- If a host reports `MCP error -32001: Request timed out` on `call_agent`, the child is still running. Poll `get_agent_call`; do not assume the child died. A headless `cursor-agent` parent aborts an open `tools/call` at 60.3 seconds measured, and progress notifications do not extend that wait.
 - If `get_agent_call` is missing after a start that returned a `call_id`, that is a blocker. Do not wait on another `call_agent` or substitute a different delegation path.
 - If a second `call_agent` reports `call_in_progress`, poll or cancel the active `call_id`. Calls do not queue or run in parallel.
 - To abort a running child without ending the parent step, invoke `cancel_agent_call`, then poll `get_agent_call` until the call is terminal. A cancel RPC can return while the child is still stopping; that is not a freed slot. Canceling the MCP `tools/call` for start or poll does not stop the child.

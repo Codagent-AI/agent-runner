@@ -115,7 +115,7 @@ func (m *Model) renderFailureReason() string {
 	if m.rootStatus() != StatusFailed {
 		return ""
 	}
-	reason := failureReason(m.tree.Root)
+	reason := m.failureReason()
 	if reason == "" {
 		reason = "workflow failed"
 	}
@@ -434,7 +434,32 @@ func stepRowLabel(n *StepNode) (label, suffix string) {
 	if (n.Type == NodeHeadlessAgent || n.Type == NodeInteractiveAgent) && len(n.Children) > 0 {
 		suffix = fmt.Sprintf(" (%d calls)", len(n.Children))
 	}
+	if repair := repairSuffix(n); repair != "" {
+		suffix = repair
+	}
 	return label, suffix
+}
+
+// repairSuffix renders a check's repair progress: an attempt in flight, a
+// recovery, a blocked declaration, or an exhausted budget.
+func repairSuffix(n *StepNode) string {
+	if n.RepairBlocked {
+		return " (blocked)"
+	}
+	budget := n.repairBudgetShown()
+	if budget == 0 {
+		return ""
+	}
+	if n.RepairActiveAttempt > 0 {
+		return fmt.Sprintf(" (repairing %d/%d)", n.RepairActiveAttempt, budget)
+	}
+	if n.RepairAttempts == 0 {
+		return ""
+	}
+	if n.Status == StatusSuccess {
+		return fmt.Sprintf(" (repaired %d/%d)", n.RepairAttempts, budget)
+	}
+	return fmt.Sprintf(" (%d/%d)", n.RepairAttempts, budget)
 }
 
 func (m *Model) statusGlyph(n *StepNode) string {
@@ -491,7 +516,7 @@ func typeGlyph(t NodeType) string {
 		return scriptGlyphStyle.Render(raw)
 	case NodeUI:
 		return uiGlyphStyle.Render(raw)
-	case NodeLoop, NodeIteration, NodeGroup:
+	case NodeLoop, NodeIteration, NodeGroup, NodeRepairAttempt:
 		return loopGlyphStyle.Render(raw)
 	case NodeHeadlessAgent, NodeInteractiveAgent, NodeSubWorkflow, NodeAgentCall:
 		return subwfGlyphStyle.Render(raw)
@@ -756,6 +781,7 @@ func (m *Model) renderLegend() string {
 	b.WriteString("  " + typeGlyph(NodeLoop) + "  loop\n")
 	b.WriteString("  " + typeGlyph(NodeIteration) + "  iteration\n")
 	b.WriteString("  " + typeGlyph(NodeGroup) + "  group\n")
+	b.WriteString("  " + typeGlyph(NodeRepairAttempt) + "  repair attempt\n")
 
 	b.WriteString("\n  ")
 	b.WriteString(tuistyle.SelectedStyle.Render("Live Navigation"))
