@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1068,6 +1069,159 @@ func TestParseRunCommandArgsSupportsUntilFlag(t *testing.T) {
 			}
 			if gotOpts.until != "summarize" {
 				t.Fatalf("until = %q, want %q", gotOpts.until, "summarize")
+			}
+		})
+	}
+}
+
+func TestParseRunCommandArgsSupportsSessionDirFlag(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{name: "separate value", args: []string{"run", "core:debug", "--session-dir", "/tmp/session-abc", "failed_run_id=run-123"}},
+		{name: "equals value", args: []string{"run", "core:debug", "--session-dir=/tmp/session-abc", "failed_run_id=run-123"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			gotArgs, gotOpts, err := parseRunCommandArgs(tt.args)
+			if err != nil {
+				t.Fatalf("parseRunCommandArgs returned error: %v", err)
+			}
+
+			wantArgs := []string{"core:debug", "failed_run_id=run-123"}
+			if diff := cmp.Diff(wantArgs, gotArgs); diff != "" {
+				t.Fatalf("normalized args mismatch (-want +got):\n%s", diff)
+			}
+			if gotOpts.sessionDir != "/tmp/session-abc" {
+				t.Fatalf("sessionDir = %q, want %q", gotOpts.sessionDir, "/tmp/session-abc")
+			}
+		})
+	}
+}
+
+func TestParseRunCommandArgsRejectsMissingSessionDirValue(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{name: "missing separate value", args: []string{"run", "core:debug", "--session-dir"}},
+		{name: "empty separate value", args: []string{"run", "core:debug", "--session-dir", ""}},
+		{name: "empty equals value", args: []string{"run", "core:debug", "--session-dir="}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := parseRunCommandArgs(tt.args)
+			if err == nil || err.Error() != "--session-dir requires a path" {
+				t.Fatalf("err = %v, want %q", err, "--session-dir requires a path")
+			}
+		})
+	}
+}
+
+func TestPrepareFreshRunPassesSessionDirToRunnerOptions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := t.TempDir()
+	t.Chdir(project)
+	workflowPath := filepath.Join(project, "greet-v1.0.yaml")
+	if err := os.WriteFile(workflowPath, []byte("name: greet\nsteps:\n  - id: hello\n    command: echo hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := filepath.Join(project, "custom-session")
+
+	h, err := prepareFreshRun(&freshRunRequest{SourceRef: workflowPath, SessionDir: sessionDir})
+	if err != nil {
+		t.Fatalf("prepareFreshRun returned error: %v", err)
+	}
+	if h.SessionDir != sessionDir {
+		t.Fatalf("h.SessionDir = %q, want %q", h.SessionDir, sessionDir)
+	}
+}
+
+func TestPrintRunUsageListsSessionDirFlag(t *testing.T) {
+	var buf bytes.Buffer
+	printRunUsage(&buf)
+	if !strings.Contains(buf.String(), "--session-dir") {
+		t.Fatalf("run usage = %q, want it to mention --session-dir", buf.String())
+	}
+}
+
+func TestDispatchRunCommandRejectsSessionDirWithResume(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := t.TempDir()
+	t.Chdir(project)
+
+	var stderr bytes.Buffer
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	code := dispatchRunCommand([]string{"run", "some-workflow", "--session-dir", filepath.Join(project, "s")}, &commandFlags{resume: true})
+	_ = w.Close()
+	os.Stderr = origStderr
+	_, _ = stderr.ReadFrom(r)
+
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "--session-dir cannot be combined with --resume") {
+		t.Fatalf("stderr = %q, want it to mention the conflicting flags", stderr.String())
+	}
+}
+
+func TestHandleRunWithRunOptionsSessionDirHeadlessWritesUnderSessionDir(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		command       string
+		wantExitCode  int
+		wantCompleted bool
+	}{
+		{name: "success", command: "echo hello", wantExitCode: 0, wantCompleted: true},
+		{name: "failure", command: "exit 1", wantExitCode: 1, wantCompleted: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("AGENT_RUNNER_NO_TUI", "1")
+			project := t.TempDir()
+			t.Chdir(project)
+			workflowPath := filepath.Join(project, "session-dir-case-v1.0.yaml")
+			workflowYAML := "name: session-dir-case\nsteps:\n  - id: step-one\n    command: " + tt.command + "\n"
+			if err := os.WriteFile(workflowPath, []byte(workflowYAML), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			sessionDir := filepath.Join(t.TempDir(), "custom-session")
+
+			result := handleRunWithRunOptions([]string{workflowPath}, &runCommandOptions{sessionDir: sessionDir})
+
+			if result.exitCode != tt.wantExitCode {
+				t.Fatalf("exitCode = %d, want %d", result.exitCode, tt.wantExitCode)
+			}
+			if result.sessionDir != sessionDir {
+				t.Fatalf("sessionDir = %q, want %q", result.sessionDir, sessionDir)
+			}
+			if _, err := os.Stat(filepath.Join(sessionDir, "state.json")); err != nil {
+				t.Fatalf("expected state.json under session dir: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(sessionDir, "audit.log")); err != nil {
+				t.Fatalf("expected audit.log under session dir: %v", err)
+			}
+			state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+			if err != nil {
+				t.Fatalf("read run state: %v", err)
+			}
+			if state.Completed != tt.wantCompleted {
+				t.Fatalf("state.Completed = %v, want %v", state.Completed, tt.wantCompleted)
+			}
+			if _, err := os.Stat(sessionDir); err != nil {
+				t.Fatalf("expected session dir to remain in place: %v", err)
+			}
+
+			projectsDir := filepath.Join(home, ".agent-runner", "projects")
+			if _, err := os.Stat(projectsDir); !os.IsNotExist(err) {
+				t.Fatalf("expected no ~/.agent-runner/projects entry, stat err = %v", err)
 			}
 		})
 	}
