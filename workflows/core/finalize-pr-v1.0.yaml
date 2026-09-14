@@ -2,6 +2,11 @@ name: finalize-pr
 description: "Push changes, mark a draft PR ready, and fix CI or review failures (max 3 cycles)."
 hidden: true
 
+params:
+  - name: ci_fix_cycles
+    required: false
+    default: "3"
+
 sessions:
   - name: lead-agent
     agent: lead
@@ -27,7 +32,7 @@ steps:
 
   - id: ci-fix-loop
     loop:
-      max: 3
+      max_param: ci_fix_cycles
     steps:
       - id: wait-ci
         session: resume

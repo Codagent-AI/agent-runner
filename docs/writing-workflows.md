@@ -255,7 +255,10 @@ For-each loop:
 
 Sub-workflow references must resolve to a versioned filename. Paths resolve
 relative to the parent workflow, and the exact referenced version remains
-pinned even when a newer sibling exists. Built-in workflows can call scripts
+pinned even when a newer sibling exists. A reference that starts with `builtin:`
+(for example `workflow: builtin:core/finalize-pr-v1.0.yaml`) names an embedded
+workflow directly, so project and user workflows can call built-in
+sub-workflows. Built-in workflows can call scripts
 and child workflows bundled in the same namespace. Sub-workflows get their own
 execution context, receive only explicitly passed parameters plus defaults, and
 may use `session: inherit` to continue the parent session.
