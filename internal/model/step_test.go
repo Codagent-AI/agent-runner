@@ -399,6 +399,28 @@ func TestStepSchemaExtensions(t *testing.T) {
 		}
 	})
 
+	t.Run("accepts loop with max_param in place of a literal max", func(t *testing.T) {
+		s := Step{
+			ID: "l", Session: SessionNew,
+			Loop:  &Loop{MaxParam: "ci_fix_cycles"},
+			Steps: []Step{{ID: "a", Command: "echo", Session: SessionNew}},
+		}
+		if err := s.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("rejects loop with both max and max_param", func(t *testing.T) {
+		s := Step{
+			ID: "l", Session: SessionNew,
+			Loop:  &Loop{Max: intPtr(3), MaxParam: "ci_fix_cycles"},
+			Steps: []Step{{ID: "a", Command: "echo", Session: SessionNew}},
+		}
+		if err := s.Validate(nil); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
 	t.Run("accepts workflow field for sub-workflow step", func(t *testing.T) {
 		s := Step{ID: "sub", Workflow: "workflows/sub.yaml", Session: SessionNew}
 		if err := s.Validate(nil); err != nil {
