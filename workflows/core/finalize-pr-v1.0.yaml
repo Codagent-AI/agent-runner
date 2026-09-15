@@ -10,10 +10,12 @@ params:
 sessions:
   - name: lead-agent
     agent: lead
+  - name: implementor-agent
+    agent: implementor
 
 steps:
   - id: push-pr
-    session: lead-agent
+    session: implementor-agent
     mode: autonomous
     prompt: |
       Invoke codagent:push-pr to commit any appropriate remaining changes, push them, and create or update the pull request. Follow the project's commit message conventions and prepend [{{step_id}}] when a commit is needed.
@@ -35,7 +37,7 @@ steps:
       max_param: ci_fix_cycles
     steps:
       - id: wait-ci
-        session: resume
+        session: lead-agent
         mode: autonomous
         capture: ci_report
         continue_on_failure: true
@@ -66,7 +68,7 @@ steps:
         continue_on_failure: true
 
       - id: fix-pr
-        session: resume
+        session: implementor-agent
         mode: autonomous
         skip_if: previous_success
         prompt: |
@@ -75,7 +77,7 @@ steps:
           This workflow boundary overrides any more permissive default in the skill: do not silently treat a requirement, design, or scope change as ordinary review feedback. If a requested fix would change approved product behavior, requirements, design decisions, or materially expand scope, do not make it. Leave the finding unresolved and report that the change must return to its acceptance or planning workflow before finalization can continue.
 
   - id: verify-final
-    session: resume
+    session: lead-agent
     mode: autonomous
     capture: final_ci_report
     prompt: |

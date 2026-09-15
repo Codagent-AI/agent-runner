@@ -35,7 +35,7 @@ inspection, not fresh execution.
 | `core:complete-simple-change` | Implement, flow-test, and interactively review a shared small-change plan. |
 | `core:debug` | Debug a failed Agent Runner run and optionally file an issue. |
 | `core:define-change` | Run the shared proposal, specification, design, test-plan, and approach-review phases. |
-| `core:finalize-pr` | Push PR, wait for CI, fix failures, and repeat until green, with a maximum of three fix cycles. |
+| `core:finalize-pr` | Use an implementor to push and fix a PR, while a lead assesses CI and verifies the result, with a maximum of three fix cycles. |
 | `core:implement-change` | Run the shared task implementation, validation, draft-PR, and acceptance-preparation phases. |
 | `core:implement-task` | Implement a single task with an agent step followed by a validator retry loop. |
 | `core:plan-change` | Run the shared definition validation, task planning, and task-review phases. |
