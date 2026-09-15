@@ -90,7 +90,7 @@ The Markdown docs in [`docs/`](docs/) are the source of truth for the documentat
 
 Agent Runner is pre-release. It is ready for serious early users who are comfortable with CLI tools, YAML workflows, and rough edges.
 
-The core value I want feedback on: does moving workflow control outside the agent make your coding-agent work more reliable? If setup, workflow authoring, or the mental model breaks for you, please open an issue.
+The core value we want feedback on: does moving workflow control outside the agent make your coding-agent work more reliable? If setup, workflow authoring, or the mental model breaks for you, please open an issue.
 
 ## License
 
