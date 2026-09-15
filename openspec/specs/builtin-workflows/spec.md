@@ -91,8 +91,6 @@ A builtin workflow that references another workflow via a relative path SHALL re
 
 The builtin set SHALL include a `core` namespace containing general-purpose workflows that are not tied to any particular planning methodology. The `core` namespace SHALL at minimum contain logical workflows `finalize-pr`, `implement-task`, `run-validator`, and `debug`, each backed by at least one versioned definition.
 
-The latest `core:finalize-pr` workflow SHALL use one shared implementor session for all commits, pushes, and code changes, and one shared lead session for CI assessment and final verification.
-
 #### Scenario: Core workflows invoked by namespace
 - **WHEN** the user runs `agent-runner run core:finalize-pr`
 - **THEN** the latest finalize-pr version loads from the embedded `core` namespace
