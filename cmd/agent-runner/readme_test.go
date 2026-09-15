@@ -7,17 +7,28 @@ import (
 	"testing"
 )
 
+const projectVoiceFeedbackSentence = "The core value we want feedback on"
+
 func TestReadmeFeedbackSentenceUsesProjectVoice(t *testing.T) {
-	path := filepath.Join(findRepoRoot(t), "README.md")
+	assertProjectVoiceFeedbackSentence(t, "README.md")
+}
+
+func TestIntroductionFeedbackSentenceUsesProjectVoice(t *testing.T) {
+	assertProjectVoiceFeedbackSentence(t, filepath.Join("docs", "introduction.md"))
+}
+
+func assertProjectVoiceFeedbackSentence(t *testing.T, relPath string) {
+	t.Helper()
+	path := filepath.Join(findRepoRoot(t), relPath)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read README.md: %v", err)
+		t.Fatalf("read %s: %v", relPath, err)
 	}
-	readme := string(data)
-	if strings.Contains(readme, "The core value I want feedback on") {
-		t.Fatal("README.md uses first-person I in the feedback sentence")
+	content := string(data)
+	if strings.Contains(content, "The core value I want feedback on") {
+		t.Fatalf("%s uses first-person I in the feedback sentence", relPath)
 	}
-	if !strings.Contains(readme, "The core value we want feedback on") {
-		t.Fatal("README.md is missing the project-voice feedback sentence")
+	if !strings.Contains(content, projectVoiceFeedbackSentence) {
+		t.Fatalf("%s is missing the project-voice feedback sentence", relPath)
 	}
 }
