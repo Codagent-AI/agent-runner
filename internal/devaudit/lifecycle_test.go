@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/audit"
@@ -252,5 +253,26 @@ func TestCopySourceTreeOmitsGitIgnoredArtifactsAndVCSMetadata(t *testing.T) {
 	}
 	if !runnerSnapshotComplete(destination) {
 		t.Fatal("runnerSnapshotComplete() = false, want true")
+	}
+}
+
+func TestCopySourceTreeFailsClosedWhenGitListingUnavailable(t *testing.T) {
+	source := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(source, ".validator/cache"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, ".validator/cache/cache.dat"), []byte("build cache"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	destination := t.TempDir()
+	err := copySourceTree(source, destination)
+	if err == nil {
+		t.Fatal("copySourceTree() error = nil, want listing failure")
+	}
+	if !strings.Contains(err.Error(), "build source-tree filters") {
+		t.Fatalf("copySourceTree() error = %v, want filter construction failure", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(destination, ".validator/cache/cache.dat")); !os.IsNotExist(statErr) {
+		t.Fatalf("snapshot copied ignored cache after listing failure: %v", statErr)
 	}
 }

@@ -625,7 +625,10 @@ func gitOutput(root string, args ...string) string {
 }
 
 func copySourceTree(source, destination string) error {
-	ignoredDirs, included := sourceTreeFilters(source)
+	ignoredDirs, included, err := sourceTreeFilters(source)
+	if err != nil {
+		return fmt.Errorf("build source-tree filters: %w", err)
+	}
 	return filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -645,10 +648,8 @@ func copySourceTree(source, destination string) error {
 			if _, ignored := ignoredDirs[slashRel]; ignored {
 				return filepath.SkipDir
 			}
-		} else if included != nil {
-			if _, keep := included[slashRel]; !keep {
-				return nil
-			}
+		} else if _, keep := included[slashRel]; !keep {
+			return nil
 		}
 		target := filepath.Join(destination, rel)
 		if entry.IsDir() {
@@ -664,16 +665,16 @@ func copySourceTree(source, destination string) error {
 	})
 }
 
-func sourceTreeFilters(root string) (ignoredDirs, included map[string]struct{}) {
-	ignoredDirs, err := gitNulPaths(root, "ls-files", "-z", "-o", "-i", "--exclude-standard", "--directory")
+func sourceTreeFilters(root string) (ignoredDirs, included map[string]struct{}, err error) {
+	ignoredDirs, err = gitNulPaths(root, "ls-files", "-z", "-o", "-i", "--exclude-standard", "--directory")
 	if err != nil {
-		return nil, nil
+		return nil, nil, err
 	}
 	included, err = gitNulPaths(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
 	if err != nil {
-		return ignoredDirs, nil
+		return nil, nil, err
 	}
-	return ignoredDirs, included
+	return ignoredDirs, included, nil
 }
 
 func gitNulPaths(root string, args ...string) (map[string]struct{}, error) {
