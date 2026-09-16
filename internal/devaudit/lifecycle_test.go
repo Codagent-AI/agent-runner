@@ -202,13 +202,13 @@ func TestCopySourceTreeOmitsGitIgnoredArtifactsAndVCSMetadata(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(source, "cmd/agent-runner/main.go"), []byte("package main\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(source, "cmd", "agent-runner", "main.go"), []byte("package main\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(source, "internal/runner/runner.go"), []byte("package runner\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(source, "internal", "runner", "runner.go"), []byte("package runner\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(source, "workflows/example.yaml"), []byte("name: example\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(source, "workflows", "example.yaml"), []byte("name: example\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitignore := ".validator/cache/\nbin/\nvalidator_logs/\nartifacts/\nworktrees/\n"
@@ -220,19 +220,19 @@ func TestCopySourceTreeOmitsGitIgnoredArtifactsAndVCSMetadata(t *testing.T) {
 			t.Fatalf("git %v: %v: %s", args, err, output)
 		}
 	}
-	if err := os.MkdirAll(filepath.Join(source, ".validator/cache/mod"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(source, ".validator", "cache", "mod"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(source, ".validator/cache/mod/cache.dat"), []byte("build cache"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(source, ".validator", "cache", "mod", "cache.dat"), []byte("build cache"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(source, "internal/runner/untracked.go"), []byte("package runner\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(source, "internal", "runner", "untracked.go"), []byte("package runner\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(source, "worktrees/other"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(source, "worktrees", "other"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(source, "worktrees/other/file.go"), []byte("package other\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(source, "worktrees", "other", "file.go"), []byte("package other\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -258,10 +258,10 @@ func TestCopySourceTreeOmitsGitIgnoredArtifactsAndVCSMetadata(t *testing.T) {
 
 func TestCopySourceTreeFailsClosedWhenGitListingUnavailable(t *testing.T) {
 	source := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(source, ".validator/cache"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(source, ".validator", "cache"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(source, ".validator/cache/cache.dat"), []byte("build cache"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(source, ".validator", "cache", "cache.dat"), []byte("build cache"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	destination := t.TempDir()
@@ -272,7 +272,7 @@ func TestCopySourceTreeFailsClosedWhenGitListingUnavailable(t *testing.T) {
 	if !strings.Contains(err.Error(), "build source-tree filters") {
 		t.Fatalf("copySourceTree() error = %v, want filter construction failure", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(destination, ".validator/cache/cache.dat")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(destination, ".validator", "cache", "cache.dat")); !os.IsNotExist(statErr) {
 		t.Fatalf("snapshot copied ignored cache after listing failure: %v", statErr)
 	}
 }

@@ -301,11 +301,11 @@ func findLink(links []Link, executionID, trigger string) *Link {
 }
 
 func newAuditID() (string, error) {
-	bytes := make([]byte, 8)
-	if _, err := rand.Read(bytes); err != nil {
+	idBytes := make([]byte, 8)
+	if _, err := rand.Read(idBytes); err != nil {
 		return "", fmt.Errorf("generate audit ID: %w", err)
 	}
-	return "audit-" + hex.EncodeToString(bytes), nil
+	return "audit-" + hex.EncodeToString(idBytes), nil
 }
 
 // snapshotEvidenceForProject records Git facts while the source run still
