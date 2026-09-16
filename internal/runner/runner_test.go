@@ -1873,3 +1873,36 @@ func findSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+func TestRunWorkflowGroupMembersHonourSkipIf(t *testing.T) {
+	workflow := &model.Workflow{
+		Name: "group-skip",
+		Steps: []model.Step{
+			{
+				ID: "implement", Session: model.SessionNew,
+				Steps: []model.Step{
+					{ID: "address", Command: "echo address", Session: model.SessionNew, SkipIf: "sh: true"},
+					shellStep("finalize", "echo finalize"),
+					{ID: "mark-failed", Command: "echo mark-failed", Session: model.SessionNew, SkipIf: "previous_success"},
+					shellStep("always", "echo always"),
+				},
+			},
+		},
+	}
+	processRunner := &mockRunner{}
+
+	result, err := RunWorkflow(workflow, nil, &Options{
+		SessionDir:    t.TempDir(),
+		ProcessRunner: processRunner,
+		Log:           &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("RunWorkflow returned error: %v", err)
+	}
+	if result != ResultSuccess {
+		t.Fatalf("result = %q, want success", result)
+	}
+	if got, want := len(processRunner.calls), 2; got != want {
+		t.Fatalf("shell calls = %d, want %d (finalize and always; address and mark-failed skipped): %v", got, want, processRunner.calls)
+	}
+}

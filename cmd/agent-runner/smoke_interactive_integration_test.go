@@ -354,7 +354,7 @@ func TestInteractiveTerminalLeaseFailures(t *testing.T) {
 
 			cmd := exec.Command(currentTestBinary(t), "-test.run=^TestInteractiveTerminalLeaseFixtureProcess$")
 			cmd.Dir = repoRoot
-			cmd.Env = smokeCommandEnv(os.Environ(),
+			cmd.Env = smokeCommandEnv(withoutHostLauncherEnv(os.Environ()),
 				"HOME="+home,
 				"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 				"TERM=xterm-256color",
@@ -1089,4 +1089,21 @@ func readInteractiveFixtureInvocations(t *testing.T, logPath string) []interacti
 		invocations = append(invocations, invocation)
 	}
 	return invocations
+}
+
+// withoutHostLauncherEnv drops variables a host launcher (such as the agent factory's
+// fix wrapper) exports for its own processes. Inherited, they override the isolated
+// HOME a test sets up: a private GIT_CONFIG_GLOBAL replaces $HOME/.gitconfig, and
+// AGENT_RUNNER_NO_TUI switches a spawned runner onto its headless path.
+func withoutHostLauncherEnv(base []string) []string {
+	result := make([]string, 0, len(base))
+	for _, entry := range base {
+		name, _, _ := strings.Cut(entry, "=")
+		switch name {
+		case "AGENT_RUNNER_NO_TUI", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM":
+			continue
+		}
+		result = append(result, entry)
+	}
+	return result
 }

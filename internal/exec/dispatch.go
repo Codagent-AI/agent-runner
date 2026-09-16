@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/codagent/agent-runner/internal/audit"
@@ -120,6 +121,19 @@ func executeGroupStep(
 		return OutcomeFailed, err
 	}
 	for i := 0; i < len(steps); i++ {
+		// Members honour skip_if exactly as loop bodies and sub-workflow steps do.
+		skip, skipErr := ShouldSkipStep(steps[i].SkipIf, ctx.LastStepOutcome, ctx, steps[i].ID)
+		if skipErr != nil {
+			err := fmt.Errorf("step %q skip_if evaluation failed: %w", steps[i].ID, skipErr)
+			ctx.NestingPath = originalNestingPath
+			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), map[string]any{"error": err.Error()}, step)
+			return OutcomeFailed, err
+		}
+		if skip {
+			emitSkippedChildStep(ctx, &steps[i])
+			recordLastStepOutcome(ctx, OutcomeSkipped)
+			continue
+		}
 		outcome, err := DispatchStep(&steps[i], ctx, runner, glob, log)
 		if err != nil {
 			ctx.NestingPath = originalNestingPath
