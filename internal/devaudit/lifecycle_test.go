@@ -5,6 +5,7 @@ package devaudit
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -182,5 +183,74 @@ func TestCoordinatorOnlyAuditsTopLevelCanonicalWorkflowNamespaces(t *testing.T) 
 				t.Fatalf("Eligible() = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestCopySourceTreeOmitsGitIgnoredArtifactsAndVCSMetadata(t *testing.T) {
+	source := t.TempDir()
+	for _, args := range [][]string{{"init"}, {"config", "user.email", "audit@example.test"}, {"config", "user.name", "Audit Test"}} {
+		if output, err := exec.Command("git", append([]string{"-C", source}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(source, "go.mod"), []byte("module github.com/codagent/agent-runner\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"cmd/agent-runner", "internal/runner", "workflows"} {
+		if err := os.MkdirAll(filepath.Join(source, path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(source, "cmd/agent-runner/main.go"), []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "internal/runner/runner.go"), []byte("package runner\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "workflows/example.yaml"), []byte("name: example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitignore := ".validator/cache/\nbin/\nvalidator_logs/\nartifacts/\nworktrees/\n"
+	if err := os.WriteFile(filepath.Join(source, ".gitignore"), []byte(gitignore), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "."}, {"commit", "-m", "tracked source"}} {
+		if output, err := exec.Command("git", append([]string{"-C", source}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(source, ".validator/cache/mod"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, ".validator/cache/mod/cache.dat"), []byte("build cache"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "internal/runner/untracked.go"), []byte("package runner\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(source, "worktrees/other"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "worktrees/other/file.go"), []byte("package other\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	destination := t.TempDir()
+	if err := copySourceTree(source, destination); err != nil {
+		t.Fatalf("copySourceTree() error = %v", err)
+	}
+
+	for _, path := range []string{"go.mod", "cmd/agent-runner/main.go", "internal/runner/runner.go", "workflows/example.yaml", "internal/runner/untracked.go"} {
+		if _, err := os.Stat(filepath.Join(destination, path)); err != nil {
+			t.Fatalf("snapshot missing %s: %v", path, err)
+		}
+	}
+	for _, path := range []string{".git", "worktrees", ".validator/cache", ".validator/cache/mod/cache.dat"} {
+		if _, err := os.Stat(filepath.Join(destination, path)); !os.IsNotExist(err) {
+			t.Fatalf("snapshot includes %s: %v", path, err)
+		}
+	}
+	if !runnerSnapshotComplete(destination) {
+		t.Fatal("runnerSnapshotComplete() = false, want true")
 	}
 }

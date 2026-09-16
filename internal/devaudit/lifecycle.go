@@ -4,6 +4,7 @@
 package devaudit
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -624,6 +625,7 @@ func gitOutput(root string, args ...string) string {
 }
 
 func copySourceTree(source, destination string) error {
+	ignoredDirs, included := sourceTreeFilters(source)
 	return filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -638,6 +640,16 @@ func copySourceTree(source, destination string) error {
 		if entry.IsDir() && (entry.Name() == ".git" || entry.Name() == "worktrees") {
 			return filepath.SkipDir
 		}
+		slashRel := filepath.ToSlash(rel)
+		if entry.IsDir() {
+			if _, ignored := ignoredDirs[slashRel]; ignored {
+				return filepath.SkipDir
+			}
+		} else if included != nil {
+			if _, keep := included[slashRel]; !keep {
+				return nil
+			}
+		}
 		target := filepath.Join(destination, rel)
 		if entry.IsDir() {
 			return os.MkdirAll(target, 0o700)
@@ -650,6 +662,38 @@ func copySourceTree(source, destination string) error {
 		}
 		return os.Chmod(target, 0o400)
 	})
+}
+
+func sourceTreeFilters(root string) (ignoredDirs, included map[string]struct{}) {
+	ignoredDirs, err := gitNulPaths(root, "ls-files", "-z", "-o", "-i", "--exclude-standard", "--directory")
+	if err != nil {
+		return nil, nil
+	}
+	included, err = gitNulPaths(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	if err != nil {
+		return ignoredDirs, nil
+	}
+	return ignoredDirs, included
+}
+
+func gitNulPaths(root string, args ...string) (map[string]struct{}, error) {
+	command := exec.Command("git", append([]string{"-C", root}, args...)...) // #nosec G204 -- fixed git listing argv for the injected local checkout.
+	data, err := command.Output()
+	if err != nil {
+		return nil, err
+	}
+	paths := make(map[string]struct{})
+	for _, raw := range bytes.Split(data, []byte{0}) {
+		if len(raw) == 0 {
+			continue
+		}
+		rel := strings.Trim(filepath.ToSlash(string(raw)), "/")
+		if rel == "" || rel == "." {
+			continue
+		}
+		paths[rel] = struct{}{}
+	}
+	return paths, nil
 }
 
 func sealSnapshot(root string) error {
