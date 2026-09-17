@@ -74,7 +74,10 @@ func newSupervisor(cmd *exec.Cmd, tty *os.File, runnerModes *unix.Termios, logge
 	}
 }
 
-func (s *Supervisor) Start() { go s.waitLoop() }
+func (s *Supervisor) Start() {
+	s.logTerminalOwnership("child_started", nil)
+	go s.waitLoop()
+}
 
 func (s *Supervisor) Done() <-chan struct{} { return s.done }
 
@@ -106,6 +109,8 @@ func (s *Supervisor) waitLoop() {
 		result.err = errors.Join(result.err, s.reclaimForeground())
 		s.finish(result)
 	}()
+	stopObserving := s.observeRunnerContinue()
+	defer stopObserving()
 	for {
 		var status unix.WaitStatus
 		pid, err := unix.Wait4(s.pid, &status, unix.WUNTRACED|unix.WCONTINUED, nil)
@@ -113,7 +118,7 @@ func (s *Supervisor) waitLoop() {
 			if errors.Is(err, unix.EINTR) {
 				continue
 			}
-			result.err = fmt.Errorf("wait for child %d: %w", s.pid, err)
+			result.err = errors.Join(result.err, fmt.Errorf("wait for child %d: %w", s.pid, err))
 			return
 		}
 		if pid != s.pid {
@@ -122,14 +127,17 @@ func (s *Supervisor) waitLoop() {
 		event, stopSignal := classifyWaitStatus(status)
 		switch event {
 		case waitStopped:
+			s.logTerminalOwnership("child_stopped", map[string]any{"signal": stopSignal.String()})
 			if (stopSignal == unix.SIGTTIN || stopSignal == unix.SIGTTOU) && s.tty != nil {
-				fd, fdErr := checkedTerminalFD(s.tty.Fd())
-				if fdErr != nil {
-					result.err = fdErr
-					return
+				if err := s.recoverTerminalStop(); err != nil {
+					result.err = err
+					s.logTerminalOwnership("child_recovery_failed", map[string]any{"error": err.Error()})
+					// A stopped child cannot handle SIGTERM. Kill the owned
+					// group and keep waiting so the direct child is reaped.
+					if killErr := unix.Kill(-s.pgid, unix.SIGKILL); killErr != nil && !errors.Is(killErr, unix.ESRCH) {
+						result.err = errors.Join(err, fmt.Errorf("kill child after recovery failure: %w", killErr))
+					}
 				}
-				_ = setForegroundProcessGroup(fd, s.pgid)
-				_ = unix.Kill(-s.pgid, unix.SIGCONT)
 				continue
 			}
 			if err := s.forwardStop(stopSignal); err != nil {
@@ -145,6 +153,31 @@ func (s *Supervisor) waitLoop() {
 			return
 		}
 	}
+}
+
+func (s *Supervisor) observeRunnerContinue() func() {
+	// Observe continuation without changing SIGTTIN/SIGTTOU semantics or
+	// stealing foreground ownership from the shell. Stop the observer before
+	// publishing completion so it cannot write to a closed audit logger.
+	if s.tty == nil || s.logger == nil {
+		return func() {}
+	}
+	continued := make(chan os.Signal, 1)
+	stop := make(chan struct{})
+	stopped := make(chan struct{})
+	signal.Notify(continued, unix.SIGCONT)
+	go func() {
+		defer close(stopped)
+		for {
+			select {
+			case <-continued:
+				s.logTerminalOwnership("runner_continued", nil)
+			case <-stop:
+				return
+			}
+		}
+	}()
+	return func() { signal.Stop(continued); close(stop); <-stopped }
 }
 
 func (s *Supervisor) forwardStop(stopSignal unix.Signal) error {
@@ -245,7 +278,58 @@ func (s *Supervisor) resumeTimers() {
 }
 
 func (s *Supervisor) reclaimForeground() error {
-	return restoreRunnerTerminal(s.tty, s.runnerPGID, s.runnerModes)
+	s.logTerminalOwnership("before_reclaim", nil)
+	err := restoreRunnerTerminal(s.tty, s.runnerPGID, s.runnerModes)
+	data := map[string]any{}
+	if err != nil {
+		data["error"] = err.Error()
+	}
+	s.logTerminalOwnership("after_reclaim", data)
+	return err
+}
+
+func (s *Supervisor) recoverTerminalStop() error {
+	fd, err := checkedTerminalFD(s.tty.Fd())
+	if err != nil {
+		return err
+	}
+	if err := setForegroundProcessGroup(fd, s.pgid); err != nil {
+		return fmt.Errorf("recover child terminal foreground: %w", err)
+	}
+	if err := unix.Kill(-s.pgid, unix.SIGCONT); err != nil {
+		return fmt.Errorf("continue child after terminal stop: %w", err)
+	}
+	s.logTerminalOwnership("child_recovered", nil)
+	return nil
+}
+
+// Record ownership rather than terminal bytes, prompts, or environment values.
+// A foreground query failure is evidence too (for example, a lost terminal).
+func (s *Supervisor) logTerminalOwnership(phase string, data map[string]any) {
+	if s.logger == nil || s.tty == nil {
+		return
+	}
+	if data == nil {
+		data = map[string]any{}
+	}
+	data["phase"] = phase
+	data["runner_pid"] = os.Getpid()
+	data["runner_pgid"] = s.runnerPGID
+	data["child_pid"] = s.pid
+	data["child_pgid"] = s.pgid
+	data["tty"] = s.tty.Name()
+	fd, err := checkedTerminalFD(s.tty.Fd())
+	if err == nil {
+		var pgid int
+		pgid, err = foregroundProcessGroup(fd)
+		if err == nil {
+			data["foreground_pgid"] = pgid
+		}
+	}
+	if err != nil {
+		data["foreground_error"] = err.Error()
+	}
+	s.emit(audit.EventTerminalOwnership, data)
 }
 
 // restoreRunnerTerminal returns terminal foreground to the runner's process

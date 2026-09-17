@@ -50,6 +50,10 @@ func emitStepEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time
 		data["estimated_api_cost_usd"] = (*float64)(nil)
 	}
 	data["outcome"] = outcome
+	if step != nil && step.WarnOnFailure && (outcome == string(OutcomeFailed) || outcome == string(OutcomeExhausted)) {
+		data["status"] = "warning"
+		ctx.WarningOrigins.Add(prefix)
+	}
 	data["duration_ms"] = time.Since(startTime).Milliseconds()
 	emitAudit(ctx, audit.Event{
 		Timestamp: formatAuditTimestamp(time.Now()),

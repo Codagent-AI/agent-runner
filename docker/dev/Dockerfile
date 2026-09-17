@@ -11,6 +11,7 @@ USER root
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
+    bubblewrap \
     curl \
     git \
     gh \
@@ -32,6 +33,16 @@ RUN arch="$(dpkg --print-architecture)" \
   && tar -C /usr/local -xzf /tmp/go.tgz \
   && rm /tmp/go.tgz
 
+# The hermetic development-audit smoke disables network access only after the
+# image has provisioned the exact Go module graph needed to build its tagged
+# Runner binary.
+COPY go.mod go.sum /tmp/agent-runner-deps/
+ENV GOMODCACHE=/opt/agent-runner-go/pkg/mod
+RUN mkdir -p "$GOMODCACHE" \
+  && cd /tmp/agent-runner-deps \
+  && /usr/local/go/bin/go mod download \
+  && chmod -R a+rX /opt/agent-runner-go
+
 ENV PATH="/usr/local/go/bin:/workspace/bin:${PATH}"
 
 RUN npm install -g \
@@ -43,6 +54,12 @@ RUN npm install -g \
     chrome-devtools-axi@0.1.26 \
     chrome-devtools-mcp@1.5.0 \
     opencode-ai
+
+# Cursor Agent CLI installs under $HOME/.local. Relocate it onto PATH so
+# Agent Runner's cursor adapter can invoke `agent` in the sandbox.
+RUN curl -fsSL https://cursor.com/install | HOME=/opt/cursor-agent bash \
+  && ln -sf /opt/cursor-agent/.local/bin/agent /usr/local/bin/agent \
+  && test -x /usr/local/bin/agent
 
 # chrome-devtools-mcp defaults to the stable Chrome location. The Playwright
 # image ships a compatible Chromium build under a versioned directory, so give
@@ -57,6 +74,7 @@ RUN mkdir -p \
     /workspace/bin \
     /workspace/home/.codex \
     /workspace/home/.claude \
+    /workspace/home/.cursor \
     /workspace/home/.config/git \
     /artifacts \
   && chown -R pwuser:pwuser /workspace /artifacts

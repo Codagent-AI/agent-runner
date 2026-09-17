@@ -43,27 +43,37 @@ Any agent-runner invocation that launches the TUI — workflow execution, `--res
 
 When the workflow reaches a terminal state, the run-view TUI SHALL remain active until explicit user exit.
 
-On successful completion, the TUI SHALL keep the detailed run view and focus the final top-level step; the summary is available through `s`. On failure, the TUI SHALL remain in detail, expand the failed leaf's ancestry in the root tree, and select the failed leaf without creating a manual drill scope. If multiple failed leaves share the greatest depth, the TUI SHALL select the leaf whose failure was recorded most recently, falling back to workflow order when durable failure ordering is unavailable. The summary SHALL remain available through `s`.
+On ordinary successful completion, the TUI SHALL keep the detailed run view and focus the final top-level step; the summary is available through `s`. On successful completion with warning origins, it SHALL retain the same landing behavior and show breadcrumb status `complete with warnings (N)`, with `w warnings` available to inspect the origins. It SHALL NOT automatically move selection to a warning. On failure, the TUI SHALL remain in detail, expand the failed leaf's ancestry in the root tree, and select the failed leaf without creating a manual drill scope. If multiple failed leaves share the greatest depth, the TUI SHALL select the leaf whose failure was recorded most recently, falling back to workflow order when durable failure ordering is unavailable. The summary SHALL remain available through `s`.
 
-Once execution is terminal, detailed behavior SHALL match an inactive historical run opened through `--inspect`, including manual tree navigation, optional drill scope, selected-detail scrolling, resume, and the legend.
+Once execution is terminal, detailed behavior SHALL match an inactive historical run opened through `--inspect`, including manual tree navigation, warning navigation, optional drill scope, selected-detail scrolling, resume, and the legend.
 
 #### Scenario: Successful completion keeps detailed view
-- **WHEN** the last step in the workflow completes successfully
+
+- **WHEN** the last step in the workflow completes successfully and the run has no warning origins
 - **THEN** the TUI remains open displaying the detailed run view focused on the final top-level step, with the breadcrumb status showing `completed`; the summary is not auto-shown
 
+#### Scenario: Completion with warnings keeps final-step landing
+
+- **WHEN** the workflow completes successfully with two warning origins
+- **THEN** the TUI remains in detail focused on the final top-level step, displays `complete with warnings (2)`, advertises `w warnings`, and does not auto-select a warning
+
 #### Scenario: Failure keeps TUI open in detailed view
+
 - **WHEN** an execution fails and the workflow halts
 - **THEN** the TUI remains in detail, expands the failed ancestry, selects the failed leaf, and retains root manual scope
 
 #### Scenario: Equally deep failures select the latest failure
+
 - **WHEN** terminal failure contains multiple failed leaves at the greatest depth
 - **THEN** the TUI selects the most recently recorded failure, or the first in workflow order when durable failure ordering is unavailable
 
 #### Scenario: Post-completion navigation matches inspect mode
+
 - **WHEN** the workflow is terminal and the user opens or remains in detail
-- **THEN** navigation and selected-detail behavior match an inactive `view-run`
+- **THEN** navigation, warning navigation, and selected-detail behavior match an inactive `view-run`
 
 #### Scenario: Resume action available after completion
+
 - **WHEN** a terminal run has a selected resumable agent execution and the user invokes resume
 - **THEN** the existing `view-run` resume behavior applies
 
@@ -141,7 +151,7 @@ When the workflow dispatches an interactive agent step, the run-view TUI SHALL s
 
 ### Requirement: Cursor auto-follows the active step
 
-While the workflow is running, active-step auto-follow SHALL begin engaged. It SHALL expand the active ancestry in the root workflow tree, select the active leaf itself, and keep that row visible. Active leaves include ordinary steps, iterations when they are the execution frontier, UI steps, and agent calls.
+While the workflow is running, active-step auto-follow SHALL begin engaged. It SHALL expand the active ancestry in the root workflow tree, select the active leaf itself, and keep that row visible. Active leaves include ordinary steps, iterations when they are the execution frontier, UI steps, agent calls, and steps executing inside a repair attempt (the inline repair agent, or a replayed step under a `rerun` container). While a repair attempt is active, the owning check row SHALL show a static in-progress indicator and the `(repairing N/M)` suffix, and its attempt children SHALL be expanded inline.
 
 Auto-follow SHALL NEVER drill into or out of a sub-workflow, loop, iteration, group, or agent parent. Entering and leaving nested execution SHALL change inline expansion and selection without changing the manual breadcrumb scope.
 
@@ -192,6 +202,18 @@ Pressing `l` SHALL return to root manual scope when needed, expand the current a
 #### Scenario: Failure jumps cursor to the failed step
 - **WHEN** the workflow reaches failed terminal state
 - **THEN** the root tree expands and selects the failed leaf without creating a drill scope, regardless of the prior follow state
+
+#### Scenario: Active step enters an inline repair
+- **WHEN** auto-follow is engaged and a check starts its inline repair agent
+- **THEN** the check row shows `(repairing 1/1)`, its attempt children expand, and selection moves to the `repair 1` row
+
+#### Scenario: Active step replays under a rerun
+- **WHEN** auto-follow is engaged and a rerun replays `open-draft-pr`
+- **THEN** selection moves to the replayed `open-draft-pr` row under `rerun 1` without changing the breadcrumb scope
+
+#### Scenario: Recovery collapses to the check
+- **WHEN** the replayed check passes
+- **THEN** the check row shows `✓` with `(repaired 1/1)` and auto-follow moves to the next peer
 
 ### Requirement: Detail-pane tail-follow
 
@@ -432,3 +454,4 @@ the run list or from `--inspect`; the profile segment SHALL NOT inherit that res
 - **WHEN** the terminal is too narrow to render the breadcrumb and the profile segment alongside the chrome
   logo
 - **THEN** the breadcrumb line truncates as it does today without wrapping or overflowing the chrome
+

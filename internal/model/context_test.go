@@ -1,12 +1,30 @@
 package model
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/google/go-cmp/cmp"
 )
+
+func TestWarningStateSafelyDeduplicatesConcurrentOrigins(t *testing.T) {
+	state := NewWarningState()
+	var workers sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		workers.Add(1)
+		go func(index int) {
+			defer workers.Done()
+			state.Add(fmt.Sprintf("step-%d", index%4))
+		}(i)
+	}
+	workers.Wait()
+	if got := state.Count(); got != 4 {
+		t.Fatalf("warning origin count = %d, want 4", got)
+	}
+}
 
 func TestIntakeHandoffStateRetriesClaimAfterPendingInvocationDoesNotLaunch(t *testing.T) {
 	state := NewIntakeHandoffState(false)
@@ -211,6 +229,38 @@ func TestBuiltinVarsForStep(t *testing.T) {
 		}
 		if _, ok := vars["session_dir"]; ok {
 			t.Fatal("expected session_dir to be absent")
+		}
+	})
+
+	t.Run("omits repair vars when no repair frame is open", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{WorkflowFile: "test.yaml"})
+		vars := ctx.BuiltinVarsForStep("check")
+		for _, key := range []string{"repair.attempt", "repair.check_output", "repair.check_stderr", "repair.action_response"} {
+			if _, ok := vars[key]; ok {
+				t.Fatalf("expected %q to be absent without an open repair frame", key)
+			}
+		}
+	})
+
+	t.Run("exposes repair vars when a repair frame carries evidence", func(t *testing.T) {
+		ctx := NewRootContext(&RootContextOptions{WorkflowFile: "test.yaml"})
+		ctx.RepairFrame = &RepairFrame{CheckID: "check", Attempts: 1}
+		ctx.LastFailure = &FailureRecord{
+			StepID: "check", Stdout: "checked out", Stderr: "expected one PR",
+			Guarded: &AgentExecutionRecord{Response: "opened the PR"},
+		}
+		vars := ctx.BuiltinVarsForStep("check")
+		if vars["repair.attempt"] != "1" {
+			t.Fatalf("repair.attempt = %q, want %q", vars["repair.attempt"], "1")
+		}
+		if vars["repair.check_output"] != "checked out" {
+			t.Fatalf("repair.check_output = %q", vars["repair.check_output"])
+		}
+		if vars["repair.check_stderr"] != "expected one PR" {
+			t.Fatalf("repair.check_stderr = %q", vars["repair.check_stderr"])
+		}
+		if vars["repair.action_response"] != "opened the PR" {
+			t.Fatalf("repair.action_response = %q", vars["repair.action_response"])
 		}
 	})
 }

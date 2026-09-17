@@ -36,14 +36,14 @@ func DispatchStep(
 		if ctx.PrepareStepHook != nil {
 			ctx.PrepareStepHook(step.Mode == model.ModeInteractive)
 		}
-		return ExecuteShellStep(step, ctx, runner, log)
+		return ExecuteCheckStep(step, ctx, runner, log)
 	}
 
 	if step.Script != "" {
 		if ctx.PrepareStepHook != nil {
 			ctx.PrepareStepHook(false)
 		}
-		return ExecuteScriptStep(step, ctx, runner, log)
+		return ExecuteCheckStep(step, ctx, runner, log)
 	}
 
 	if step.Mode == model.ModeUI {
@@ -108,7 +108,19 @@ func executeGroupStep(
 	childNestingPath[len(originalNestingPath)] = model.NestingSegment{StepID: step.ID}
 	ctx.NestingPath = childNestingPath
 	defer func() { ctx.NestingPath = originalNestingPath }()
-	for i := range steps {
+	// Groups share the parent context (no child ExecutionContext is created),
+	// so a check inside the group must not see an agent that ran after the
+	// group in a sibling scope, and a check after the group must not see an
+	// agent that only ran inside it.
+	originalLastAgentExecution := ctx.LastAgentExecution
+	defer func() { ctx.LastAgentExecution = originalLastAgentExecution }()
+	basePath := childNestingPath
+	if err := PrimeReplayResume(ctx, basePath); err != nil {
+		ctx.NestingPath = originalNestingPath
+		emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), map[string]any{"error": err.Error()}, step)
+		return OutcomeFailed, err
+	}
+	for i := 0; i < len(steps); i++ {
 		// Members honour skip_if exactly as loop bodies and sub-workflow steps do.
 		skip, skipErr := ShouldSkipStep(steps[i].SkipIf, ctx.LastStepOutcome, ctx, steps[i].ID)
 		if skipErr != nil {
@@ -128,13 +140,29 @@ func executeGroupStep(
 			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), map[string]any{"error": err.Error()}, step)
 			return OutcomeFailed, err
 		}
+
+		rw, absorbed := AfterStepDispatch(ctx, steps, i, basePath, outcome)
+		if rw.Stopped {
+			ctx.NestingPath = originalNestingPath
+			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), nil, step)
+			return OutcomeFailed, nil
+		}
+		if rw.Rewound {
+			i = rw.NextIndex - 1
+			continue
+		}
+		if absorbed {
+			continue
+		}
+
 		if outcome == OutcomeAborted {
 			ctx.NestingPath = originalNestingPath
 			emitStepEnd(ctx, prefix, startTime, string(OutcomeAborted), nil, step)
 			return OutcomeAborted, nil
 		}
+		closeToleratedFrame(ctx, &steps[i], outcome)
 		recordLastStepOutcome(ctx, outcome)
-		if outcome == OutcomeFailed && !steps[i].ContinueOnFailure {
+		if isBlockingOutcome(&steps[i], outcome) {
 			ctx.NestingPath = originalNestingPath
 			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), nil, step)
 			return OutcomeFailed, nil

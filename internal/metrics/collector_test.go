@@ -13,6 +13,7 @@ import (
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/stateio"
 )
 
 type recordingSink struct{ events []audit.Event }
@@ -171,6 +172,42 @@ func TestCollectorProjectsTerminalEventsAndNormalizesAttempts(t *testing.T) {
 	}
 	if a.Steps[1].EstimatedAPICostUSD != nil || a.Steps[1].Usage.Status != model.UsageUnavailable {
 		t.Fatalf("unavailable record = %+v", a.Steps[1])
+	}
+}
+
+func TestPipelineAttemptForMatchesAssignedIdentityAttempt(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	collector := NewCollector(dir, "run-1", "workflow", started)
+	pipeline := NewExecutionPipeline(collector, nil, t.TempDir(), "execution-1")
+	identity := model.ExecutionIdentity{StepID: "open-draft-pr", Prefix: "[open-draft-pr]", StepType: "agent", Kind: "step"}
+
+	predicted := pipeline.AttemptFor(&identity)
+	pipeline.Emit(stepEvent(started.Add(time.Second), identity, model.UsageRecord{Status: model.UsageUnavailable, Source: "agent-runner"}, nil, "success", 100))
+
+	assigned := 0
+	for _, s := range readArtifact(t, dir).Steps {
+		if s.ID == "open-draft-pr" {
+			assigned = s.Attempt
+		}
+	}
+	if predicted != assigned {
+		t.Fatalf("Pipeline.AttemptFor predicted %d, artifact recorded attempt %d", predicted, assigned)
+	}
+}
+
+func TestCollectorAttemptForMatchesAssignedIdentityAttempt(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(dir, "run-1", "workflow", started)
+	identity := model.ExecutionIdentity{StepID: "open-draft-pr", Prefix: "[open-draft-pr]", StepType: "agent", Kind: "step"}
+
+	predicted := c.AttemptFor(&identity)
+	end := c.Process(stepEvent(started.Add(time.Second), identity, model.UsageRecord{Status: model.UsageUnavailable, Source: "agent-runner"}, nil, "success", 100))
+	assigned := end.Data[DataIdentity].(model.ExecutionIdentity).Attempt
+
+	if predicted != assigned {
+		t.Fatalf("AttemptFor predicted %d before completion, but identity.attempt assigned %d", predicted, assigned)
 	}
 }
 
@@ -998,7 +1035,7 @@ func TestCollectorMigratesV2SessionsConservativelyAndKeepsSessionRollups(t *test
 	c.Process(stepEvent(started.Add(3*time.Second), agentIdentity("two", true), collectedUsage(4), nil, "success", 1000))
 
 	artifact := readArtifact(t, dir)
-	if artifact.SchemaVersion != 3 || len(artifact.Sessions) != 2 || artifact.Sessions[0].ExecutionSessionID == "" {
+	if artifact.SchemaVersion != SchemaVersion || len(artifact.Sessions) != 2 || artifact.Sessions[0].ExecutionSessionID == "" {
 		t.Fatalf("migrated sessions = %+v", artifact.Sessions)
 	}
 	if artifact.Steps[0].ExecutionSessionID != artifact.Sessions[0].ExecutionSessionID {
@@ -1091,7 +1128,7 @@ func TestCollectorClosesSessionAndEmbedsFinalTotals(t *testing.T) {
 func TestCollectorRecoversCorruptAndUnsupportedArtifacts(t *testing.T) {
 	for _, tc := range []struct{ name, contents string }{
 		{name: "corrupt", contents: "not-json"},
-		{name: "newer schema", contents: `{"schema_version":4,"run_id":"run","workflow":"workflow"}`},
+		{name: "newer schema", contents: `{"schema_version":5,"run_id":"run","workflow":"workflow"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -1226,6 +1263,32 @@ func TestCollectorConsolidatesRepeatedWriteErrors(t *testing.T) {
 	c.Process(stepEvent(time.Now(), agentIdentity("same", true), unavailableUsage(), nil, "completed", 1))
 	if errors := c.Errors(); len(errors) != 1 || !strings.Contains(errors[0].Error(), "25 times") {
 		t.Fatalf("consolidated warning was not retained after recovery: %v", errors)
+	}
+}
+
+func TestCollectorMigratesV3ArtifactToV4WithExplicitDeliveryState(t *testing.T) {
+	dir := t.TempDir()
+	legacy := Artifact{
+		SchemaVersion: 3, RunID: "run-v3", Workflow: "workflow", HistoryComplete: true,
+		Sessions: []SessionRecord{{ExecutionSessionID: "session-v3", StartedAt: "2026-01-01T00:00:00Z", LastObservedAt: "2026-01-01T00:00:00Z", Status: SessionClosed}},
+		Steps:    []StepRecord{{RecordID: "validate#1", ID: "validate", Kind: "step", Type: "shell", ExecutionSessionID: "session-v3"}},
+		Totals:   emptyTotals(),
+	}
+	if err := stateio.WriteJSONAtomic(filepath.Join(dir, FileName), legacy); err != nil {
+		t.Fatalf("write v3 artifact: %v", err)
+	}
+
+	c := NewCollector(dir, "run-v3", "workflow", mustTime(t, "2026-01-02T00:00:00Z"))
+	c.Process(event(audit.EventRunStart, mustTime(t, "2026-01-02T00:00:00Z"), nil))
+	got := readArtifact(t, dir)
+	if got.SchemaVersion != 4 {
+		t.Fatalf("schema version = %d, want 4", got.SchemaVersion)
+	}
+	if got.ValidatorDelivery == nil || got.ValidatorDelivery.HistoryCoverage != "legacy" {
+		t.Fatalf("validator delivery migration = %#v, want legacy coverage", got.ValidatorDelivery)
+	}
+	if len(c.Errors()) != 0 {
+		t.Fatalf("migration errors = %v", c.Errors())
 	}
 }
 

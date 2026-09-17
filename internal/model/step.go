@@ -175,23 +175,28 @@ type Step struct {
 	Capture           string            `yaml:"capture,omitempty" json:"capture,omitempty"`
 	CaptureStderr     bool              `yaml:"capture_stderr,omitempty" json:"capture_stderr,omitempty"`
 	ContinueOnFailure bool              `yaml:"continue_on_failure,omitempty" json:"continue_on_failure,omitempty"`
-	SkipIf            string            `yaml:"skip_if,omitempty" json:"skip_if,omitempty"`
-	BreakIf           string            `yaml:"break_if,omitempty" json:"break_if,omitempty"`
-	Model             string            `yaml:"model,omitempty" json:"model,omitempty"`
-	Workdir           string            `yaml:"workdir,omitempty" json:"workdir,omitempty"`
-	Workflow          string            `yaml:"workflow,omitempty" json:"workflow,omitempty"`
-	Loop              *Loop             `yaml:"loop,omitempty" json:"loop,omitempty"`
-	Params            map[string]string `yaml:"params,omitempty" json:"params,omitempty"`
-	Steps             []Step            `yaml:"steps,omitempty" json:"steps,omitempty"`
-	Title             string            `yaml:"title,omitempty" json:"title,omitempty"`
-	Body              string            `yaml:"body,omitempty" json:"body,omitempty"`
-	Actions           []UIAction        `yaml:"actions,omitempty" json:"actions,omitempty"`
-	Inputs            []UIInput         `yaml:"inputs,omitempty" json:"inputs,omitempty"`
-	OutcomeCapture    string            `yaml:"outcome_capture,omitempty" json:"outcome_capture,omitempty"`
-	Tools             RunnerTools       `yaml:"tools,omitempty" json:"tools,omitempty"`
-	// MetricsSource declares that a shell step launches a tool which may invoke
-	// nested models and will write the Runner structured metrics handoff.
+	// WarnOnFailure converts a terminal failed or exhausted outcome into a
+	// non-blocking warning while preserving that raw outcome in audit evidence.
+	WarnOnFailure  bool              `yaml:"warn_on_failure,omitempty" json:"warn_on_failure,omitempty"`
+	SkipIf         string            `yaml:"skip_if,omitempty" json:"skip_if,omitempty"`
+	BreakIf        string            `yaml:"break_if,omitempty" json:"break_if,omitempty"`
+	Model          string            `yaml:"model,omitempty" json:"model,omitempty"`
+	Workdir        string            `yaml:"workdir,omitempty" json:"workdir,omitempty"`
+	Workflow       string            `yaml:"workflow,omitempty" json:"workflow,omitempty"`
+	Loop           *Loop             `yaml:"loop,omitempty" json:"loop,omitempty"`
+	Params         map[string]string `yaml:"params,omitempty" json:"params,omitempty"`
+	Steps          []Step            `yaml:"steps,omitempty" json:"steps,omitempty"`
+	Title          string            `yaml:"title,omitempty" json:"title,omitempty"`
+	Body           string            `yaml:"body,omitempty" json:"body,omitempty"`
+	Actions        []UIAction        `yaml:"actions,omitempty" json:"actions,omitempty"`
+	Inputs         []UIInput         `yaml:"inputs,omitempty" json:"inputs,omitempty"`
+	OutcomeCapture string            `yaml:"outcome_capture,omitempty" json:"outcome_capture,omitempty"`
+	Tools          RunnerTools       `yaml:"tools,omitempty" json:"tools,omitempty"`
+	// MetricsSource declares that a shell or script step launches a tool which may invoke
+	// nested models and participates in Runner's correlated metrics protocol.
 	MetricsSource string `yaml:"metrics_source,omitempty" json:"metrics_source,omitempty"`
+	// Repair declares how a failed shell or script check may be repaired.
+	Repair *Repair `yaml:"repair,omitempty" json:"repair,omitempty"`
 }
 
 // HasTool reports whether the step enables a Runner-owned tool.
@@ -290,6 +295,13 @@ func (s *Step) Validate(knownCLIs []string) error {
 		return err
 	}
 
+	if s.Repair != nil {
+		isCheckStep := s.Command != "" || s.Script != ""
+		if err := s.Repair.validate(isCheckStep); err != nil {
+			return err
+		}
+	}
+
 	if s.Loop != nil {
 		if err := s.Loop.Validate(); err != nil {
 			return err
@@ -384,8 +396,8 @@ func (s *Step) validateCaptureFields(isAgent, isShell bool) error {
 	if s.CaptureStderr && s.Capture == "" {
 		return fmt.Errorf(`"capture_stderr" requires "capture"`)
 	}
-	if s.CaptureStderr && !isShell {
-		return fmt.Errorf(`"capture_stderr" is only allowed on shell steps`)
+	if s.CaptureStderr && !isShell && s.Script == "" {
+		return fmt.Errorf(`"capture_stderr" is only allowed on shell and script steps`)
 	}
 	return nil
 }
@@ -400,8 +412,8 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 		return err
 	}
 	if s.MetricsSource != "" {
-		if !isShell {
-			return fmt.Errorf(`"metrics_source" is only allowed on shell steps`)
+		if !isShell && !isScript {
+			return fmt.Errorf(`"metrics_source" is only allowed on shell and script steps`)
 		}
 		if s.MetricsSource != "agent-validator" {
 			return fmt.Errorf(`unknown metrics_source %q`, s.MetricsSource)
@@ -762,6 +774,10 @@ func (w *Workflow) Validate(knownCLIs []string) error {
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("workflow validation failed: %s", strings.Join(errs, "; "))
+	}
+
+	if err := validateRepairTargets(w.Steps); err != nil {
+		return err
 	}
 
 	return nil

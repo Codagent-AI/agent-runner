@@ -1,0 +1,10 @@
+- [ ] Implement the change described by these files:
+  - [proposal.md](proposal.md)
+  - [specs/validator-metrics-delivery/spec.md](specs/validator-metrics-delivery/spec.md)
+  - [specs/run-metrics-artifact/spec.md](specs/run-metrics-artifact/spec.md)
+  - [specs/agent-usage-collection/spec.md](specs/agent-usage-collection/spec.md)
+  - [specs/task-compliance-activation/spec.md](specs/task-compliance-activation/spec.md)
+  - [specs/workflow-value-observation/spec.md](specs/workflow-value-observation/spec.md)
+  - [specs/audit-evidence-preparation/spec.md](specs/audit-evidence-preparation/spec.md)
+  - [specs/run-audit-replay/spec.md](specs/run-audit-replay/spec.md)
+  - [design.md](design.md)

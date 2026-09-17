@@ -1,6 +1,7 @@
 package listview
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -279,10 +280,21 @@ const (
 	hdrStep     = "Step"
 	hdrChange   = "Change"
 	hdrUpdated  = "Updated"
+	hdrReason   = "Reason"
 )
+
+// minReasonWidth is the narrowest failure-reason cell worth rendering. Below
+// it the reason is dropped entirely rather than shown as an ellipsis.
+const minReasonWidth = 12
 
 type runListCols struct {
 	nameMax, wfMax, stepMax, tsMax int
+	// reasonMax is the width of the failure-reason cell appended after the
+	// step column. It is zero when no listed run carries a failure reason, so
+	// lists without failures render exactly as they did before.
+	reasonMax int
+	// reasonWanted is the widest failure reason in the list, before fitting.
+	reasonWanted int
 }
 
 func measureRunListCols(runList []runs.RunInfo) runListCols {
@@ -300,18 +312,30 @@ func measureRunListCols(runList []runs.RunInfo) runListCols {
 		if w := runewidth.StringWidth(sanitize(workflowDisplay(r))); w > c.wfMax {
 			c.wfMax = w
 		}
-		step := r.CurrentStep
-		if step == "" {
-			step = "—"
-		}
+		step := runStepDisplay(r)
 		if w := runewidth.StringWidth(sanitize(step)); w > c.stepMax {
 			c.stepMax = w
 		}
 		if w := runewidth.StringWidth(formatTime(r.LastUpdate)); w > c.tsMax {
 			c.tsMax = w
 		}
+		if reason := runFailureReason(r); reason != "" {
+			if w := runewidth.StringWidth(sanitize(reason)); w > c.reasonWanted {
+				c.reasonWanted = w
+			}
+		}
 	}
 	return c
+}
+
+// runFailureReason returns the classified failure reason to show for a run.
+// Only an inactive, uncompleted run reports one: an active run has not failed
+// yet, and a completed run has no failure.
+func runFailureReason(r *runs.RunInfo) string {
+	if r == nil || r.Status != runs.StatusInactive {
+		return ""
+	}
+	return r.FailureReason
 }
 
 // fitTo adjusts c.nameMax, c.wfMax, c.stepMax to fit in avail columns,
@@ -335,6 +359,21 @@ func (c *runListCols) fitTo(avail int) {
 	}
 }
 
+// fitReasonTo sizes the failure-reason cell from whatever width the other
+// columns left over, so adding a reason never moves them.
+func (c *runListCols) fitReasonTo(avail int) {
+	c.reasonMax = 0
+	if c.reasonWanted == 0 {
+		return
+	}
+	leftover := avail - c.nameMax - c.wfMax - c.stepMax - 2 // one column separator
+	width := min(c.reasonWanted, leftover)
+	if width < minReasonWidth {
+		return
+	}
+	c.reasonMax = width
+}
+
 func (m *Model) renderRunList(runList []runs.RunInfo, cursor int, offset *int) string {
 	c := measureRunListCols(runList)
 
@@ -344,7 +383,9 @@ func (m *Model) renderRunList(runList []runs.RunInfo, cursor int, offset *int) s
 	if m.termWidth == 0 {
 		avail = c.nameMax + c.wfMax + c.stepMax
 	}
-	c.fitTo(max(avail, 16))
+	avail = max(avail, 16)
+	c.fitTo(avail)
+	c.fitReasonTo(avail)
 
 	maxRows := m.listMaxRows(true)
 	*offset = adjustOffset(cursor, *offset, maxRows, len(runList))
@@ -364,6 +405,9 @@ func renderRunListHeader(c runListCols) string {
 		columnHeader.Render(fitCell(hdrWorkflow, c.wfMax)) + "  " +
 		columnHeader.Render(fitCell(hdrChange, c.nameMax)) + "  " +
 		columnHeader.Render(fitCell(hdrStep, c.stepMax))
+	if c.reasonMax > 0 {
+		h += "  " + columnHeader.Render(fitCell(hdrReason, c.reasonMax))
+	}
 	return h + "  " + columnHeader.Render(hdrUpdated) + "\n"
 }
 
@@ -373,10 +417,7 @@ func (m *Model) renderRunListRow(r *runs.RunInfo, isSel bool, c runListCols) str
 		prefix = cursorStyle.Render("▶") + "  "
 	}
 
-	step := r.CurrentStep
-	if step == "" {
-		step = "—"
-	}
+	step := runStepDisplay(r)
 
 	style := dimStyle
 	if isSel {
@@ -385,16 +426,29 @@ func (m *Model) renderRunListRow(r *runs.RunInfo, isSel bool, c runListCols) str
 
 	wfStyle := style.Bold(true)
 
-	line := m.renderStatusIcon(r.Status) + "  " +
+	line := m.renderStatusIcon(r) + "  " +
 		wfStyle.Render(fitCell(sanitize(workflowDisplay(r)), c.wfMax)) + "  " +
 		style.Render(fitCell(sanitize(r.ChangeName), c.nameMax)) + "  " +
 		style.Render(fitCell(sanitize(step), c.stepMax))
+	if c.reasonMax > 0 {
+		line += "  " + tuistyle.StatusFailed.Render(fitCell(sanitize(runFailureReason(r)), c.reasonMax))
+	}
 	line += "  " + dimStyle.Render(formatTime(r.LastUpdate))
 	return prefix + line + "\n"
 }
 
-func (m *Model) renderStatusIcon(s runs.Status) string {
-	switch s {
+func runStepDisplay(r *runs.RunInfo) string {
+	if r == nil || r.CurrentStep == "" {
+		if r != nil && r.WarningCount > 0 {
+			return fmt.Sprintf("complete with warnings (%d)", r.WarningCount)
+		}
+		return "—"
+	}
+	return r.CurrentStep
+}
+
+func (m *Model) renderStatusIcon(r *runs.RunInfo) string {
+	switch r.Status {
 	case runs.StatusActive:
 		if tuistyle.BlinkOn(m.pulsePhase) {
 			return tuistyle.StatusSuccess.Render("●")
@@ -403,6 +457,9 @@ func (m *Model) renderStatusIcon(s runs.Status) string {
 	case runs.StatusInactive:
 		return statusInactive.Render("○")
 	case runs.StatusCompleted:
+		if r.WarningCount > 0 {
+			return tuistyle.StatusInactive.Render("!")
+		}
 		return statusDone.Render("✓")
 	}
 	return " "

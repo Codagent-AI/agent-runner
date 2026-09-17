@@ -115,8 +115,14 @@ func (a *OpenCodeAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
 			},
 		}
 		if invocationContext.IsAutonomous() {
-			config["permission"] = map[string]string{"agent-runner_call_agent": "allow"}
-			permission["agent-runner_call_agent"] = "allow"
+			permissions := make(map[string]string, len(agentCallMCPToolNames))
+			for _, name := range agentCallMCPToolNames {
+				permissions["agent-runner_"+name] = "allow"
+			}
+			config["permission"] = permissions
+			for name, value := range permissions {
+				permission[name] = value
+			}
 		}
 	}
 	rendered, err := json.Marshal(config)

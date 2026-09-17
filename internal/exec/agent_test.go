@@ -192,6 +192,33 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("publishes LastAgentExecution on completion", func(t *testing.T) {
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		step := model.Step{ID: "open-draft-pr", Mode: model.ModeAutonomous, Prompt: "do something", Session: model.SessionNew}
+
+		outcome, err := ExecuteAgentStep(&step, ctx, &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: claudeUsageOutput("opened the PR", 0.1)}}}, &mockLogger{})
+		if err != nil || outcome != OutcomeSuccess {
+			t.Fatalf("ExecuteAgentStep() = (%q, %v), want success", outcome, err)
+		}
+		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
+		identity := end.Data["identity"].(model.ExecutionIdentity)
+
+		if ctx.LastAgentExecution == nil {
+			t.Fatal("expected LastAgentExecution to be published")
+		}
+		if ctx.LastAgentExecution.Ref.Prefix != "[open-draft-pr]" {
+			t.Fatalf("ref prefix = %q, want [open-draft-pr]", ctx.LastAgentExecution.Ref.Prefix)
+		}
+		if ctx.LastAgentExecution.Ref.Attempt != identity.Attempt {
+			t.Fatalf("ref attempt = %d, want to match identity.attempt %d", ctx.LastAgentExecution.Ref.Attempt, identity.Attempt)
+		}
+		if ctx.LastAgentExecution.Response != "opened the PR" {
+			t.Fatalf("response = %q, want %q", ctx.LastAgentExecution.Response, "opened the PR")
+		}
+	})
+
 	t.Run("usage parse failure does not change successful outcome", func(t *testing.T) {
 		auditLog := &recordingAuditLogger{}
 		ctx := makeCtx()
@@ -288,6 +315,42 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 		if len(identities) != 2 || identities[0].SessionResumed || !identities[1].SessionResumed {
 			t.Fatalf("session resume identities = %+v, want fresh then resumed", identities)
+		}
+	})
+
+	t.Run("cursor result stall records session and step_end error", func(t *testing.T) {
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		step := model.Step{
+			ID: "generate-code", Mode: model.ModeAutonomous, Prompt: "implement",
+			Session: model.SessionNew, CLI: "cursor",
+		}
+		stdout := `{"type":"system","subtype":"init","session_id":"stall-session"}` + "\n" +
+			`{"type":"thinking","subtype":"completed"}` + "\n"
+		runner := &invocationRecordingRunner{
+			options: make(chan AgentProcessOptions, 1),
+			result:  ProcessResult{Started: true, ExitCode: -1, Stdout: stdout},
+			err:     cli.ErrCursorResultStall,
+		}
+
+		outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+		if outcome != OutcomeFailed || !errors.Is(err, cli.ErrCursorResultStall) {
+			t.Fatalf("ExecuteAgentStep() = (%q, %v), want cursor result stall", outcome, err)
+		}
+		if ctx.SessionIDs["generate-code"] != "stall-session" {
+			t.Fatalf("SessionIDs = %#v, want stall-session", ctx.SessionIDs)
+		}
+		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
+		if end == nil {
+			t.Fatal("expected step_end")
+		}
+		if end.Data["discovered_session_id"] != "stall-session" {
+			t.Fatalf("discovered_session_id = %#v", end.Data["discovered_session_id"])
+		}
+		errorText, _ := end.Data["error"].(string)
+		if !strings.Contains(errorText, "without a terminal result") {
+			t.Fatalf("step_end error = %#v, want stall diagnostic", end.Data["error"])
 		}
 	})
 

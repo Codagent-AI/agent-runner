@@ -202,6 +202,83 @@ func TestInvokeAgentPreservesCopilotWaitDelayAfterUnsuccessfulTaskCompletion(t *
 	}
 }
 
+func TestInvokeAgentFailsCursorStreamThatNeverEmitsResult(t *testing.T) {
+	const stdout = `{"type":"system","subtype":"init","session_id":"stall-session"}` + "\n" +
+		`{"type":"thinking","subtype":"delta","text":"Implementation is complete."}` + "\n" +
+		`{"type":"thinking","subtype":"completed"}` + "\n"
+	adapter := &cli.CursorAdapter{}
+	adapter.SetResultStallGrace(15 * time.Millisecond)
+	runner := &hangingCursorRunner{stdout: stdout}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	got, err := InvokeAgent(&AgentInvocation{
+		Context: ctx, Adapter: adapter, Args: []string{"agent"},
+		InvocationContext: cli.ContextAutonomousHeadless, CLI: "cursor",
+	}, runner, &mockLogger{})
+	if !errors.Is(err, cli.ErrCursorResultStall) {
+		t.Fatalf("InvokeAgent() error = %v, want cursor result stall", err)
+	}
+	if got.Outcome != OutcomeFailed || !got.CLILaunched {
+		t.Fatalf("InvokeAgent() result = %#v", got)
+	}
+	if got.DiscoveredSessionID != "stall-session" {
+		t.Fatalf("DiscoveredSessionID = %q, want stall-session", got.DiscoveredSessionID)
+	}
+}
+
+func TestInvokeAgentKeepsCursorAliveWhenResultArrives(t *testing.T) {
+	const stdout = `{"type":"thinking","subtype":"completed"}` + "\n" +
+		`{"type":"result","result":"done","session_id":"ok-session"}` + "\n"
+	adapter := &cli.CursorAdapter{}
+	adapter.SetResultStallGrace(15 * time.Millisecond)
+	runner := &hangingCursorRunner{stdout: stdout, exitAfterWrite: true}
+
+	got, err := InvokeAgent(&AgentInvocation{
+		Context: context.Background(), Adapter: adapter, Args: []string{"agent"},
+		InvocationContext: cli.ContextAutonomousHeadless, CLI: "cursor",
+	}, runner, &mockLogger{})
+	if err != nil {
+		t.Fatalf("InvokeAgent() error = %v, want success after result event", err)
+	}
+	if got.Outcome != OutcomeSuccess || got.Response != "done" || got.DiscoveredSessionID != "ok-session" {
+		t.Fatalf("InvokeAgent() result = %#v", got)
+	}
+}
+
+type hangingCursorRunner struct {
+	stdout         string
+	exitAfterWrite bool
+}
+
+func (*hangingCursorRunner) RunShell(string, bool, string) (ProcessResult, error) {
+	return ProcessResult{}, nil
+}
+func (*hangingCursorRunner) RunScript(string, []byte, bool, string) (ProcessResult, error) {
+	return ProcessResult{}, nil
+}
+func (r *hangingCursorRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, error) {
+	options.NotifyStarted()
+	if options.StdoutWrapper != nil {
+		writer := options.StdoutWrapper(io.Discard)
+		_, _ = writer.Write([]byte(r.stdout))
+		if closer, ok := writer.(io.Closer); ok {
+			if r.exitAfterWrite {
+				_ = closer.Close()
+			}
+		}
+	}
+	if r.exitAfterWrite {
+		return ProcessResult{Started: true, ExitCode: 0, Stdout: r.stdout}, nil
+	}
+	select {
+	case <-options.Context.Done():
+		return ProcessResult{Started: true, ExitCode: -1, Stdout: r.stdout}, context.Cause(options.Context)
+	case <-time.After(3 * time.Second):
+		return ProcessResult{Started: true, ExitCode: -1, Stdout: r.stdout}, errors.New("cursor child was left running")
+	}
+}
+
 func TestInvokeAgentPreservesCopilotWaitDelayWithoutTerminalResult(t *testing.T) {
 	runner := &invocationRecordingRunner{
 		options: make(chan AgentProcessOptions, 1),

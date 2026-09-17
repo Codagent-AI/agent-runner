@@ -108,6 +108,8 @@ trap 'rm -f "$SANDBOX_SYNC_HOME_LOCK"' EXIT
 mkdir -p \
   "$HOME_DIR/.codex" \
   "$HOME_DIR/.claude" \
+  "$HOME_DIR/.cursor" \
+  "$HOME_DIR/.config/cursor" \
   "$HOME_DIR/.config/git" \
   "$HOME_DIR/.ssh"
 chmod 700 "$HOME_DIR/.ssh" 2>/dev/null || true
@@ -305,6 +307,9 @@ seed_file_if_present "$HOST_HOME_ROOT/codex/auth.json" "$HOME_DIR/.codex/auth.js
 seed_file_if_present "$HOST_HOME_ROOT/claude/.credentials.json" "$HOME_DIR/.claude/.credentials.json"
 seed_file_if_present "$HOST_HOME_ROOT/claude/settings.json" "$HOME_DIR/.claude/settings.json"
 seed_file_if_present "$HOST_HOME_ROOT/claude/settings.local.json" "$HOME_DIR/.claude/settings.local.json"
+seed_file_if_present "$HOST_HOME_ROOT/cursor/auth.json" "$HOME_DIR/.cursor/auth.json"
+# Linux Cursor reads XDG (~/.config/cursor/auth.json); macOS uses ~/.cursor/auth.json.
+seed_file_if_present "$HOST_HOME_ROOT/cursor/auth.json" "$HOME_DIR/.config/cursor/auth.json"
 
 copy_file_if_present "$HOST_HOME_ROOT/shell/.zshrc" "$HOME_DIR/.zshrc"
 copy_file_if_present "$HOST_HOME_ROOT/shell/.zprofile" "$HOME_DIR/.zprofile"

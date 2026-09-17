@@ -39,6 +39,12 @@ type RunInfo struct {
 	// TODO: replace with a first-class "run name" attribute on all runs, set
 	// explicitly by the workflow rather than sniffed from a conventional param.
 	ChangeName string
+	// WarningCount is persisted for successfully completed runs so list views
+	// can distinguish clean completion from completion with warnings.
+	WarningCount int
+	// FailureReason is the classified root failure reason persisted by the
+	// runner for a failed run. It is empty for runs with no failure record.
+	FailureReason string
 }
 
 // projectMeta is the JSON structure of meta.json.
@@ -94,6 +100,8 @@ func ListForDir(projectDir string) ([]RunInfo, error) {
 				info.WorkflowFile = state.WorkflowFile
 				info.CurrentStep = currentStepID(&state)
 				info.ChangeName = state.Params["change_name"]
+				info.WarningCount = state.WarningCount
+				info.FailureReason = state.FailureReason
 			}
 		}
 

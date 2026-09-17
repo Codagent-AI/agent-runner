@@ -460,6 +460,129 @@ func shellStep(id, cmd string) model.Step {
 	return model.Step{ID: id, Command: cmd, Session: model.SessionNew}
 }
 
+func claudeAgentOutput(result string) string {
+	return `{"type":"result","result":` + fmt.Sprintf("%q", result) + `}` + "\n"
+}
+
+func TestRunWorkflowRecordsFailureReasonFromFailingCheck(t *testing.T) {
+	runner := &mockRunner{results: []exec.ProcessResult{
+		{ExitCode: 0, Stdout: claudeAgentOutput("opened the PR")},
+		{ExitCode: 1, Stderr: "expected one open PR\nmore detail"},
+	}}
+	w := model.Workflow{
+		Name: "test",
+		Steps: []model.Step{
+			{ID: "open-draft-pr", Mode: model.ModeAutonomous, Prompt: "open it", Agent: "test-agent", Session: model.SessionNew},
+			shellStep("verify-draft-pr", "exit 1"),
+		},
+	}
+	w.ApplyDefaults()
+	sessionDir := t.TempDir()
+	log := &mockLog{}
+	result, err := RunWorkflow(&w, map[string]string{}, &Options{
+		ProcessRunner: runner, GlobExpander: &mockGlob{}, Log: log, SessionDir: sessionDir,
+		ProfileStore: &config.Config{ActiveAgents: map[string]*config.Agent{"test-agent": {CLI: "claude"}}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != ResultFailed {
+		t.Fatalf("expected failed, got %q", result)
+	}
+
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "verify-draft-pr failed: expected one open PR"
+	if state.FailureReason != want {
+		t.Fatalf("state.FailureReason = %q, want %q", state.FailureReason, want)
+	}
+
+	printed := strings.Join(log.lines, "")
+	if !strings.Contains(printed, want) {
+		t.Fatalf("console output missing failure reason %q:\n%s", want, printed)
+	}
+	resumeIdx := strings.Index(printed, "to resume:")
+	reasonIdx := strings.Index(printed, want)
+	if resumeIdx < 0 || reasonIdx < 0 || reasonIdx > resumeIdx {
+		t.Fatalf("failure reason must print above the resume hint:\n%s", printed)
+	}
+
+	auditData, err := os.ReadFile(filepath.Join(sessionDir, "audit.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(auditData), `"failure_reason":"verify-draft-pr failed: expected one open PR"`) {
+		t.Fatalf("run_end missing failure_reason: %s", auditData)
+	}
+}
+
+func TestRunWorkflowResumeRebuildsGuardedResponseFromAuditAfterInterruption(t *testing.T) {
+	sessionDir := t.TempDir()
+	workflowPath := filepath.Join(t.TempDir(), "deploy-v1.0.yaml")
+	source := `name: deploy
+steps:
+  - id: open-draft-pr
+    prompt: open it
+    mode: autonomous
+    agent: test-agent
+    session: new
+  - id: verify-draft-pr
+    command: exit 1
+`
+	if err := os.WriteFile(workflowPath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate an interruption right after open-draft-pr completed, before
+	// verify-draft-pr ran: state.json carries lastAgent but the in-memory
+	// record is gone (fresh process), and the audit log holds the agent's
+	// step_end evidence.
+	state := model.RunState{
+		WorkflowFile: workflowPath,
+		WorkflowName: "deploy",
+		WorkflowHash: stateio.ComputeWorkflowHash(source),
+		CurrentStep: model.CurrentStep{
+			Nested: &model.NestedStepState{
+				StepID: "open-draft-pr", SessionIDs: map[string]string{}, CapturedVariables: map[string]model.CapturedValue{},
+				Completed: true,
+				LastAgent: &model.ExecutionRef{Prefix: "[open-draft-pr]", Attempt: 1},
+			},
+		},
+	}
+	if err := stateio.WriteState(&state, sessionDir); err != nil {
+		t.Fatal(err)
+	}
+	auditLogger, err := audit.NewLogger(filepath.Join(sessionDir, "audit.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditLogger.Emit(audit.Event{
+		Timestamp: "2026-07-17T00:00:00Z", Prefix: "[open-draft-pr]", Type: audit.EventStepEnd,
+		Data: map[string]any{"outcome": "success", "stdout": "opened the PR", "identity": map[string]any{"step_id": "open-draft-pr", "attempt": 1}},
+	})
+	auditLogger.Close()
+
+	runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 1, Stderr: "expected one open PR"}}}
+	handle, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+		ProcessRunner: runner, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil {
+		t.Fatalf("PrepareResume: %v", err)
+	}
+	result := ExecuteFromHandle(handle, nil)
+	if result != ResultFailed {
+		t.Fatalf("expected failed, got %q", result)
+	}
+	if handle.rs.ctx.LastFailure == nil || handle.rs.ctx.LastFailure.Guarded == nil {
+		t.Fatal("expected failure record with guarded execution")
+	}
+	if got := handle.rs.ctx.LastFailure.Guarded.Response; got != "opened the PR" {
+		t.Fatalf("guarded response = %q, want rebuilt from audit %q", got, "opened the PR")
+	}
+}
+
 func TestRunWorkflow_OptionalParamAvailableAsEmptyString(t *testing.T) {
 	optional := false
 	workflow := &model.Workflow{
@@ -822,6 +945,44 @@ func TestRunWorkflow(t *testing.T) {
 		}
 	})
 
+	t.Run("warn_on_failure preserves failed evidence and completes successfully", func(t *testing.T) {
+		dir := t.TempDir()
+		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 1, Stdout: "validator failed"}, {ExitCode: 0}}}
+		w := model.Workflow{
+			Name: "test",
+			Steps: []model.Step{
+				{ID: "advisory", Command: "false", Session: model.SessionNew, WarnOnFailure: true},
+				shellStep("reached", "echo yes"),
+			},
+		}
+		w.ApplyDefaults()
+		result, err := RunWorkflow(&w, map[string]string{}, &Options{
+			ProcessRunner: runner,
+			GlobExpander:  &mockGlob{},
+			Log:           &mockLog{},
+			SessionDir:    dir,
+		})
+		if err != nil || result != ResultSuccess {
+			t.Fatalf("RunWorkflow() = (%q, %v), want success", result, err)
+		}
+		if len(runner.calls) != 2 {
+			t.Fatalf("calls = %d, want warning step and following step", len(runner.calls))
+		}
+		body, err := os.ReadFile(filepath.Join(dir, "audit.log"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{`"status":"warning"`, `"outcome":"failed"`, `"completed_with_warnings":true`, `"warning_count":1`} {
+			if !strings.Contains(string(body), want) {
+				t.Fatalf("audit missing %s:\n%s", want, body)
+			}
+		}
+		state, err := stateio.ReadState(filepath.Join(dir, "state.json"))
+		if err != nil || !state.Completed || state.WarningCount != 1 {
+			t.Fatalf("state = %#v, %v; want completed with one warning", state, err)
+		}
+	})
+
 	t.Run("counted loop exhaustion succeeds workflow", func(t *testing.T) {
 		maxIterations := 1
 		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}}}
@@ -887,6 +1048,77 @@ func TestRunWorkflow(t *testing.T) {
 		}
 		if len(runner.calls) != 1 {
 			t.Fatalf("expected only the loop body to run, got %d calls", len(runner.calls))
+		}
+	})
+
+	t.Run("warn_on_failure turns exhausted retry loop into a warning", func(t *testing.T) {
+		maxIterations := 1
+		dir := t.TempDir()
+		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 1}, {ExitCode: 0}}}
+		w := model.Workflow{Name: "test", Steps: []model.Step{
+			{ID: "retry", Loop: &model.Loop{Max: &maxIterations}, WarnOnFailure: true, Steps: []model.Step{
+				{ID: "always-fail", Command: "false", ContinueOnFailure: true, BreakIf: "success"},
+			}},
+			shellStep("reached", "echo reached"),
+		}}
+		w.ApplyDefaults()
+		result, err := RunWorkflow(&w, nil, &Options{ProcessRunner: runner, GlobExpander: &mockGlob{}, Log: &mockLog{}, SessionDir: dir})
+		if err != nil || result != ResultSuccess || len(runner.calls) != 2 {
+			t.Fatalf("RunWorkflow = (%q, %v), calls=%d; want success after warning", result, err, len(runner.calls))
+		}
+		body, err := os.ReadFile(filepath.Join(dir, "audit.log"))
+		if err != nil || !strings.Contains(string(body), `"outcome":"exhausted"`) || !strings.Contains(string(body), `"status":"warning"`) {
+			t.Fatalf("audit = %q, %v; want exhausted warning evidence", body, err)
+		}
+	})
+
+	t.Run("warned exhausted loop does not satisfy previous_success", func(t *testing.T) {
+		maxIterations := 1
+		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 1}, {ExitCode: 0}}}
+		w := model.Workflow{Name: "test", Steps: []model.Step{
+			{ID: "retry", Loop: &model.Loop{Max: &maxIterations}, WarnOnFailure: true, Steps: []model.Step{
+				{ID: "always-fail", Command: "false", ContinueOnFailure: true, BreakIf: "success"},
+			}},
+			{ID: "recover", Command: "recover", SkipIf: "previous_success"},
+		}}
+		w.ApplyDefaults()
+		result, err := RunWorkflow(&w, nil, &Options{ProcessRunner: runner, GlobExpander: &mockGlob{}, Log: &mockLog{}, SessionDir: t.TempDir()})
+		if err != nil || result != ResultSuccess {
+			t.Fatalf("RunWorkflow = (%q, %v), want success after warned exhaustion and recovery", result, err)
+		}
+		if len(runner.calls) != 2 {
+			t.Fatalf("calls = %#v, want exhausted loop body followed by recovery", runner.calls)
+		}
+		if got := runner.calls[1][2]; got != "recover" {
+			t.Fatalf("second call = %q, want recovery", got)
+		}
+	})
+
+	t.Run("third repair receives verification without a fourth repair", func(t *testing.T) {
+		maxIterations := 3
+		runner := &mockRunner{results: []exec.ProcessResult{
+			{ExitCode: 1}, {ExitCode: 0}, // first validate, repair
+			{ExitCode: 1}, {ExitCode: 0}, // second validate, repair
+			{ExitCode: 1}, {ExitCode: 0}, // third validate, repair
+			{ExitCode: 0}, // verification only
+		}}
+		w := model.Workflow{Name: "validator", Steps: []model.Step{
+			{ID: "retry", ContinueOnFailure: true, Loop: &model.Loop{Max: &maxIterations}, Steps: []model.Step{
+				{ID: "validate", Command: "validate", ContinueOnFailure: true, BreakIf: "success"},
+				{ID: "repair", Command: "repair", SkipIf: "previous_success", ContinueOnFailure: true},
+			}},
+			{ID: "verify-final", Command: "verify-final", SkipIf: "previous_success", WarnOnFailure: true},
+		}}
+		w.ApplyDefaults()
+		result, err := RunWorkflow(&w, nil, &Options{ProcessRunner: runner, GlobExpander: &mockGlob{}, Log: &mockLog{}, SessionDir: t.TempDir()})
+		if err != nil || result != ResultSuccess {
+			t.Fatalf("RunWorkflow = (%q, %v), want success", result, err)
+		}
+		if len(runner.calls) != 7 {
+			t.Fatalf("calls = %#v, want 3 repairs plus their 4 validations", runner.calls)
+		}
+		if got := runner.calls[len(runner.calls)-1][2]; got != "verify-final" {
+			t.Fatalf("last call = %q, want final verification", got)
 		}
 	})
 

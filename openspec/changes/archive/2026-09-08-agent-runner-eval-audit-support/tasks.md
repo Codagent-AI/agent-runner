@@ -1,0 +1,8 @@
+- [ ] Implement the change described by these files:
+  - [proposal.md](proposal.md)
+  - [specs/development-audit-availability/spec.md](specs/development-audit-availability/spec.md)
+  - [specs/automatic-run-audit/spec.md](specs/automatic-run-audit/spec.md)
+  - [specs/audit-model-isolation/spec.md](specs/audit-model-isolation/spec.md)
+  - [specs/development-audit-sandbox/spec.md](specs/development-audit-sandbox/spec.md)
+  - [design.md](design.md)
+  - [test-plan.md](test-plan.md)

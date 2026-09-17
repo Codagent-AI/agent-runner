@@ -64,7 +64,7 @@ steps:
     session: new
     tools: [call_agent]
     prompt: |
-      Use call_agent exactly once with the named session called-claude. Ask the called agent to invent a token made of exactly two unusual lowercase words joined by one underscore, write only that token into %s, remember it, and reply with only that token. After call_agent returns, write its exact response into %s and reply with only that same response. Do not use a proprietary subagent tool.
+      Use call_agent exactly once with the named session called-claude. Ask the called agent to invent a token made of exactly two unusual lowercase words joined by one underscore, write only that token into %s, remember it, and reply with only that token. After call_agent returns a call_id, poll get_agent_call until the call is terminal, write that exact child response into %s, and reply with only that same response. Do not treat an in-progress status as success. Do not use a proprietary subagent tool.
   - id: claude-call-session-reuse
     session: called-claude
     prompt: "Write only the exact token you invented in the previous turn into %s, then reply with only that token."

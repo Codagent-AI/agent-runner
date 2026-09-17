@@ -64,28 +64,34 @@ func init() {
 	runner.SetDefaultPostFinalizationHook(Coordinator{Launcher: launchDetached}.AfterFinalization)
 }
 
-// executeAuditWorkflow runs the one injected hidden workflow. Its first
-// unavailable stage intentionally fails the linked audit through normal Runner
-// execution; completing that diagnostic never changes the source outcome.
+// executeAuditWorkflow runs the injected hidden workflow and records its
+// terminal diagnostic independently of the source outcome.
 func executeAuditWorkflow(request *Request) error {
 	workflow, err := loader.LoadWorkflow("builtin:audit/run-audit-v1.0.yaml", loader.Options{})
 	if err != nil {
 		return err
 	}
+	var stageFailure string
 	result, runErr := runner.RunWorkflow(&workflow, map[string]string{"audit_request": filepath.Join(request.AuditSessionDir, "request.json")}, &runner.Options{
 		SessionDir: request.AuditSessionDir, WorkflowFile: "builtin:audit/run-audit-v1.0.yaml", WorkingDir: request.AuditSessionDir,
-		ProjectRoot: request.AuditSessionDir, ProcessRunner: auditProcessRunner{auditSessionDir: request.AuditSessionDir}, GlobExpander: auditGlobExpander{}, Log: &runner.DiscardLogger{},
+		ProjectRoot: request.AuditSessionDir, ProcessRunner: auditProcessRunner{auditSessionDir: request.AuditSessionDir, failure: &stageFailure}, GlobExpander: auditGlobExpander{}, Log: &runner.DiscardLogger{},
 	})
 	warning := ""
 	if runErr != nil {
 		warning = runErr.Error()
 	} else if result != runner.ResultSuccess {
-		warning = "audit stage handlers are not implemented"
+		warning = stageFailure
+		if warning == "" {
+			warning = fmt.Sprintf("audit workflow ended with result %v", result)
+		}
 	}
 	return completeAudit(request, warning)
 }
 
-type auditProcessRunner struct{ auditSessionDir string }
+type auditProcessRunner struct {
+	auditSessionDir string
+	failure         *string
+}
 
 func (r auditProcessRunner) RunShell(command string, capture bool, workdir string) (iexec.ProcessResult, error) {
 	if strings.HasPrefix(command, "audit-stage ") {
@@ -93,7 +99,16 @@ func (r auditProcessRunner) RunShell(command string, capture bool, workdir strin
 		if auditSessionDir == "" {
 			auditSessionDir = workdir
 		}
-		return runAuditStage(strings.TrimSpace(strings.TrimPrefix(command, "audit-stage ")), auditSessionDir)
+		stage := strings.TrimSpace(strings.TrimPrefix(command, "audit-stage "))
+		result, err := runAuditStage(stage, auditSessionDir)
+		if r.failure != nil && (err != nil || result.ExitCode != 0) {
+			detail := result.Stderr
+			if err != nil {
+				detail = err.Error()
+			}
+			*r.failure = fmt.Sprintf("audit stage %s failed: %s", stage, detail)
+		}
+		return result, err
 	}
 	cmd := exec.Command("sh", "-c", command) // #nosec G204 -- commands are from the injected private audit workflow.
 	cmd.Dir = workdir

@@ -224,6 +224,8 @@ func renderSummaryRow(row summaryRow, columns summaryColumns) string {
 	switch row.status {
 	case StatusFailed:
 		values[0] = tuistyle.StatusFailed.Render(values[0])
+	case StatusWarning:
+		values[0] = tuistyle.StatusInactive.Render(values[0])
 	case StatusPending, StatusSkipped:
 		values[0] = tuistyle.DimStyle.Render(values[0])
 	default:

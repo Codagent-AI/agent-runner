@@ -12,10 +12,11 @@ import (
 
 const (
 	agentCallMCPServerName       = "agent-runner"
-	agentCallMCPToolName         = "call_agent"
 	agentCallTimeoutSeconds      = 30 * 24 * 60 * 60
 	agentCallTimeoutMilliseconds = int64(2_147_483_647)
 )
+
+var agentCallMCPToolNames = []string{"call_agent", "get_agent_call", "cancel_agent_call"}
 
 var agentCallControlEnvironmentVariables = []string{
 	"AGENT_RUNNER_CONTROL_SOCKET",
@@ -62,7 +63,7 @@ func standardAgentCallMCPConfig(command MCPServerCommand, includeToolFilter bool
 		server["env"] = environment
 	}
 	if includeToolFilter {
-		server["tools"] = []string{agentCallMCPToolName}
+		server["tools"] = append([]string{}, agentCallMCPToolNames...)
 	}
 	if timeoutMilliseconds > 0 {
 		server["timeout"] = timeoutMilliseconds
@@ -73,7 +74,7 @@ func standardAgentCallMCPConfig(command MCPServerCommand, includeToolFilter bool
 }
 
 func prepareAgentCallPlugin(command MCPServerCommand) (string, error) {
-	config, err := standardAgentCallMCPConfig(command, false, 0, true)
+	config, err := standardAgentCallMCPConfig(command, true, 0, true)
 	if err != nil {
 		return "", fmt.Errorf("encode agent-call MCP plugin: %w", err)
 	}

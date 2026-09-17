@@ -139,6 +139,25 @@ func TestOnboardingRunsStepTypesDemoBeforeCompletion(t *testing.T) {
 	}
 }
 
+func TestRunValidatorVerifiesThirdRepairWithoutAFourthRepair(t *testing.T) {
+	wf := readBuiltinWorkflowForTest(t, "builtin:core/run-validator-v1.0.yaml")
+	retry := stepByID(t, &wf, "validator-retry")
+	if retry.Loop == nil || retry.Loop.Max == nil || *retry.Loop.Max != 3 {
+		t.Fatalf("validator retry loop = %#v, want three repair opportunities", retry.Loop)
+	}
+	if !retry.ContinueOnFailure {
+		t.Fatal("validator retry must continue to final verification after exhausting repair budget")
+	}
+	final := stepByID(t, &wf, "verify-final-validator")
+	if final.Script != "run-validator.sh" || final.Command != "" || final.MetricsSource != "agent-validator" || !final.WarnOnFailure || final.SkipIf != "previous_success" {
+		t.Fatalf("final verification = %#v, want warning-on-failure verification after exhausted retry", final)
+	}
+	initial := retry.Steps[0]
+	if initial.Script != "run-validator.sh" || initial.Command != "" || initial.MetricsSource != "agent-validator" {
+		t.Fatalf("retry validator = %#v, want shared validator script", initial)
+	}
+}
+
 func TestGuidedWorkflowShape(t *testing.T) {
 	wf := readBuiltinWorkflowForTest(t, "builtin:onboarding/guided-workflow-v1.0.yaml")
 

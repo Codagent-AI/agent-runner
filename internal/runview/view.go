@@ -115,7 +115,7 @@ func (m *Model) renderFailureReason() string {
 	if m.rootStatus() != StatusFailed {
 		return ""
 	}
-	reason := failureReason(m.tree.Root)
+	reason := m.failureReason()
 	if reason == "" {
 		reason = "workflow failed"
 	}
@@ -261,6 +261,9 @@ func (m *Model) renderTreeRowLabel(n *StepNode, selected, staticInProgress bool,
 	}
 	if n.Status == StatusFailed {
 		style = tuistyle.StatusFailed
+	}
+	if n.Status == StatusWarning || n.WarningDescendant {
+		glyph = styledStatusGlyph(StatusWarning)
 	}
 	return prefix + strings.Repeat("  ", depth) + glyph + "  " + style.Render(label) + "  " + typeCol
 }
@@ -421,7 +424,7 @@ func stepRowLabel(n *StepNode) (label, suffix string) {
 	switch n.Type {
 	case NodeLoop:
 		if total := loopTotal(n); total > 0 {
-			suffix = fmt.Sprintf(" (%d/%d)", n.IterationsCompleted, total)
+			suffix = fmt.Sprintf(" (%d/%d)", loopDisplayProgress(n), total)
 		}
 	case NodeIteration:
 		label = fmt.Sprintf("iter %d", n.IterationIndex+1)
@@ -431,7 +434,32 @@ func stepRowLabel(n *StepNode) (label, suffix string) {
 	if (n.Type == NodeHeadlessAgent || n.Type == NodeInteractiveAgent) && len(n.Children) > 0 {
 		suffix = fmt.Sprintf(" (%d calls)", len(n.Children))
 	}
+	if repair := repairSuffix(n); repair != "" {
+		suffix = repair
+	}
 	return label, suffix
+}
+
+// repairSuffix renders a check's repair progress: an attempt in flight, a
+// recovery, a blocked declaration, or an exhausted budget.
+func repairSuffix(n *StepNode) string {
+	if n.RepairBlocked {
+		return " (blocked)"
+	}
+	budget := n.repairBudgetShown()
+	if budget == 0 {
+		return ""
+	}
+	if n.RepairActiveAttempt > 0 {
+		return fmt.Sprintf(" (repairing %d/%d)", n.RepairActiveAttempt, budget)
+	}
+	if n.RepairAttempts == 0 {
+		return ""
+	}
+	if n.Status == StatusSuccess {
+		return fmt.Sprintf(" (repaired %d/%d)", n.RepairAttempts, budget)
+	}
+	return fmt.Sprintf(" (%d/%d)", n.RepairAttempts, budget)
 }
 
 func (m *Model) statusGlyph(n *StepNode) string {
@@ -453,6 +481,8 @@ func (m *Model) statusGlyph(n *StepNode) string {
 		return styledStatusGlyph(StatusSuccess)
 	case StatusFailed:
 		return styledStatusGlyph(StatusFailed)
+	case StatusWarning:
+		return styledStatusGlyph(StatusWarning)
 	case StatusSkipped:
 		return styledStatusGlyph(StatusSkipped)
 	}
@@ -469,6 +499,8 @@ func styledStatusGlyph(status NodeStatus) string {
 		return tuistyle.StatusSuccess.Render("✓")
 	case StatusFailed:
 		return tuistyle.StatusFailed.Render("✗")
+	case StatusWarning:
+		return tuistyle.StatusInactive.Render("!")
 	case StatusSkipped:
 		return tuistyle.StatusDone.Render("⇥")
 	}
@@ -484,7 +516,7 @@ func typeGlyph(t NodeType) string {
 		return scriptGlyphStyle.Render(raw)
 	case NodeUI:
 		return uiGlyphStyle.Render(raw)
-	case NodeLoop, NodeIteration, NodeGroup:
+	case NodeLoop, NodeIteration, NodeGroup, NodeRepairAttempt:
 		return loopGlyphStyle.Render(raw)
 	case NodeHeadlessAgent, NodeInteractiveAgent, NodeSubWorkflow, NodeAgentCall:
 		return subwfGlyphStyle.Render(raw)
@@ -550,6 +582,9 @@ func (m *Model) helpBarParts() []string {
 
 	if m.canLaunchDebug() {
 		parts = append(parts, "d debug")
+	}
+	if m.warningOriginsAvailable() {
+		parts = append(parts, "w warnings")
 	}
 
 	if m.selectedNodeHasTruncatedOutput() {
@@ -729,6 +764,7 @@ func (m *Model) renderLegend() string {
 	b.WriteString(tuistyle.ScreenMargin + styledStatusGlyph(StatusInProgress) + "  running\n")
 	b.WriteString(tuistyle.ScreenMargin + styledStatusGlyph(StatusPending) + "  pending\n")
 	b.WriteString(tuistyle.ScreenMargin + styledStatusGlyph(StatusSuccess) + "  success\n")
+	b.WriteString(tuistyle.ScreenMargin + styledStatusGlyph(StatusWarning) + "  warning\n")
 	b.WriteString(tuistyle.ScreenMargin + styledStatusGlyph(StatusFailed) + "  failed\n")
 	b.WriteString(tuistyle.ScreenMargin + styledStatusGlyph(StatusSkipped) + "  skipped\n")
 
@@ -745,6 +781,7 @@ func (m *Model) renderLegend() string {
 	b.WriteString("  " + typeGlyph(NodeLoop) + "  loop\n")
 	b.WriteString("  " + typeGlyph(NodeIteration) + "  iteration\n")
 	b.WriteString("  " + typeGlyph(NodeGroup) + "  group\n")
+	b.WriteString("  " + typeGlyph(NodeRepairAttempt) + "  repair attempt\n")
 
 	b.WriteString("\n  ")
 	b.WriteString(tuistyle.SelectedStyle.Render("Live Navigation"))

@@ -54,6 +54,72 @@ exit 99
 	}
 }
 
+func TestCoreRunValidatorTreatsTaskFileAsData(t *testing.T) {
+	workdir := t.TempDir()
+	binDir := t.TempDir()
+	writeFakeBinary(t, binDir, "agent-runner", `#!/bin/sh
+if [ "$1" = internal ] && [ "$2" = json-value ] && [ "$3" = task_file ]; then
+  IFS= read -r payload || :
+  printf '%s' '$(touch should-not-exist)'
+  exit 0
+fi
+exit 1
+`)
+	writeFakeBinary(t, binDir, "agent-validator", `#!/bin/sh
+printf '%s\n' "$@" > validator-args
+`)
+
+	cmd := exec.Command("sh", coreRunValidatorScript(t))
+	cmd.Dir = workdir
+	cmd.Stdin = strings.NewReader(`{"task_file":"$(touch should-not-exist)"}`)
+	cmd.Env = append(os.Environ(), "PATH="+binDir,
+		"AGENT_RUNNER_EXECUTABLE="+filepath.Join(binDir, "agent-runner"),
+		"AGENT_RUNNER_VALIDATOR_EXECUTABLE="+filepath.Join(binDir, "agent-validator"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("run-validator failed: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(workdir, "should-not-exist")); !os.IsNotExist(err) {
+		t.Fatalf("task_file command substitution ran: %v", err)
+	}
+	args, err := os.ReadFile(filepath.Join(workdir, "validator-args"))
+	if err != nil {
+		t.Fatalf("read validator arguments: %v", err)
+	}
+	if !strings.Contains(string(args), "$(touch should-not-exist)") {
+		t.Fatalf("validator args = %q, want literal task file", args)
+	}
+}
+
+func TestCoreRunValidatorForwardsMetricsCorrelation(t *testing.T) {
+	workdir := t.TempDir()
+	binDir := t.TempDir()
+	writeFakeBinary(t, binDir, "agent-runner", `#!/bin/sh
+printf ''
+`)
+	writeFakeBinary(t, binDir, "agent-validator", `#!/bin/sh
+printf '%s\n' "$@" > validator-args
+`)
+
+	cmd := exec.Command("sh", coreRunValidatorScript(t))
+	cmd.Dir = workdir
+	cmd.Env = append(os.Environ(), "PATH="+binDir,
+		"AGENT_RUNNER_EXECUTABLE="+filepath.Join(binDir, "agent-runner"),
+		"AGENT_RUNNER_VALIDATOR_EXECUTABLE="+filepath.Join(binDir, "agent-validator"),
+		"AGENT_RUNNER_METRICS_CONSUMER=agent-runner", "AGENT_RUNNER_METRICS_CONTEXT=opaque-context")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("run-validator failed: %v\n%s", err, out)
+	}
+	args, err := os.ReadFile(filepath.Join(workdir, "validator-args"))
+	if err != nil {
+		t.Fatalf("read validator arguments: %v", err)
+	}
+	for _, want := range []string{"--metrics-consumer", "agent-runner", "--metrics-context", "opaque-context"} {
+		if !strings.Contains(string(args), want) {
+			t.Fatalf("validator args = %q, want %q", args, want)
+		}
+	}
+}
+
 func TestOpenSpecCreateChangeReportsUnvalidatedChanges(t *testing.T) {
 	workdir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(workdir, "openspec", "changes"), 0o755); err != nil {
@@ -144,6 +210,15 @@ func openSpecCreateChangeScript(t *testing.T) string {
 	path, err := filepath.Abs(filepath.Join("openspec", "create-change.sh"))
 	if err != nil {
 		t.Fatalf("resolve create-change.sh: %v", err)
+	}
+	return path
+}
+
+func coreRunValidatorScript(t *testing.T) string {
+	t.Helper()
+	path, err := filepath.Abs(filepath.Join("core", "run-validator.sh"))
+	if err != nil {
+		t.Fatalf("resolve run-validator.sh: %v", err)
 	}
 	return path
 }

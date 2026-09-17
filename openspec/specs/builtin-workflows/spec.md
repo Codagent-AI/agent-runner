@@ -103,6 +103,25 @@ The builtin set SHALL include a `core` namespace containing general-purpose work
 - **WHEN** the user runs `agent-runner run core:debug`
 - **THEN** the latest debug version loads from the embedded `core` namespace and executes
 
+### Requirement: Implement-change Validator skipping
+
+The `core:implement-change` workflow SHALL accept `skip_validator` only as `true` or `false`. The value SHALL control every Agent Validator invocation owned by that workflow, including task-level validation, final validation, and validation requested after acceptance remediation. Skipping validation SHALL NOT skip draft pull-request creation, acceptance preparation, evidence generation, or the final acceptance handoff.
+
+#### Scenario: Validation enabled
+- **WHEN** `core:implement-change` runs with `skip_validator=false`
+- **THEN** task-level and final Agent Validator steps run
+- **AND** acceptance remediation that changes tracked files requires Agent Validator to pass
+
+#### Scenario: Validation skipped
+- **WHEN** `core:implement-change` runs or resumes with `skip_validator=true`
+- **THEN** task-level and final Agent Validator steps record their normal skipped outcomes
+- **AND** acceptance remediation does not invoke Agent Validator
+- **AND** the workflow continues through draft pull-request creation, acceptance preparation, evidence generation, and the final acceptance handoff
+
+#### Scenario: Invalid skip value rejected
+- **WHEN** `core:implement-change` receives a `skip_validator` value other than `true` or `false`
+- **THEN** deterministic parameter validation fails before implementation tasks begin
+
 ### Requirement: Onboarding namespace embedded
 
 The builtin set SHALL include an `onboarding` namespace alongside the existing `core`, `openspec`, and `spec-driven` namespaces. The `onboarding` namespace SHALL contain at minimum `onboarding` as the top-level demo workflow and `step-types-demo` as the workflow step demonstration. The namespace SHALL NOT expose `welcome` or `setup-agent-profile` workflows because first-run setup is native TUI functionality.

@@ -262,7 +262,9 @@ func buildLeaves(request *Request, artifact *metrics.Artifact, refs []EvidenceRe
 	for _, key := range keys {
 		records := groups[key]
 		sort.SliceStable(records, func(i, j int) bool { return records[i].RecordID < records[j].RecordID })
-		leaves = append(leaves, leafFromRecords(request, artifact, key, records, refs, commits))
+		leaf := leafFromRecords(request, artifact, key, records, refs, commits)
+		attachMeasurementEvidence(&leaf, artifact, keys, request.ExecutionSessionID)
+		leaves = append(leaves, leaf)
 	}
 	applyDeferredCommitAttribution(leaves)
 	return leaves
@@ -1212,7 +1214,7 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 	if len(args) == 0 {
 		return ModelValueBatch{}, fmt.Errorf("crosscheck adapter produced no command")
 	}
-	args, finalResponsePath, removeStructuredFiles, err := withCodexOutputSchema(request.Crosscheck.CLI, args, filepath.Join(request.AuditSessionDir, "model-output"), "value", valueOutputSchema(pkg))
+	args, finalResponsePath, removeStructuredFiles, err := withCrosscheckOutputSchema(request.Crosscheck.CLI, args, filepath.Join(request.AuditSessionDir, "model-output"), "value", valueOutputSchema(pkg))
 	if err != nil {
 		return ModelValueBatch{}, err
 	}
@@ -1227,7 +1229,7 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 	}
 	defer cleanup()
 	command.Env = env
-	result, runErr := command.Output()
+	result, runErr := runCrosscheckOutput(command, adapter)
 	if after, err := trustedAuditInputsFingerprint(request); err != nil {
 		return ModelValueBatch{}, err
 	} else if after != trustedInputs {
@@ -1242,13 +1244,13 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 			return ModelValueBatch{}, fmt.Errorf("read structured crosscheck response: %w", err)
 		}
 	}
-	response := string(result)
-	if filter, ok := adapter.(cli.OutputFilter); ok && finalResponsePath == "" {
-		response = filter.FilterOutput(response)
+	response, err := crosscheckResponse(adapter, result, finalResponsePath != "")
+	if err != nil {
+		return ModelValueBatch{}, err
 	}
 	output, err := decodeModelValueBatch(response, pkg)
 	if err != nil {
-		return ModelValueBatch{}, fmt.Errorf("decode crosscheck result: %w", err)
+		return ModelValueBatch{}, fmt.Errorf("decode crosscheck result: %w; response: %s", err, crosscheckDiagnostic(response))
 	}
 	output.Provenance = BatchProvenance{CLI: request.Crosscheck.CLI, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, SessionID: adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: time.Now(), Headless: true, ProcessOutput: response, Workdir: workspace})}
 	if output.Provenance.SessionID == "" {
@@ -1350,24 +1352,107 @@ func trustedAuditInputsFingerprint(request *Request) (string, error) {
 }
 
 func sandboxedCrosscheckCommand(args []string, workspace, outputDir string) (*exec.Cmd, error) {
-	if runtime.GOOS != "darwin" {
-		return nil, fmt.Errorf("OS-enforced audit filesystem sandbox is unavailable on %s", runtime.GOOS)
-	}
-	if _, err := exec.LookPath("sandbox-exec"); err != nil {
-		return nil, fmt.Errorf("resolve audit sandbox: %w", err)
+	if len(args) == 0 {
+		return nil, fmt.Errorf("audit sandbox command is empty")
 	}
 	if err := os.MkdirAll(outputDir, 0o700); err != nil {
 		return nil, err
 	}
-	argv := sandboxExecArgs(args, outputDir)
-	command := exec.Command("sandbox-exec", argv...) // #nosec G204 -- registered adapter argv is wrapped in an audit-owned OS sandbox.
-	command.Dir = workspace
-	return command, nil
+	boundary, err := validateAuditOutputBoundary(outputDir, []string{workspace})
+	if err != nil {
+		return nil, err
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		if _, err := exec.LookPath("sandbox-exec"); err != nil {
+			return nil, fmt.Errorf("resolve audit sandbox: %w", err)
+		}
+		argv := sandboxExecArgs(args, boundary)
+		command := exec.Command("sandbox-exec", argv...) // #nosec G204 -- registered adapter argv is wrapped in an audit-owned OS sandbox.
+		command.Dir = workspace
+		return command, nil
+	case "linux":
+		if _, err := exec.LookPath("bwrap"); err != nil {
+			return nil, fmt.Errorf("resolve Linux audit sandbox: %w", err)
+		}
+		workspaceRoot, err := filepath.EvalSymlinks(workspace)
+		if err != nil {
+			return nil, fmt.Errorf("resolve audit workspace: %w", err)
+		}
+		self, err := os.Executable()
+		if err != nil {
+			return nil, fmt.Errorf("resolve audit model launcher: %w", err)
+		}
+		// The final exec closes inherited nonstandard descriptors, which can
+		// otherwise retain write access through a read-only bind mount.
+		payload := append([]string{self, "internal", "audit-model-exec"}, args...)
+		argv := linuxSandboxArgs(payload, workspaceRoot, boundary)
+		command := exec.Command("bwrap", argv...) // #nosec G204 -- registered adapter argv is wrapped in an audit-owned OS sandbox.
+		command.Dir = workspaceRoot
+		return command, nil
+	default:
+		return nil, fmt.Errorf("OS-enforced audit filesystem sandbox is unavailable on %s", runtime.GOOS)
+	}
 }
 
 func sandboxExecArgs(args []string, outputDir string) []string {
 	argv := []string{"-D", "OUTPUT_DIR=" + outputDir, "-p", auditSandboxProfile, "--"}
 	return append(argv, args...)
+}
+
+// linuxSandboxArgs makes the ordinary filesystem read-only, then restores
+// write access only for the already-validated audit-owned output tree. The
+// user namespace is deliberate: it lets a non-root Docker user mount this
+// boundary without granting the container privileged mode.
+func linuxSandboxArgs(args []string, workspace, outputDir string) []string {
+	argv := []string{
+		"--die-with-parent", "--new-session", "--unshare-user", "--uid", "0", "--gid", "0",
+		"--ro-bind", "/", "/", "--bind", outputDir, outputDir,
+		"--proc", "/proc", "--chdir", workspace, "--",
+	}
+	return append(argv, args...)
+}
+
+// validateAuditOutputBoundary resolves the output after it exists, so a
+// symlink cannot turn an apparently local output directory into a write grant
+// over source evidence or any other trusted input.
+func validateAuditOutputBoundary(outputDir string, trustedInputs []string) (string, error) {
+	boundary, err := filepath.EvalSymlinks(outputDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve audit output boundary: %w", err)
+	}
+	boundary, err = filepath.Abs(boundary)
+	if err != nil {
+		return "", fmt.Errorf("resolve audit output boundary: %w", err)
+	}
+	for _, input := range trustedInputs {
+		if strings.TrimSpace(input) == "" {
+			continue
+		}
+		trusted, err := filepath.EvalSymlinks(input)
+		if err != nil {
+			return "", fmt.Errorf("resolve trusted audit input: %w", err)
+		}
+		trusted, err = filepath.Abs(trusted)
+		if err != nil {
+			return "", fmt.Errorf("resolve trusted audit input: %w", err)
+		}
+		if pathsOverlap(boundary, trusted) {
+			return "", fmt.Errorf("audit output boundary overlaps trusted input %q", trusted)
+		}
+	}
+	return boundary, nil
+}
+
+func pathsOverlap(first, second string) bool {
+	return pathContains(first, second) || pathContains(second, first)
+}
+
+func pathContains(parent, child string) bool {
+	if parent == child || parent == string(filepath.Separator) {
+		return true
+	}
+	return strings.HasPrefix(child, parent+string(filepath.Separator))
 }
 
 func cliEnvironment(adapter cli.Adapter, request *Request, input []byte, workdir, outputDir string) (environment []string, cleanup func(), err error) {
@@ -1434,7 +1519,32 @@ func prepareAuditCodexRuntime(outputDir string) (environment []string, cleanup f
 	return []string{"CODEX_HOME=" + codexHome, "HOME=" + home, "TMPDIR=" + temp}, cleanup, nil
 }
 
-func withCodexOutputSchema(cliName string, args []string, outputDir, label string, schema map[string]any) (structured []string, responsePath string, cleanup func(), err error) {
+func withCrosscheckOutputSchema(cliName string, args []string, outputDir, label string, schema map[string]any) (structured []string, responsePath string, cleanup func(), err error) {
+	if cliName == "claude" {
+		// JSON mode returns the schema-bound structured_output in the final
+		// result envelope, without streaming the tool transcript into stdout.
+		data, err := json.Marshal(schema)
+		if err != nil {
+			return nil, "", nil, err
+		}
+		if len(args) == 0 {
+			return nil, "", nil, fmt.Errorf("claude invocation has no prompt argument")
+		}
+		for i := 0; i < len(args)-1; i++ {
+			switch args[i] {
+			case "--verbose":
+				// Verbose JSON can include the entire message history.
+				continue
+			case "--output-format":
+				structured = append(structured, "--output-format", "json")
+				i++
+			default:
+				structured = append(structured, args[i])
+			}
+		}
+		structured = append(structured, "--json-schema", string(data), args[len(args)-1])
+		return structured, "", func() {}, nil
+	}
 	if cliName != "codex" {
 		return args, "", func() {}, nil
 	}
