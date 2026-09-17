@@ -63,6 +63,10 @@ Before correctness publication, Agent Runner SHALL verify that the launch-time s
 - **WHEN** the current checkout revision or dirty state materially differs from the recorded build provenance
 - **THEN** the discrepancy is retained locally while the verified audit-launch snapshot remains authoritative for current-defect assessment
 
+#### Scenario: Launch snapshot excludes gitignored artifacts
+- **WHEN** the injected checkout contains gitignored build artifacts, VCS metadata, or worktrees
+- **THEN** the launch-time snapshot includes tracked and untracked non-ignored source and excludes those trees
+
 #### Scenario: Launch snapshot is not Agent Runner source
 - **WHEN** the injected path resolves at launch but its snapshot does not identify the Agent Runner module
 - **THEN** correctness publication is blocked
