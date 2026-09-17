@@ -34,5 +34,9 @@ export GOSUMDB=off
 export GOCACHE="$validator_cache/go-build"
 export GOPATH="$validator_cache/go"
 export GOMODCACHE="$project_modcache"
+# Non-interactive validator shells often omit ~/go/bin, where go install
+# puts golangci-lint and gosec. Keep those tools visible after GOPATH is
+# redirected into the validator cache.
+export PATH="$GOPATH/bin:$HOME/go/bin:$PATH"
 
 exec "$@"
