@@ -44,6 +44,44 @@ func TestBuildPrefix(t *testing.T) {
 			t.Fatalf("expected '[parent, child]', got %q", result)
 		}
 	})
+
+	t.Run("builds prefix for replayed step with attempt token after its check", func(t *testing.T) {
+		path := []NestingInfo{{StepID: "verify-draft-pr", RepairAttempt: intPtr(1)}}
+		result := BuildPrefix(path, "open-draft-pr")
+		if result != "[verify-draft-pr, attempt:1, open-draft-pr]" {
+			t.Fatalf("expected attempt token after check, got %q", result)
+		}
+	})
+
+	t.Run("builds prefix for inline repair agent", func(t *testing.T) {
+		path := []NestingInfo{{StepID: "check-plan", RepairAttempt: intPtr(1)}}
+		result := BuildPrefix(path, "repair")
+		if result != "[check-plan, attempt:1, repair]" {
+			t.Fatalf("expected attempt token before repair leaf, got %q", result)
+		}
+	})
+}
+
+func TestNewRepairAuditEventTypesAreRecognized(t *testing.T) {
+	types := []EventType{EventRepairAttemptStart, EventRepairAttemptEnd, EventRepairBlocked}
+	path := filepath.Join(t.TempDir(), "audit.log")
+	logger, err := NewLogger(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eventType := range types {
+		logger.Emit(Event{Timestamp: "2026-07-17T00:00:00Z", Type: eventType, Data: map[string]any{}})
+	}
+	logger.Close()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eventType := range types {
+		if !strings.Contains(string(data), " "+string(eventType)+" ") {
+			t.Fatalf("audit log missing event type %q:\n%s", eventType, data)
+		}
+	}
 }
 
 func TestEncodePath(t *testing.T) {

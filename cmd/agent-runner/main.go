@@ -718,6 +718,9 @@ func intakeProfileModel(profileOverride config.ProfileOverride) (string, error) 
 }
 
 func dispatchRunCommand(args []string, opts *commandFlags) int {
+	if len(args) > 0 && args[0] == "metrics" {
+		return handleMetricsCommand(args[1:])
+	}
 	if isRunCommandHelp(args) {
 		printRunUsage(os.Stderr)
 		return 0
@@ -731,6 +734,20 @@ func dispatchRunCommand(args []string, opts *commandFlags) int {
 		return 1
 	}
 	runOpts.headless = opts.headless
+
+	if runOpts.sessionDir != "" {
+		abs, err := filepath.Abs(runOpts.sessionDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: --session-dir %s: %v\n", runOpts.sessionDir, err)
+			return 1
+		}
+		runOpts.sessionDir = abs
+	}
+
+	if opts.resume && runOpts.sessionDir != "" {
+		fmt.Fprintln(os.Stderr, "agent-runner: --session-dir cannot be combined with --resume")
+		return 1
+	}
 
 	if opts.validate {
 		return handleValidateArgs(args, opts.profileOverride())
@@ -811,9 +828,10 @@ func isRunCommandHelp(args []string) bool {
 }
 
 func printRunUsage(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "Usage: agent-runner run <workflow> [--until <step-id>] [--param key=value] [key=value ...]")
+	_, _ = fmt.Fprintln(w, "Usage: agent-runner run <workflow> [--until <step-id>] [--session-dir <path>] [--param key=value] [key=value ...]")
 	_, _ = fmt.Fprintln(w, "\nFlags:")
 	_, _ = fmt.Fprintln(w, "  --until <step-id>\n\tStop successfully after reaching the named top-level step")
+	_, _ = fmt.Fprintln(w, "  --session-dir <path>\n\tUse this directory for the run's session instead of computing one automatically")
 }
 
 func normalizeRunCommandArgs(args []string) ([]string, error) {
@@ -858,6 +876,18 @@ func parseRunCommandArgs(args []string) ([]string, runCommandOptions, error) {
 				return nil, opts, fmt.Errorf("--until requires a step ID")
 			}
 			opts.until = value
+		case arg == "--session-dir":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return nil, opts, fmt.Errorf("--session-dir requires a path")
+			}
+			i++
+			opts.sessionDir = args[i]
+		case strings.HasPrefix(arg, "--session-dir="):
+			value := strings.TrimPrefix(arg, "--session-dir=")
+			if strings.TrimSpace(value) == "" {
+				return nil, opts, fmt.Errorf("--session-dir requires a path")
+			}
+			opts.sessionDir = value
 		default:
 			normalized = append(normalized, arg)
 		}
@@ -2134,6 +2164,7 @@ type runCommandOptions struct {
 	liveOpts        liveTUIOptions
 	from            string
 	until           string
+	sessionDir      string
 	profileOverride config.ProfileOverride
 	headless        bool
 	agentOverride   *model.AgentOverride
@@ -2148,6 +2179,7 @@ type freshRunRequest struct {
 	Keyed                 map[string]string
 	From                  string
 	Until                 string
+	SessionDir            string
 	AgentOverride         *model.AgentOverride
 	ProfileOverride       config.ProfileOverride
 	IntakeParentRunID     string
@@ -2193,6 +2225,7 @@ func prepareFreshRun(req *freshRunRequest) (*runner.RunHandle, error) {
 		WorkflowFile:          req.SourceRef,
 		From:                  req.From,
 		Until:                 req.Until,
+		SessionDir:            req.SessionDir,
 		AgentOverride:         req.AgentOverride,
 		IntakeParentRunID:     req.IntakeParentRunID,
 		IntakeHandoffContents: req.IntakeHandoffContents,
@@ -2242,7 +2275,7 @@ func handleRunWithRunOptions(args []string, runOpts *runCommandOptions) liveTUIR
 	prepare := func(log iexec.Logger) (*runner.RunHandle, error) {
 		return prepareFreshRun(&freshRunRequest{
 			SourceRef: workflowFile, Positional: positional, Keyed: keyed,
-			From: runOpts.from, Until: runOpts.until, AgentOverride: runOpts.agentOverride,
+			From: runOpts.from, Until: runOpts.until, SessionDir: runOpts.sessionDir, AgentOverride: runOpts.agentOverride,
 			ProfileOverride: runOpts.profileOverride, Log: log,
 		})
 	}

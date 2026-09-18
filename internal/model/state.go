@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // NestedStepState tracks execution position within nested workflows/loops.
@@ -26,6 +27,47 @@ type NestedStepState struct {
 	Iteration          *int                        `json:"iteration,omitempty"`
 	Child              *NestedStepState            `json:"child"`
 	InteractiveAttempt *InteractiveAttemptMetadata `json:"interactiveAttempt,omitempty"`
+	// LastAgent identifies the most recent completed agent execution in this
+	// scope by audit prefix and attempt, so it can be rebuilt from the audit
+	// log after an interruption between the agent step and a later check.
+	LastAgent *ExecutionRef `json:"lastAgent,omitempty"`
+	// Repair carries the in-progress repair frame for a check in this scope.
+	Repair *RepairFrame `json:"repair,omitempty"`
+}
+
+// Repair phase constants, mirroring RepairFrame.Phase.
+const (
+	RepairPhaseChecking  = "checking"
+	RepairPhaseRepairing = "repairing"
+	RepairPhaseReplaying = "replaying"
+	RepairPhaseFailed    = "failed"
+)
+
+// RepairFrame tracks one check's repair lifecycle: which form applies, how
+// many attempts have run against its budget, and (for a rerun form) the
+// range of captures that must be replayed alongside the target step.
+type RepairFrame struct {
+	CheckID string `json:"checkId"`
+	// Form is "inline" or "rerun", mirroring model.RepairForm.
+	Form   string `json:"form"`
+	Target string `json:"target,omitempty"`
+	// Phase is one of "checking", "repairing", "replaying", or "failed".
+	Phase         string        `json:"phase"`
+	Attempts      int           `json:"attempts"`
+	Budget        int           `json:"budget"`
+	Guarded       *ExecutionRef `json:"guarded,omitempty"`
+	RangeCaptures []string      `json:"rangeCaptures,omitempty"`
+	// StartedAt is when the owning check's step_start was emitted, so a
+	// terminal step_end emitted outside the check's own call (a replay that
+	// stops before the check reruns) reports the check's full duration.
+	StartedAt time.Time `json:"startedAt,omitempty"`
+}
+
+// RewindRequest asks the sequencer to resume execution from an earlier step
+// (the rerun target) on behalf of a check's repair attempt.
+type RewindRequest struct {
+	Target  string `json:"target"`
+	CheckID string `json:"checkId"`
 }
 
 type InteractiveAttemptMetadata struct {
@@ -94,6 +136,9 @@ type RunState struct {
 	// RunKind identifies special persisted runs without changing how ordinary
 	// callers load them. Empty means an ordinary workflow execution.
 	RunKind string `json:"runKind,omitempty"`
+	// FailureReason is the classified root failure reason for a failed run,
+	// written by the top-level runner from the failing check's FailureRecord.
+	FailureReason string `json:"failureReason,omitempty"`
 	// Audit records reciprocal audit linkage. It is intentionally data-only so
 	// untagged binaries can safely list and inspect development audit history.
 	Audit *AuditMetadata `json:"audit,omitempty"`
@@ -132,7 +177,39 @@ type ResolveResumeStepResult struct {
 // ResolveResumeStep determines which step to actually start executing on resume.
 // If the recorded step completed successfully, it advances to the next step.
 // If the recorded step did not complete, it returns that step (to re-run it).
-func ResolveResumeStep(steps []Step, recordedStepID string, completed bool) (ResolveResumeStepResult, error) {
+//
+// frame is the open repair frame restored at this scope, or nil when none is
+// open. A frame in phase checking, repairing, or replaying does not change
+// the resolution: the recorded step (the check, or a step inside its replay
+// range) is resumed as usual and its budget is kept. A frame in phase failed
+// re-enters the cycle with a fresh budget instead: at frame.Target for the
+// rerun form (frame is kept open, moved to phase replaying), or at the
+// recorded step for the inline form. frame is mutated in place to reflect
+// the reset.
+func ResolveResumeStep(steps []Step, recordedStepID string, completed bool, frame *RepairFrame) (ResolveResumeStepResult, error) {
+	if frame != nil && frame.Phase == RepairPhaseFailed {
+		resumeAt := recordedStepID
+		rerun := frame.Form == string(RepairRerun)
+		// For the rerun form, resume at the target when the frame's own check
+		// is recordedStepID. Otherwise the check is owned by a step nested
+		// inside recordedStepID (a group has no child-position state of its
+		// own, so its frame is recorded on the enclosing scope with the group
+		// as recordedStepID) and frame.Target lives in that nested scope, not
+		// in this list: resume at recordedStepID and let its ordinary
+		// from-scratch re-execution reach the target.
+		if rerun && frame.CheckID == recordedStepID {
+			resumeAt = frame.Target
+		}
+		if !stepExists(steps, resumeAt) {
+			return ResolveResumeStepResult{}, fmt.Errorf("step %q not found", resumeAt)
+		}
+		frame.Attempts = 0
+		if rerun {
+			frame.Phase = RepairPhaseReplaying
+		}
+		return ResolveResumeStepResult{StepID: resumeAt}, nil
+	}
+
 	for i := range steps {
 		if steps[i].ID == recordedStepID {
 			if completed {
@@ -145,4 +222,13 @@ func ResolveResumeStep(steps []Step, recordedStepID string, completed bool) (Res
 		}
 	}
 	return ResolveResumeStepResult{}, fmt.Errorf("step %q not found", recordedStepID)
+}
+
+func stepExists(steps []Step, id string) bool {
+	for i := range steps {
+		if steps[i].ID == id {
+			return true
+		}
+	}
+	return false
 }

@@ -348,3 +348,45 @@ func TestParseStartTime(t *testing.T) {
 		}
 	})
 }
+
+func TestListForDirReadsRepairFailureReasonFromState(t *testing.T) {
+	projectDir := t.TempDir()
+	setupSession(t, projectDir, "implement-change-2026-09-01T09-14-00-000000000Z", sessionOpts{
+		stateJSON: &model.RunState{
+			WorkflowName:  "implement-change",
+			CurrentStep:   model.CurrentStep{StepID: "verify-draft-pr"},
+			Params:        map[string]string{},
+			FailureReason: "verify-draft-pr failed: no draft pr; blocked: push rejected: token lacks workflow scope",
+		},
+	})
+
+	infos, err := ListForDir(projectDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("expected 1 run, got %d", len(infos))
+	}
+	if infos[0].FailureReason != "verify-draft-pr failed: no draft pr; blocked: push rejected: token lacks workflow scope" {
+		t.Fatalf("FailureReason = %q", infos[0].FailureReason)
+	}
+}
+
+func TestListForDirLeavesFailureReasonEmptyWithoutFailureRecord(t *testing.T) {
+	projectDir := t.TempDir()
+	setupSession(t, projectDir, "deploy-2026-09-01T09-14-00-000000000Z", sessionOpts{
+		stateJSON: &model.RunState{
+			WorkflowName: "deploy",
+			CurrentStep:  model.CurrentStep{StepID: "build"},
+			Params:       map[string]string{},
+		},
+	})
+
+	infos, err := ListForDir(projectDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if infos[0].FailureReason != "" {
+		t.Fatalf("FailureReason = %q, want empty", infos[0].FailureReason)
+	}
+}

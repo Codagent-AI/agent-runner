@@ -103,7 +103,12 @@ type Model struct {
 	showSummary   bool
 	summaryOffset int // scroll offset (in step rows) for the summary screen
 	loadErr       string
-	notice        string // transient message shown below the step list (e.g. spawn error)
+	// persistedFailureReason is state.json's classified failure reason, when
+	// present. It takes precedence over the tree-derived fallback so a
+	// blocked or repair-attempt reason survives even after the workflow file
+	// changes.
+	persistedFailureReason string
+	notice                 string // transient message shown below the step list (e.g. spawn error)
 
 	resolverCfg     ResolverConfig
 	startTime       time.Time
@@ -202,19 +207,20 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 	tree, loadErr, workflowMissing := loadRunTree(sessionDir, entered, &state, resolved)
 
 	m := &Model{
-		tree:          tree,
-		sessionDir:    sessionDir,
-		projectDir:    projectDir,
-		originCwd:     resolved.OriginCwd,
-		entered:       entered,
-		path:          []*StepNode{tree.Root},
-		loadedFull:    make(map[string]bool),
-		inputExpanded: make(map[string]bool),
-		loadErr:       loadErr,
-		running:       entered == FromLiveRun,
-		followActive:  entered == FromLiveRun,
-		followTail:    entered == FromLiveRun,
-		altScreen:     entered != FromLiveRun,
+		tree:                   tree,
+		sessionDir:             sessionDir,
+		projectDir:             projectDir,
+		originCwd:              resolved.OriginCwd,
+		entered:                entered,
+		path:                   []*StepNode{tree.Root},
+		loadedFull:             make(map[string]bool),
+		inputExpanded:          make(map[string]bool),
+		loadErr:                loadErr,
+		running:                entered == FromLiveRun,
+		followActive:           entered == FromLiveRun,
+		followTail:             entered == FromLiveRun,
+		altScreen:              entered != FromLiveRun,
+		persistedFailureReason: state.FailureReason,
 	}
 	m.setSelected(firstRealChild(m.currentContainer()))
 	if entered == FromList || entered == FromInspect {
@@ -1297,6 +1303,8 @@ func (m *Model) selectedDetailDocument(width int) detailDocument {
 	if node != nil && m.inputExpanded != nil {
 		expanded = m.inputExpanded[node.NodeKey()]
 	}
+	m.hydrateGuardedResponse(node)
+	m.hydrateGuardedResponse(previous)
 	return buildDetailDocument(node, detailBuildOptions{
 		width:         width,
 		loadedFull:    node != nil && m.loadedFull[node.NodeKey()],
@@ -1307,6 +1315,40 @@ func (m *Model) selectedDetailDocument(width int) detailDocument {
 		resumeReady:   m.canResumeAgentSession(node),
 		resolverCfg:   m.resolverCfg,
 	})
+}
+
+// hydrateGuardedResponse resolves the final response of the agent execution
+// named by node's failure record. The response is never copied into the
+// check's own audit event, so it is looked up in the tree by the recorded
+// prefix and cached on the record for the renderers.
+func (m *Model) hydrateGuardedResponse(node *StepNode) {
+	if node == nil || node.Failure == nil || node.Failure.GuardedPrefix == "" || m.tree == nil {
+		return
+	}
+	guarded := m.tree.FindByPrefix(node.Failure.GuardedPrefix)
+	if guarded == nil {
+		return
+	}
+	m.loadHistoricalOutput(guarded)
+	node.Failure.GuardedResponse = guardedResponseForAttempt(guarded, node.Failure.GuardedAttempt)
+}
+
+// guardedResponseForAttempt returns the guarded node's response from the
+// specific attempt recorded on the failure evidence. A node re-executed since
+// that failure was recorded has overwritten its latest-wins Stdout/Stderr
+// fields, so the matching entry in the append-only Attempts history — not the
+// node's current output — is the only reliable source for that attempt's
+// response. Falls back to the node's current output when no matching attempt
+// is recorded (legacy audit logs with no identity/attempt data).
+func guardedResponseForAttempt(guarded *StepNode, attempt int) string {
+	if attempt > 0 {
+		for _, a := range guarded.Attempts {
+			if a.Attempt == attempt {
+				return firstNonEmpty(a.Stdout, a.Stderr)
+			}
+		}
+	}
+	return firstNonEmpty(guarded.Stdout, guarded.Stderr)
 }
 
 func (m *Model) toggleSelectedInputExpansion() {

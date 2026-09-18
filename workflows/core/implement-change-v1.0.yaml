@@ -29,6 +29,12 @@ steps:
     script_inputs:
       change_name: "{{change_name}}"
 
+  - id: validate-skip-validator
+    script: validate-boolean-param.sh
+    script_inputs:
+      name: skip_validator
+      value: "{{skip_validator}}"
+
   - id: check-plan
     script: validate-planning-artifacts.sh
     script_inputs:
@@ -66,6 +72,10 @@ steps:
         echo "tasks.md still contains incomplete task entries" >&2
         exit 1
       fi
+    repair:
+      session: lead-agent
+      prompt: |
+        `{{change_dir}}/tasks.md` still has unchecked task entries. Update it so each checklist entry corresponding to a task file under `{{change_dir}}/tasks/*.md` is checked, without changing task wording, task-file content, requirements, design, or implementation. Commit only that file, following the project's commit message conventions. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
 
   - id: review-assumptions
     session: lead-agent
@@ -85,6 +95,10 @@ steps:
 
   - id: verify-assumptions-handoff
     command: test -s "{{session_dir}}/output/acceptance-assumptions.md"
+    repair:
+      session: lead-agent
+      prompt: |
+        `{{session_dir}}/output/acceptance-assumptions.md` is missing or empty. Write it now: list every unresolved finding or context gap concisely, with its source task or session report, why it is undecided, the decision needed from the user, and the likely impact of each option. If none remain, write an explicit `No unresolved assumptions or context gaps.` statement. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
 
   - id: simplify
     session: lead-agent
@@ -96,6 +110,9 @@ steps:
 
   - id: run-validator
     workflow: ../core/run-validator-v1.0.yaml
+    # skip_if parameters are shell-quoted by InterpolateShellSafeTyped. The
+    # validation step above additionally constrains this value to true|false.
+    skip_if: 'sh: test {{skip_validator}} = true'
 
   - id: verify-clean-for-pr
     command: |
@@ -103,12 +120,16 @@ steps:
         echo "working tree changes remain after validation; commit or remove them before opening the draft pull request" >&2
         exit 1
       fi
+    repair:
+      session: lead-agent
+      prompt: |
+        There are uncommitted changes leftover after implementing and validating {{change_label}} "{{change_name}}". Run git status and git diff to review them. Only stage and commit files that are related to this change and appropriate to check into git — ignore unrelated changes, generated artifacts, or files that should be gitignored. Follow the project's commit message conventions. Summarize which files you committed and which you left out, and why. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
 
   - id: open-draft-pr
     session: lead-agent
     mode: autonomous
     prompt: |
-      Final validation is complete, and no tracked changes may remain uncommitted. Invoke codagent:push-pr to push the current branch and create or update its pull request. Do not create a new implementation or artifact commit here; if tracked changes remain, stop and report them instead of opening the pull request.
+      No tracked changes may remain uncommitted. Agent Validator skipping was set to `{{skip_validator}}`. If `skip_validator` is `false`, final validation is complete. If it is `true`, final validation was intentionally skipped. Invoke codagent:push-pr to push the current branch and create or update its pull request. Do not create a new implementation or artifact commit here; if tracked changes remain, stop and report them instead of opening the pull request.
 
       The pull request MUST be a draft so the user can review it during the acceptance phase. This requirement intentionally overrides the skill's default non-draft creation command:
       - preserve the base branch of an existing pull request;
@@ -119,8 +140,12 @@ steps:
 
       Verify the final state by querying the open pull request for the current head branch. Do not signal completion unless it is open, its base branch is non-empty, it is a draft, and its head SHA equals local `HEAD`. Report the pull request URL and actual base branch.
 
+      If pushing or opening the pull request is blocked by a missing credential, an insufficient permission or token scope, or a decision only a human can make, do not retry indefinitely. Explain exactly what is blocked and what a human must do, then end your response with the line `REPAIR_BLOCKED`.
+
   - id: verify-draft-pr
     capture: pr_url
+    repair:
+      rerun: open-draft-pr
     command: |
       branch=$(git branch --show-current)
       local_head=$(git rev-parse HEAD)
@@ -163,7 +188,7 @@ steps:
 
       Before fixing an implementation defect found by acceptance testing, you MUST invoke codagent:implement-with-tdd and follow its red-green-refactor process. Add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
 
-      If a tracked file changes, run the narrowest relevant automated checks. {{artifact_validation_instruction}} Then invoke the validator-run skill and require it to pass. Incorporate any Validator fixes, commit all related changes following project conventions with the `[{{step_id}}]` prefix, push, and verify local `HEAD` equals the draft PR head.
+      If a tracked file changes, run the narrowest relevant automated checks. {{artifact_validation_instruction}} Agent Validator skipping is set to `{{skip_validator}}`. If `skip_validator` is `false`, invoke the validator-run skill and require it to pass, incorporating any Validator fixes. If `skip_validator` is `true`, do not invoke Agent Validator. In either mode, commit all related changes following project conventions with the `[{{step_id}}]` prefix, push, and verify local `HEAD` equals the draft PR head.
 
       Before each post-fix tester call, write `{{session_dir}}/output/acceptance-impact-scope.md`. Name the affected `AT-*` obligations and any directly dependent flows, plus a concise rationale bounding why other surfaces or subsystems are unaffected. Resume `acceptance-tester` with explicit re-review instructions: reproduce the prior finding against the fix, exercise only those affected and directly dependent flows, retain the prior full-pass evidence for unaffected flows, and do not begin a new broad review. It may report a newly introduced defect only when observed within that targeted scope. Give it `{{session_dir}}/output/acceptance-flow-evidence.md` as the prior full-pass baseline.
 

@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -50,7 +51,7 @@ func TestProvisionedAgentCallPreservesExplicitClientDeadline(t *testing.T) {
 func assertExplicitClientDeadline(t *testing.T) {
 	t.Helper()
 	serverCanceled := make(chan struct{})
-	server := agentcall.NewServer(agentcall.BridgeOptions{Send: func(ctx context.Context, _ string, _ agentcall.Request) (agentcall.Response, error) {
+	server := agentcall.NewServer(agentcall.BridgeOptions{Send: func(ctx context.Context, _ string, _ string, _ json.RawMessage) (agentcall.Response, error) {
 		<-ctx.Done()
 		close(serverCanceled)
 		return agentcall.Response{}, ctx.Err()

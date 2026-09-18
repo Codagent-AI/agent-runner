@@ -1,0 +1,282 @@
+package exec
+
+import (
+	"time"
+
+	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/model"
+)
+
+// takeRewind pops and clears ctx.PendingRewind, reporting nil when none is set.
+func takeRewind(ctx *model.ExecutionContext) *model.RewindRequest {
+	rw := ctx.PendingRewind
+	ctx.PendingRewind = nil
+	return rw
+}
+
+// indexOfStep returns the index of the step with the given ID in steps, or
+// -1 if not found.
+func indexOfStep(steps []model.Step, id string) int {
+	for i := range steps {
+		if steps[i].ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// extendedRepairNesting returns basePath with one more segment naming the
+// owning check and the attempt about to run, so a rerun-form replay's steps
+// (the target, any intermediates, and the check itself) audit under
+// [..., checkID, attempt:N, <step>].
+func extendedRepairNesting(basePath []model.NestingSegment, checkID string, attempt int) []model.NestingSegment {
+	extended := make([]model.NestingSegment, len(basePath)+1)
+	copy(extended, basePath)
+	extended[len(basePath)] = model.NestingSegment{StepID: checkID, RepairAttempt: &attempt}
+	return extended
+}
+
+// PrimeReplayResume extends ctx.NestingPath for a repair frame that was
+// restored on resume in phase replaying, so the sequencer's own basePath
+// (captured just before this call by the caller) sees the same "currently
+// mid-replay" nesting a live run would have produced via AfterStepDispatch's
+// takeRewind handling. It is a no-op when there is no open frame, the frame
+// is not replaying, or the path is already extended (a live run reaching
+// this scope again with a still-open frame from an earlier call). The
+// resumed attempt is frame.Attempts+1, matching a fresh rewind.
+//
+// The rerun target executed next may need the repair evidence preface (see
+// agent.go's ctx.LastFailure check), and ctx.LastFailure is never persisted,
+// so it is rebuilt from audit here, at the nesting depth (including any
+// enclosing group/loop/sub-workflow) this scope actually owns the check at.
+// Callers must propagate a non-nil error instead of dispatching the replay
+// target: without the rebuilt evidence, a resumed agent would silently lose
+// the repair-evidence preface and could repeat the original failing action.
+func PrimeReplayResume(ctx *model.ExecutionContext, basePath []model.NestingSegment) error {
+	frame := ctx.RepairFrame
+	if frame == nil || frame.Phase != model.RepairPhaseReplaying {
+		return nil
+	}
+	if len(ctx.NestingPath) > len(basePath) {
+		return nil
+	}
+	attempt := frame.Attempts + 1
+	ctx.NestingPath = extendedRepairNesting(basePath, frame.CheckID, attempt)
+	return RestoreLastFailureForResume(ctx)
+}
+
+// inReplay reports whether ctx is currently within a rerun-form replay
+// range: the sequencer has pushed an attempt-nesting segment beyond
+// basePath and the frame is still mid-replay.
+func inReplay(ctx *model.ExecutionContext, basePath []model.NestingSegment) bool {
+	return len(ctx.NestingPath) > len(basePath) &&
+		ctx.RepairFrame != nil && ctx.RepairFrame.Phase == model.RepairPhaseReplaying
+}
+
+// isBlockingOutcome reports whether outcome would ordinarily stop the
+// enclosing scope for step: an abort always blocks, and a failure blocks
+// unless the step's own continue_on_failure or warn_on_failure lets it
+// through. Only a blocking outcome inside a replay range counts as a failed
+// repair attempt; a replayed step whose own flow control tolerates its
+// failure proceeds through ordinary sequencing instead.
+func isBlockingOutcome(step *model.Step, outcome StepOutcome) bool {
+	if outcome == OutcomeAborted {
+		return true
+	}
+	return outcome == OutcomeFailed && !step.ContinueOnFailure && !IsWarningOutcome(step, outcome)
+}
+
+// terminalReplayBlocked marks the frame terminally blocked when the rerun
+// target's own response declares REPAIR_BLOCKED. It is tested immediately
+// after the target step completes and before any later replay step runs, so
+// a marker from an unrelated agent later in the replay range is never
+// consulted.
+func terminalReplayBlocked(ctx *model.ExecutionContext, checkStep *model.Step, response string) {
+	frame := ctx.RepairFrame
+	owningPrefix := auditBuildPrefixForOwningCheck(ctx, frame.CheckID)
+	emitRepairBlocked(ctx, owningPrefix, frame.Attempts, response)
+	record := failFrame(ctx, frame, owningPrefix)
+	record.Blocked = true
+	record.BlockedBy = response
+	flushState(ctx)
+	emitReplayTerminalEnd(ctx, checkStep, owningPrefix, true)
+}
+
+// failFrame marks frame terminally failed and installs the owning check's
+// failure record on ctx, updated with the attempt count and the guarded
+// execution's identity. The record keeps the check's own failing output:
+// ctx.LastFailure when it still belongs to the check, otherwise one rebuilt
+// from audit (a replayed step's own failure may have replaced it), and only
+// as a last resort a bare record. Callers add blocked details when relevant
+// and flush state afterwards.
+func failFrame(ctx *model.ExecutionContext, frame *model.RepairFrame, owningPrefix string) *model.FailureRecord {
+	frame.Phase = model.RepairPhaseFailed
+	record := ctx.LastFailure
+	if record == nil || record.StepID != frame.CheckID || record.Prefix != owningPrefix {
+		record = nil
+		if err := RestoreLastFailureForResume(ctx); err == nil {
+			record = ctx.LastFailure
+		}
+	}
+	if record == nil {
+		record = &model.FailureRecord{StepID: frame.CheckID, Prefix: owningPrefix}
+	}
+	record.RepairAttempts = frame.Attempts
+	if record.Guarded == nil && frame.Guarded != nil {
+		ref := *frame.Guarded
+		record.Guarded = &model.AgentExecutionRecord{Ref: ref}
+	}
+	ctx.LastFailure = record
+	return record
+}
+
+// emitReplayTerminalEnd closes the owning check when a rerun-form replay
+// stops before the check reruns (the target declared blocked, or a replayed
+// step's failure used up the budget): the check's single step_start already
+// exists, so this is its one terminal step_end, carrying the check's own
+// failing run and the repair fields exactly as the check's own terminal
+// path would.
+func emitReplayTerminalEnd(ctx *model.ExecutionContext, checkStep *model.Step, owningPrefix string, blocked bool) {
+	frame := ctx.RepairFrame
+	if checkStep == nil || frame == nil {
+		return
+	}
+	startTime := frame.StartedAt
+	if startTime.IsZero() {
+		startTime = time.Now()
+	}
+	endData := repairEndData(checkEndData(checkStep, lastResultFromFailure(ctx.LastFailure)), frame, blocked)
+	addGuardedLinkage(endData, OutcomeFailed, ctx)
+	emitStepEnd(ctx, owningPrefix, startTime, "failed", endData, checkStep)
+}
+
+// RewindOutcome tells a sequencer what to do after checking for a pending
+// rewind following one DispatchStep call.
+type RewindOutcome struct {
+	// Rewound is true when the sequencer should set its loop index to
+	// NextIndex and `continue`, without applying its ordinary per-step
+	// handling (skip/break/continue_on_failure) for the just-dispatched step.
+	Rewound   bool
+	NextIndex int
+	// Stopped is true when a replay-range failure exhausted the check's
+	// repair budget: the sequencer must stop its scope now, reporting the
+	// owning check as a blocking failure (ctx.LastFailure is already set).
+	Stopped bool
+}
+
+// AfterStepDispatch centralizes the rewind/replay bookkeeping shared by all
+// four sequencers (top-level runner, loop body, sub-workflow, group). Call it
+// immediately after DispatchStep returns for steps[i], before applying the
+// sequencer's ordinary outcome handling:
+//
+//   - If ctx is currently replaying a rerun-form repair attempt (the
+//     sequencer previously extended ctx.NestingPath past basePath for this
+//     check) and outcome is a blocking failure or abort, it is absorbed as a
+//     failed repair attempt via AbsorbReplayFailure instead of the
+//     sequencer's ordinary handling for steps[i]. absorbed reports this: the
+//     caller must skip its own failure/abort handling for steps[i] whenever
+//     absorbed is true, whether or not the result says to stop or rewind.
+//   - Otherwise, if ctx.PendingRewind is now set (by the check itself, or
+//     just now by AbsorbReplayFailure), ctx.NestingPath is extended for the
+//     replay and Rewound is true with NextIndex naming the rerun target.
+//   - Otherwise, if ctx.NestingPath was extended for a replay that has now
+//     concluded (the check's own re-entry cleared or terminally failed the
+//     frame), it is restored to basePath.
+func AfterStepDispatch(ctx *model.ExecutionContext, steps []model.Step, i int, basePath []model.NestingSegment, outcome StepOutcome) (result RewindOutcome, absorbed bool) {
+	replaying := inReplay(ctx, basePath)
+	var checkStep *model.Step
+	if replaying {
+		if idx := indexOfStep(steps, ctx.RepairFrame.CheckID); idx >= 0 {
+			checkStep = &steps[idx]
+		}
+	}
+	if replaying && steps[i].ID == ctx.RepairFrame.Target && outcome == OutcomeSuccess {
+		if response, blocked := targetDeclaredBlocked(ctx, ctx.RepairFrame); blocked {
+			ctx.NestingPath = basePath
+			terminalReplayBlocked(ctx, checkStep, response)
+			return RewindOutcome{Stopped: true}, true
+		}
+	}
+
+	if replaying && isBlockingOutcome(&steps[i], outcome) {
+		absorbed = true
+		if stop := AbsorbReplayFailure(ctx, checkStep, steps[i].ID, outcome); stop {
+			ctx.NestingPath = basePath
+			return RewindOutcome{Stopped: true}, true
+		}
+	}
+
+	if rw := takeRewind(ctx); rw != nil {
+		targetIndex := indexOfStep(steps, rw.Target)
+		attempt := 1
+		if ctx.RepairFrame != nil {
+			attempt = ctx.RepairFrame.Attempts + 1
+		}
+		ctx.NestingPath = extendedRepairNesting(basePath, rw.CheckID, attempt)
+		return RewindOutcome{Rewound: true, NextIndex: targetIndex}, absorbed
+	}
+
+	if len(ctx.NestingPath) > len(basePath) && (ctx.RepairFrame == nil || ctx.RepairFrame.Phase != model.RepairPhaseReplaying) {
+		ctx.NestingPath = basePath
+	}
+	return RewindOutcome{}, absorbed
+}
+
+// AbsorbReplayFailure records a blocking failure or abort of a step inside a
+// rerun-form replay range as one failed repair attempt owned by the check,
+// instead of letting the sequencer terminate the scope directly. It emits
+// repair_attempt_end for the failed step, increments the frame's completed
+// attempt count, and either re-arms ctx.PendingRewind for another attempt
+// (returns false) or marks the frame terminally failed, commits
+// ctx.LastFailure, and emits the owning check's terminal step_end (returns
+// true — the sequencer must stop the scope with a failed outcome for the
+// owning check). checkStep is the owning check's definition, used for that
+// terminal step_end.
+func AbsorbReplayFailure(ctx *model.ExecutionContext, checkStep *model.Step, failingStepID string, outcome StepOutcome) (stop bool) {
+	frame := ctx.RepairFrame
+	if frame == nil {
+		return true
+	}
+	owningPrefix := auditBuildPrefixForOwningCheck(ctx, frame.CheckID)
+
+	frame.Attempts++
+	emitAudit(ctx, audit.Event{
+		Timestamp: formatAuditTimestamp(time.Now()), Prefix: owningPrefix, Type: audit.EventRepairAttemptEnd,
+		Data: map[string]any{
+			"attempt": frame.Attempts, "form": frame.Form, "outcome": string(outcome),
+			"failed_step": failingStepID,
+		},
+	})
+
+	if frame.Attempts >= frame.Budget {
+		failFrame(ctx, frame, owningPrefix)
+		flushState(ctx)
+		emitReplayTerminalEnd(ctx, checkStep, owningPrefix, false)
+		return true
+	}
+
+	emitAudit(ctx, audit.Event{
+		Timestamp: formatAuditTimestamp(time.Now()), Prefix: owningPrefix, Type: audit.EventRepairAttemptStart,
+		Data: map[string]any{"attempt": frame.Attempts + 1, "form": frame.Form, "target": frame.Target},
+	})
+	armRerunReplay(ctx, frame)
+	return false
+}
+
+// toleratedFailure reports whether a failed outcome for step is one its own
+// continue_on_failure or warn_on_failure lets the enclosing scope advance
+// past. The sequencers use it to close the step's repair frame (if any) and
+// record the step as completed instead of stopping.
+func toleratedFailure(step *model.Step, outcome StepOutcome) bool {
+	return outcome == OutcomeFailed && !isBlockingOutcome(step, outcome)
+}
+
+// closeToleratedFrame clears ctx.RepairFrame when step's failure is tolerated
+// by its flow control, so a done check is never persisted as an open cycle.
+func closeToleratedFrame(ctx *model.ExecutionContext, step *model.Step, outcome StepOutcome) bool {
+	if !toleratedFailure(step, outcome) {
+		return false
+	}
+	ctx.RepairFrame = nil
+	return true
+}

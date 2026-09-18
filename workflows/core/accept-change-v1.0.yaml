@@ -41,7 +41,9 @@ steps:
     prompt: |
       Help the user review, test, and request additional changes for implemented {{change_label}} "{{change_name}}". The pull request must remain a draft.
 
-      Read `{{session_dir}}/output/acceptance-handoff.md` and its evidence. Present a concise implementation summary, validation results, testing instructions, any `HT-*` items reserved for the user, limitations, and relevant screenshots with text equivalents. Give the user room to review and test.
+      This step exists so the user can review and test the change themselves. Your own review, a review skill, or another agent pass is not a substitute for it and never satisfies this step.
+
+      Start by reading `{{session_dir}}/output/acceptance-handoff.md` and its evidence. Present a concise implementation summary, validation results, testing instructions, any `HT-*` items reserved for the user, limitations, and relevant screenshots with text equivalents. Present that package before doing any other work in this step, then stop and give the user room to review and test. Never request step completion in the same response that presents it.
 
       Implement user-requested fixes and minor enhancements. Confirm changes to behavior, scope, or design before editing. Do not implement requests that materially expand the change's scope or require substantial redesign.
 
@@ -51,7 +53,7 @@ steps:
 
       Run relevant targeted checks. {{artifact_validation_instruction}} Commit completed refinements that belong to the current project repository using the project's conventions and the `[{{step_id}}]` prefix, then push while keeping the pull request in draft. Leave artifacts outside the repository uncommitted. Do not create an empty commit.
 
-      Continue to next step when the user says the requested refinements are complete and the change is ready for final validation.
+      Continue to next step only after the user has reviewed or tested the change and says the requested refinements are complete and the change is ready for final validation. Your own judgement that nothing needs fixing, silence, or a bare acknowledgement is not that confirmation. Ask when you are unsure whether the user is finished.
 
   - id: recommend-reacceptance-testing
     session: lead-agent

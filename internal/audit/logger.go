@@ -56,6 +56,10 @@ type NestingInfo struct {
 	StepID          string
 	Iteration       *int
 	SubWorkflowName string
+	// RepairAttempt, when set, renders an "attempt:N" token immediately after
+	// this segment's own token (and after any sub: token), identifying a
+	// replayed rerun target or an inline repair agent under this check.
+	RepairAttempt *int
 }
 
 // BuildPrefix constructs the nesting prefix string.
@@ -63,7 +67,7 @@ type NestingInfo struct {
 //   - [], "validate" → "[validate]"
 //   - [{stepId: "loop", iteration: 0}], "impl" → "[loop:0, impl]"
 func BuildPrefix(nestingPath []NestingInfo, stepID string) string {
-	tokens := make([]string, 0, len(nestingPath)*2+1)
+	tokens := make([]string, 0, len(nestingPath)*3+1)
 
 	for _, seg := range nestingPath {
 		if seg.Iteration != nil {
@@ -73,6 +77,9 @@ func BuildPrefix(nestingPath []NestingInfo, stepID string) string {
 		}
 		if seg.SubWorkflowName != "" {
 			tokens = append(tokens, "sub:"+seg.SubWorkflowName)
+		}
+		if seg.RepairAttempt != nil {
+			tokens = append(tokens, fmt.Sprintf("attempt:%d", *seg.RepairAttempt))
 		}
 	}
 

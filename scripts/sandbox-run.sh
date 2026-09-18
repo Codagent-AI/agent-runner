@@ -15,6 +15,7 @@ DEFAULT_SECRETS_FILE="${SANDBOX_SECRETS_FILE:-$RUNNER_ROOT/.sandbox-secrets.env}
 LOAD_DEFAULT_SECRETS=1
 MOUNT_CODEX_AUTH=0
 MOUNT_CLAUDE_AUTH=0
+MOUNT_CURSOR_AUTH=0
 DEV_AUDIT=0
 AUDIT_SMOKE=0
 ENV_VARS=()
@@ -54,6 +55,10 @@ Options:
   --mount-claude-auth    Mount host ~/.claude auth/settings files read-only for
                           subscription-based Claude Code auth. Files are copied
                           into writable container home before the command runs.
+  --mount-cursor-auth    Mount host ~/.cursor/auth.json read-only for
+                          subscription-based Cursor CLI auth. The file is copied
+                          to ~/.cursor/auth.json and ~/.config/cursor/auth.json
+                          in writable container home before the command runs.
   --docker-run-arg ARG   Extra docker run argument. Repeatable. Use this for
                           explicit opt-ins such as --ipc=host.
   -h, --help             Show this help.
@@ -137,6 +142,10 @@ while (($#)); do
       ;;
     --mount-claude-auth)
       MOUNT_CLAUDE_AUTH=1
+      shift
+      ;;
+    --mount-cursor-auth)
+      MOUNT_CURSOR_AUTH=1
       shift
       ;;
     -h|--help)
@@ -347,6 +356,10 @@ if [[ "$MOUNT_CLAUDE_AUTH" == 1 ]]; then
   add_required_file_mount "$HOME/.claude/.credentials.json" "/host-home/claude/.credentials.json" "Claude"
   add_optional_file_mount "$HOME/.claude/settings.json" "/host-home/claude/settings.json"
   add_optional_file_mount "$HOME/.claude/settings.local.json" "/host-home/claude/settings.local.json"
+fi
+
+if [[ "$MOUNT_CURSOR_AUTH" == 1 ]]; then
+  add_required_file_mount "$HOME/.cursor/auth.json" "/host-home/cursor/auth.json" "Cursor"
 fi
 
 run_cmd+=("$IMAGE" "${container_command[@]}")

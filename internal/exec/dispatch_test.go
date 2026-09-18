@@ -119,6 +119,64 @@ func TestDispatchStep(t *testing.T) {
 	})
 }
 
+func TestGroupSavesAndRestoresLastAgentExecutionAroundBody(t *testing.T) {
+	ctx := makeCtx()
+	ctx.LastAgentExecution = &model.AgentExecutionRecord{
+		Ref: model.ExecutionRef{Prefix: "[before-group]", Attempt: 1}, Response: "before group",
+	}
+	runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
+	step := model.Step{
+		ID: "g", Session: model.SessionNew,
+		Steps: []model.Step{
+			{ID: "inner-agent", Mode: model.ModeAutonomous, Prompt: "do it", Session: model.SessionNew},
+			{ID: "inner-check", Command: "echo b", Session: model.SessionNew},
+		},
+	}
+	outcome, err := DispatchStep(&step, ctx, runner, &mockGlob{}, &mockLogger{})
+	if err != nil || outcome != OutcomeSuccess {
+		t.Fatalf("DispatchStep() = (%q, %v), want success", outcome, err)
+	}
+	if ctx.LastAgentExecution == nil || ctx.LastAgentExecution.Ref.Prefix != "[before-group]" {
+		t.Fatalf("expected parent's guarded execution restored after group, got %+v", ctx.LastAgentExecution)
+	}
+}
+
+func TestGroupBoundaryScopesGuardedExecutionVisibility(t *testing.T) {
+	ctx := makeCtx()
+	auditLog := &mockAuditLogger{}
+	ctx.AuditLogger = auditLog
+	runner := &mockRunner{results: []ProcessResult{
+		{ExitCode: 0, Stdout: claudeUsageOutput("outer agent response", 0)},
+		{ExitCode: 0, Stdout: claudeUsageOutput("group agent response", 0)},
+		{ExitCode: 0},
+		{ExitCode: 0},
+	}}
+	steps := []model.Step{
+		{ID: "outer-agent", Mode: model.ModeAutonomous, Prompt: "do it", Session: model.SessionNew},
+		{
+			ID: "g", Session: model.SessionNew,
+			Steps: []model.Step{
+				{ID: "group-agent", Mode: model.ModeAutonomous, Prompt: "do it too", Session: model.SessionNew},
+				{ID: "check-in-group", Command: "echo b", Session: model.SessionNew},
+			},
+		},
+		{ID: "check-after-group", Command: "echo c", Session: model.SessionNew},
+	}
+	var lastAgentWhenCheckAfterGroupRan *model.AgentExecutionRecord
+	for i := range steps {
+		if steps[i].ID == "check-after-group" {
+			lastAgentWhenCheckAfterGroupRan = ctx.LastAgentExecution
+		}
+		outcome, err := DispatchStep(&steps[i], ctx, runner, &mockGlob{}, &mockLogger{})
+		if err != nil || outcome != OutcomeSuccess {
+			t.Fatalf("step %q: DispatchStep() = (%q, %v), want success", steps[i].ID, outcome, err)
+		}
+	}
+	if lastAgentWhenCheckAfterGroupRan == nil || lastAgentWhenCheckAfterGroupRan.Response != "outer agent response" {
+		t.Fatalf("check after group should see outer agent, got %+v", lastAgentWhenCheckAfterGroupRan)
+	}
+}
+
 func TestGroupMembersIncludeGroupInAuditIdentity(t *testing.T) {
 	recorder := &mockAuditLogger{}
 	ctx := makeCtx()
@@ -377,3 +435,80 @@ func TestDispatchStep_PrepareStepHook(t *testing.T) {
 }
 
 func intPtr(n int) *int { return &n }
+
+func TestGroupStepEvaluatesMemberSkipIf(t *testing.T) {
+	t.Run("skips a member whose shell condition exits zero", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{
+			ID: "g", Session: model.SessionNew,
+			Steps: []model.Step{
+				{ID: "skipped", Command: "echo skipped", Session: model.SessionNew, SkipIf: "sh: true"},
+				{ID: "runs", Command: "echo runs", Session: model.SessionNew},
+			},
+		}
+		outcome, err := DispatchStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{})
+		if err != nil || outcome != OutcomeSuccess {
+			t.Fatalf("DispatchStep() = (%q, %v), want success", outcome, err)
+		}
+		if len(runner.calls) != 1 {
+			t.Fatalf("expected only the unskipped member to run, got %d calls", len(runner.calls))
+		}
+	})
+
+	t.Run("runs a member whose shell condition exits non-zero", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{
+			ID: "g", Session: model.SessionNew,
+			Steps: []model.Step{
+				{ID: "runs", Command: "echo runs", Session: model.SessionNew, SkipIf: "sh: false"},
+			},
+		}
+		if _, err := DispatchStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(runner.calls) != 1 {
+			t.Fatalf("expected the member to run, got %d calls", len(runner.calls))
+		}
+	})
+
+	t.Run("skips a previous_success member after its predecessor succeeds", func(t *testing.T) {
+		runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}}}
+		step := model.Step{
+			ID: "g", Session: model.SessionNew,
+			Steps: []model.Step{
+				{ID: "first", Command: "echo first", Session: model.SessionNew},
+				{ID: "on-failure", Command: "echo recover", Session: model.SessionNew, SkipIf: "previous_success"},
+			},
+		}
+		if _, err := DispatchStep(&step, makeCtx(), runner, &mockGlob{}, &mockLogger{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(runner.calls) != 1 {
+			t.Fatalf("expected previous_success member to be skipped, got %d calls", len(runner.calls))
+		}
+	})
+
+	t.Run("records the skipped member in the audit log", func(t *testing.T) {
+		recorder := &mockAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = recorder
+		step := model.Step{
+			ID: "g", Session: model.SessionNew,
+			Steps: []model.Step{
+				{ID: "skipped", Command: "echo skipped", Session: model.SessionNew, SkipIf: "sh: true"},
+			},
+		}
+		if _, err := DispatchStep(&step, ctx, &mockRunner{}, &mockGlob{}, &mockLogger{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		for _, event := range recorder.events {
+			if event.Type == audit.EventStepEnd && event.Prefix == "[g, skipped]" {
+				if event.Data["outcome"] != string(OutcomeSkipped) {
+					t.Fatalf("skipped member outcome = %v, want %q", event.Data["outcome"], OutcomeSkipped)
+				}
+				return
+			}
+		}
+		t.Fatalf("skipped member step_end not found: %+v", recorder.events)
+	})
+}

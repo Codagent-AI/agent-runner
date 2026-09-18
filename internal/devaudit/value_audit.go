@@ -262,7 +262,9 @@ func buildLeaves(request *Request, artifact *metrics.Artifact, refs []EvidenceRe
 	for _, key := range keys {
 		records := groups[key]
 		sort.SliceStable(records, func(i, j int) bool { return records[i].RecordID < records[j].RecordID })
-		leaves = append(leaves, leafFromRecords(request, artifact, key, records, refs, commits))
+		leaf := leafFromRecords(request, artifact, key, records, refs, commits)
+		attachMeasurementEvidence(&leaf, artifact, keys, request.ExecutionSessionID)
+		leaves = append(leaves, leaf)
 	}
 	applyDeferredCommitAttribution(leaves)
 	return leaves
