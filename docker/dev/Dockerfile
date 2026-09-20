@@ -64,7 +64,9 @@ RUN curl -fsSL https://cursor.com/install | HOME=/opt/cursor-agent bash \
 # chrome-devtools-mcp defaults to the stable Chrome location. The Playwright
 # image ships a compatible Chromium build under a versioned directory, so give
 # browser-agent tools a stable path without installing a second browser.
-RUN chrome_path="$(find /ms-playwright -path '*/chrome-linux/chrome' -type f -print -quit)" \
+# Playwright's Chromium directory is chrome-linux on some releases and
+# chrome-linux64 on others; accept either.
+RUN chrome_path="$(find /ms-playwright \( -path '*/chrome-linux/chrome' -o -path '*/chrome-linux64/chrome' \) -type f -print -quit)" \
   && test -n "$chrome_path" \
   && mkdir -p /opt/google/chrome \
   && ln -s "$chrome_path" /opt/google/chrome/chrome
