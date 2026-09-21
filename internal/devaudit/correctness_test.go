@@ -450,6 +450,20 @@ func TestRepairIssueBodiesRestoresOnlyBlankAutoAuditIssues(t *testing.T) {
 	}
 }
 
+func TestRepairIssueBodiesRejectsIssueOutsideAuditRepository(t *testing.T) {
+	report := LocalReport{Correctness: CorrectnessResult{Findings: []Finding{{
+		PublicationState: "created", IssueURL: "https://github.com/example/other/issues/42",
+		Marker: findingMarker("finding-1"), Candidate: confirmedCandidate(),
+	}}}}
+	runner := &recordingGH{view: &ghIssue{URL: "https://github.com/example/other/issues/42", State: "OPEN", Title: "[auto-audit] retry state is lost", Body: "-"}}
+	if _, err := repairIssueBodies(report, runner); err == nil {
+		t.Fatal("repair issue bodies accepted an issue outside the audit repository")
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("GitHub calls = %#v, want none", runner.calls)
+	}
+}
+
 func TestPublishCorrectnessPersistsPendingStateBeforeCreate(t *testing.T) {
 	request, prepared := correctnessFixture(t)
 	request.AuditSessionDir = filepath.Join(t.TempDir(), "audit")

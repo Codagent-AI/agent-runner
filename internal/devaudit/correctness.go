@@ -589,6 +589,9 @@ func repairIssueBodies(report LocalReport, runner CommandRunner) (int, error) {
 		if finding.PublicationState != "created" || finding.IssueURL == "" {
 			continue
 		}
+		if !githubIssueURL(finding.IssueURL) {
+			return repaired, fmt.Errorf("created issue URL is invalid")
+		}
 		issue, err := viewIssue(runner, finding.IssueURL)
 		if err != nil {
 			return repaired, err

@@ -151,4 +151,54 @@ func TestIssueRepairScriptListsOnlyPlaceholderAutoAuditIssues(t *testing.T) {
 	}
 }
 
+func TestRecoveryScriptStopsWhenReplayedAuditFinishesWithoutDelivery(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command("git", "init", project).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, output)
+	}
+	dataRoot := filepath.Join(root, "state")
+	projectState := filepath.Join(dataRoot, "projects", "project")
+	source := filepath.Join(projectState, "runs", "source")
+	auditDir := filepath.Join(projectState, "runs", "audit")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(auditDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectState, "meta.json"), []byte(`{"path":`+strconvQuote(project)+`}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "audit-lifecycle.json"), []byte(`{"links":[{"audit_run_id":"missing","execution_session_id":"session","trigger":"automatic","state":"completed"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "run-metrics.json"), []byte(`{"sessions":[{"execution_session_id":"session"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(auditDir, "state.json"), []byte(`{"completed":true,"failureReason":"model output rejected"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	goFixture := "#!/bin/sh\nout=\nwhile [ \"$#\" -gt 0 ]; do if [ \"$1\" = \"-o\" ]; then out=$2; shift; fi; shift; done\nprintf '#!/bin/sh\\nprintf \\\"audit\\\\n\\\"\\n' > \"$out\"\nchmod +x \"$out\"\n"
+	if err := os.WriteFile(filepath.Join(binDir, "go"), []byte(goFixture), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", "recover-development-audits.sh"), "--execute", "--data-root", dataRoot, "--timeout-seconds", "5")
+	cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("recovery unexpectedly succeeded:\n%s", output)
+	}
+	if !strings.Contains(string(output), "FAILED  source  audit  model output rejected") || strings.Contains(string(output), "TIMEOUT") {
+		t.Fatalf("recovery did not stop on completed failed audit:\n%s", output)
+	}
+}
+
 func strconvQuote(value string) string { return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"` }

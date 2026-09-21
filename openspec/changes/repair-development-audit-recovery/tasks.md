@@ -6,3 +6,4 @@
 - [x] 4. Add the temporary two-machine recovery script.
 - [x] 5. Update audit specifications and run formatting, targeted tests, full tests, and lint.
 - [x] 6. Repair GitHub issue-body publication and add a temporary two-machine issue-repair script.
+- [x] 7. Cover recovery exit when a replayed audit completes without delivery.
