@@ -89,6 +89,7 @@ type Link struct {
 	StartedAt          string `json:"started_at,omitempty"`
 	FailedAt           string `json:"failed_at,omitempty"`
 	Warning            string `json:"warning,omitempty"`
+	ReportingWarning   string `json:"reporting_warning,omitempty"`
 }
 
 // Lifecycle is deliberately source-local so an untagged binary can safely

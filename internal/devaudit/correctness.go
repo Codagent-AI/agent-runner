@@ -705,6 +705,7 @@ type LocalReport struct {
 	CorrectnessConsultation []correctnessConsultation `json:"correctness_consultations"`
 	Destination             DestinationState          `json:"destination"`
 	DeliveryState           string                    `json:"delivery_state"`
+	DeliveryError           string                    `json:"delivery_error,omitempty"`
 	RunnerSource            SourceProvenance          `json:"runner_source"`
 }
 

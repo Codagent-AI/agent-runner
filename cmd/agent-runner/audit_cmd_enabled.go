@@ -26,7 +26,7 @@ func handleDevelopmentAuditCommand(args []string, stdout, stderr io.Writer) (han
 		return false, 0
 	}
 	if len(args) == 1 || args[1] == "help" || args[1] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: agent-runner audit setup --client <file> --token <file> --spreadsheet <id> --tab <tab> | audit retry <audit-session-dir> [--migrate-spreadsheet <id> --migrate-tab <tab>] | audit status <session-dir> | audit replay <session-dir> --session <execution-session-id>")
+		_, _ = fmt.Fprintln(stdout, "Usage: agent-runner audit setup --client <file> --token <file> --spreadsheet <id> --tab <tab> | audit retry <audit-session-dir> [--migrate-spreadsheet <id> --migrate-tab <tab>] | audit status <session-dir> | audit replay <session-dir> --session <execution-session-id> | audit reconcile <session-dir> --session <execution-session-id>")
 		return true, 0
 	}
 	switch args[1] {

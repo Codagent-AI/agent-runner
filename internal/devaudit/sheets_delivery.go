@@ -581,6 +581,7 @@ func reportValueObservationsStage(request *Request) error {
 	}
 	if err := defaultSheetsReporter.Deliver(context.Background(), &report); err != nil {
 		report.DeliveryState = "pending"
+		report.DeliveryError = "Sheets reporting pending"
 		if writeErr := stateio.WriteJSONAtomic(path, report); writeErr != nil {
 			return writeErr
 		}
@@ -608,6 +609,7 @@ func RetryReport(auditSessionDir string) error {
 	if err := defaultSheetsReporter.Deliver(context.Background(), &report); err != nil {
 		return err
 	}
+	report.DeliveryError = ""
 	return stateio.WriteJSONAtomic(filepath.Join(auditSessionDir, "local-report.json"), report)
 }
 
