@@ -26,7 +26,7 @@ func handleDevelopmentAuditCommand(args []string, stdout, stderr io.Writer) (han
 		return false, 0
 	}
 	if len(args) == 1 || args[1] == "help" || args[1] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: agent-runner audit setup --client <file> --token <file> --spreadsheet <id> --tab <tab> | audit retry <audit-session-dir> [--migrate-spreadsheet <id> --migrate-tab <tab>] | audit status <session-dir> | audit replay <session-dir> --session <execution-session-id> | audit reconcile <session-dir> --session <execution-session-id>")
+		_, _ = fmt.Fprintln(stdout, "Usage: agent-runner audit setup --client <file> --token <file> --spreadsheet <id> --tab <tab> | audit retry <audit-session-dir> [--migrate-spreadsheet <id> --migrate-tab <tab>] | audit repair-issues <audit-session-dir> | audit status <session-dir> | audit replay <session-dir> --session <execution-session-id> | audit reconcile <session-dir> --session <execution-session-id>")
 		return true, 0
 	}
 	switch args[1] {
@@ -34,9 +34,25 @@ func handleDevelopmentAuditCommand(args []string, stdout, stderr io.Writer) (han
 		return true, handleAuditSetupCommand(args[2:], stdout, stderr)
 	case "retry":
 		return true, handleAuditRetryCommand(args[2:], stdout, stderr)
+	case "repair-issues":
+		return true, handleAuditRepairIssuesCommand(args[2:], stdout, stderr)
 	default:
 		return false, 0
 	}
+}
+
+func handleAuditRepairIssuesCommand(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 {
+		_, _ = fmt.Fprintln(stderr, "Usage: agent-runner audit repair-issues <audit-session-dir>")
+		return 1
+	}
+	repaired, err := devaudit.RepairIssueBodies(args[0])
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "agent-runner audit repair-issues: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintln(stdout, repaired)
+	return 0
 }
 
 func handleAuditSetupCommand(args []string, stdout, stderr io.Writer) int {

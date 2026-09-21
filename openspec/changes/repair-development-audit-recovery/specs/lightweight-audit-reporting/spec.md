@@ -19,3 +19,19 @@ When a proposed optional note contains prohibited detail, validation SHALL omit 
 #### Scenario: Note contains prohibited detail
 - **WHEN** a proposed note contains a local path, URL, secret-like value, or evidence excerpt
 - **THEN** the observation remains valid and its optional note is omitted before any row is written
+
+### Requirement: Audit issue bodies are durable and repairable
+
+GitHub issue publication SHALL pass the redacted body through the GitHub CLI's
+explicit stdin body-file option. A development-only repair operation SHALL
+restore the intended redacted body and markers only when the locally recorded
+issue is an auto-audit issue whose remote body is exactly the historical `-`
+placeholder.
+
+#### Scenario: Historical placeholder issue is repaired
+- **WHEN** a locally recorded created finding points to an `[auto-audit]` GitHub issue with body `-`
+- **THEN** the repair operation replaces that body with the redacted finding body and durable markers
+
+#### Scenario: Edited issue is protected
+- **WHEN** the linked issue has a body other than `-` or is not an auto-audit issue
+- **THEN** the repair operation leaves it unchanged

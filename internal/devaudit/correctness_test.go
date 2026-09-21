@@ -417,7 +417,7 @@ func TestExecutableRunnerUsesFixedGHArgumentsAndStdin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := string(args); !strings.Contains(got, "--repo\nCodagent-AI/agent-runner\n") || !strings.Contains(got, "issue\ncreate\n") {
+	if got := string(args); !strings.Contains(got, "--repo\nCodagent-AI/agent-runner\n") || !strings.Contains(got, "issue\ncreate\n") || !strings.Contains(got, "--body-file\n-\n") {
 		t.Fatalf("fake gh argv = %q", got)
 	}
 	stdin, err := os.ReadFile(stdinPath)
@@ -426,6 +426,27 @@ func TestExecutableRunnerUsesFixedGHArgumentsAndStdin(t *testing.T) {
 	}
 	if !strings.Contains(string(stdin), "<!-- agent-runner-audit:") {
 		t.Fatalf("fake gh stdin = %q", stdin)
+	}
+}
+
+func TestRepairIssueBodiesRestoresOnlyBlankAutoAuditIssues(t *testing.T) {
+	report := LocalReport{
+		SourceRunID: "source", ExecutionSessionID: "session",
+		Correctness: CorrectnessResult{Findings: []Finding{{
+			PublicationState: "created", IssueURL: "https://github.com/Codagent-AI/agent-runner/issues/42",
+			Marker: findingMarker("finding-1"), Candidate: confirmedCandidate(),
+		}}},
+	}
+	runner := &recordingGH{view: &ghIssue{URL: "https://github.com/Codagent-AI/agent-runner/issues/42", State: "OPEN", Title: "[auto-audit] retry state is lost", Body: "-"}}
+	if repaired, err := repairIssueBodies(report, runner); err != nil || repaired != 1 {
+		t.Fatalf("repair issue bodies = %d, %v", repaired, err)
+	}
+	edit := runner.calls[len(runner.calls)-1]
+	if got, want := strings.Join(edit.args, " "), "gh issue edit 42 --repo Codagent-AI/agent-runner --body-file -"; got != want {
+		t.Fatalf("edit args = %q, want %q", got, want)
+	}
+	if body := string(edit.stdin); !strings.Contains(body, "## Observed behavior") || !strings.Contains(body, findingMarker("finding-1")) || !strings.Contains(body, causeMarker(report.Correctness.Findings[0].Candidate.DefectKey)) {
+		t.Fatalf("repaired issue body = %q", body)
 	}
 }
 
@@ -604,6 +625,9 @@ func (runner *recordingGH) Run(_ context.Context, name string, args []string, st
 		}
 		data, _ := json.Marshal(issue)
 		return string(data), nil
+	}
+	if len(args) >= 2 && args[0] == "issue" && args[1] == "edit" {
+		return "", nil
 	}
 	query := args[indexOf(args, "--search")+1]
 	issues := runner.semantic
