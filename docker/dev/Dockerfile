@@ -71,6 +71,9 @@ RUN chrome_path="$(find /ms-playwright \( -path '*/chrome-linux/chrome' -o -path
   && mkdir -p /opt/google/chrome \
   && ln -s "$chrome_path" /opt/google/chrome/chrome
 
+# Under Docker the source and input directories arrive as bind mounts, which the
+# daemon creates. On Fly there are no binds: the guest clones into them, so they
+# must already exist and belong to the unprivileged user the job runs as.
 RUN mkdir -p \
     /workspace \
     /workspace/bin \
@@ -79,7 +82,11 @@ RUN mkdir -p \
     /workspace/home/.cursor \
     /workspace/home/.config/git \
     /artifacts \
-  && chown -R pwuser:pwuser /workspace /artifacts
+    /eval-input \
+    /agent-runner-source \
+    /agent-skills-source \
+  && chown -R pwuser:pwuser /workspace /artifacts /eval-input \
+    /agent-runner-source /agent-skills-source
 
 USER pwuser
 WORKDIR /workspace
