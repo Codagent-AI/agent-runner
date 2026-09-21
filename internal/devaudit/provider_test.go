@@ -180,6 +180,30 @@ func TestSandboxedCrosscheckCanExecuteAndOnlyWriteAuditOutput(t *testing.T) {
 	}
 }
 
+func TestSandboxedCrosscheckCanDiscardWritesToNullDevice(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS sandbox-exec integration")
+	}
+	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command, err := sandboxedCrosscheckCommand([]string{
+		"/bin/sh", "-c", `printf discarded > /dev/null`,
+	}, workspace, filepath.Join(root, "output"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("sandboxed crosscheck could not discard output to /dev/null: %v\n%s", err, output)
+	}
+}
+
 func TestSandboxedCodexGetsDisposableWritableRuntime(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("macOS sandbox-exec integration")

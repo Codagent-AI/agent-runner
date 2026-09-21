@@ -30,7 +30,9 @@ const (
 	rubricVersion          = "value-rubric-v2"
 	defaultPackageBytes    = 256 * 1024
 	defaultLeafDetailBytes = 32 * 1024
-	auditSandboxProfile    = "(version 1)\n(allow default)\n(deny file-write* (require-not (subpath (param \"OUTPUT_DIR\"))))\n"
+	// Discarding to the null device persists nothing, so denying it protects no
+	// evidence while breaking ordinary shell launchers that redirect there.
+	auditSandboxProfile = "(version 1)\n(allow default)\n(deny file-write* (require-not (subpath (param \"OUTPUT_DIR\"))))\n(allow file-write-data (literal \"/dev/null\"))\n"
 )
 
 var crosscheckCommand = sandboxedCrosscheckCommand
