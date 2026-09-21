@@ -31,6 +31,8 @@ steps:
       gh pr list --head "$branch" --state open --json url --limit 1 | jq -r '.[0].url // empty' || true
 
   - id: ci-fix-loop
+    # An exhausted fix budget must fall through so the last push is verified.
+    continue_on_failure: true
     loop:
       max_param: ci_fix_cycles
     steps:
