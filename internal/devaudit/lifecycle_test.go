@@ -82,7 +82,7 @@ func TestReplayExcludesEvidenceWithoutHistoricalSessionOwnership(t *testing.T) {
 
 	var request Request
 	t.Chdir(t.TempDir())
-	if err := Replay(source, "session-1", func(got Request) error {
+	if _, err := Replay(source, "session-1", func(got Request) error {
 		request = got
 		return nil
 	}); err != nil {
@@ -121,6 +121,58 @@ func TestReplayExcludesEvidenceWithoutHistoricalSessionOwnership(t *testing.T) {
 		if count != 1 {
 			t.Fatalf("replay %s reference count = %d, want 1", category, count)
 		}
+	}
+}
+
+func TestReconcileReservedAutomaticAuditUsesOriginalIdentity(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(project, ".agent-runner"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".agent-runner", "config.yaml"), []byte("profiles:\n  default:\n    agents:\n      crosscheck:\n        default_mode: autonomous\n        cli: codex\n        model: gpt-5.6-sol\n        effort: low\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	projectState := filepath.Join(home, ".agent-runner", "projects", audit.EncodePath(project))
+	source := filepath.Join(projectState, "runs", "source")
+	auditDir := filepath.Join(projectState, "runs", "audit-original")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(auditDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectState, "meta.json"), []byte(`{"path":`+strconv.Quote(project)+`}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := stateio.WriteState(&model.RunState{RunID: "source", WorkflowFile: "builtin:openspec/change-v1.0.yaml", WorkflowName: "change"}, source); err != nil {
+		t.Fatal(err)
+	}
+	writeJSON(t, filepath.Join(source, metrics.FileName), metrics.Artifact{Sessions: []metrics.SessionRecord{{ExecutionSessionID: "session"}}})
+	if err := stateio.WriteState(&model.RunState{RunID: "audit-original", Audit: &model.AuditMetadata{}}, auditDir); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := filepath.Join(auditDir, "snapshot")
+	if err := os.MkdirAll(snapshot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeJSON(t, filepath.Join(source, lifecycleFileName), Lifecycle{Version: 1, SourceRunID: "source", Links: []Link{{AuditRunID: "audit-original", ExecutionSessionID: "session", Trigger: "automatic", State: LaunchReserved, SnapshotPath: snapshot}}})
+
+	var launched Request
+	id, err := Reconcile(source, "session", func(request Request) error { launched = request; return nil })
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if id != "audit-original" || launched.AuditRunID != "audit-original" {
+		t.Fatalf("reconcile identity = %q, launched %#v", id, launched)
+	}
+	lifecycle, err := ReadLifecycle(filepath.Join(source, lifecycleFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lifecycle.Links[0].State != LaunchStarted {
+		t.Fatalf("lifecycle state = %q, want started", lifecycle.Links[0].State)
 	}
 }
 

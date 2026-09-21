@@ -3,6 +3,7 @@
 package devaudit
 
 import (
+	"context"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -22,6 +23,7 @@ import (
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/runs"
 	"github.com/codagent/agent-runner/internal/stateio"
@@ -231,7 +233,7 @@ func RecordReportingWarning(request *Request, warning string) error {
 		if link.AuditRunID != request.AuditRunID {
 			continue
 		}
-		link.Warning = warning
+		link.ReportingWarning = warning
 		if err := writeLifecycle(filepath.Join(request.SourceSessionDir, lifecycleFileName), lifecycle); err != nil {
 			return err
 		}
@@ -332,10 +334,30 @@ func HandleCommand(args []string, stdout, stderr io.Writer) (handled bool, exitC
 			_, _ = fmt.Fprintf(stderr, "agent-runner audit replay: %v\n", err)
 			return true, 1
 		}
-		if err := Replay(sourceSessionDir, sessionID, launchDetached); err != nil {
+		id, err := Replay(sourceSessionDir, sessionID, launchDetached)
+		if err != nil {
 			_, _ = fmt.Fprintf(stderr, "agent-runner audit replay: %v\n", err)
 			return true, 1
 		}
+		_, _ = fmt.Fprintln(stdout, id)
+		return true, 0
+	case "reconcile":
+		sourceRef, sessionID, ok := replayArgs(args[2:])
+		if !ok {
+			_, _ = fmt.Fprintln(stderr, "Usage: agent-runner audit reconcile <run-id> --session <execution-session-id>")
+			return true, 1
+		}
+		sourceSessionDir, err := resolveRecordedRun(sourceRef)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "agent-runner audit reconcile: %v\n", err)
+			return true, 1
+		}
+		id, err := Reconcile(sourceSessionDir, sessionID, launchDetached)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "agent-runner audit reconcile: %v\n", err)
+			return true, 1
+		}
+		_, _ = fmt.Fprintln(stdout, id)
 		return true, 0
 	default:
 		_, _ = fmt.Fprintf(stderr, "agent-runner audit: unknown command %q\n", args[1])
@@ -426,18 +448,18 @@ func handleInternalAudit(args []string, stderr io.Writer) int {
 
 // Replay creates a new append-only audit identity for exactly one durable
 // execution session; it never starts or resumes the source workflow.
-func Replay(sourceSessionDir, executionSessionID string, launch func(Request) error) error {
+func Replay(sourceSessionDir, executionSessionID string, launch func(Request) error) (string, error) {
 	state, err := stateio.ReadState(filepath.Join(sourceSessionDir, "state.json"))
 	if err != nil {
-		return err
+		return "", err
 	}
 	metricData, err := os.ReadFile(filepath.Join(sourceSessionDir, metrics.FileName)) // #nosec G304 -- fixed file under source run directory.
 	if err != nil {
-		return fmt.Errorf("source evidence unavailable: %w", err)
+		return "", fmt.Errorf("source evidence unavailable: %w", err)
 	}
 	var artifact metrics.Artifact
 	if err := json.Unmarshal(metricData, &artifact); err != nil {
-		return fmt.Errorf("source metrics: %w", err)
+		return "", fmt.Errorf("source metrics: %w", err)
 	}
 	found := false
 	for _, session := range artifact.Sessions {
@@ -447,42 +469,108 @@ func Replay(sourceSessionDir, executionSessionID string, launch func(Request) er
 		}
 	}
 	if !found {
-		return fmt.Errorf("execution session %q is unavailable", executionSessionID)
+		return "", fmt.Errorf("execution session %q is unavailable", executionSessionID)
 	}
 	auditID, err := newAuditID()
 	if err != nil {
-		return err
+		return "", err
 	}
 	link := Link{AuditRunID: auditID, ExecutionSessionID: executionSessionID, Trigger: "replay", State: LaunchReserved, RequestedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	workingDir, err := recordedProjectRoot(sourceSessionDir)
 	if err != nil {
-		return err
+		return "", err
 	}
 	summary := runner.PostFinalizationSummary{RunID: state.RunID, ExecutionSessionID: executionSessionID, SessionDir: sourceSessionDir, WorkingDir: workingDir, WorkflowFile: state.WorkflowFile, WorkflowName: state.WorkflowName, ProfileSet: state.ProfileSet, TopLevel: true}
 	if err := createAuditRun(&summary, &link); err != nil {
-		return err
+		return "", err
 	}
 	snapshot, err := snapshotReplayEvidenceAt(sourceSessionDir, filepath.Join(auditSessionDir(sourceSessionDir, auditID), "snapshot"), executionSessionID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := exportGitEvidence(summary.WorkingDir, snapshot); err != nil {
-		return err
+		return "", err
 	}
 	link.SnapshotPath = snapshot
 	lifecycle, err := loadLifecycle(filepath.Join(sourceSessionDir, lifecycleFileName), state.RunID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	lifecycle.Links = append(lifecycle.Links, link)
 	if err := writeLifecycle(filepath.Join(sourceSessionDir, lifecycleFileName), lifecycle); err != nil {
-		return err
+		return "", err
 	}
 	if err := appendSourceLink(sourceSessionDir, &link); err != nil {
-		return err
+		return "", err
 	}
 	appendLifecycleEvent(sourceSessionDir, audit.EventAuditLaunchRequested, &link)
-	return (Coordinator{Launcher: launch}).launch(&summary, &lifecycle, &lifecycle.Links[len(lifecycle.Links)-1], time.Now)
+	if err := (Coordinator{Launcher: launch}).launch(&summary, &lifecycle, &lifecycle.Links[len(lifecycle.Links)-1], time.Now); err != nil {
+		return "", err
+	}
+	return auditID, nil
+}
+
+// Reconcile restarts only a durable automatic reservation that never reached a
+// launch state. It preserves the original audit identity and never reruns the
+// source workflow.
+func Reconcile(sourceSessionDir, executionSessionID string, launch func(Request) error) (string, error) {
+	if runlock.Check(sourceSessionDir) == runlock.LockActive {
+		return "", fmt.Errorf("source workflow is still active")
+	}
+	unlock, err := acquireDeliveryLock(context.Background(), filepath.Join(sourceSessionDir, "audit-reconcile.lock"))
+	if err != nil {
+		return "", fmt.Errorf("acquire audit reconciliation lock: %w", err)
+	}
+	defer unlock()
+	state, err := stateio.ReadState(filepath.Join(sourceSessionDir, "state.json"))
+	if err != nil {
+		return "", err
+	}
+	lifecyclePath := filepath.Join(sourceSessionDir, lifecycleFileName)
+	lifecycle, err := ReadLifecycle(lifecyclePath)
+	if err != nil {
+		return "", err
+	}
+	link := findLink(lifecycle.Links, executionSessionID, "automatic")
+	if link == nil {
+		return "", fmt.Errorf("automatic audit reservation for execution session %q is missing", executionSessionID)
+	}
+	switch link.State {
+	case LaunchLaunching, LaunchStarted, LaunchCompleted:
+		return link.AuditRunID, nil
+	case LaunchReserved:
+	default:
+		return "", fmt.Errorf("automatic audit %q is %s and cannot be reconciled", link.AuditRunID, link.State)
+	}
+	if link.SnapshotPath == "" {
+		return "", fmt.Errorf("automatic audit %q has no snapshot", link.AuditRunID)
+	}
+	sessions, err := availableExecutionSessions(sourceSessionDir)
+	if err != nil {
+		return "", err
+	}
+	found := false
+	for _, session := range sessions {
+		if session == executionSessionID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return "", fmt.Errorf("execution session %q is unavailable", executionSessionID)
+	}
+	if _, err := stateio.ReadState(filepath.Join(auditSessionDir(sourceSessionDir, link.AuditRunID), "state.json")); err != nil {
+		return "", fmt.Errorf("automatic audit %q state: %w", link.AuditRunID, err)
+	}
+	workingDir, err := recordedProjectRoot(sourceSessionDir)
+	if err != nil {
+		return "", err
+	}
+	summary := runner.PostFinalizationSummary{RunID: state.RunID, ExecutionSessionID: executionSessionID, SessionDir: sourceSessionDir, WorkingDir: workingDir, WorkflowFile: state.WorkflowFile, WorkflowName: state.WorkflowName, ProfileSet: state.ProfileSet, TopLevel: true}
+	if err := (Coordinator{Launcher: launch}).launch(&summary, &lifecycle, link, time.Now); err != nil {
+		return "", err
+	}
+	return link.AuditRunID, nil
 }
 
 func recordedProjectRoot(sourceSessionDir string) (string, error) {

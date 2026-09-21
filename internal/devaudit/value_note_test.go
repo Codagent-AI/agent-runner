@@ -5,6 +5,8 @@ package devaudit
 import (
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestValidateValueBatchOmitsRejectedOptionalNotes(t *testing.T) {
@@ -21,22 +23,27 @@ func TestValidateValueBatchOmitsRejectedOptionalNotes(t *testing.T) {
 			judgment := ModelValueJudgment{ObservationID: "observation", OverallValue: "medium", ChangeEffect: "intended", UniqueContribution: "unique", DownstreamEvidence: "supporting", Confidence: "medium", EvidenceCoverage: "partial", Note: note}
 			batch := ModelValueBatch{BatchID: "value-001", Observations: []ModelValueJudgment{judgment}}
 			pkg := ValuePackage{BatchID: batch.BatchID, Leaves: []LeafEvidence{{Skeleton: ObservationSkeleton{ObservationID: judgment.ObservationID}}}}
-			result, err := validateValueBatch(&Request{}, pkg, &batch, nil)
+			result, diagnostics, err := validateValueBatch(&Request{}, pkg, &batch, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
 			want := note
-			if safeValueNote(note) != nil {
+			wantDiagnostics := []string{}
+			if reason := unsafeValueNote(note); reason != "" {
 				want = ""
+				wantDiagnostics = append(wantDiagnostics, "value note omitted: "+reason)
 			}
 			if len(result) != 1 || result[0].Note != want || result[0].OverallValue != judgment.OverallValue {
 				t.Fatalf("observations = %+v", result)
+			}
+			if diff := cmp.Diff(wantDiagnostics, diagnostics); diff != "" {
+				t.Fatalf("diagnostics (-want +got):\n%s", diff)
 			}
 			if batch.Observations[0].Note != note {
 				t.Fatal("original model judgment was modified")
 			}
 			batch.Observations[0].OverallValue = "invented"
-			if _, err := validateValueBatch(&Request{}, pkg, &batch, nil); err == nil {
+			if _, _, err := validateValueBatch(&Request{}, pkg, &batch, nil); err == nil {
 				t.Fatal("invalid judgment accepted")
 			}
 		})

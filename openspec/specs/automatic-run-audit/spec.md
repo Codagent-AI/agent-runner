@@ -53,6 +53,14 @@ Nested sub-workflows, audit workflows, and workflows outside those namespaces SH
 - **WHEN** terminal handling lacks an execution-session identity
 - **THEN** it does not create an automatic linked audit
 
+### Requirement: Reserved launches can be explicitly reconciled
+
+A development-audit build SHALL provide `audit reconcile <source-run> --session <execution-session-id>` for an existing automatic audit reservation. It SHALL preserve the original audit identity, refuse an active source run, and never rerun the source workflow. Launching, started, and completed links SHALL be safe no-ops; failed or inconsistent reservations SHALL be rejected.
+
+#### Scenario: Interrupted reservation is reconciled
+- **WHEN** an automatic audit link is durably `reserved` after the source run is no longer active
+- **THEN** explicit reconciliation launches that original audit identity
+
 ### Requirement: Audit launch is independent of the run view
 
 Agent Runner SHALL launch the audit asynchronously as soon as the source outcome and durable evidence are finalized. Launch SHALL NOT wait for the user to exit the source run view. The audit SHALL execute as a separate linked headless run and SHALL continue independently if the source run view exits.
@@ -158,4 +166,3 @@ The initial capability SHALL require no new TUI placement, navigation, or separa
 #### Scenario: Production binary encounters local audit history
 - **WHEN** an untagged or release binary reads a runs directory containing audit runs created by a development-audit build
 - **THEN** ordinary list and view operations do not fail and no audit command or automatic capability becomes available
-

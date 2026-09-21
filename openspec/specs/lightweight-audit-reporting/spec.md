@@ -59,7 +59,7 @@ The reporter MUST NOT write transcripts, transcript summaries, prompts, response
 
 #### Scenario: Note contains prohibited detail
 - **WHEN** a proposed note contains a local path, evidence excerpt, or transcript-like content
-- **THEN** validation rejects or sanitizes the note before any row is written
+- **THEN** validation omits the optional note while retaining the validated categorical observation
 
 #### Scenario: Rejected optional note does not block an audit
 - **WHEN** an otherwise valid model observation contains a note rejected by the evidence-safety checks
@@ -97,7 +97,7 @@ A completed audit SHALL append one row per executed-leaf-step observation. Repla
 
 ### Requirement: Reporting failure is local and non-blocking
 
-The complete validated audit report SHALL be committed locally before external reporting begins. A validation, authentication, API, rate-limit, or write failure SHALL retain that report for retry, record a reporting warning on the audit, and SHALL NOT change the source workflow's result.
+The complete validated audit report SHALL be committed locally before external reporting begins. A validation, authentication, API, rate-limit, or write failure SHALL retain that report for retry, record a reporting warning on the audit, and SHALL NOT change the source workflow's result. The pending local report SHALL retain a non-secret delivery error independently of audit-stage warnings; successful retry SHALL clear only the reporting failure.
 
 #### Scenario: Google API is unavailable
 - **WHEN** the local audit report is complete but the Sheets API request fails
@@ -106,4 +106,3 @@ The complete validated audit report SHALL be committed locally before external r
 #### Scenario: Reporting later succeeds
 - **WHEN** reporting is retried after a transient failure
 - **THEN** the original validated observations are written without rerunning the model audit
-

@@ -35,7 +35,7 @@ steps:
       max_param: ci_fix_cycles
     steps:
       - id: wait-ci
-        session: resume
+        session: lead-agent
         mode: autonomous
         capture: ci_report
         continue_on_failure: true
@@ -66,7 +66,7 @@ steps:
         continue_on_failure: true
 
       - id: fix-pr
-        session: resume
+        session: lead-agent
         mode: autonomous
         skip_if: previous_success
         prompt: |
