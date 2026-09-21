@@ -112,8 +112,20 @@ EOF
       esac
       if [ "$action" = retry ]; then audit_id="$target"; fi
       report="$project_dir/runs/$audit_id/local-report.json"
+      state_file="$project_dir/runs/$audit_id/state.json"
       deadline=$(( $(date +%s) + timeout_seconds ))
       while [ ! -f "$report" ] || [ "$(jq -r '.delivery_state // empty' "$report" 2>/dev/null || true)" != delivered ]; do
+        # An audit run that already finished never delivers later, so report it
+        # instead of waiting out the whole timeout. The recheck covers a report
+        # written just after the run recorded completion.
+        if [ -f "$state_file" ] && [ "$(jq -r '.completed // false' "$state_file" 2>/dev/null || true)" = true ]; then
+          sleep 2
+          if [ -f "$report" ] && [ "$(jq -r '.delivery_state // empty' "$report" 2>/dev/null || true)" = delivered ]; then break; fi
+          reason=$(jq -r '.failureReason // "audit finished without delivering"' "$state_file" 2>/dev/null | tr '\n' ' ' | cut -c1-200)
+          echo "FAILED  $source_name  $audit_id  ${reason:-audit finished without delivering}" >&2
+          failed=$((failed + 1))
+          break
+        fi
         if [ "$(date +%s)" -ge "$deadline" ]; then echo "TIMEOUT $source_name $audit_id" >&2; failed=$((failed + 1)); break; fi
         sleep 2
       done
