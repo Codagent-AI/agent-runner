@@ -29,6 +29,144 @@ func TestPublishCorrectnessRejectsCandidateWithoutSemanticDuplicateResult(t *tes
 	}
 }
 
+func TestPublishCorrectnessNormalizesSuppliedDefectKeys(t *testing.T) {
+	for _, supplied := range []string{
+		"agent_runner.agent_usage_telemetry_unavailable_in_pty_context",
+		"agent-runner/claude-pty-usage-telemetry-missing",
+		"Runner Retry Loss",
+	} {
+		request, prepared := correctnessFixture(t)
+		candidate := confirmedCandidate()
+		candidate.DefectKey = supplied
+
+		result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{candidate}}, deadlineGH{testing: t})
+		if err != nil {
+			t.Fatalf("publish correctness: %v", err)
+		}
+		if len(result.Findings) != 1 || result.Findings[0].PublicationState != "created" {
+			t.Fatalf("defect key %q: findings = %#v, want a published finding", supplied, result.Findings)
+		}
+		if got, want := result.Findings[0].Candidate.DefectKey, normalizeDefectKey(supplied); got != want {
+			t.Fatalf("defect key %q recorded as %q, want %q", supplied, got, want)
+		}
+	}
+}
+
+func TestPublishCorrectnessRejectsUnnormalizableDefectKey(t *testing.T) {
+	request, prepared := correctnessFixture(t)
+	candidate := confirmedCandidate()
+	candidate.DefectKey = "///"
+
+	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{candidate}}, fakeGH{})
+	if err != nil {
+		t.Fatalf("publish correctness: %v", err)
+	}
+	if len(result.Findings) != 1 || result.Findings[0].PublicationState != "rejected" {
+		t.Fatalf("findings = %#v, want an empty-defect-key rejection", result.Findings)
+	}
+}
+
+func TestPublishCorrectnessHoldsAmbiguousDuplicateWithoutIssueURL(t *testing.T) {
+	request, prepared := correctnessFixture(t)
+	candidate := confirmedCandidate()
+	candidate.SemanticDuplicate = Duplicate{State: "ambiguous", DefectKey: candidate.DefectKey}
+
+	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{candidate}}, fakeGH{})
+	if err != nil {
+		t.Fatalf("publish correctness: %v", err)
+	}
+	// An ambiguous search found no single issue to cite, so demanding one
+	// discards the finding instead of routing it to review.
+	if len(result.Findings) != 1 || result.Findings[0].PublicationState != "ambiguous" {
+		t.Fatalf("findings = %#v, want the finding held for review", result.Findings)
+	}
+}
+
+func TestPublishCorrectnessStillRequiresIssueURLForDecidedDuplicate(t *testing.T) {
+	for _, state := range []string{"open", "closed"} {
+		request, prepared := correctnessFixture(t)
+		candidate := confirmedCandidate()
+		candidate.SemanticDuplicate = Duplicate{State: state, DefectKey: candidate.DefectKey}
+
+		result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{candidate}}, fakeGH{})
+		if err != nil {
+			t.Fatalf("publish correctness: %v", err)
+		}
+		if len(result.Findings) != 1 || result.Findings[0].PublicationState != "rejected" {
+			t.Fatalf("duplicate state %q: findings = %#v, want a missing-URL rejection", state, result.Findings)
+		}
+	}
+}
+
+func rejectedReportFixture(t *testing.T, candidate CorrectnessCandidate, failure string) string {
+	t.Helper()
+	request, prepared := correctnessFixture(t)
+	dir := t.TempDir()
+	finding := findingFor(&candidate, normalizeDefectKey(candidate.DefectKey), "rejected", "", failure)
+	report := LocalReport{
+		SourceRunID:        "change-1",
+		ExecutionSessionID: "session-1",
+		Evidence:           prepared.Index,
+		RunnerSource:       request.RunnerSource,
+		Correctness:        CorrectnessResult{SchemaVersion: correctnessSchema, Findings: []Finding{finding}},
+	}
+	if err := stateio.WriteJSONAtomic(filepath.Join(dir, "local-report.json"), report); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestRepublishRejectedFindingsPublishesNewlyValidCandidates(t *testing.T) {
+	candidate := confirmedCandidate()
+	candidate.DefectKey = "agent_runner.usage_telemetry_missing"
+	dir := rejectedReportFixture(t, candidate, "defect_key is not normalized")
+
+	published, err := republishRejectedFindings(dir, deadlineGH{testing: t})
+	if err != nil {
+		t.Fatalf("republish rejected findings: %v", err)
+	}
+	if len(published) != 1 || published[0].PublicationState != "created" || published[0].IssueURL == "" {
+		t.Fatalf("published = %#v, want one created issue", published)
+	}
+	if got, want := published[0].Candidate.DefectKey, "agent-runner-usage-telemetry-missing"; got != want {
+		t.Fatalf("recorded defect key = %q, want %q", got, want)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "local-report.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var updated LocalReport
+	if err := json.Unmarshal(data, &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Correctness.Findings[0].PublicationState != "created" {
+		t.Fatalf("local report was not updated: %#v", updated.Correctness.Findings[0])
+	}
+}
+
+func TestRepublishRejectedFindingsLeavesStillInvalidCandidatesUnpublished(t *testing.T) {
+	candidate := confirmedCandidate()
+	candidate.EvidenceRefs = []string{"evidence-missing"}
+	dir := rejectedReportFixture(t, candidate, "unknown or unavailable evidence reference \"evidence-missing\"")
+
+	published, err := republishRejectedFindings(dir, refusingGH{testing: t})
+	if err != nil {
+		t.Fatalf("republish rejected findings: %v", err)
+	}
+	if len(published) != 0 {
+		t.Fatalf("published = %#v, want nothing published", published)
+	}
+}
+
+type refusingGH struct{ testing *testing.T }
+
+func (r refusingGH) Run(context.Context, string, []string, []byte) (string, error) {
+	r.testing.Helper()
+	r.testing.Fatal("republish contacted GitHub for a candidate that is still invalid")
+	return "", nil
+}
+
 func TestRunBoundedOutputRejectsOversizedCrosscheckResponse(t *testing.T) {
 	command := exec.Command("sh", "-c", "head -c 1025 /dev/zero")
 	if _, err := runBoundedOutput(command, 1024); err == nil || !strings.Contains(err.Error(), "exceeds maximum size") {

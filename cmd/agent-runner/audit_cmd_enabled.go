@@ -26,7 +26,7 @@ func handleDevelopmentAuditCommand(args []string, stdout, stderr io.Writer) (han
 		return false, 0
 	}
 	if len(args) == 1 || args[1] == "help" || args[1] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: agent-runner audit setup --client <file> --token <file> --spreadsheet <id> --tab <tab> | audit retry <audit-session-dir> [--migrate-spreadsheet <id> --migrate-tab <tab>] | audit repair-issues <audit-session-dir> | audit status <session-dir> | audit replay <session-dir> --session <execution-session-id> | audit reconcile <session-dir> --session <execution-session-id>")
+		_, _ = fmt.Fprintln(stdout, "Usage: agent-runner audit setup --client <file> --token <file> --spreadsheet <id> --tab <tab> | audit retry <audit-session-dir> [--migrate-spreadsheet <id> --migrate-tab <tab>] | audit repair-issues <audit-session-dir> | audit republish <audit-session-dir> | audit status <session-dir> | audit replay <session-dir> --session <execution-session-id> | audit reconcile <session-dir> --session <execution-session-id>")
 		return true, 0
 	}
 	switch args[1] {
@@ -36,9 +36,27 @@ func handleDevelopmentAuditCommand(args []string, stdout, stderr io.Writer) (han
 		return true, handleAuditRetryCommand(args[2:], stdout, stderr)
 	case "repair-issues":
 		return true, handleAuditRepairIssuesCommand(args[2:], stdout, stderr)
+	case "republish":
+		return true, handleAuditRepublishCommand(args[2:], stdout, stderr)
 	default:
 		return false, 0
 	}
+}
+
+func handleAuditRepublishCommand(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 {
+		_, _ = fmt.Fprintln(stderr, "Usage: agent-runner audit republish <audit-session-dir>")
+		return 1
+	}
+	published, err := devaudit.RepublishRejectedFindings(args[0])
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "agent-runner audit republish: %v\n", err)
+		return 1
+	}
+	for _, finding := range published {
+		_, _ = fmt.Fprintf(stdout, "%s\t%s\t%s\n", finding.PublicationState, finding.IssueURL, finding.Candidate.Title)
+	}
+	return 0
 }
 
 func handleAuditRepairIssuesCommand(args []string, stdout, stderr io.Writer) int {
