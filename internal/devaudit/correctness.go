@@ -560,7 +560,7 @@ func publishCandidate(request *Request, candidate *CorrectnessCandidate, runner 
 	body, redacted := issueBody(request, &finding, candidate)
 	title := redactText(candidate.Title)
 	finding.Redacted = redacted || title != candidate.Title
-	url, err := runGitHubCommand(runner, []string{"issue", "create", "--repo", auditIssueRepository, "--title", "[auto-audit] " + title, "--body", "-"}, []byte(body))
+	url, err := runGitHubCommand(runner, []string{"issue", "create", "--repo", auditIssueRepository, "--title", "[auto-audit] " + title, "--body-file", "-"}, []byte(body))
 	if err != nil {
 		finding.PublicationState, finding.Failure = "failed", strings.TrimSpace(url)
 		if finding.Failure == "" {
@@ -576,6 +576,51 @@ func publishCandidate(request *Request, candidate *CorrectnessCandidate, runner 
 	}
 	finding.PublicationState = "created"
 	return finding, nil
+}
+
+// repairIssueBodies restores the redacted body and durable audit markers on
+// issues created by the historical --body "-" publication bug. It only edits
+// a known auto-audit issue whose body is still exactly the placeholder.
+func repairIssueBodies(report LocalReport, runner CommandRunner) (int, error) {
+	repaired := 0
+	request := Request{SourceRunID: report.SourceRunID, ExecutionSessionID: report.ExecutionSessionID}
+	for index := range report.Correctness.Findings {
+		finding := &report.Correctness.Findings[index]
+		if finding.PublicationState != "created" || finding.IssueURL == "" {
+			continue
+		}
+		issue, err := viewIssue(runner, finding.IssueURL)
+		if err != nil {
+			return repaired, err
+		}
+		if !strings.HasPrefix(issue.Title, "[auto-audit] ") || issue.Body != "-" {
+			continue
+		}
+		match := regexp.MustCompile(`/issues/(\d+)$`).FindStringSubmatch(finding.IssueURL)
+		if len(match) != 2 {
+			return repaired, fmt.Errorf("created issue URL is invalid")
+		}
+		body, _ := issueBody(&request, finding, &finding.Candidate)
+		if _, err := runGitHubCommand(runner, []string{"issue", "edit", match[1], "--repo", auditIssueRepository, "--body-file", "-"}, []byte(body)); err != nil {
+			return repaired, fmt.Errorf("repair issue %s: %w", finding.IssueURL, err)
+		}
+		repaired++
+	}
+	return repaired, nil
+}
+
+// RepairIssueBodies repairs historical placeholder bodies for one audit's
+// locally recorded issue publications.
+func RepairIssueBodies(auditSessionDir string) (int, error) {
+	data, err := os.ReadFile(filepath.Join(auditSessionDir, "local-report.json"))
+	if err != nil {
+		return 0, fmt.Errorf("read local report: %w", err)
+	}
+	var report LocalReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		return 0, fmt.Errorf("decode local report: %w", err)
+	}
+	return repairIssueBodies(report, ghRunner)
 }
 
 func verifySelectedDuplicate(runner CommandRunner, duplicate Duplicate) (ghIssue, error) {

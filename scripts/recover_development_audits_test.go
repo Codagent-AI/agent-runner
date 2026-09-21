@@ -121,4 +121,34 @@ func TestRecoveryScriptSkipsOlderAttemptAfterSameSessionDelivered(t *testing.T) 
 	}
 }
 
+func TestIssueRepairScriptListsOnlyPlaceholderAutoAuditIssues(t *testing.T) {
+	root := t.TempDir()
+	dataRoot := filepath.Join(root, "state")
+	auditDir := filepath.Join(dataRoot, "projects", "project", "runs", "audit")
+	if err := os.MkdirAll(auditDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	report := `{"correctness":{"findings":[{"publication_state":"created","issue_url":"https://github.com/Codagent-AI/agent-runner/issues/42","candidate":{"title":"repair me"}},{"publication_state":"created","issue_url":"https://github.com/Codagent-AI/agent-runner/issues/43","candidate":{"title":"already repaired"}}]}}`
+	if err := os.WriteFile(filepath.Join(auditDir, "local-report.json"), []byte(report), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	gh := "#!/bin/sh\nif [ \"$3\" = \"https://github.com/Codagent-AI/agent-runner/issues/42\" ]; then printf '%s' '{\"title\":\"[auto-audit] repair me\",\"body\":\"-\"}'; else printf '%s' '{\"title\":\"[auto-audit] already repaired\",\"body\":\"full body\"}'; fi\n"
+	if err := os.WriteFile(filepath.Join(binDir, "gh"), []byte(gh), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", "repair-development-audit-issues.sh"), "--data-root", dataRoot)
+	cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("issue repair dry run: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "REPAIR  audit  https://github.com/Codagent-AI/agent-runner/issues/42") || strings.Contains(string(output), "REPAIR  audit  https://github.com/Codagent-AI/agent-runner/issues/43") {
+		t.Fatalf("unexpected issue repair inventory:\n%s", output)
+	}
+}
+
 func strconvQuote(value string) string { return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"` }
