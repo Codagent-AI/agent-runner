@@ -683,7 +683,7 @@ func repairIssueBodies(report *LocalReport, runner CommandRunner) (int, error) {
 // RepairIssueBodies repairs historical placeholder bodies for one audit's
 // locally recorded issue publications.
 func RepairIssueBodies(auditSessionDir string) (int, error) {
-	data, err := os.ReadFile(filepath.Join(auditSessionDir, "local-report.json"))
+	data, err := os.ReadFile(filepath.Join(auditSessionDir, "local-report.json")) // #nosec G304 -- operator-selected audit directory, fixed artifact name.
 	if err != nil {
 		return 0, fmt.Errorf("read local report: %w", err)
 	}

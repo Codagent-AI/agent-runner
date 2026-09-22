@@ -50,7 +50,7 @@ make lint        # run golangci-lint
 | Target | Command | Description |
 |--------|---------|-------------|
 | `make build` | `go build -o bin/agent-runner ./cmd/agent-runner` | Compile binary |
-| `make test` | `go test ./...` | Run all tests |
+| `make test` | `go test -tags dev_audit ./...` | Run all tests, including development audit code |
 | `make test-verbose` | `go test -v ./...` | Run tests with output |
 | `make test-cover` | `go test -coverprofile=...` | Run tests with coverage report |
 | `make lint` | `golangci-lint run ./...` | Run linter (strict config) |
