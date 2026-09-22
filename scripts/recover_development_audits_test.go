@@ -186,7 +186,7 @@ func TestRecoveryScriptStopsWhenReplayedAuditFinishesWithoutDelivery(t *testing.
 	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	goFixture := "#!/bin/sh\nout=\nwhile [ \"$#\" -gt 0 ]; do if [ \"$1\" = \"-o\" ]; then out=$2; shift; fi; shift; done\nprintf '#!/bin/sh\\nprintf \\\"audit\\\\n\\\"\\n' > \"$out\"\nchmod +x \"$out\"\n"
+	goFixture := "#!/bin/sh\nout=\nwhile [ \"$#\" -gt 0 ]; do if [ \"$1\" = \"-o\" ]; then out=$2; shift; fi; shift; done\nprintf '#!/bin/sh\\necho audit\\n' > \"$out\"\nchmod +x \"$out\"\n"
 	if err := os.WriteFile(filepath.Join(binDir, "go"), []byte(goFixture), 0o700); err != nil {
 		t.Fatal(err)
 	}
