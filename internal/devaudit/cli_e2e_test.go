@@ -38,8 +38,8 @@ func TestE2E001TaggedCLIAutomaticAuditCompletesAndRetriesWithoutDuplicate(t *tes
 		t.Fatalf("local report = %#v, want one delivered observation", report)
 	}
 	request := readE2ERequest(t, auditDir)
-	if request.Crosscheck.CLI != "codex" || request.Crosscheck.Model != "gpt-5.6-sol" {
-		t.Fatalf("crosscheck provenance = %#v", request.Crosscheck)
+	if request.Auditor.CLI != "codex" || request.Auditor.Model != "gpt-5.6-sol" {
+		t.Fatalf("auditor provenance = %#v", request.Auditor)
 	}
 	if _, err := os.Stat(filepath.Join(auditDir, metrics.FileName)); err != nil {
 		t.Fatalf("audit metrics unavailable: %v", err)
@@ -412,7 +412,7 @@ func writeE2EProfile(t *testing.T, home string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	config := "profiles:\n  default:\n    agents:\n      crosscheck:\n        default_mode: autonomous\n        cli: codex\n        model: gpt-5.6-sol\n        effort: low\n"
+	config := "profiles:\n  default:\n    agents:\n      lead:\n        default_mode: autonomous\n        cli: codex\n        model: gpt-5.6-sol\n        effort: low\n"
 	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}

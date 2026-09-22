@@ -25,7 +25,7 @@ func TestReplayExcludesEvidenceWithoutHistoricalSessionOwnership(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(project, ".agent-runner"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	config := "profiles:\n  default:\n    agents:\n      crosscheck:\n        default_mode: autonomous\n        cli: codex\n        model: gpt-5.6-sol\n        effort: low\n"
+	config := "profiles:\n  default:\n    agents:\n      lead:\n        default_mode: interactive\n        cli: claude\n        model: opus\n        effort: high\n      crosscheck:\n        default_mode: autonomous\n        cli: codex\n        model: gpt-5.6-sol\n        effort: low\n"
 	if err := os.WriteFile(filepath.Join(project, ".agent-runner", "config.yaml"), []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -88,8 +88,11 @@ func TestReplayExcludesEvidenceWithoutHistoricalSessionOwnership(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Replay() error = %v", err)
 	}
-	if request.Project != filepath.Base(project) || request.Crosscheck.CLI != "codex" {
-		t.Fatalf("replay source context = project %q crosscheck %#v", request.Project, request.Crosscheck)
+	if request.Project != filepath.Base(project) {
+		t.Fatalf("replay source project = %q", request.Project)
+	}
+	if want := (AgentProvenance{CLI: "claude", Model: "opus", Effort: "high"}); request.Auditor != want {
+		t.Fatalf("replay auditor = %#v, want lead agent %#v", request.Auditor, want)
 	}
 	if _, err := os.Stat(filepath.Join(request.SnapshotPath, "output", "later-session.out")); !os.IsNotExist(err) {
 		t.Fatalf("ambiguous later-session output remains in replay snapshot: %v", err)
@@ -225,7 +228,8 @@ func TestCoordinatorOnlyAuditsTopLevelCanonicalWorkflowNamespaces(t *testing.T) 
 		summary runner.PostFinalizationSummary
 		want    bool
 	}{
-		{"openspec", runner.PostFinalizationSummary{WorkflowFile: "builtin:openspec/change-v1.0.yaml", ExecutionSessionID: "session", Result: runner.ResultStopped, TopLevel: true}, true},
+		{"openspec", runner.PostFinalizationSummary{WorkflowFile: "builtin:openspec/change-v1.0.yaml", ExecutionSessionID: "session", Result: runner.ResultSuccess, TopLevel: true}, true},
+		{"user stopped", runner.PostFinalizationSummary{WorkflowFile: "builtin:openspec/change-v1.0.yaml", ExecutionSessionID: "session", Result: runner.ResultStopped, TopLevel: true}, false},
 		{"spec driven", runner.PostFinalizationSummary{WorkflowFile: "builtin:spec-driven/change-v1.0.yaml", ExecutionSessionID: "session", Result: runner.ResultFailed, TopLevel: true}, true},
 		{"nested", runner.PostFinalizationSummary{WorkflowFile: "builtin:openspec/change-v1.0.yaml", Result: runner.ResultSuccess}, false},
 		{"unrelated", runner.PostFinalizationSummary{WorkflowFile: "builtin:core/intake-v1.0.yaml", Result: runner.ResultSuccess, TopLevel: true}, false},

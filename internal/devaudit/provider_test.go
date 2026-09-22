@@ -234,7 +234,7 @@ func testSandboxedCodexRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	environment, cleanup, err := cliEnvironment(adapter, &Request{Crosscheck: AgentProvenance{CLI: "codex"}}, nil, workspace, outputDir)
+	environment, cleanup, err := cliEnvironment(adapter, &Request{Auditor: AgentProvenance{CLI: "codex"}}, nil, workspace, outputDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -532,7 +532,7 @@ func TestValidateValueStageAcceptsOnlyCompleteFixedRubricOutput(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(snapshot, metrics.FileName), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	request := Request{AuditRunID: "audit-run", AuditSessionDir: filepath.Join(temp, "audit"), SnapshotPath: snapshot, SourceRunID: "source-run", ExecutionSessionID: "source-session", SourceWorkflow: "core:example", Trigger: "automatic", Crosscheck: AgentProvenance{CLI: "fake", Model: "fake-model"}}
+	request := Request{AuditRunID: "audit-run", AuditSessionDir: filepath.Join(temp, "audit"), SnapshotPath: snapshot, SourceRunID: "source-run", ExecutionSessionID: "source-session", SourceWorkflow: "core:example", Trigger: "automatic", Auditor: AgentProvenance{CLI: "fake", Model: "fake-model"}}
 	if _, err := PrepareEvidence(request); err != nil {
 		t.Fatalf("prepare evidence: %v", err)
 	}
@@ -579,7 +579,7 @@ func TestValidateValueStageOmitsUnsafeNotesAndRejectsMissingOutput(t *testing.T)
 	if err := os.Mkdir(filepath.Join(temp, "model-output"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	request := Request{AuditRunID: "audit", AuditSessionDir: temp, SnapshotPath: temp, ExecutionSessionID: "session", Crosscheck: AgentProvenance{Model: "fake"}}
+	request := Request{AuditRunID: "audit", AuditSessionDir: temp, SnapshotPath: temp, ExecutionSessionID: "session", Auditor: AgentProvenance{Model: "fake"}}
 	prepared := PreparedValueAudit{Index: EvidenceIndex{Fingerprints: Fingerprints{}}, Packages: []ValuePackage{{BatchID: "value-001", Leaves: []LeafEvidence{{Skeleton: ObservationSkeleton{ObservationID: "observation"}}}}}}
 	before, err := fingerprintTree(temp)
 	if err != nil {
@@ -671,7 +671,7 @@ func TestValidateValueOutputsAcceptsLeafEvidenceConsultation(t *testing.T) {
 		Index:    EvidenceIndex{Fingerprints: Fingerprints{SnapshotBefore: before}, Leaves: []LeafEvidence{leaf}},
 		Packages: []ValuePackage{{BatchID: "value-001", Leaves: []LeafEvidence{leaf}}},
 	}
-	request := Request{AuditSessionDir: temp, SnapshotPath: temp, Crosscheck: AgentProvenance{Model: "fake"}}
+	request := Request{AuditSessionDir: temp, SnapshotPath: temp, Auditor: AgentProvenance{Model: "fake"}}
 	output := ModelValueBatch{BatchID: "value-001", Observations: []ModelValueJudgment{{
 		ObservationID: "observation", OverallValue: "medium", ChangeEffect: "intended", UniqueContribution: "unique",
 		DownstreamEvidence: "supporting", Confidence: "medium", EvidenceCoverage: "partial", Consultations: []string{reference.ID},

@@ -899,7 +899,7 @@ func validateValueBatch(request *Request, pkg ValuePackage, batch *ModelValueBat
 	}
 	provenance := batch.Provenance
 	if provenance.CLI == "" {
-		provenance = BatchProvenance{CLI: request.Crosscheck.CLI, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, SessionID: "unknown"}
+		provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: "unknown"}
 	}
 	observations := make([]ValueObservation, 0, len(batch.Observations))
 	diagnostics := []string{}
@@ -1199,10 +1199,10 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 	if err != nil {
 		return ModelValueBatch{}, err
 	}
-	if request.Crosscheck.CLI == "" {
-		return ModelValueBatch{}, fmt.Errorf("frozen crosscheck CLI is unavailable")
+	if request.Auditor.CLI == "" {
+		return ModelValueBatch{}, fmt.Errorf("frozen auditor CLI is unavailable")
 	}
-	adapter, err := cli.Get(request.Crosscheck.CLI)
+	adapter, err := cli.Get(request.Auditor.CLI)
 	if err != nil {
 		return ModelValueBatch{}, err
 	}
@@ -1219,7 +1219,7 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 		return ModelValueBatch{}, err
 	}
 	args, err := cli.BuildInvocationArgs(adapter, &cli.BuildArgsInput{
-		Prompt: prompt, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort,
+		Prompt: prompt, Model: request.Auditor.Model, Effort: request.Auditor.Effort,
 		Context: cli.ContextAutonomousHeadless, Workdir: workspace,
 		DisallowedTools: []string{"AskUserQuestion"},
 	})
@@ -1229,7 +1229,7 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 	if len(args) == 0 {
 		return ModelValueBatch{}, fmt.Errorf("crosscheck adapter produced no command")
 	}
-	args, finalResponsePath, removeStructuredFiles, err := withCrosscheckOutputSchema(request.Crosscheck.CLI, args, filepath.Join(request.AuditSessionDir, "model-output"), "value", valueOutputSchema(pkg))
+	args, finalResponsePath, removeStructuredFiles, err := withCrosscheckOutputSchema(request.Auditor.CLI, args, filepath.Join(request.AuditSessionDir, "model-output"), "value", valueOutputSchema(pkg))
 	if err != nil {
 		return ModelValueBatch{}, err
 	}
@@ -1267,7 +1267,7 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 	if err != nil {
 		return ModelValueBatch{}, fmt.Errorf("decode crosscheck result: %w; response: %s", err, crosscheckDiagnostic(response))
 	}
-	output.Provenance = BatchProvenance{CLI: request.Crosscheck.CLI, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, SessionID: adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: time.Now(), Headless: true, ProcessOutput: response, Workdir: workspace})}
+	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: time.Now(), Headless: true, ProcessOutput: response, Workdir: workspace})}
 	if output.Provenance.SessionID == "" {
 		output.Provenance.SessionID = "unknown"
 	}
@@ -1473,13 +1473,13 @@ func pathContains(parent, child string) bool {
 func cliEnvironment(adapter cli.Adapter, request *Request, input []byte, workdir, outputDir string) (environment []string, cleanup func(), err error) {
 	// Adapters may require isolated process-local setup. It is derived from this
 	// batch only and never persisted in the source snapshot.
-	build := &cli.BuildArgsInput{Prompt: string(input), Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, Context: cli.ContextAutonomousHeadless, Workdir: workdir}
+	build := &cli.BuildArgsInput{Prompt: string(input), Model: request.Auditor.Model, Effort: request.Auditor.Effort, Context: cli.ContextAutonomousHeadless, Workdir: workdir}
 	extra, err := cli.SpawnEnvForInvocation(adapter, build)
 	if err != nil {
 		return nil, nil, fmt.Errorf("prepare crosscheck environment: %w", err)
 	}
 	cleanup = func() {}
-	if request.Crosscheck.CLI == "codex" {
+	if request.Auditor.CLI == "codex" {
 		var runtimeEnv []string
 		runtimeEnv, cleanup, err = prepareAuditCodexRuntime(outputDir)
 		if err != nil {

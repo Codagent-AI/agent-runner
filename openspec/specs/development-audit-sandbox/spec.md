@@ -69,7 +69,7 @@ Agent Runner SHALL provide a hermetic Docker smoke using its own fixtures and th
 
 ### Requirement: Development documentation states operating contracts
 
-Development documentation SHALL describe the opt-in/default distinction, authoritative mounted source and unavailable Git metadata, exact canonical workflow eligibility, inherited `crosscheck` resolution, Linux prerequisites and fail-closed behavior, retained Darwin/Sequoia behavior, and smoke usage and artifact interpretation. Documentation SHALL distinguish source completion from linked-audit completion and confinement from read/network restrictions.
+Development documentation SHALL describe the opt-in/default distinction, authoritative mounted source and unavailable Git metadata, exact canonical workflow eligibility, inherited `lead` resolution, Linux prerequisites and fail-closed behavior, retained Darwin/Sequoia behavior, and smoke usage and artifact interpretation. Documentation SHALL distinguish source completion from linked-audit completion and confinement from read/network restrictions.
 
 #### Scenario: Developer follows sandbox audit instructions
 - **WHEN** a developer reads the documented workflow

@@ -113,8 +113,8 @@ func ensureCorrectnessOutput(request *Request) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if request.Crosscheck.CLI == "" {
-		return writeCorrectnessDiagnostic(request, "frozen crosscheck CLI is unavailable")
+	if request.Auditor.CLI == "" {
+		return writeCorrectnessDiagnostic(request, "frozen auditor CLI is unavailable")
 	}
 	output, err := invokeCrosscheckCorrectness(request)
 	if err != nil {
@@ -132,7 +132,7 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 	if err != nil {
 		return CorrectnessCandidates{}, err
 	}
-	adapter, err := cli.Get(request.Crosscheck.CLI)
+	adapter, err := cli.Get(request.Auditor.CLI)
 	if err != nil {
 		return CorrectnessCandidates{}, err
 	}
@@ -152,14 +152,14 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 	if err != nil {
 		return CorrectnessCandidates{}, err
 	}
-	args, err := cli.BuildInvocationArgs(adapter, &cli.BuildArgsInput{Prompt: prompt, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, Context: cli.ContextAutonomousHeadless, Workdir: workspace, DisallowedTools: []string{"AskUserQuestion"}})
+	args, err := cli.BuildInvocationArgs(adapter, &cli.BuildArgsInput{Prompt: prompt, Model: request.Auditor.Model, Effort: request.Auditor.Effort, Context: cli.ContextAutonomousHeadless, Workdir: workspace, DisallowedTools: []string{"AskUserQuestion"}})
 	if err != nil || len(args) == 0 {
 		if err == nil {
 			err = fmt.Errorf("crosscheck adapter produced no command")
 		}
 		return CorrectnessCandidates{}, err
 	}
-	args, finalResponsePath, removeStructuredFiles, err := withCrosscheckOutputSchema(request.Crosscheck.CLI, args, filepath.Join(request.AuditSessionDir, "model-output"), "correctness", correctnessOutputSchema(allEvidenceReferences(&prepared.Index)))
+	args, finalResponsePath, removeStructuredFiles, err := withCrosscheckOutputSchema(request.Auditor.CLI, args, filepath.Join(request.AuditSessionDir, "model-output"), "correctness", correctnessOutputSchema(allEvidenceReferences(&prepared.Index)))
 	if err != nil {
 		return CorrectnessCandidates{}, err
 	}
@@ -203,7 +203,7 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 	if decoder.Decode(&extra) != io.EOF {
 		return CorrectnessCandidates{}, fmt.Errorf("crosscheck result contains multiple JSON values")
 	}
-	output.Provenance = BatchProvenance{CLI: request.Crosscheck.CLI, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, SessionID: "unknown"}
+	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: "unknown"}
 	return output, nil
 }
 
@@ -290,7 +290,7 @@ func validatePublishCorrectnessStage(request *Request) error {
 	result.Diagnostics = append(result.Diagnostics, diagnostics...)
 	provenance := output.Provenance
 	if provenance.CLI == "" {
-		provenance = BatchProvenance{CLI: request.Crosscheck.CLI, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, SessionID: "unknown"}
+		provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: "unknown"}
 	}
 	result.JudgeCLI, result.JudgeModel, result.JudgeEffort, result.JudgeSessionID = provenance.CLI, provenance.Model, provenance.Effort, provenance.SessionID
 	return stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "correctness-findings.json"), result)
