@@ -45,6 +45,9 @@ RUN mkdir -p "$GOMODCACHE" \
 
 ENV PATH="/usr/local/go/bin:/workspace/bin:${PATH}"
 
+# A new value per build (the factory passes its claim id) reinstalls the model CLIs
+# and everything after them, while the layers above stay cached.
+ARG FACTORY_CLI_REFRESH
 RUN npm install -g \
     @openai/codex \
     @anthropic-ai/claude-code \
