@@ -5,9 +5,10 @@ set -euo pipefail
 execute=false
 data_root="${HOME}/.agent-runner"
 timeout_seconds=3600
+include_temp_projects=false
 
 usage() {
-  echo "Usage: $0 [--execute] [--data-root <dir>] [--timeout-seconds <seconds>]" >&2
+  echo "Usage: $0 [--execute] [--data-root <dir>] [--timeout-seconds <seconds>] [--include-temp-projects]" >&2
 }
 
 while [ "$#" -gt 0 ]; do
@@ -15,6 +16,7 @@ while [ "$#" -gt 0 ]; do
     --execute) execute=true ;;
     --data-root) shift; data_root="${1:-}" ;;
     --timeout-seconds) shift; timeout_seconds="${1:-}" ;;
+    --include-temp-projects) include_temp_projects=true ;;
     -h|--help) usage; exit 0 ;;
     *) usage; exit 2 ;;
   esac
@@ -45,6 +47,8 @@ build_runner() {
 is_real_project() {
   local project_root="$1"
   [ -d "$project_root" ] && git -C "$project_root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  # Projects under temp directories are normally throwaway test checkouts.
+  [ "$include_temp_projects" = true ] && return 0
   case "$(cd "$project_root" && pwd -P)" in /tmp/*|/private/tmp/*|*/tmp/*) return 1;; esac
 }
 

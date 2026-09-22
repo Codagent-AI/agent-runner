@@ -19,7 +19,7 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-for command in go gh jq rg; do
+for command in go gh jq grep; do
   command -v "$command" >/dev/null || { echo "missing required command: $command" >&2; exit 2; }
 done
 [ -d "$data_root/projects" ] || { echo "data root has no projects directory: $data_root" >&2; exit 2; }
@@ -56,7 +56,7 @@ EOF
   count=$("$runner" audit repair-issues "$audit_dir")
   repaired=$((repaired + count))
 done <<EOF
-$(rg -l '"issue_url"' "$data_root/projects" 2>/dev/null | rg 'local-report\.json$' || true)
+$(grep -rl --include=local-report.json '"issue_url"' "$data_root/projects" 2>/dev/null || true)
 EOF
 
 echo "Issue repair inventory: actionable=$actionable repaired=$repaired execute=$execute"

@@ -38,7 +38,7 @@ func TestRecoveryScriptDoesNotHideUndeliveredAttemptBehindDeliveredSibling(t *te
 	if err := os.WriteFile(filepath.Join(projectState, "runs", "delivered", "local-report.json"), []byte(`{"delivery_state":"delivered"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", "recover-development-audits.sh"), "--data-root", dataRoot)
+	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", "recover-development-audits.sh"), "--data-root", dataRoot, "--include-temp-projects")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("recovery dry run: %v\n%s", err, output)
@@ -72,7 +72,7 @@ func TestRecoveryScriptSkipsLifecycleSessionMissingFromMetrics(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(source, "run-metrics.json"), []byte(`{"sessions":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	output, err := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", "recover-development-audits.sh"), "--data-root", dataRoot).CombinedOutput()
+	output, err := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", "recover-development-audits.sh"), "--data-root", dataRoot, "--include-temp-projects").CombinedOutput()
 	if err != nil {
 		t.Fatalf("recovery dry run: %v\n%s", err, output)
 	}
@@ -112,7 +112,7 @@ func TestRecoveryScriptSkipsOlderAttemptAfterSameSessionDelivered(t *testing.T) 
 	if err := os.WriteFile(filepath.Join(projectState, "runs", "delivered", "local-report.json"), []byte(`{"delivery_state":"delivered"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	output, err := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", "recover-development-audits.sh"), "--data-root", dataRoot).CombinedOutput()
+	output, err := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", "recover-development-audits.sh"), "--data-root", dataRoot, "--include-temp-projects").CombinedOutput()
 	if err != nil {
 		t.Fatalf("recovery dry run: %v\n%s", err, output)
 	}
@@ -190,7 +190,7 @@ func TestRecoveryScriptStopsWhenReplayedAuditFinishesWithoutDelivery(t *testing.
 	if err := os.WriteFile(filepath.Join(binDir, "go"), []byte(goFixture), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", "recover-development-audits.sh"), "--execute", "--data-root", dataRoot, "--timeout-seconds", "5")
+	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", "recover-development-audits.sh"), "--execute", "--data-root", dataRoot, "--timeout-seconds", "5", "--include-temp-projects")
 	cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	output, err := cmd.CombinedOutput()
 	if err == nil {
