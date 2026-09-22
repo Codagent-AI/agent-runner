@@ -1,15 +1,11 @@
 cli:
   default_preference:
     - codex
-    - github-copilot
   adapters:
     codex:
-      model: gpt-5.6-sol
+      model: gpt-6-sol
       allow_tool_use: false
-      thinking_budget: low
-    github-copilot:
-      allow_tool_use: false
-      thinking_budget: low
+      thinking_budget: medium
 
 entry_points:
   # Default: run standard checks plus reviews for code quality, security & errors
@@ -20,13 +16,13 @@ entry_points:
       - openspec
     checks:
       - build:
-          command: ./.validator/go-offline.sh go build ./...
+          command: ./.validator/go-offline.sh sh -c "go build ./... && go build -tags dev_audit ./..."
       - lint:
           command: ./.validator/go-offline.sh golangci-lint run ./...
       - test:
-          command: ./.validator/go-offline.sh go test ./...
+          command: ./.validator/go-offline.sh go test -tags dev_audit ./...
       - security-code:
-          command: ./.validator/go-offline.sh gosec -exclude-dir=.claude -exclude-dir=.validator -exclude-dir=worktrees ./...
+          command: ./.validator/go-offline.sh gosec -tags=dev_audit -exclude-dir=.claude -exclude-dir=.validator -exclude-dir=worktrees ./...
     reviews:
       - all-reviewers:
           builtin: all-reviewers

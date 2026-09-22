@@ -2,6 +2,10 @@ version: "2"
 
 run:
   timeout: 5m
+  # Lint the development audit code too; the tagged build is a superset of
+  # the release build apart from two inert stubs.
+  build-tags:
+    - dev_audit
 
 linters:
   enable:

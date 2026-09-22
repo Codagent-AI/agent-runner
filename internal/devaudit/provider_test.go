@@ -16,6 +16,7 @@ import (
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/metrics"
+	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/stateio"
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
@@ -179,6 +180,30 @@ func TestSandboxedCrosscheckCanExecuteAndOnlyWriteAuditOutput(t *testing.T) {
 	}
 }
 
+func TestSandboxedCrosscheckCanDiscardWritesToNullDevice(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS sandbox-exec integration")
+	}
+	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command, err := sandboxedCrosscheckCommand([]string{
+		"/bin/sh", "-c", `printf discarded > /dev/null`,
+	}, workspace, filepath.Join(root, "output"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("sandboxed crosscheck could not discard output to /dev/null: %v\n%s", err, output)
+	}
+}
+
 func TestSandboxedCodexGetsDisposableWritableRuntime(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("macOS sandbox-exec integration")
@@ -209,7 +234,7 @@ func testSandboxedCodexRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	environment, cleanup, err := cliEnvironment(adapter, &Request{Crosscheck: AgentProvenance{CLI: "codex"}}, nil, workspace, outputDir)
+	environment, cleanup, err := cliEnvironment(adapter, &Request{Auditor: AgentProvenance{CLI: "codex"}}, nil, workspace, outputDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -507,7 +532,7 @@ func TestValidateValueStageAcceptsOnlyCompleteFixedRubricOutput(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(snapshot, metrics.FileName), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	request := Request{AuditRunID: "audit-run", AuditSessionDir: filepath.Join(temp, "audit"), SnapshotPath: snapshot, SourceRunID: "source-run", ExecutionSessionID: "source-session", SourceWorkflow: "core:example", Trigger: "automatic", Crosscheck: AgentProvenance{CLI: "fake", Model: "fake-model"}}
+	request := Request{AuditRunID: "audit-run", AuditSessionDir: filepath.Join(temp, "audit"), SnapshotPath: snapshot, SourceRunID: "source-run", ExecutionSessionID: "source-session", SourceWorkflow: "core:example", Trigger: "automatic", Auditor: AgentProvenance{CLI: "fake", Model: "fake-model"}}
 	if _, err := PrepareEvidence(request); err != nil {
 		t.Fatalf("prepare evidence: %v", err)
 	}
@@ -549,9 +574,12 @@ func TestValidateValueStageAcceptsOnlyCompleteFixedRubricOutput(t *testing.T) {
 	}
 }
 
-func TestValidateValueStageRejectsFabricatedMeasurementsAndUnsafeNotes(t *testing.T) {
+func TestValidateValueStageOmitsUnsafeNotesAndRejectsMissingOutput(t *testing.T) {
 	temp := t.TempDir()
-	request := Request{AuditRunID: "audit", AuditSessionDir: temp, SnapshotPath: temp, ExecutionSessionID: "session", Crosscheck: AgentProvenance{Model: "fake"}}
+	if err := os.Mkdir(filepath.Join(temp, "model-output"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	request := Request{AuditRunID: "audit", AuditSessionDir: temp, SnapshotPath: temp, ExecutionSessionID: "session", Auditor: AgentProvenance{Model: "fake"}}
 	prepared := PreparedValueAudit{Index: EvidenceIndex{Fingerprints: Fingerprints{}}, Packages: []ValuePackage{{BatchID: "value-001", Leaves: []LeafEvidence{{Skeleton: ObservationSkeleton{ObservationID: "observation"}}}}}}
 	before, err := fingerprintTree(temp)
 	if err != nil {
@@ -560,11 +588,71 @@ func TestValidateValueStageRejectsFabricatedMeasurementsAndUnsafeNotes(t *testin
 	prepared.Index.Fingerprints.SnapshotBefore = before
 	prepared.Index.Fingerprints.OutputBefore = before
 	output := ModelValueBatch{BatchID: "value-001", Observations: []ModelValueJudgment{{ObservationID: "observation", OverallValue: "medium", ChangeEffect: "intended", UniqueContribution: "unique", DownstreamEvidence: "supporting", Confidence: "medium", EvidenceCoverage: "partial", Note: "https://example.test/evidence"}}}
-	if _, err := ValidateValueOutputs(request, prepared, []ModelValueBatch{output}); err == nil {
-		t.Fatal("unsafe note was accepted")
+	result, err := ValidateValueOutputs(request, prepared, []ModelValueBatch{output})
+	if err != nil {
+		t.Fatalf("unsafe optional note rejected the observation: %v", err)
+	}
+	if len(result.Observations) != 1 || result.Observations[0].Note != "" {
+		t.Fatalf("unsafe note result = %#v", result.Observations)
+	}
+	if diff := cmp.Diff([]string{"value note omitted: unsafe detailed evidence"}, result.Diagnostics); diff != "" {
+		t.Fatalf("diagnostics (-want +got):\n%s", diff)
 	}
 	if _, err := loadModelValueBatches(temp, []ValuePackage{{BatchID: "value-001"}}); err == nil {
 		t.Fatal("missing model output was accepted")
+	}
+}
+
+func TestReportingFailureSurvivesAuditCompletion(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "runs", "source")
+	auditDir := filepath.Join(root, "runs", "audit")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(auditDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	request := Request{AuditRunID: "audit", AuditSessionDir: auditDir, SourceSessionDir: source, SourceRunID: "source", ExecutionSessionID: "session", Trigger: "automatic"}
+	if err := stateio.WriteState(&model.RunState{RunID: "source"}, source); err != nil {
+		t.Fatal(err)
+	}
+	if err := stateio.WriteState(&model.RunState{RunID: "audit", Audit: &model.AuditMetadata{}}, auditDir); err != nil {
+		t.Fatal(err)
+	}
+	writeJSON(t, filepath.Join(source, lifecycleFileName), Lifecycle{Version: 1, SourceRunID: "source", Links: []Link{{AuditRunID: "audit", ExecutionSessionID: "session", Trigger: "automatic", State: LaunchStarted}}})
+	writeJSON(t, filepath.Join(auditDir, "local-report.json"), LocalReport{AuditRunID: "audit", DeliveryState: "pending", Destination: DestinationState{State: "configured", SpreadsheetID: "sheet", Tab: "tab"}})
+
+	oldReporter := defaultSheetsReporter
+	defaultSheetsReporter = SheetsReporter{Store: ConnectionStore{Home: t.TempDir(), allowInsecureTokenURI: true}}
+	t.Cleanup(func() { defaultSheetsReporter = oldReporter })
+	if err := reportValueObservationsStage(&request); err != nil {
+		t.Fatal(err)
+	}
+	if err := completeAudit(&request, "audit stage warning"); err != nil {
+		t.Fatal(err)
+	}
+
+	var report LocalReport
+	data, err := os.ReadFile(filepath.Join(auditDir, "local-report.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.DeliveryError == "" {
+		t.Fatal("delivery error was not persisted")
+	}
+	lifecycle, err := ReadLifecycle(filepath.Join(source, lifecycleFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := lifecycle.Links[0].Warning, "audit stage warning"; got != want {
+		t.Fatalf("audit warning = %q, want %q", got, want)
+	}
+	if lifecycle.Links[0].ReportingWarning == "" {
+		t.Fatal("reporting warning was erased by completion")
 	}
 }
 
@@ -583,7 +671,7 @@ func TestValidateValueOutputsAcceptsLeafEvidenceConsultation(t *testing.T) {
 		Index:    EvidenceIndex{Fingerprints: Fingerprints{SnapshotBefore: before}, Leaves: []LeafEvidence{leaf}},
 		Packages: []ValuePackage{{BatchID: "value-001", Leaves: []LeafEvidence{leaf}}},
 	}
-	request := Request{AuditSessionDir: temp, SnapshotPath: temp, Crosscheck: AgentProvenance{Model: "fake"}}
+	request := Request{AuditSessionDir: temp, SnapshotPath: temp, Auditor: AgentProvenance{Model: "fake"}}
 	output := ModelValueBatch{BatchID: "value-001", Observations: []ModelValueJudgment{{
 		ObservationID: "observation", OverallValue: "medium", ChangeEffect: "intended", UniqueContribution: "unique",
 		DownstreamEvidence: "supporting", Confidence: "medium", EvidenceCoverage: "partial", Consultations: []string{reference.ID},

@@ -34,7 +34,7 @@ func crosscheckFixture(t *testing.T) (*Request, ValuePackage) {
 	if err := stateio.WriteJSONAtomic(filepath.Join(snapshot, metrics.FileName), artifact); err != nil {
 		t.Fatal(err)
 	}
-	request := &Request{AuditRunID: "audit", AuditSessionDir: filepath.Join(root, "audit"), SourceSessionDir: filepath.Join(root, "source"), SnapshotPath: snapshot, SourceRunID: "source", ExecutionSessionID: "session", SourceWorkflow: "core:example", Trigger: "automatic", Crosscheck: AgentProvenance{CLI: "claude", Model: "fable"}}
+	request := &Request{AuditRunID: "audit", AuditSessionDir: filepath.Join(root, "audit"), SourceSessionDir: filepath.Join(root, "source"), SnapshotPath: snapshot, SourceRunID: "source", ExecutionSessionID: "session", SourceWorkflow: "core:example", Trigger: "automatic", Auditor: AgentProvenance{CLI: "claude", Model: "fable"}}
 	prepared, err := PrepareEvidence(*request)
 	if err != nil {
 		t.Fatal(err)

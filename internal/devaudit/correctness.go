@@ -113,8 +113,8 @@ func ensureCorrectnessOutput(request *Request) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if request.Crosscheck.CLI == "" {
-		return writeCorrectnessDiagnostic(request, "frozen crosscheck CLI is unavailable")
+	if request.Auditor.CLI == "" {
+		return writeCorrectnessDiagnostic(request, "frozen auditor CLI is unavailable")
 	}
 	output, err := invokeCrosscheckCorrectness(request)
 	if err != nil {
@@ -132,7 +132,7 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 	if err != nil {
 		return CorrectnessCandidates{}, err
 	}
-	adapter, err := cli.Get(request.Crosscheck.CLI)
+	adapter, err := cli.Get(request.Auditor.CLI)
 	if err != nil {
 		return CorrectnessCandidates{}, err
 	}
@@ -152,14 +152,14 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 	if err != nil {
 		return CorrectnessCandidates{}, err
 	}
-	args, err := cli.BuildInvocationArgs(adapter, &cli.BuildArgsInput{Prompt: prompt, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, Context: cli.ContextAutonomousHeadless, Workdir: workspace, DisallowedTools: []string{"AskUserQuestion"}})
+	args, err := cli.BuildInvocationArgs(adapter, &cli.BuildArgsInput{Prompt: prompt, Model: request.Auditor.Model, Effort: request.Auditor.Effort, Context: cli.ContextAutonomousHeadless, Workdir: workspace, DisallowedTools: []string{"AskUserQuestion"}})
 	if err != nil || len(args) == 0 {
 		if err == nil {
 			err = fmt.Errorf("crosscheck adapter produced no command")
 		}
 		return CorrectnessCandidates{}, err
 	}
-	args, finalResponsePath, removeStructuredFiles, err := withCrosscheckOutputSchema(request.Crosscheck.CLI, args, filepath.Join(request.AuditSessionDir, "model-output"), "correctness", correctnessOutputSchema(allEvidenceReferences(&prepared.Index)))
+	args, finalResponsePath, removeStructuredFiles, err := withCrosscheckOutputSchema(request.Auditor.CLI, args, filepath.Join(request.AuditSessionDir, "model-output"), "correctness", correctnessOutputSchema(allEvidenceReferences(&prepared.Index)))
 	if err != nil {
 		return CorrectnessCandidates{}, err
 	}
@@ -203,7 +203,7 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 	if decoder.Decode(&extra) != io.EOF {
 		return CorrectnessCandidates{}, fmt.Errorf("crosscheck result contains multiple JSON values")
 	}
-	output.Provenance = BatchProvenance{CLI: request.Crosscheck.CLI, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, SessionID: "unknown"}
+	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: "unknown"}
 	return output, nil
 }
 
@@ -290,7 +290,7 @@ func validatePublishCorrectnessStage(request *Request) error {
 	result.Diagnostics = append(result.Diagnostics, diagnostics...)
 	provenance := output.Provenance
 	if provenance.CLI == "" {
-		provenance = BatchProvenance{CLI: request.Crosscheck.CLI, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, SessionID: "unknown"}
+		provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: "unknown"}
 	}
 	result.JudgeCLI, result.JudgeModel, result.JudgeEffort, result.JudgeSessionID = provenance.CLI, provenance.Model, provenance.Effort, provenance.SessionID
 	return stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "correctness-findings.json"), result)
@@ -395,8 +395,10 @@ func persistCorrectnessOutcome(request *Request, result *CorrectnessResult) erro
 }
 
 func validateCorrectnessCandidate(candidate *CorrectnessCandidate, key string, known map[string]EvidenceReference, source *SourceProvenance) error {
-	if key == "" || candidate.DefectKey != key {
-		return fmt.Errorf("defect_key is not normalized")
+	// The caller normalizes the supplied key and records the normalized form, so
+	// only a key with nothing normalizable left in it is unusable here.
+	if key == "" {
+		return fmt.Errorf("defect_key is empty")
 	}
 	if candidate.Title == "" || candidate.Observed == "" || candidate.Expected == "" || candidate.Verification == "" || candidate.AffectedComponent == "" {
 		return fmt.Errorf("candidate is incomplete")
@@ -407,13 +409,15 @@ func validateCorrectnessCandidate(candidate *CorrectnessCandidate, key string, k
 	if !oneOf(candidate.SemanticDuplicate.State, "none", "open", "closed", "ambiguous") {
 		return fmt.Errorf("candidate has no semantic duplicate result")
 	}
-	if candidate.SemanticDuplicate.State != "none" && candidate.SemanticDuplicate.URL == "" {
+	// An ambiguous search settled on no single issue, so it has none to cite.
+	// Only a decided duplicate must name the issue the publisher verifies.
+	if oneOf(candidate.SemanticDuplicate.State, "open", "closed") && candidate.SemanticDuplicate.URL == "" {
 		return fmt.Errorf("semantic duplicate result is missing its issue URL")
 	}
 	if candidate.SemanticDuplicate.URL != "" && !githubIssueURL(candidate.SemanticDuplicate.URL) {
 		return fmt.Errorf("semantic duplicate result has an unsafe issue URL")
 	}
-	if candidate.SemanticDuplicate.State != "none" && candidate.SemanticDuplicate.DefectKey != key {
+	if candidate.SemanticDuplicate.State != "none" && normalizeDefectKey(candidate.SemanticDuplicate.DefectKey) != key {
 		return fmt.Errorf("semantic duplicate result does not identify the candidate cause")
 	}
 	if len(candidate.EvidenceRefs) == 0 {
@@ -560,7 +564,7 @@ func publishCandidate(request *Request, candidate *CorrectnessCandidate, runner 
 	body, redacted := issueBody(request, &finding, candidate)
 	title := redactText(candidate.Title)
 	finding.Redacted = redacted || title != candidate.Title
-	url, err := runGitHubCommand(runner, []string{"issue", "create", "--repo", auditIssueRepository, "--title", "[auto-audit] " + title, "--body", "-"}, []byte(body))
+	url, err := runGitHubCommand(runner, []string{"issue", "create", "--repo", auditIssueRepository, "--title", "[auto-audit] " + title, "--body-file", "-"}, []byte(body))
 	if err != nil {
 		finding.PublicationState, finding.Failure = "failed", strings.TrimSpace(url)
 		if finding.Failure == "" {
@@ -576,6 +580,118 @@ func publishCandidate(request *Request, candidate *CorrectnessCandidate, runner 
 	}
 	finding.PublicationState = "created"
 	return finding, nil
+}
+
+// republishRejectedFindings re-validates findings an earlier audit rejected and
+// publishes the ones that now pass. A validation defect otherwise discards an
+// investigated defect permanently: the audit is already delivered, so nothing
+// revisits it. Publication still dedupes on the durable finding marker, so a
+// finding that did reach GitHub is linked rather than filed twice.
+func republishRejectedFindings(auditSessionDir string, runner CommandRunner) ([]Finding, error) {
+	reportPath := filepath.Join(auditSessionDir, "local-report.json")
+	data, err := os.ReadFile(reportPath) // #nosec G304 -- fixed audit artifact.
+	if err != nil {
+		return nil, fmt.Errorf("read local report: %w", err)
+	}
+	var report LocalReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		return nil, fmt.Errorf("decode local report: %w", err)
+	}
+	known := map[string]EvidenceReference{}
+	for _, reference := range allEvidenceReferences(&report.Evidence) {
+		if reference.Status == "available" {
+			known[reference.ID] = reference
+		}
+	}
+	request := Request{
+		AuditSessionDir:    auditSessionDir,
+		SourceRunID:        report.SourceRunID,
+		ExecutionSessionID: report.ExecutionSessionID,
+		RunnerSource:       report.RunnerSource,
+	}
+	published := []Finding{}
+	for index := range report.Correctness.Findings {
+		finding := &report.Correctness.Findings[index]
+		if finding.PublicationState != "rejected" || finding.Candidate.Status != "confirmed" {
+			continue
+		}
+		candidate := finding.Candidate
+		key := normalizeDefectKey(candidate.DefectKey)
+		if err := validateCorrectnessCandidate(&candidate, key, known, &report.RunnerSource); err != nil {
+			// Record why it is still rejected so the report stops citing a
+			// reason that no longer applies.
+			finding.Failure = err.Error()
+			continue
+		}
+		candidate.DefectKey = key
+		updated, err := publishCandidate(&request, &candidate, runner)
+		if err != nil {
+			return published, err
+		}
+		*finding = updated
+		published = append(published, updated)
+	}
+	if err := stateio.WriteJSONAtomic(reportPath, report); err != nil {
+		return published, fmt.Errorf("write local report: %w", err)
+	}
+	if err := persistCorrectnessOutcome(&request, &report.Correctness); err != nil {
+		return published, err
+	}
+	return published, nil
+}
+
+// RepublishRejectedFindings republishes one audit's locally recorded findings
+// that a since-corrected validation defect rejected.
+func RepublishRejectedFindings(auditSessionDir string) ([]Finding, error) {
+	return republishRejectedFindings(auditSessionDir, ghRunner)
+}
+
+// repairIssueBodies restores the redacted body and durable audit markers on
+// issues created by the historical --body "-" publication bug. It only edits
+// a known auto-audit issue whose body is still exactly the placeholder.
+func repairIssueBodies(report *LocalReport, runner CommandRunner) (int, error) {
+	repaired := 0
+	request := Request{SourceRunID: report.SourceRunID, ExecutionSessionID: report.ExecutionSessionID}
+	for index := range report.Correctness.Findings {
+		finding := &report.Correctness.Findings[index]
+		if finding.PublicationState != "created" || finding.IssueURL == "" {
+			continue
+		}
+		if !githubIssueURL(finding.IssueURL) {
+			return repaired, fmt.Errorf("created issue URL is invalid")
+		}
+		issue, err := viewIssue(runner, finding.IssueURL)
+		if err != nil {
+			return repaired, err
+		}
+		if !strings.HasPrefix(issue.Title, "[auto-audit] ") || issue.Body != "-" {
+			continue
+		}
+		match := regexp.MustCompile(`/issues/(\d+)$`).FindStringSubmatch(finding.IssueURL)
+		if len(match) != 2 {
+			return repaired, fmt.Errorf("created issue URL is invalid")
+		}
+		body, _ := issueBody(&request, finding, &finding.Candidate)
+		if _, err := runGitHubCommand(runner, []string{"issue", "edit", match[1], "--repo", auditIssueRepository, "--body-file", "-"}, []byte(body)); err != nil {
+			return repaired, fmt.Errorf("repair issue %s: %w", finding.IssueURL, err)
+		}
+		repaired++
+	}
+	return repaired, nil
+}
+
+// RepairIssueBodies repairs historical placeholder bodies for one audit's
+// locally recorded issue publications.
+func RepairIssueBodies(auditSessionDir string) (int, error) {
+	data, err := os.ReadFile(filepath.Join(auditSessionDir, "local-report.json")) // #nosec G304 -- operator-selected audit directory, fixed artifact name.
+	if err != nil {
+		return 0, fmt.Errorf("read local report: %w", err)
+	}
+	var report LocalReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		return 0, fmt.Errorf("decode local report: %w", err)
+	}
+	return repairIssueBodies(&report, ghRunner)
 }
 
 func verifySelectedDuplicate(runner CommandRunner, duplicate Duplicate) (ghIssue, error) {
@@ -705,6 +821,7 @@ type LocalReport struct {
 	CorrectnessConsultation []correctnessConsultation `json:"correctness_consultations"`
 	Destination             DestinationState          `json:"destination"`
 	DeliveryState           string                    `json:"delivery_state"`
+	DeliveryError           string                    `json:"delivery_error,omitempty"`
 	RunnerSource            SourceProvenance          `json:"runner_source"`
 }
 
