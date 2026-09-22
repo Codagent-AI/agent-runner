@@ -649,7 +649,7 @@ func RepublishRejectedFindings(auditSessionDir string) ([]Finding, error) {
 // repairIssueBodies restores the redacted body and durable audit markers on
 // issues created by the historical --body "-" publication bug. It only edits
 // a known auto-audit issue whose body is still exactly the placeholder.
-func repairIssueBodies(report LocalReport, runner CommandRunner) (int, error) {
+func repairIssueBodies(report *LocalReport, runner CommandRunner) (int, error) {
 	repaired := 0
 	request := Request{SourceRunID: report.SourceRunID, ExecutionSessionID: report.ExecutionSessionID}
 	for index := range report.Correctness.Findings {
@@ -691,7 +691,7 @@ func RepairIssueBodies(auditSessionDir string) (int, error) {
 	if err := json.Unmarshal(data, &report); err != nil {
 		return 0, fmt.Errorf("decode local report: %w", err)
 	}
-	return repairIssueBodies(report, ghRunner)
+	return repairIssueBodies(&report, ghRunner)
 }
 
 func verifySelectedDuplicate(runner CommandRunner, duplicate Duplicate) (ghIssue, error) {

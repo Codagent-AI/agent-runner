@@ -310,37 +310,7 @@ func HandleCommand(args []string, stdout, stderr io.Writer) (handled bool, exitC
 		_, _ = fmt.Fprintln(stdout, string(data))
 		return true, 0
 	case "replay":
-		if len(args[2:]) == 1 {
-			sourceSessionDir, err := resolveRecordedRun(args[2])
-			if err != nil {
-				_, _ = fmt.Fprintf(stderr, "agent-runner audit replay: %v\n", err)
-				return true, 1
-			}
-			sessions, err := availableExecutionSessions(sourceSessionDir)
-			if err != nil {
-				_, _ = fmt.Fprintf(stderr, "agent-runner audit replay: %v\n", err)
-				return true, 1
-			}
-			_, _ = fmt.Fprintf(stderr, "agent-runner audit replay: execution session is required; available: %s\n", strings.Join(sessions, ", "))
-			return true, 1
-		}
-		sourceRef, sessionID, ok := replayArgs(args[2:])
-		if !ok {
-			_, _ = fmt.Fprintln(stderr, "Usage: agent-runner audit replay <run-id> --session <execution-session-id>")
-			return true, 1
-		}
-		sourceSessionDir, err := resolveRecordedRun(sourceRef)
-		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "agent-runner audit replay: %v\n", err)
-			return true, 1
-		}
-		id, err := Replay(sourceSessionDir, sessionID, launchDetached)
-		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "agent-runner audit replay: %v\n", err)
-			return true, 1
-		}
-		_, _ = fmt.Fprintln(stdout, id)
-		return true, 0
+		return true, handleReplayCommand(args[2:], stdout, stderr)
 	case "reconcile":
 		sourceRef, sessionID, ok := replayArgs(args[2:])
 		if !ok {
@@ -363,6 +333,40 @@ func HandleCommand(args []string, stdout, stderr io.Writer) (handled bool, exitC
 		_, _ = fmt.Fprintf(stderr, "agent-runner audit: unknown command %q\n", args[1])
 		return true, 1
 	}
+}
+
+func handleReplayCommand(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 1 {
+		sourceSessionDir, err := resolveRecordedRun(args[0])
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "agent-runner audit replay: %v\n", err)
+			return 1
+		}
+		sessions, err := availableExecutionSessions(sourceSessionDir)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "agent-runner audit replay: %v\n", err)
+			return 1
+		}
+		_, _ = fmt.Fprintf(stderr, "agent-runner audit replay: execution session is required; available: %s\n", strings.Join(sessions, ", "))
+		return 1
+	}
+	sourceRef, sessionID, ok := replayArgs(args)
+	if !ok {
+		_, _ = fmt.Fprintln(stderr, "Usage: agent-runner audit replay <run-id> --session <execution-session-id>")
+		return 1
+	}
+	sourceSessionDir, err := resolveRecordedRun(sourceRef)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "agent-runner audit replay: %v\n", err)
+		return 1
+	}
+	id, err := Replay(sourceSessionDir, sessionID, launchDetached)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "agent-runner audit replay: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintln(stdout, id)
+	return 0
 }
 
 func availableExecutionSessions(sourceSessionDir string) ([]string, error) {

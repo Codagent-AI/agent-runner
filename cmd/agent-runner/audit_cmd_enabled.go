@@ -53,7 +53,8 @@ func handleAuditRepublishCommand(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "agent-runner audit republish: %v\n", err)
 		return 1
 	}
-	for _, finding := range published {
+	for i := range published {
+		finding := &published[i]
 		_, _ = fmt.Fprintf(stdout, "%s\t%s\t%s\n", finding.PublicationState, finding.IssueURL, finding.Candidate.Title)
 	}
 	return 0

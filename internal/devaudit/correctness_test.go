@@ -98,11 +98,11 @@ func TestPublishCorrectnessStillRequiresIssueURLForDecidedDuplicate(t *testing.T
 	}
 }
 
-func rejectedReportFixture(t *testing.T, candidate CorrectnessCandidate, failure string) string {
+func rejectedReportFixture(t *testing.T, candidate *CorrectnessCandidate, failure string) string {
 	t.Helper()
 	request, prepared := correctnessFixture(t)
 	dir := t.TempDir()
-	finding := findingFor(&candidate, normalizeDefectKey(candidate.DefectKey), "rejected", "", failure)
+	finding := findingFor(candidate, normalizeDefectKey(candidate.DefectKey), "rejected", "", failure)
 	report := LocalReport{
 		SourceRunID:        "change-1",
 		ExecutionSessionID: "session-1",
@@ -119,7 +119,7 @@ func rejectedReportFixture(t *testing.T, candidate CorrectnessCandidate, failure
 func TestRepublishRejectedFindingsPublishesNewlyValidCandidates(t *testing.T) {
 	candidate := confirmedCandidate()
 	candidate.DefectKey = "agent_runner.usage_telemetry_missing"
-	dir := rejectedReportFixture(t, candidate, "defect_key is not normalized")
+	dir := rejectedReportFixture(t, &candidate, "defect_key is not normalized")
 
 	published, err := republishRejectedFindings(dir, deadlineGH{testing: t})
 	if err != nil {
@@ -148,7 +148,7 @@ func TestRepublishRejectedFindingsPublishesNewlyValidCandidates(t *testing.T) {
 func TestRepublishRejectedFindingsLeavesStillInvalidCandidatesUnpublished(t *testing.T) {
 	candidate := confirmedCandidate()
 	candidate.EvidenceRefs = []string{"evidence-missing"}
-	dir := rejectedReportFixture(t, candidate, "unknown or unavailable evidence reference \"evidence-missing\"")
+	dir := rejectedReportFixture(t, &candidate, "unknown or unavailable evidence reference \"evidence-missing\"")
 
 	published, err := republishRejectedFindings(dir, refusingGH{testing: t})
 	if err != nil {
@@ -576,7 +576,7 @@ func TestRepairIssueBodiesRestoresOnlyBlankAutoAuditIssues(t *testing.T) {
 		}}},
 	}
 	runner := &recordingGH{view: &ghIssue{URL: "https://github.com/Codagent-AI/agent-runner/issues/42", State: "OPEN", Title: "[auto-audit] retry state is lost", Body: "-"}}
-	if repaired, err := repairIssueBodies(report, runner); err != nil || repaired != 1 {
+	if repaired, err := repairIssueBodies(&report, runner); err != nil || repaired != 1 {
 		t.Fatalf("repair issue bodies = %d, %v", repaired, err)
 	}
 	edit := runner.calls[len(runner.calls)-1]
@@ -594,7 +594,7 @@ func TestRepairIssueBodiesRejectsIssueOutsideAuditRepository(t *testing.T) {
 		Marker: findingMarker("finding-1"), Candidate: confirmedCandidate(),
 	}}}}
 	runner := &recordingGH{view: &ghIssue{URL: "https://github.com/example/other/issues/42", State: "OPEN", Title: "[auto-audit] retry state is lost", Body: "-"}}
-	if _, err := repairIssueBodies(report, runner); err == nil {
+	if _, err := repairIssueBodies(&report, runner); err == nil {
 		t.Fatal("repair issue bodies accepted an issue outside the audit repository")
 	}
 	if len(runner.calls) != 0 {
