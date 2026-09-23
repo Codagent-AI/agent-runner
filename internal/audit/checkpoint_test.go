@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 type capturedLogger struct{ events []Event }
@@ -99,6 +101,150 @@ func TestCheckpointLoggerCountsCommittedStepChanges(t *testing.T) {
 	changes, ok := sink.events[1].Data["git_changes"].(GitChangeCounts)
 	if !ok || !changes.Available || changes.FilesChanged != 1 || changes.LinesAdded != 1 || changes.LinesDeleted != 0 {
 		t.Fatalf("committed Git changes = %#v", sink.events[1].Data["git_changes"])
+	}
+}
+
+func TestCommittedRenameRemainsAvailable(t *testing.T) {
+	repo := newCheckpointRepo(t)
+	writeCheckpointFile(t, repo, "a/f", "one\ntwo\nthree\nfour\n")
+	runGit(t, repo, "add", "a/f")
+	runGit(t, repo, "commit", "-m", "initial")
+	start := observeGit(repo)
+	if err := os.MkdirAll(filepath.Join(repo, "b"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "mv", "a/f", "b/f")
+	writeCheckpointFile(t, repo, "b/f", "one\ntwo\nthree\nchanged\n")
+	runGit(t, repo, "add", "b/f")
+	runGit(t, repo, "commit", "-m", "rename")
+	end := observeGit(repo)
+	completeHeadTransition(repo, &start, &end)
+	if !end.Available || !end.CommittedObserved {
+		t.Fatalf("end checkpoint = %#v", end)
+	}
+	if diff := cmp.Diff([]string{end.HEAD}, end.Commits); diff != "" {
+		t.Fatalf("commits mismatch (-want +got):\n%s", diff)
+	}
+	want := []GitFileStat{{Path: "a/f", Deleted: 4}, {Path: "b/f", Added: 4}}
+	if diff := cmp.Diff(want, end.Committed); diff != "" {
+		t.Fatalf("committed stats mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(GitChangeCounts{Available: true, FilesChanged: 2, LinesAdded: 4, LinesDeleted: 4}, deriveGitChanges(&start, &end)); diff != "" {
+		t.Fatalf("changes mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestStagedRenameRemainsAvailable(t *testing.T) {
+	repo := newCheckpointRepo(t)
+	writeCheckpointFile(t, repo, "a/f", "one\ntwo\n")
+	runGit(t, repo, "add", "a/f")
+	runGit(t, repo, "commit", "-m", "initial")
+	if err := os.MkdirAll(filepath.Join(repo, "b"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "mv", "a/f", "b/f")
+	checkpoint := observeGit(repo)
+	if !checkpoint.Available {
+		t.Fatalf("staged rename checkpoint = %#v", checkpoint)
+	}
+	if diff := cmp.Diff([]GitFileStat{{Path: "a/f", Deleted: 2}, {Path: "b/f", Added: 2}}, checkpoint.Index); diff != "" {
+		t.Fatalf("index stats mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCommittedRenameKeepsUnrelatedStagedStateSeparate(t *testing.T) {
+	repo := newCheckpointRepo(t)
+	writeCheckpointFile(t, repo, "a/f", "one\ntwo\nthree\nfour\n")
+	writeCheckpointFile(t, repo, "unrelated", "old\n")
+	runGit(t, repo, "add", "a/f", "unrelated")
+	runGit(t, repo, "commit", "-m", "initial")
+	writeCheckpointFile(t, repo, "unrelated", "old\nstaged\n")
+	runGit(t, repo, "add", "unrelated")
+	start := observeGit(repo)
+	if err := os.MkdirAll(filepath.Join(repo, "b"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "mv", "a/f", "b/f")
+	writeCheckpointFile(t, repo, "b/f", "one\ntwo\nthree\nchanged\n")
+	runGit(t, repo, "add", "b/f")
+	runGit(t, repo, "commit", "-m", "rename", "--only", "--", "a/f", "b/f")
+	end := observeGit(repo)
+	completeHeadTransition(repo, &start, &end)
+	if !end.Available {
+		t.Fatalf("end checkpoint = %#v", end)
+	}
+	if diff := cmp.Diff(start.Index, end.Index); diff != "" {
+		t.Fatalf("unrelated staged state changed (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(GitChangeCounts{Available: true, FilesChanged: 2, LinesAdded: 4, LinesDeleted: 4}, deriveGitChanges(&start, &end)); diff != "" {
+		t.Fatalf("changes mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCommittedChangeOverlappingDirtyStateUnavailable(t *testing.T) {
+	start := GitCheckpoint{Available: true, HEAD: "old", Index: []GitFileStat{{Path: "same", Added: 1}}}
+	end := GitCheckpoint{Available: true, HEAD: "new", CommittedObserved: true, Committed: []GitFileStat{{Path: "same", Added: 2}}, Index: []GitFileStat{{Path: "same", Added: 1}}}
+	want := GitChangeCounts{Reason: "preexisting dirty state prevents conservative commit attribution"}
+	if diff := cmp.Diff(want, deriveGitChanges(&start, &end)); diff != "" {
+		t.Fatalf("changes mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCommittedChangeWithUnchangedDirtyStateAndNewDirtyFile(t *testing.T) {
+	start := GitCheckpoint{Available: true, HEAD: "old", Index: []GitFileStat{{Path: "staged", Added: 1}}}
+	end := GitCheckpoint{Available: true, HEAD: "new", CommittedObserved: true, Committed: []GitFileStat{{Path: "committed", Added: 2}}, Index: []GitFileStat{{Path: "staged", Added: 1}}, Worktree: []GitFileStat{{Path: "new-dirty", Added: 3}}}
+	want := GitChangeCounts{Available: true, FilesChanged: 2, LinesAdded: 5}
+	if diff := cmp.Diff(want, deriveGitChanges(&start, &end)); diff != "" {
+		t.Fatalf("changes mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCommittedChangeWithModifiedPreexistingDirtyStateUnavailable(t *testing.T) {
+	start := GitCheckpoint{Available: true, HEAD: "old", Index: []GitFileStat{{Path: "staged", Added: 1}}}
+	end := GitCheckpoint{Available: true, HEAD: "new", CommittedObserved: true, Committed: []GitFileStat{{Path: "committed", Added: 2}}, Index: []GitFileStat{{Path: "staged", Added: 2}}}
+	want := GitChangeCounts{Reason: "preexisting dirty state prevents conservative commit attribution"}
+	if diff := cmp.Diff(want, deriveGitChanges(&start, &end)); diff != "" {
+		t.Fatalf("changes mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCommittedChangeWithMissingPreexistingBinaryStateUnavailable(t *testing.T) {
+	start := GitCheckpoint{Available: true, HEAD: "old", Index: []GitFileStat{{Path: "staged-binary"}}}
+	end := GitCheckpoint{Available: true, HEAD: "new", CommittedObserved: true, Committed: []GitFileStat{{Path: "committed", Added: 2}}}
+	want := GitChangeCounts{Reason: "preexisting dirty state prevents conservative commit attribution"}
+	if diff := cmp.Diff(want, deriveGitChanges(&start, &end)); diff != "" {
+		t.Fatalf("changes mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestParseNumstatCountsBinaryFileWithoutLines(t *testing.T) {
+	want := []GitFileStat{{Path: "image.png"}}
+	got, err := parseNumstat([]byte("-\t-\timage.png\x00"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("binary stats mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func newCheckpointRepo(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	return repo
+}
+
+func writeCheckpointFile(t *testing.T, repo, path, content string) {
+	t.Helper()
+	fullPath := filepath.Join(repo, path)
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fullPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
