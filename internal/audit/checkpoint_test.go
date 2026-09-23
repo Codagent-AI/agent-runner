@@ -62,6 +62,67 @@ func TestDirtyCheckpointDetectsContentChangeWithSameLineCounts(t *testing.T) {
 	}
 }
 
+func TestDirtyCheckpointDetectsContentChangeFromSubdirectoryRoot(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	root := filepath.Join(repo, "sub")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "tracked.txt")
+	if err := os.WriteFile(path, []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "sub/tracked.txt")
+	runGit(t, repo, "commit", "-m", "initial")
+	if err := os.WriteFile(path, []byte("first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	start := observeGit(root)
+	if err := os.WriteFile(path, []byte("later\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	end := observeGit(root)
+	if !start.Available || !end.Available {
+		t.Fatalf("checkpoints unavailable: start=%q end=%q", start.Reason, end.Reason)
+	}
+	if diff := cmp.Diff([]string{"sub/tracked.txt"}, ChangedDirtyPaths(&start, &end)); diff != "" {
+		t.Errorf("changed paths mismatch (-want +got):\n%s", diff)
+	}
+	if got := deriveGitChanges(&start, &end); !got.Available || got.FilesChanged != 1 || got.LinesAdded != 0 || got.LinesDeleted != 0 {
+		t.Errorf("changes = %+v, want one changed file with zero line delta", got)
+	}
+}
+
+func TestDirtyCheckpointUsesTopLevelUntrackedPathsFromSubdirectoryRoot(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	runGit(t, repo, "commit", "--allow-empty", "-m", "initial")
+	root := filepath.Join(repo, "sub")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "new.txt"), []byte("first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	start := observeGit(root)
+	runGit(t, repo, "add", "sub/new.txt")
+	end := observeGit(root)
+	if !start.Available || !end.Available {
+		t.Fatalf("checkpoints unavailable: start=%q end=%q", start.Reason, end.Reason)
+	}
+	if diff := cmp.Diff([]string{"sub/new.txt"}, ChangedDirtyPaths(&start, &end)); diff != "" {
+		t.Errorf("changed paths mismatch (-want +got):\n%s", diff)
+	}
+	if got := deriveGitChanges(&start, &end); !got.Available || got.FilesChanged != 1 || got.LinesAdded != 0 || got.LinesDeleted != 0 {
+		t.Errorf("changes = %+v, want one changed file with zero line delta", got)
+	}
+}
+
 func TestDirtyCheckpointDetectsStagedContentChangeWithSameLineCounts(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")

@@ -183,7 +183,8 @@ func fingerprintDiffStats(root string, stats []GitFileStat, staged bool) error {
 		if staged {
 			args = append(args, "--cached")
 		}
-		args = append(args, "--", ":(literal)"+stats[index].Path)
+		// Numstat paths are relative to the worktree top, not to root.
+		args = append(args, "--", ":(top,literal)"+stats[index].Path)
 		command := exec.Command("git", args...) // #nosec G204 -- root and paths come from the runner's Git observation.
 		hash := sha256.New()
 		command.Stdout = hash
@@ -196,6 +197,11 @@ func fingerprintDiffStats(root string, stats []GitFileStat, staged bool) error {
 }
 
 func gitUntrackedStats(root string) ([]GitFileStat, error) {
+	top, err := gitOutput(root, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return nil, err
+	}
+	top = strings.TrimSuffix(top, "\n")
 	paths, err := gitUntrackedPaths(root)
 	if err != nil {
 		return nil, err
@@ -206,7 +212,7 @@ func gitUntrackedStats(root string) ([]GitFileStat, error) {
 		if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 			return nil, fmt.Errorf("unsafe untracked path %q", path)
 		}
-		filePath := filepath.Join(root, clean)
+		filePath := filepath.Join(top, clean)
 		data, readErr := readBoundedUntrackedFile(filePath)
 		if readErr != nil {
 			return nil, fmt.Errorf("untracked file %q cannot be measured within limits: %w", path, readErr)
@@ -246,7 +252,8 @@ func readBoundedUntrackedFile(path string) ([]byte, error) {
 }
 
 func gitUntrackedPaths(root string) ([]string, error) {
-	command := exec.Command("git", "-C", root, "ls-files", "--others", "--exclude-standard", "-z") // #nosec G204 -- root is the runner's resolved project root.
+	// --full-name keeps paths relative to the worktree top, matching numstat.
+	command := exec.Command("git", "-C", root, "ls-files", "--others", "--exclude-standard", "--full-name", "-z") // #nosec G204 -- root is the runner's resolved project root.
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return nil, err
