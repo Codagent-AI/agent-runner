@@ -3,6 +3,7 @@ package audit
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os/exec"
@@ -24,15 +25,16 @@ type GitFileStat struct {
 // GitCheckpoint is a conservative local Git observation. An unavailable
 // checkpoint is evidence of a limitation, not evidence of zero change.
 type GitCheckpoint struct {
-	Available         bool          `json:"available"`
-	Reason            string        `json:"reason,omitempty"`
-	HEAD              string        `json:"head,omitempty"`
-	Index             []GitFileStat `json:"index,omitempty"`
-	Worktree          []GitFileStat `json:"worktree,omitempty"`
-	Untracked         []GitFileStat `json:"untracked,omitempty"`
-	Committed         []GitFileStat `json:"committed,omitempty"`
-	CommittedObserved bool          `json:"committed_observed,omitempty"`
-	Commits           []string      `json:"commits,omitempty"`
+	Available         bool              `json:"available"`
+	Reason            string            `json:"reason,omitempty"`
+	HEAD              string            `json:"head,omitempty"`
+	Index             []GitFileStat     `json:"index,omitempty"`
+	Worktree          []GitFileStat     `json:"worktree,omitempty"`
+	Untracked         []GitFileStat     `json:"untracked,omitempty"`
+	Committed         []GitFileStat     `json:"committed,omitempty"`
+	CommittedObserved bool              `json:"committed_observed,omitempty"`
+	Commits           []string          `json:"commits,omitempty"`
+	DirtySignatures   map[string]string `json:"dirty_signatures,omitempty"`
 }
 
 const (
@@ -145,7 +147,44 @@ func observeGit(root string) GitCheckpoint {
 	if err != nil {
 		return GitCheckpoint{Reason: "git untracked state unavailable"}
 	}
-	return GitCheckpoint{Available: true, HEAD: strings.TrimSpace(head), Index: index, Worktree: worktree, Untracked: untracked}
+	checkpoint := GitCheckpoint{Available: true, HEAD: strings.TrimSpace(head), Index: index, Worktree: worktree, Untracked: untracked}
+	checkpoint.DirtySignatures, err = gitDirtySignatures(root, &checkpoint)
+	if err != nil {
+		return GitCheckpoint{Reason: "git dirty state unavailable"}
+	}
+	return checkpoint
+}
+
+func gitDirtySignatures(root string, checkpoint *GitCheckpoint) (map[string]string, error) {
+	signatures := make(map[string]string)
+	untracked := make(map[string]struct{}, len(checkpoint.Untracked))
+	for _, stat := range checkpoint.Untracked {
+		untracked[stat.Path] = struct{}{}
+	}
+	for path := range flattenCheckpoint(checkpoint) {
+		indexDiff, err := gitOutput(root, "diff", "--cached", "--binary", "--full-index", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color", "--", ":(literal)"+path)
+		if err != nil {
+			return nil, err
+		}
+		worktreeDiff, err := gitOutput(root, "diff", "--binary", "--full-index", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color", "--", ":(literal)"+path)
+		if err != nil {
+			return nil, err
+		}
+		var untrackedData []byte
+		if _, exists := untracked[path]; exists {
+			untrackedData, err = readBoundedUntrackedFile(filepath.Join(root, filepath.FromSlash(path)))
+			if err != nil {
+				return nil, err
+			}
+		}
+		signature := sha256.New()
+		for _, part := range [][]byte{[]byte(indexDiff), []byte(worktreeDiff), untrackedData} {
+			_, _ = signature.Write([]byte{0})
+			_, _ = signature.Write(part)
+		}
+		signatures[path] = fmt.Sprintf("%x", signature.Sum(nil))
+	}
+	return signatures, nil
 }
 
 func gitOutput(root string, args ...string) (string, error) {
@@ -346,14 +385,15 @@ func deriveGitChanges(start, end *GitCheckpoint) GitChangeCounts {
 		committed := statsMap(end.Committed)
 		for path, counts := range before {
 			current, remains := after[path]
-			if _, overlaps := committed[path]; overlaps || !remains || current != counts {
+			if _, overlaps := committed[path]; overlaps || !remains || current != counts || start.DirtySignatures[path] == "" || start.DirtySignatures[path] != end.DirtySignatures[path] {
 				return GitChangeCounts{Reason: "preexisting dirty state prevents conservative commit attribution"}
 			}
 		}
 		dirtyDelta := make(map[string]gitCounts, len(after))
 		for path, counts := range after {
-			if counts != before[path] {
-				dirtyDelta[path] = gitCounts{added: counts.added - before[path].added, deleted: counts.deleted - before[path].deleted}
+			previous, existed := before[path]
+			if !existed || counts != previous {
+				dirtyDelta[path] = gitCounts{added: counts.added - previous.added, deleted: counts.deleted - previous.deleted}
 			}
 		}
 		return countGitStats(mergeGitStats(committed, dirtyDelta))

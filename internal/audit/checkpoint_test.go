@@ -191,9 +191,46 @@ func TestCommittedChangeOverlappingDirtyStateUnavailable(t *testing.T) {
 }
 
 func TestCommittedChangeWithUnchangedDirtyStateAndNewDirtyFile(t *testing.T) {
-	start := GitCheckpoint{Available: true, HEAD: "old", Index: []GitFileStat{{Path: "staged", Added: 1}}}
-	end := GitCheckpoint{Available: true, HEAD: "new", CommittedObserved: true, Committed: []GitFileStat{{Path: "committed", Added: 2}}, Index: []GitFileStat{{Path: "staged", Added: 1}}, Worktree: []GitFileStat{{Path: "new-dirty", Added: 3}}}
+	start := GitCheckpoint{Available: true, HEAD: "old", Index: []GitFileStat{{Path: "staged", Added: 1}}, DirtySignatures: map[string]string{"staged": "same"}}
+	end := GitCheckpoint{Available: true, HEAD: "new", CommittedObserved: true, Committed: []GitFileStat{{Path: "committed", Added: 2}}, Index: []GitFileStat{{Path: "staged", Added: 1}}, Worktree: []GitFileStat{{Path: "new-dirty", Added: 3}}, DirtySignatures: map[string]string{"staged": "same"}}
 	want := GitChangeCounts{Available: true, FilesChanged: 2, LinesAdded: 5}
+	if diff := cmp.Diff(want, deriveGitChanges(&start, &end)); diff != "" {
+		t.Fatalf("changes mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCommittedChangeIncludesNewZeroLineDirtyPath(t *testing.T) {
+	start := GitCheckpoint{Available: true, HEAD: "old"}
+	end := GitCheckpoint{Available: true, HEAD: "new", CommittedObserved: true, Committed: []GitFileStat{{Path: "committed", Added: 2}}, Index: []GitFileStat{{Path: "empty"}}}
+	want := GitChangeCounts{Available: true, FilesChanged: 2, LinesAdded: 2}
+	if diff := cmp.Diff(want, deriveGitChanges(&start, &end)); diff != "" {
+		t.Fatalf("changes mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCommittedChangeRejectsStagedContentChangeWithSameCounts(t *testing.T) {
+	repo := newCheckpointRepo(t)
+	writeCheckpointFile(t, repo, "staged", "base\n")
+	writeCheckpointFile(t, repo, "committed", "base\n")
+	runGit(t, repo, "add", "staged", "committed")
+	runGit(t, repo, "commit", "-m", "initial")
+	writeCheckpointFile(t, repo, "staged", "first\n")
+	runGit(t, repo, "add", "staged")
+	start := observeGit(repo)
+	writeCheckpointFile(t, repo, "staged", "other\n")
+	runGit(t, repo, "add", "staged")
+	writeCheckpointFile(t, repo, "committed", "base\nnext\n")
+	runGit(t, repo, "add", "committed")
+	runGit(t, repo, "commit", "-m", "other path", "--only", "--", "committed")
+	end := observeGit(repo)
+	completeHeadTransition(repo, &start, &end)
+	if !start.Available || !end.Available {
+		t.Fatalf("checkpoints unavailable: start=%#v end=%#v", start, end)
+	}
+	if diff := cmp.Diff(start.Index, end.Index); diff != "" {
+		t.Fatalf("numstat changed unexpectedly (-want +got):\n%s", diff)
+	}
+	want := GitChangeCounts{Reason: "preexisting dirty state prevents conservative commit attribution"}
 	if diff := cmp.Diff(want, deriveGitChanges(&start, &end)); diff != "" {
 		t.Fatalf("changes mismatch (-want +got):\n%s", diff)
 	}
