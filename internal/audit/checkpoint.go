@@ -384,7 +384,12 @@ func mergeGitStats(left, right map[string]gitCounts) map[string]gitCounts {
 	return result
 }
 
-func countDirtyDelta(before, after map[string]gitCounts) GitChangeCounts {
+// DirtyDeltaPaths returns paths whose dirty counts changed between checkpoints.
+func DirtyDeltaPaths(start, end *GitCheckpoint) []string {
+	return dirtyDeltaPaths(flattenCheckpoint(start), flattenCheckpoint(end))
+}
+
+func dirtyDeltaPaths(before, after map[string]gitCounts) []string {
 	paths := make(map[string]struct{}, len(before)+len(after))
 	for path := range before {
 		paths[path] = struct{}{}
@@ -392,17 +397,26 @@ func countDirtyDelta(before, after map[string]gitCounts) GitChangeCounts {
 	for path := range after {
 		paths[path] = struct{}{}
 	}
-	result := GitChangeCounts{Available: true}
+	changed := make([]string, 0, len(paths))
 	for path := range paths {
+		if before[path] != after[path] {
+			changed = append(changed, path)
+		}
+	}
+	sort.Strings(changed)
+	return changed
+}
+
+func countDirtyDelta(before, after map[string]gitCounts) GitChangeCounts {
+	result := GitChangeCounts{Available: true}
+	for _, path := range dirtyDeltaPaths(before, after) {
 		left, right := before[path], after[path]
 		if right.added < left.added || right.deleted < left.deleted {
 			return GitChangeCounts{Reason: "repository change cannot be derived conservatively"}
 		}
-		if right != left {
-			result.FilesChanged++
-			result.LinesAdded += right.added - left.added
-			result.LinesDeleted += right.deleted - left.deleted
-		}
+		result.FilesChanged++
+		result.LinesAdded += right.added - left.added
+		result.LinesDeleted += right.deleted - left.deleted
 	}
 	return result
 }

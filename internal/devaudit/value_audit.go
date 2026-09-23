@@ -507,13 +507,11 @@ func dirtyChangedPaths(records []metrics.StepRecord) []string {
 	paths := map[string]struct{}{}
 	for index := range records {
 		record := &records[index]
-		if record.GitEnd == nil {
+		if record.GitStart == nil || record.GitEnd == nil {
 			continue
 		}
-		for _, stats := range [][]audit.GitFileStat{record.GitEnd.Index, record.GitEnd.Worktree, record.GitEnd.Untracked} {
-			for _, stat := range stats {
-				paths[stat.Path] = struct{}{}
-			}
+		for _, path := range audit.DirtyDeltaPaths(record.GitStart, record.GitEnd) {
+			paths[path] = struct{}{}
 		}
 	}
 	result := make([]string, 0, len(paths))

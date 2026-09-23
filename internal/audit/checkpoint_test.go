@@ -9,7 +9,29 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 )
+
+func TestDirtyDeltaPathsMatchesChangedFileCount(t *testing.T) {
+	start := &GitCheckpoint{Available: true, HEAD: "same",
+		Index:    []GitFileStat{{Path: "unchanged.txt", Added: 1}, {Path: "changed.txt", Added: 1}},
+		Worktree: []GitFileStat{{Path: "changed.txt", Deleted: 1}},
+	}
+	end := &GitCheckpoint{Available: true, HEAD: "same",
+		Index:     []GitFileStat{{Path: "unchanged.txt", Added: 1}, {Path: "changed.txt", Added: 2}},
+		Worktree:  []GitFileStat{{Path: "changed.txt", Deleted: 1}},
+		Untracked: []GitFileStat{{Path: "added.txt", Added: 1}},
+	}
+
+	got := DirtyDeltaPaths(start, end)
+	if diff := cmp.Diff([]string{"added.txt", "changed.txt"}, got); diff != "" {
+		t.Errorf("dirty delta paths (-want +got):\n%s", diff)
+	}
+	if changes := deriveGitChanges(start, end); !changes.Available || changes.FilesChanged != int64(len(got)) {
+		t.Errorf("git changes = %#v, delta paths = %v", changes, got)
+	}
+}
 
 type capturedLogger struct{ events []Event }
 
