@@ -132,7 +132,6 @@ func executeCountedLoop(
 			emitLoopEnd(ctx, prefix, startTime, step, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, err
 		}
-		mergeIterationCaptures(ctx, iterCtx)
 		completed++
 
 		if result.aborted {
@@ -143,6 +142,7 @@ func executeCountedLoop(
 			emitLoopEnd(ctx, prefix, startTime, step, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, nil
 		}
+		mergeIterationCaptures(ctx, iterCtx)
 		flushAndKeepLoopIterationProgress(ctx, stepID, i+1, false)
 		if result.breakTriggered {
 			emitLoopEnd(ctx, prefix, startTime, step, completed, true, "success")
@@ -233,7 +233,6 @@ func executeForEachLoop(
 			emitLoopEnd(ctx, prefix, startTime, step, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, err
 		}
-		mergeIterationCaptures(ctx, iterCtx)
 		completed++
 
 		if result.aborted {
@@ -244,6 +243,7 @@ func executeForEachLoop(
 			emitLoopEnd(ctx, prefix, startTime, step, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, nil
 		}
+		mergeIterationCaptures(ctx, iterCtx)
 		flushAndKeepLoopIterationProgress(ctx, stepID, i+1, false)
 		if result.breakTriggered {
 			emitLoopEnd(ctx, prefix, startTime, step, completed, true, "success")
@@ -297,6 +297,10 @@ func newLoopStepMarker(src *model.ExecutionContext, loopStepID string, iteration
 	}
 }
 
+// mergeIterationCaptures publishes a finished iteration's captures to the
+// loop's scope. Callers skip it for failed or aborted iterations: their
+// captures stay in the persisted body state, which restores them when the
+// same iteration resumes and drops them when a changed item restarts it.
 func mergeIterationCaptures(parent, iterCtx *model.ExecutionContext) {
 	for k, v := range iterCtx.CapturedVariables {
 		parent.CapturedVariables[k] = v

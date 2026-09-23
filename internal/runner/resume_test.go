@@ -14,6 +14,7 @@ import (
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/stateio"
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestPrepareResume_LoadsExactRecordedVersion(t *testing.T) {
@@ -115,6 +116,130 @@ steps:
 	}
 	if _, stale := resumedState.CurrentStep.Nested.CapturedVariables["task_start_head"]; stale {
 		t.Fatal("stale iteration capture survived resume")
+	}
+}
+
+func TestResumeAfterFailedForEachIterationScopesCaptures(t *testing.T) {
+	const loop = `    loop:
+      over: "tasks/*.md"
+      as: task_file
+    steps:
+      - id: first
+        command: echo FIRST={{task_file}}
+      - id: record
+        command: git rev-parse HEAD
+        capture: task_start_head
+      - id: gate
+        command: echo GATE={{task_start_head}}
+`
+	layouts := []struct {
+		name  string
+		files map[string]string
+	}{
+		{name: "top-level loop", files: map[string]string{
+			"tasks-v1.0.yaml": "name: tasks\nsteps:\n  - id: implement-tasks\n" + loop,
+		}},
+		{name: "loop in sub-workflow", files: map[string]string{
+			"tasks-v1.0.yaml": "name: tasks\nsteps:\n  - id: implement\n    workflow: child-v1.0.yaml\n",
+			"child-v1.0.yaml": "name: child\nsteps:\n  - id: implement-tasks\n" + loop,
+		}},
+	}
+	cases := []struct {
+		name        string
+		resumeItems []string
+		wantCmds    []string
+		// restarted marks a restarted iteration, which must begin without
+		// the failed iteration's captures.
+		restarted bool
+	}{
+		{
+			name:        "changed item restarts without stale capture",
+			resumeItems: []string{"tasks/0.md"},
+			wantCmds:    []string{"echo FIRST='tasks/0.md'", "git rev-parse HEAD", "echo GATE='fresh-head'"},
+			restarted:   true,
+		},
+		{
+			name:        "same item resumes failed step with its capture",
+			resumeItems: []string{"tasks/a.md"},
+			wantCmds:    []string{"echo GATE='a-head'"},
+		},
+	}
+	for _, layout := range layouts {
+		for _, tc := range cases {
+			t.Run(layout.name+"/"+tc.name, func(t *testing.T) {
+				t.Setenv("HOME", t.TempDir())
+				dir := t.TempDir()
+				for name, body := range layout.files {
+					if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				workflowPath := filepath.Join(dir, "tasks-v1.0.yaml")
+				workflow, err := loader.LoadWorkflow(workflowPath, loader.Options{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				sessionDir := t.TempDir()
+				handle, err := PrepareRun(&workflow, nil, &Options{
+					WorkflowFile: workflowPath,
+					SessionDir:   sessionDir,
+					ProcessRunner: &mockRunner{results: []exec.ProcessResult{
+						{}, {Stdout: "a-head"}, {ExitCode: 1},
+					}},
+					GlobExpander: &mockGlob{matches: []string{"tasks/a.md"}},
+					Log:          &mockLog{},
+				})
+				if err != nil {
+					t.Fatalf("PrepareRun: %v", err)
+				}
+				if result := ExecuteFromHandle(handle, nil); result != ResultFailed {
+					t.Fatalf("initial result = %q, want failure at gate", result)
+				}
+				auditPath := filepath.Join(sessionDir, "audit.log")
+				firstAudit, err := os.ReadFile(auditPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				resumedRunner := &mockRunner{results: []exec.ProcessResult{{}, {Stdout: "fresh-head"}}}
+				result, err := ResumeWorkflow(filepath.Join(sessionDir, "state.json"), &Options{
+					ProcessRunner: resumedRunner,
+					GlobExpander:  &mockGlob{matches: tc.resumeItems},
+					Log:           &mockLog{},
+				})
+				if err != nil || result != ResultSuccess {
+					t.Fatalf("resume result = %q, error = %v", result, err)
+				}
+				gotCmds := make([]string, 0, len(resumedRunner.calls))
+				for _, call := range resumedRunner.calls {
+					gotCmds = append(gotCmds, call[2])
+				}
+				if diff := cmp.Diff(tc.wantCmds, gotCmds); diff != "" {
+					t.Fatalf("resumed commands mismatch (-want +got):\n%s", diff)
+				}
+
+				if !tc.restarted {
+					return
+				}
+				fullAudit, err := os.ReadFile(auditPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var iterationStarts int
+				for _, line := range strings.Split(string(fullAudit[len(firstAudit):]), "\n") {
+					if !strings.Contains(line, " iteration_start ") {
+						continue
+					}
+					iterationStarts++
+					if strings.Contains(line, `"task_start_head"`) {
+						t.Fatalf("restarted iteration sees the failed iteration's task_start_head: %s", line)
+					}
+				}
+				if iterationStarts != 1 {
+					t.Fatalf("resumed iteration_start events = %d, want 1:\n%s", iterationStarts, fullAudit[len(firstAudit):])
+				}
+			})
+		}
 	}
 }
 
