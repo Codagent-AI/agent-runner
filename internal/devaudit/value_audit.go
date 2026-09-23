@@ -507,7 +507,7 @@ func dirtyChangedPaths(records []metrics.StepRecord) []string {
 	paths := map[string]struct{}{}
 	for index := range records {
 		record := &records[index]
-		if record.GitStart == nil || record.GitEnd == nil {
+		if record.GitStart == nil || !record.GitStart.Available || record.GitEnd == nil || !record.GitEnd.Available {
 			continue
 		}
 		for _, path := range audit.DirtyDeltaPaths(record.GitStart, record.GitEnd) {

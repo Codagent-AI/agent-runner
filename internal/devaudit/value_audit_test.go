@@ -86,3 +86,14 @@ func TestAggregateGitWorkingTreeChangedPathsIncludeChangedPreexistingPath(t *tes
 		t.Errorf("changed paths (-want +got):\n%s", diff)
 	}
 }
+
+func TestDirtyChangedPathsSkipsUnavailableCheckpoint(t *testing.T) {
+	records := []metrics.StepRecord{{
+		GitStart: &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "dirty.txt", Added: 1}}},
+		GitEnd:   &audit.GitCheckpoint{Reason: "Git capture failed"},
+	}}
+
+	if diff := cmp.Diff([]string{}, dirtyChangedPaths(records)); diff != "" {
+		t.Errorf("changed paths (-want +got):\n%s", diff)
+	}
+}
