@@ -1,6 +1,8 @@
 package exec
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/audit"
@@ -8,6 +10,52 @@ import (
 )
 
 func boolPtr(b bool) *bool { return &b }
+
+func TestForEachResumeUsesRecordedLoopVariable(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		recordedVar string
+		firstCmd    string
+		wantCalls   int
+		wantStale   bool
+	}{
+		{name: "changed item restarts body", recordedVar: `"loopVar":{"task_file":"tasks/01.md"},`, firstCmd: "echo 'tasks/02.md'", wantCalls: 4},
+		{name: "same item resumes body", recordedVar: `"loopVar":{"task_file":"tasks/02.md"},`, firstCmd: "echo verify", wantCalls: 3, wantStale: true},
+		{name: "old state without loop variable resumes body", firstCmd: "echo verify", wantCalls: 3, wantStale: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := makeCtx()
+			var marker model.NestedStepState
+			state := `{"stepId":"implement-tasks","iteration":0,` + tc.recordedVar + `"child":{"stepId":"verify","capturedVariables":{"task_start_head":"stale"}}}`
+			if err := json.Unmarshal([]byte(state), &marker); err != nil {
+				t.Fatal(err)
+			}
+			ctx.ResumeChildState = &marker
+			runner := &mockRunner{}
+			step := model.Step{
+				ID: "implement-tasks", Loop: &model.Loop{Over: "tasks/*.md", As: "task_file"},
+				Steps: []model.Step{
+					{ID: "generate", Command: "echo {{task_file}}"},
+					{ID: "verify", Command: "echo verify"},
+				},
+			}
+			_, err := ExecuteLoopStep(&step, ctx, runner, &mockGlob{matches: []string{"tasks/02.md", "tasks/03.md"}}, &mockLogger{}, LoopExecuteOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(runner.calls) != tc.wantCalls {
+				t.Fatalf("calls = %v, want %d", runner.calls, tc.wantCalls)
+			}
+			if got := runner.calls[0][2]; got != tc.firstCmd {
+				t.Fatalf("first command = %q, want %q", got, tc.firstCmd)
+			}
+			_, stale := ctx.CapturedVariables["task_start_head"]
+			if stale != tc.wantStale {
+				t.Fatalf("stale capture present = %t, want %t", stale, tc.wantStale)
+			}
+		})
+	}
+}
 
 func TestExecuteLoopStep(t *testing.T) {
 	t.Run("iteration end carries duration-only identity", func(t *testing.T) {
@@ -477,6 +525,7 @@ func TestBuildIterationFlushChainLeavesTopLevelStepForRunner(t *testing.T) {
 	iterCtx := model.NewLoopIterationContext(implement, model.LoopIterationOptions{
 		StepID:    "implement-tasks",
 		Iteration: iteration,
+		LoopVar:   map[string]string{"task_file": "tasks/02.md"},
 	})
 	iterCtx.LastSubWorkflowChild = &model.NestedStepState{
 		StepID: "implement-single-task",
@@ -496,6 +545,13 @@ func TestBuildIterationFlushChainLeavesTopLevelStepForRunner(t *testing.T) {
 	}
 	if gotChain == nil || gotChain.StepID != "implement-tasks" {
 		t.Fatalf("chain root = %#v, want implement-tasks", gotChain)
+	}
+	encoded, err := json.Marshal(gotChain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"loopVar":{"task_file":"tasks/02.md"}`) {
+		t.Fatalf("loop variable missing from nested flush chain: %s", encoded)
 	}
 	if gotChain.Child == nil || gotChain.Child.StepID != "implement-single-task" {
 		t.Fatalf("chain child = %#v, want implement-single-task", gotChain.Child)
@@ -520,6 +576,7 @@ func TestFlushLoopStateLeavesTopLevelStepForRunner(t *testing.T) {
 		implement,
 		"implement-tasks",
 		iteration,
+		nil,
 		&model.NestedStepState{StepID: "implement-single-task"},
 	)
 

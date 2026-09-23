@@ -299,6 +299,7 @@ func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, c
 	// legitimately reuse their parent's step ID.
 	if nestedChild != nil && nestedChild.StepID == childStepID && nestedChild.Iteration != nil {
 		entry.Iteration = nestedChild.Iteration
+		entry.LoopVar = nestedChild.LoopVar
 		entry.Child = nestedChild.Child
 	} else {
 		entry.Child = nestedChild
