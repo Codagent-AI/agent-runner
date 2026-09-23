@@ -38,9 +38,10 @@ type GitCheckpoint struct {
 }
 
 const (
-	maxUntrackedFiles     = 256
-	maxUntrackedFileBytes = 4 << 20
-	maxUntrackedPathBytes = 32 << 10
+	maxTrackedFingerprintPaths = 256
+	maxUntrackedFiles          = 256
+	maxUntrackedFileBytes      = 4 << 20
+	maxUntrackedPathBytes      = 32 << 10
 )
 
 // GitChangeCounts is the aggregate projection used by metrics consumers.
@@ -139,12 +140,15 @@ func observeGit(root string) GitCheckpoint {
 	if err != nil {
 		return GitCheckpoint{Reason: "git index state unavailable"}
 	}
-	if err := fingerprintDiffStats(root, index, true); err != nil {
-		return GitCheckpoint{Reason: "git index content unavailable"}
-	}
 	worktree, err := gitNumstat(root, "diff", "--numstat", "-z")
 	if err != nil {
 		return GitCheckpoint{Reason: "git worktree state unavailable"}
+	}
+	if len(index)+len(worktree) > maxTrackedFingerprintPaths {
+		return GitCheckpoint{Reason: "tracked Git fingerprint limit exceeded"}
+	}
+	if err := fingerprintDiffStats(root, index, true); err != nil {
+		return GitCheckpoint{Reason: "git index content unavailable"}
 	}
 	if err := fingerprintDiffStats(root, worktree, false); err != nil {
 		return GitCheckpoint{Reason: "git worktree content unavailable"}

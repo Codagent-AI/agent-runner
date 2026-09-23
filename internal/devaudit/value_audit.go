@@ -494,8 +494,9 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 	}
 	if files != 0 || added != 0 || deleted != 0 {
 		result.Attribution = "working_tree"
-		result.FilesChanged, result.LinesAdded, result.LinesDeleted = &files, &added, &deleted
 		result.ChangedPaths = dirtyChangedPaths(records)
+		files = int64(len(result.ChangedPaths))
+		result.FilesChanged, result.LinesAdded, result.LinesDeleted = &files, &added, &deleted
 	} else {
 		zero := int64(0)
 		result.FilesChanged, result.LinesAdded, result.LinesDeleted = &zero, &zero, &zero

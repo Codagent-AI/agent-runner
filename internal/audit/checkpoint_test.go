@@ -148,6 +148,32 @@ func TestDirtyCheckpointFingerprintsLiteralGitPath(t *testing.T) {
 	}
 }
 
+func TestCheckpointDeclinesExcessiveTrackedFingerprintWork(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	for i := 0; i < 257; i++ {
+		path := filepath.Join(repo, fmt.Sprintf("tracked-%03d.txt", i))
+		if err := os.WriteFile(path, []byte("base\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGit(t, repo, "add", "-A")
+	runGit(t, repo, "commit", "-m", "initial")
+	for i := 0; i < 257; i++ {
+		path := filepath.Join(repo, fmt.Sprintf("tracked-%03d.txt", i))
+		if err := os.WriteFile(path, []byte("changed\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	checkpoint := observeGit(repo)
+	if checkpoint.Available || checkpoint.Reason != "tracked Git fingerprint limit exceeded" {
+		t.Errorf("checkpoint available = %t, reason = %q; want tracked fingerprint limit reason", checkpoint.Available, checkpoint.Reason)
+	}
+}
+
 type capturedLogger struct{ events []Event }
 
 func (l *capturedLogger) Emit(event Event) { l.events = append(l.events, event) }
