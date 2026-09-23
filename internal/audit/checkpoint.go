@@ -351,6 +351,9 @@ type gitCounts struct{ added, deleted int64 }
 
 func flattenCheckpoint(checkpoint *GitCheckpoint) map[string]gitCounts {
 	result := make(map[string]gitCounts)
+	if checkpoint == nil {
+		return result
+	}
 	for _, group := range [][]GitFileStat{checkpoint.Index, checkpoint.Worktree, checkpoint.Untracked} {
 		for _, stat := range group {
 			current := result[stat.Path]
@@ -360,6 +363,29 @@ func flattenCheckpoint(checkpoint *GitCheckpoint) map[string]gitCounts {
 		}
 	}
 	return result
+}
+
+// ChangedDirtyPaths returns paths whose flattened dirty stats changed between checkpoints.
+func ChangedDirtyPaths(start, end *GitCheckpoint) []string {
+	return changedDirtyCountPaths(flattenCheckpoint(start), flattenCheckpoint(end))
+}
+
+func changedDirtyCountPaths(before, after map[string]gitCounts) []string {
+	paths := make(map[string]struct{}, len(before)+len(after))
+	for path := range before {
+		paths[path] = struct{}{}
+	}
+	for path := range after {
+		paths[path] = struct{}{}
+	}
+	changed := make([]string, 0, len(paths))
+	for path := range paths {
+		if after[path] != before[path] {
+			changed = append(changed, path)
+		}
+	}
+	sort.Strings(changed)
+	return changed
 }
 
 func statsMap(stats []GitFileStat) map[string]gitCounts {
@@ -385,24 +411,15 @@ func mergeGitStats(left, right map[string]gitCounts) map[string]gitCounts {
 }
 
 func countDirtyDelta(before, after map[string]gitCounts) GitChangeCounts {
-	paths := make(map[string]struct{}, len(before)+len(after))
-	for path := range before {
-		paths[path] = struct{}{}
-	}
-	for path := range after {
-		paths[path] = struct{}{}
-	}
 	result := GitChangeCounts{Available: true}
-	for path := range paths {
+	for _, path := range changedDirtyCountPaths(before, after) {
 		left, right := before[path], after[path]
 		if right.added < left.added || right.deleted < left.deleted {
 			return GitChangeCounts{Reason: "repository change cannot be derived conservatively"}
 		}
-		if right != left {
-			result.FilesChanged++
-			result.LinesAdded += right.added - left.added
-			result.LinesDeleted += right.deleted - left.deleted
-		}
+		result.FilesChanged++
+		result.LinesAdded += right.added - left.added
+		result.LinesDeleted += right.deleted - left.deleted
 	}
 	return result
 }

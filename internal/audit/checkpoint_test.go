@@ -9,7 +9,28 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 )
+
+func TestChangedDirtyPathsComparesFlattenedCheckpoints(t *testing.T) {
+	start := &GitCheckpoint{
+		Index:    []GitFileStat{{Path: "unchanged.txt", Added: 2}, {Path: "modified.txt", Added: 1}},
+		Worktree: []GitFileStat{{Path: "shared.txt", Added: 1}},
+	}
+	end := &GitCheckpoint{
+		Index:     []GitFileStat{{Path: "unchanged.txt", Added: 2}, {Path: "modified.txt", Added: 2}},
+		Worktree:  []GitFileStat{{Path: "shared.txt", Added: 1}, {Path: "new-b.txt", Added: 1}},
+		Untracked: []GitFileStat{{Path: "new-a.txt", Added: 1}},
+	}
+	want := []string{"modified.txt", "new-a.txt", "new-b.txt"}
+	if diff := cmp.Diff(want, ChangedDirtyPaths(start, end)); diff != "" {
+		t.Errorf("changed paths (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{"new.txt"}, ChangedDirtyPaths(nil, &GitCheckpoint{Untracked: []GitFileStat{{Path: "new.txt", Added: 1}}})); diff != "" {
+		t.Errorf("nil start changed paths (-want +got):\n%s", diff)
+	}
+}
 
 type capturedLogger struct{ events []Event }
 
