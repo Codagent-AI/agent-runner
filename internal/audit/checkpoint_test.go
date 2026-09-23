@@ -32,6 +32,19 @@ func TestChangedDirtyPathsComparesFlattenedCheckpoints(t *testing.T) {
 	}
 }
 
+func TestZeroLineDirtyPathCountsAsChange(t *testing.T) {
+	start := &GitCheckpoint{Available: true, HEAD: "same-head"}
+	end := &GitCheckpoint{Available: true, HEAD: "same-head", Untracked: []GitFileStat{{Path: "empty.txt"}}}
+
+	if diff := cmp.Diff([]string{"empty.txt"}, ChangedDirtyPaths(start, end)); diff != "" {
+		t.Errorf("changed paths (-want +got):\n%s", diff)
+	}
+	wantChanges := GitChangeCounts{Available: true, FilesChanged: 1}
+	if diff := cmp.Diff(wantChanges, deriveGitChanges(start, end)); diff != "" {
+		t.Errorf("git changes (-want +got):\n%s", diff)
+	}
+}
+
 type capturedLogger struct{ events []Event }
 
 func (l *capturedLogger) Emit(event Event) { l.events = append(l.events, event) }

@@ -380,7 +380,9 @@ func changedDirtyCountPaths(before, after map[string]gitCounts) []string {
 	}
 	changed := make([]string, 0, len(paths))
 	for path := range paths {
-		if after[path] != before[path] {
+		beforeCount, beforeOK := before[path]
+		afterCount, afterOK := after[path]
+		if beforeOK != afterOK || beforeCount != afterCount {
 			changed = append(changed, path)
 		}
 	}
