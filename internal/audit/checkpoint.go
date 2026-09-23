@@ -177,14 +177,16 @@ func gitDirtySignatures(root string, checkpoint *GitCheckpoint) (map[string]stri
 	}
 	for path := range paths {
 		signature := sha256.New()
+		gitlink := false
 		for _, entry := range indexEntries[path] {
 			_, _ = io.WriteString(signature, entry)
 			_, _ = signature.Write([]byte{0})
+			gitlink = gitlink || strings.HasPrefix(entry, "160000 ")
 		}
 		_, isUntracked := untracked[path]
 		_, hasWorktreeDelta := worktree[path]
 		if isUntracked || hasWorktreeDelta {
-			if err := hashWorktreePath(signature, filepath.Join(root, filepath.FromSlash(path)), isUntracked); err != nil {
+			if err := hashWorktreePath(signature, filepath.Join(root, filepath.FromSlash(path)), isUntracked, gitlink); err != nil {
 				return nil, err
 			}
 		}
@@ -233,7 +235,7 @@ func gitIndexEntries(root string, dirtyPaths map[string]gitCounts) (map[string][
 	return entries, nil
 }
 
-func hashWorktreePath(signature hash.Hash, path string, bounded bool) error {
+func hashWorktreePath(signature hash.Hash, path string, bounded, gitlink bool) error {
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		_, _ = io.WriteString(signature, "missing")
@@ -275,7 +277,49 @@ func hashWorktreePath(signature hash.Hash, path string, bounded bool) error {
 		_, _ = io.WriteString(signature, "symlink:\x00"+target)
 		return nil
 	}
+	if info.IsDir() && gitlink {
+		clean, err := submoduleClean(path)
+		if err != nil {
+			return err
+		}
+		if !clean {
+			return fmt.Errorf("submodule has uncommitted changes: %q", path)
+		}
+		head, err := gitOutput(path, "rev-parse", "HEAD")
+		if err != nil {
+			return err
+		}
+		_, _ = io.WriteString(signature, "submodule:\x00"+strings.TrimSpace(head))
+		return nil
+	}
 	return fmt.Errorf("unsupported dirty path type %q", path)
+}
+
+func submoduleClean(path string) (bool, error) {
+	command := exec.Command("git", "-C", path, "status", "--porcelain", "-z") // #nosec G204 -- path is a Git-reported submodule under the resolved project root.
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return false, err
+	}
+	if err := command.Start(); err != nil {
+		return false, err
+	}
+	var first [1]byte
+	count, readErr := io.ReadFull(stdout, first[:])
+	if count != 0 {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		return false, nil
+	}
+	if readErr != io.EOF {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		return false, readErr
+	}
+	if err := command.Wait(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func gitOutput(root string, args ...string) (string, error) {
@@ -489,7 +533,7 @@ func deriveGitChanges(start, end *GitCheckpoint) GitChangeCounts {
 		}
 		return countGitStats(mergeGitStats(committed, dirtyDelta))
 	}
-	return countDirtyDelta(before, after)
+	return countDirtyDelta(start, end, before, after)
 }
 
 type gitCounts struct{ added, deleted int64 }
@@ -529,7 +573,7 @@ func mergeGitStats(left, right map[string]gitCounts) map[string]gitCounts {
 	return result
 }
 
-func countDirtyDelta(before, after map[string]gitCounts) GitChangeCounts {
+func countDirtyDelta(start, end *GitCheckpoint, before, after map[string]gitCounts) GitChangeCounts {
 	paths := make(map[string]struct{}, len(before)+len(after))
 	for path := range before {
 		paths[path] = struct{}{}
@@ -539,11 +583,18 @@ func countDirtyDelta(before, after map[string]gitCounts) GitChangeCounts {
 	}
 	result := GitChangeCounts{Available: true}
 	for path := range paths {
-		left, right := before[path], after[path]
+		left, existedBefore := before[path]
+		right, existsAfter := after[path]
+		if existedBefore && !existsAfter {
+			return GitChangeCounts{Reason: "repository change cannot be derived conservatively"}
+		}
 		if right.added < left.added || right.deleted < left.deleted {
 			return GitChangeCounts{Reason: "repository change cannot be derived conservatively"}
 		}
-		if right != left {
+		if existedBefore && existsAfter && (start.DirtySignatures[path] == "" || end.DirtySignatures[path] == "") {
+			return GitChangeCounts{Reason: "repository change cannot be derived conservatively"}
+		}
+		if !existedBefore || right != left || start.DirtySignatures[path] != end.DirtySignatures[path] {
 			result.FilesChanged++
 			result.LinesAdded += right.added - left.added
 			result.LinesDeleted += right.deleted - left.deleted

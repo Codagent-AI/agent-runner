@@ -329,6 +329,78 @@ func TestDirtySignaturesDetectWorktreeContentChangeWithSameCounts(t *testing.T) 
 	}
 }
 
+func TestUncommittedBinaryChangeCountsFileWithoutLines(t *testing.T) {
+	repo := newCheckpointRepo(t)
+	writeCheckpointFile(t, repo, "image.bin", "before\x00")
+	runGit(t, repo, "add", "image.bin")
+	runGit(t, repo, "commit", "-m", "initial")
+	start := observeGit(repo)
+	writeCheckpointFile(t, repo, "image.bin", "after\x00")
+	end := observeGit(repo)
+	if !start.Available || !end.Available {
+		t.Fatalf("checkpoints unavailable: start=%#v end=%#v", start, end)
+	}
+	want := GitChangeCounts{Available: true, FilesChanged: 1}
+	if diff := cmp.Diff(want, deriveGitChanges(&start, &end)); diff != "" {
+		t.Fatalf("binary changes mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestDirtyBinaryContentChangeWithSameNumstatCountsFile(t *testing.T) {
+	repo := newCheckpointRepo(t)
+	writeCheckpointFile(t, repo, "image.bin", "original\x00")
+	runGit(t, repo, "add", "image.bin")
+	runGit(t, repo, "commit", "-m", "initial")
+	writeCheckpointFile(t, repo, "image.bin", "first\x00")
+	start := observeGit(repo)
+	writeCheckpointFile(t, repo, "image.bin", "second\x00")
+	end := observeGit(repo)
+	if !start.Available || !end.Available {
+		t.Fatalf("checkpoints unavailable: start=%#v end=%#v", start, end)
+	}
+	if diff := cmp.Diff(start.Worktree, end.Worktree); diff != "" {
+		t.Fatalf("binary numstat changed unexpectedly (-want +got):\n%s", diff)
+	}
+	want := GitChangeCounts{Available: true, FilesChanged: 1}
+	if diff := cmp.Diff(want, deriveGitChanges(&start, &end)); diff != "" {
+		t.Fatalf("binary changes mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestChangedSubmoduleCheckpointRemainsAvailable(t *testing.T) {
+	subRepo := newCheckpointRepo(t)
+	writeCheckpointFile(t, subRepo, "file", "first\n")
+	runGit(t, subRepo, "add", "file")
+	runGit(t, subRepo, "commit", "-m", "first")
+	first, err := gitOutput(subRepo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeCheckpointFile(t, subRepo, "file", "second\n")
+	runGit(t, subRepo, "add", "file")
+	runGit(t, subRepo, "commit", "-m", "second")
+	second, err := gitOutput(subRepo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := newCheckpointRepo(t)
+	runGit(t, repo, "-c", "protocol.file.allow=always", "submodule", "add", subRepo, "module")
+	runGit(t, filepath.Join(repo, "module"), "checkout", strings.TrimSpace(first))
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "initial")
+	start := observeGit(repo)
+	runGit(t, filepath.Join(repo, "module"), "checkout", strings.TrimSpace(second))
+	end := observeGit(repo)
+	if !start.Available || !end.Available {
+		t.Fatalf("checkpoints unavailable: start=%#v end=%#v", start, end)
+	}
+	want := GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1, LinesDeleted: 1}
+	if diff := cmp.Diff(want, deriveGitChanges(&start, &end)); diff != "" {
+		t.Fatalf("submodule changes mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func newCheckpointRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
