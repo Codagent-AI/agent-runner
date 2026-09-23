@@ -1,0 +1,11 @@
+# Keep remote and local image builds from scanning the whole working tree.
+# The sandbox image is built from docker/dev and needs none of these.
+.git
+worktrees
+artifacts
+bin
+validator_logs
+testdata
+pty-poc
+.runtime
+*.log
