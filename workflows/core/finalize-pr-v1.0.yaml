@@ -46,9 +46,12 @@ steps:
           - `CI_PASSED` when CI is green and no actionable unresolved feedback or unfinished bot review remains;
           - `CI_FAILED` when a check failed or a blocking review remains;
           - `CI_COMMENTS` when CI is green but actionable unresolved feedback remains;
-          - `CI_PENDING` when checks or a review bot are still in progress.
+          - `CI_PENDING` when real CI checks (such as tests, specs, or builds) are still running;
+          - `CI_REVIEW_INCOMPLETE` when CI is otherwise green with no actionable feedback, but a review bot did not complete its review.
 
-          When more than one condition applies, use this precedence: `CI_FAILED`, `CI_COMMENTS`, `CI_PENDING`, `CI_PASSED`. In particular, actionable unresolved feedback produces `CI_COMMENTS` even when other review automation is still running.
+          When more than one condition applies, use this precedence: `CI_FAILED`, `CI_COMMENTS`, `CI_PENDING`, `CI_REVIEW_INCOMPLETE`, `CI_PASSED`. In particular, actionable unresolved feedback produces `CI_COMMENTS` even when other review automation is still running.
+
+          Distinguish running required CI checks from a running review bot such as CodeRabbit. A "draft not reviewed" notice, or bot status or comments dated before the PR left draft or before the latest push, is stale and must not count as a pass. If the PR recently left draft or received a push and the bot has not started, keep polling for a reasonable bounded time (a few minutes) to let it start. If the bot is actively reviewing, wait a reasonable bounded time for it to finish. If it never starts, says it is rate-limited or skipped, or does not finish within that wait, report `CI_REVIEW_INCOMPLETE` when CI is otherwise green and no actionable feedback remains. Use `CI_PENDING` only for real CI checks still running.
 
           Do not write anything after the marker. The workflow reads this marker as its control result.
 
@@ -85,9 +88,12 @@ steps:
       - `CI_PASSED` when CI is green and no actionable unresolved feedback or unfinished bot review remains;
       - `CI_FAILED` when a check failed or a blocking review remains;
       - `CI_COMMENTS` when CI is green but actionable unresolved feedback remains;
-      - `CI_PENDING` when checks or a review bot are still in progress.
+      - `CI_PENDING` when real CI checks (such as tests, specs, or builds) are still running;
+      - `CI_REVIEW_INCOMPLETE` when CI is otherwise green with no actionable feedback, but a review bot did not complete its review.
 
-      When more than one condition applies, use this precedence: `CI_FAILED`, `CI_COMMENTS`, `CI_PENDING`, `CI_PASSED`. In particular, actionable unresolved feedback produces `CI_COMMENTS` even when other review automation is still running.
+      When more than one condition applies, use this precedence: `CI_FAILED`, `CI_COMMENTS`, `CI_PENDING`, `CI_REVIEW_INCOMPLETE`, `CI_PASSED`. In particular, actionable unresolved feedback produces `CI_COMMENTS` even when other review automation is still running.
+
+      Distinguish running required CI checks from a running review bot such as CodeRabbit. A "draft not reviewed" notice, or bot status or comments dated before the PR left draft or before the latest push, is stale and must not count as a pass. If the PR recently left draft or received a push and the bot has not started, keep polling for a reasonable bounded time (a few minutes) to let it start. If the bot is actively reviewing, wait a reasonable bounded time for it to finish. If it never starts, says it is rate-limited or skipped, or does not finish within that wait, report `CI_REVIEW_INCOMPLETE` when CI is otherwise green and no actionable feedback remains. Use `CI_PENDING` only for real CI checks still running.
 
       Do not write anything after the marker. The workflow reads this marker as its control result.
 
@@ -95,3 +101,9 @@ steps:
     script: ci-status-gate.sh
     script_inputs:
       report: "{{final_ci_report}}"
+
+  - id: final-review-incomplete-gate
+    script: ci-review-incomplete-gate.sh
+    script_inputs:
+      report: "{{final_ci_report}}"
+    warn_on_failure: true
