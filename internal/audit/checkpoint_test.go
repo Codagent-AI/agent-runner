@@ -265,6 +265,70 @@ func TestParseNumstatCountsBinaryFileWithoutLines(t *testing.T) {
 	}
 }
 
+func TestDirtySignaturesUseBoundedGitInvocations(t *testing.T) {
+	repo := newCheckpointRepo(t)
+	for i := range 20 {
+		writeCheckpointFile(t, repo, fmt.Sprintf("file-%02d", i), "old\n")
+	}
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "initial")
+	for i := range 20 {
+		writeCheckpointFile(t, repo, fmt.Sprintf("file-%02d", i), "new\n")
+	}
+	runGit(t, repo, "add", ".")
+	checkpoint := observeGit(repo)
+	if !checkpoint.Available {
+		t.Fatalf("checkpoint = %#v", checkpoint)
+	}
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shimDir := t.TempDir()
+	shim := filepath.Join(shimDir, "git")
+	if err := os.WriteFile(shim, []byte("#!/bin/sh\nprintf x >> \"$GIT_SIGNATURE_TEST_COUNT\"\nexec \"$GIT_SIGNATURE_REAL_GIT\" \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	countPath := filepath.Join(shimDir, "count")
+	t.Setenv("GIT_SIGNATURE_TEST_COUNT", countPath)
+	t.Setenv("GIT_SIGNATURE_REAL_GIT", realGit)
+	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	got, err := gitDirtySignatures(repo, &checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(checkpoint.DirtySignatures, got); diff != "" {
+		t.Fatalf("signatures mismatch (-want +got):\n%s", diff)
+	}
+	calls, err := os.ReadFile(countPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) > 2 {
+		t.Fatalf("git calls = %d for 20 paths, want at most 2", len(calls))
+	}
+}
+
+func TestDirtySignaturesDetectWorktreeContentChangeWithSameCounts(t *testing.T) {
+	repo := newCheckpointRepo(t)
+	writeCheckpointFile(t, repo, "file", "base\n")
+	runGit(t, repo, "add", "file")
+	runGit(t, repo, "commit", "-m", "initial")
+	writeCheckpointFile(t, repo, "file", "first\n")
+	start := observeGit(repo)
+	writeCheckpointFile(t, repo, "file", "other\n")
+	end := observeGit(repo)
+	if !start.Available || !end.Available {
+		t.Fatalf("checkpoints unavailable: start=%#v end=%#v", start, end)
+	}
+	if diff := cmp.Diff(start.Worktree, end.Worktree); diff != "" {
+		t.Fatalf("numstat changed unexpectedly (-want +got):\n%s", diff)
+	}
+	if start.DirtySignatures["file"] == end.DirtySignatures["file"] {
+		t.Fatal("worktree content change did not change the signature")
+	}
+}
+
 func newCheckpointRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()

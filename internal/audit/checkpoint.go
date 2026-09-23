@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"hash"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -156,35 +158,124 @@ func observeGit(root string) GitCheckpoint {
 }
 
 func gitDirtySignatures(root string, checkpoint *GitCheckpoint) (map[string]string, error) {
+	paths := flattenCheckpoint(checkpoint)
 	signatures := make(map[string]string)
+	if len(paths) == 0 {
+		return signatures, nil
+	}
+	indexEntries, err := gitIndexEntries(root, paths)
+	if err != nil {
+		return nil, err
+	}
 	untracked := make(map[string]struct{}, len(checkpoint.Untracked))
 	for _, stat := range checkpoint.Untracked {
 		untracked[stat.Path] = struct{}{}
 	}
-	for path := range flattenCheckpoint(checkpoint) {
-		indexDiff, err := gitOutput(root, "diff", "--cached", "--binary", "--full-index", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color", "--", ":(literal)"+path)
-		if err != nil {
-			return nil, err
+	worktree := make(map[string]struct{}, len(checkpoint.Worktree))
+	for _, stat := range checkpoint.Worktree {
+		worktree[stat.Path] = struct{}{}
+	}
+	for path := range paths {
+		signature := sha256.New()
+		for _, entry := range indexEntries[path] {
+			_, _ = io.WriteString(signature, entry)
+			_, _ = signature.Write([]byte{0})
 		}
-		worktreeDiff, err := gitOutput(root, "diff", "--binary", "--full-index", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color", "--", ":(literal)"+path)
-		if err != nil {
-			return nil, err
-		}
-		var untrackedData []byte
-		if _, exists := untracked[path]; exists {
-			untrackedData, err = readBoundedUntrackedFile(filepath.Join(root, filepath.FromSlash(path)))
-			if err != nil {
+		_, isUntracked := untracked[path]
+		_, hasWorktreeDelta := worktree[path]
+		if isUntracked || hasWorktreeDelta {
+			if err := hashWorktreePath(signature, filepath.Join(root, filepath.FromSlash(path)), isUntracked); err != nil {
 				return nil, err
 			}
-		}
-		signature := sha256.New()
-		for _, part := range [][]byte{[]byte(indexDiff), []byte(worktreeDiff), untrackedData} {
-			_, _ = signature.Write([]byte{0})
-			_, _ = signature.Write(part)
 		}
 		signatures[path] = fmt.Sprintf("%x", signature.Sum(nil))
 	}
 	return signatures, nil
+}
+
+func gitIndexEntries(root string, dirtyPaths map[string]gitCounts) (map[string][]string, error) {
+	command := exec.Command("git", "-C", root, "ls-files", "--stage", "-z") // #nosec G204 -- root is the runner's resolved project root.
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := command.Start(); err != nil {
+		return nil, err
+	}
+	entries := make(map[string][]string)
+	reader := bufio.NewReader(stdout)
+	for {
+		record, readErr := reader.ReadBytes(0)
+		if readErr == io.EOF && len(record) == 0 {
+			break
+		}
+		if readErr != nil || len(record) == 0 || record[len(record)-1] != 0 {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+			if readErr != nil {
+				return nil, readErr
+			}
+			return nil, fmt.Errorf("unterminated git index entry")
+		}
+		metadata, path, found := bytes.Cut(record[:len(record)-1], []byte{'\t'})
+		if !found {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+			return nil, fmt.Errorf("invalid git index entry")
+		}
+		if _, dirty := dirtyPaths[string(path)]; dirty {
+			entries[string(path)] = append(entries[string(path)], string(metadata))
+		}
+	}
+	if err := command.Wait(); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+func hashWorktreePath(signature hash.Hash, path string, bounded bool) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		_, _ = io.WriteString(signature, "missing")
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode().IsRegular() {
+		file, err := openUntrackedFileNoFollow(path)
+		if err != nil {
+			return err
+		}
+		openedInfo, err := file.Stat()
+		if err != nil || !openedInfo.Mode().IsRegular() {
+			_ = file.Close()
+			return fmt.Errorf("dirty path is not a regular file: %q", path)
+		}
+		_, _ = fmt.Fprintf(signature, "regular:%d\x00", openedInfo.Mode().Perm()&0o111)
+		var reader io.Reader = file
+		if bounded {
+			reader = io.LimitReader(file, maxUntrackedFileBytes+1)
+		}
+		copied, copyErr := io.Copy(signature, reader)
+		closeErr := file.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if bounded && copied > maxUntrackedFileBytes {
+			return fmt.Errorf("untracked file exceeds %d bytes", maxUntrackedFileBytes)
+		}
+		return closeErr
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(path)
+		if err != nil {
+			return err
+		}
+		_, _ = io.WriteString(signature, "symlink:\x00"+target)
+		return nil
+	}
+	return fmt.Errorf("unsupported dirty path type %q", path)
 }
 
 func gitOutput(root string, args ...string) (string, error) {
