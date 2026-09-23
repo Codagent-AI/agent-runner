@@ -88,6 +88,36 @@ func TestAggregateGitCountsRepeatedPathOnce(t *testing.T) {
 	}
 }
 
+func TestAggregateGitRetainsCountsWhenCheckpointPathsAreIncomplete(t *testing.T) {
+	complete := metrics.StepRecord{
+		GitStart:   &audit.GitCheckpoint{},
+		GitEnd:     &audit.GitCheckpoint{Worktree: []audit.GitFileStat{{Path: "c", Added: 1}}},
+		GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1},
+	}
+	cases := []struct {
+		name   string
+		record metrics.StepRecord
+	}{
+		{name: "missing start", record: metrics.StepRecord{GitEnd: &audit.GitCheckpoint{Worktree: []audit.GitFileStat{{Path: "c", Added: 2}}}, GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1}}},
+		{name: "missing end", record: metrics.StepRecord{GitStart: &audit.GitCheckpoint{Worktree: []audit.GitFileStat{{Path: "c", Added: 1}}}, GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1}}},
+		{name: "missing path details", record: metrics.StepRecord{GitStart: &audit.GitCheckpoint{}, GitEnd: &audit.GitCheckpoint{}, GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := aggregateGit([]metrics.StepRecord{complete, tc.record}, nil)
+			if got.Attribution != "working_tree" {
+				t.Fatalf("attribution = %q, want working_tree", got.Attribution)
+			}
+			if got.FilesChanged == nil || *got.FilesChanged != 2 {
+				t.Errorf("files changed = %v, want 2", got.FilesChanged)
+			}
+			if got.LinesAdded == nil || *got.LinesAdded != 2 {
+				t.Errorf("lines added = %v, want 2", got.LinesAdded)
+			}
+		})
+	}
+}
+
 func TestAggregateGitIncludesSameCountContentChanges(t *testing.T) {
 	records := []metrics.StepRecord{{
 		GitStart:   &audit.GitCheckpoint{Worktree: []audit.GitFileStat{{Path: "tracked.txt", Added: 1, Deleted: 1, Fingerprint: "first"}}},

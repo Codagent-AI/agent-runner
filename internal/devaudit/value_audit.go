@@ -458,6 +458,7 @@ func observationID(auditID, executionID, path string) string {
 func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGitCommit) GitEvidence {
 	result := GitEvidence{Attribution: "no_change", CommitSHAs: []string{}, DeferredSHAs: []string{}}
 	var files, added, deleted int64
+	pathsComplete := true
 	for index := range records {
 		record := &records[index]
 		if record.GitChanges == nil || !record.GitChanges.Available {
@@ -466,6 +467,9 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 		files += record.GitChanges.FilesChanged
 		added += record.GitChanges.LinesAdded
 		deleted += record.GitChanges.LinesDeleted
+		if record.GitStart == nil || record.GitEnd == nil || int64(len(audit.ChangedDirtyPaths(record.GitStart, record.GitEnd))) != record.GitChanges.FilesChanged {
+			pathsComplete = false
+		}
 		if record.GitEnd != nil && record.GitStart != nil && record.GitEnd.HEAD != record.GitStart.HEAD {
 			if commits == nil {
 				return GitEvidence{Attribution: "unavailable", CommitSHAs: []string{}, DeferredSHAs: []string{}, Reason: "Git commit metadata is unavailable"}
@@ -495,7 +499,9 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 	if files != 0 || added != 0 || deleted != 0 {
 		result.Attribution = "working_tree"
 		result.ChangedPaths = dirtyChangedPaths(records)
-		files = int64(len(result.ChangedPaths))
+		if pathsComplete {
+			files = int64(len(result.ChangedPaths))
+		}
 		result.FilesChanged, result.LinesAdded, result.LinesDeleted = &files, &added, &deleted
 	} else {
 		zero := int64(0)
