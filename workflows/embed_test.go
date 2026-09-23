@@ -1371,8 +1371,9 @@ func TestCoreFinalizePRUsesCIStatusGate(t *testing.T) {
 
 	var workflow struct {
 		Steps []struct {
-			ID    string `yaml:"id"`
-			Steps []struct {
+			ID                string `yaml:"id"`
+			ContinueOnFailure bool   `yaml:"continue_on_failure"`
+			Steps             []struct {
 				ID                string            `yaml:"id"`
 				Script            string            `yaml:"script"`
 				ScriptInputs      map[string]string `yaml:"script_inputs"`
@@ -1398,6 +1399,9 @@ func TestCoreFinalizePRUsesCIStatusGate(t *testing.T) {
 	}
 	for _, step := range workflow.Steps {
 		if step.ID == "ci-fix-loop" {
+			if !step.ContinueOnFailure {
+				t.Fatal("ci-fix-loop should continue_on_failure so the final CI verification runs after loop exhaustion")
+			}
 			loopSteps = step.Steps
 			break
 		}

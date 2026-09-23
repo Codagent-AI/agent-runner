@@ -1051,6 +1051,48 @@ func TestRunWorkflow(t *testing.T) {
 		}
 	})
 
+	t.Run("continued exhausted retry loop lets final gate decide workflow result", func(t *testing.T) {
+		for _, tc := range []struct {
+			name       string
+			finalExit  int
+			wantResult WorkflowResult
+		}{
+			{name: "final verification passes", finalExit: 0, wantResult: ResultSuccess},
+			{name: "final verification fails", finalExit: 1, wantResult: ResultFailed},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				maxIterations := 1
+				runner := &mockRunner{results: []exec.ProcessResult{
+					{ExitCode: 1},            // retry gate never breaks, so the loop exhausts
+					{ExitCode: 0},            // verify the final push
+					{ExitCode: tc.finalExit}, // final status gate owns the workflow result
+				}}
+				w := model.Workflow{Name: "finalize", Steps: []model.Step{
+					{ID: "ci-fix-loop", ContinueOnFailure: true, Loop: &model.Loop{Max: &maxIterations}, Steps: []model.Step{
+						{ID: "ci-status-gate", Command: "ci-status-gate", ContinueOnFailure: true, BreakIf: "success"},
+					}},
+					{ID: "verify-final", Command: "verify-final"},
+					{ID: "final-ci-status-gate", Command: "final-ci-status-gate"},
+				}}
+				w.ApplyDefaults()
+
+				result, err := RunWorkflow(&w, nil, &Options{ProcessRunner: runner, GlobExpander: &mockGlob{}, Log: &mockLog{}, SessionDir: t.TempDir()})
+				if err != nil || result != tc.wantResult {
+					t.Fatalf("RunWorkflow = (%q, %v), want %q", result, err, tc.wantResult)
+				}
+				if len(runner.calls) != 3 {
+					t.Fatalf("calls = %#v, want exhausted loop, final verification, and final gate", runner.calls)
+				}
+				if got := runner.calls[1][2]; got != "verify-final" {
+					t.Fatalf("second call = %q, want final verification", got)
+				}
+				if got := runner.calls[2][2]; got != "final-ci-status-gate" {
+					t.Fatalf("third call = %q, want final status gate", got)
+				}
+			})
+		}
+	})
+
 	t.Run("warn_on_failure turns exhausted retry loop into a warning", func(t *testing.T) {
 		maxIterations := 1
 		dir := t.TempDir()
