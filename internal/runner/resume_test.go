@@ -62,6 +62,62 @@ steps:
 	}
 }
 
+func TestResumeTopLevelForEachRestartsChangedIteration(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	workflowPath := filepath.Join(dir, "tasks-v1.0.yaml")
+	source := `name: tasks
+steps:
+  - id: implement-tasks
+    loop:
+      over: "tasks/*.md"
+      as: task_file
+    steps:
+      - id: first
+        command: echo FIRST={{task_file}}
+      - id: gate
+        command: echo GATE={{task_file}}
+`
+	if err := os.WriteFile(workflowPath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	iteration := 0
+	state := model.RunState{
+		WorkflowFile: workflowPath,
+		WorkflowName: "tasks",
+		WorkflowHash: stateio.ComputeWorkflowHash(source),
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+			StepID: "implement-tasks", Iteration: &iteration,
+			LoopVar: map[string]string{"task_file": "tasks/a.md"},
+			Child: &model.NestedStepState{StepID: "gate", CapturedVariables: map[string]model.CapturedValue{
+				"task_start_head": model.NewCapturedString("stale"),
+			}},
+		}},
+	}
+	if err := stateio.WriteState(&state, dir); err != nil {
+		t.Fatal(err)
+	}
+	runner := &mockRunner{}
+	result, err := ResumeWorkflow(filepath.Join(dir, "state.json"), &Options{
+		ProcessRunner: runner,
+		GlobExpander:  &mockGlob{matches: []string{"tasks/0.md", "tasks/a.md"}},
+		Log:           &mockLog{},
+	})
+	if err != nil || result != ResultSuccess {
+		t.Fatalf("resume result = %q, error = %v", result, err)
+	}
+	if len(runner.calls) != 4 || !strings.Contains(runner.calls[0][2], "FIRST='tasks/0.md'") || !strings.Contains(runner.calls[1][2], "GATE='tasks/0.md'") {
+		t.Fatalf("resumed commands = %v, want first then gate for tasks/0.md", runner.calls)
+	}
+	resumedState, err := stateio.ReadState(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, stale := resumedState.CurrentStep.Nested.CapturedVariables["task_start_head"]; stale {
+		t.Fatal("stale iteration capture survived resume")
+	}
+}
+
 func TestPrepareRun_RecordsExactVersionMetadata(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	sourceDir := t.TempDir()
