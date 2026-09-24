@@ -92,6 +92,15 @@ wait_for_delivery() {
   echo "DELIVERED  $label  $(basename "$audit_dir")"
 }
 
+# audit_live <audit-dir>: the audit run's lock names a live process.
+audit_live() {
+  local lock="$1/lock" pid
+  [ -f "$lock" ] || return 1
+  pid=$(tr -d '[:space:]' < "$lock")
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null
+}
+
 # recover_session <session-dir> <execution-session-id> <project-dir>: recover
 # one explicitly named session whose runs directory may not be recorded.
 recover_session() {
@@ -108,9 +117,15 @@ recover_session() {
         delivered) echo "SKIP delivered-session  $label  $session"; return ;;
         pending) pending="$linked_id" ;;
         *)
-          # A running audit may still deliver; a second replay would duplicate its rows.
+          # A running audit may still deliver; a second replay would duplicate its
+          # rows. An audit whose process is gone is recovered like any other.
           case "$linked_state" in
-            launching|started) echo "SKIP active  $label  $linked_id"; return ;;
+            launching|started)
+              if audit_live "$(dirname "$source_dir")/$linked_id"; then
+                echo "SKIP active  $label  $linked_id"
+                return
+              fi
+              ;;
           esac
           ;;
       esac

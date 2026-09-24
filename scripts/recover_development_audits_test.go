@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -220,6 +221,26 @@ func TestRecoveryScriptRecoversExplicitSessionOutsideDataRoot(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(running, "audit-lifecycle.json"), []byte(`{"links":[{"audit_run_id":"audit-live","execution_session_id":"exec","trigger":"replay","state":"started"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The live audit's lock names this test process; a crashed audit's names none alive.
+	if err := os.MkdirAll(filepath.Join(filepath.Dir(running), "audit-live"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(running), "audit-live", "lock"), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	crashed := filepath.Join(root, "claim", "attempt-5", "agent-runner-session")
+	if err := os.MkdirAll(filepath.Join(filepath.Dir(crashed), "audit-crashed"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(crashed, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(crashed, "run-metrics.json"), []byte(`{"sessions":[{"execution_session_id":"exec"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(crashed, "audit-lifecycle.json"), []byte(`{"links":[{"audit_run_id":"audit-crashed","execution_session_id":"exec","trigger":"replay","state":"started"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	for _, dir := range []string{replay, retry, delivered, filepath.Join(filepath.Dir(retry), "audit-pending"), filepath.Join(filepath.Dir(delivered), "audit-done")} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
@@ -249,6 +270,7 @@ func TestRecoveryScriptRecoversExplicitSessionOutsideDataRoot(t *testing.T) {
 		"--session", delivered+":exec",
 		"--session", replay+":unknown",
 		"--session", running+":exec",
+		"--session", crashed+":exec",
 	).CombinedOutput()
 	if err != nil {
 		t.Fatalf("recovery dry run: %v\n%s", err, output)
@@ -259,7 +281,8 @@ func TestRecoveryScriptRecoversExplicitSessionOutsideDataRoot(t *testing.T) {
 		"SKIP delivered-session  attempt-3/agent-runner-session  exec",
 		"SKIP unavailable  attempt-1/agent-runner-session  unknown",
 		"SKIP active  attempt-4/agent-runner-session  audit-live",
-		"actionable=2",
+		"REPLAY  attempt-5/agent-runner-session  exec",
+		"actionable=3",
 	} {
 		if !strings.Contains(string(output), want) {
 			t.Fatalf("dry run missing %q:\n%s", want, output)
