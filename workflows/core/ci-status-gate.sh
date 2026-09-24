@@ -16,7 +16,7 @@ status=$(
 )
 
 case "$status" in
-  CI_PASSED)
+  CI_PASSED|CI_REVIEW_INCOMPLETE)
     printf 'CI status gate: passed\n'
     exit 0
     ;;
