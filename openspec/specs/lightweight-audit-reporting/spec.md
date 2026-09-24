@@ -103,6 +103,10 @@ The complete validated audit report SHALL be committed locally before external r
 - **WHEN** the local audit report is complete but the Sheets API request fails
 - **THEN** the report remains retryable locally and the source workflow outcome is unchanged
 
+#### Scenario: Report assembled without a connection is retried elsewhere
+- **WHEN** a pending report whose frozen destination is unconfigured is retried on a machine with a configured reporting connection
+- **THEN** the retry adopts that machine's destination and delivers the original observations, while a report frozen to a configured destination changes only through explicit migration
+
 #### Scenario: Reporting later succeeds
 - **WHEN** reporting is retried after a transient failure
 - **THEN** the original validated observations are written without rerunning the model audit

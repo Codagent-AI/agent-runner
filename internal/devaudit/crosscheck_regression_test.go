@@ -4,12 +4,14 @@ package devaudit
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/stateio"
@@ -145,5 +147,155 @@ func TestAuditFailureWarningNamesFailedStage(t *testing.T) {
 	warning := lifecycle.Links[0].Warning
 	if !strings.Contains(warning, "value-audit") || !strings.Contains(warning, "session limit") {
 		t.Fatalf("misleading audit warning: %s", warning)
+	}
+}
+
+func TestCrosscheckPromptTravelsOnStdinWithinLinuxArgumentLimit(t *testing.T) {
+	const linuxMaxArgStrlen = 128 * 1024
+	large := strings.Repeat("x", 2*linuxMaxArgStrlen)
+	for _, cliName := range []string{"claude", "codex"} {
+		t.Run(cliName, func(t *testing.T) {
+			var adapterArgs []string
+			if cliName == "claude" {
+				adapterArgs = []string{"claude", "-p", "--output-format", "stream-json", "--verbose", "--disallowedTools", "AskUserQuestion", "--", large}
+			} else {
+				adapterArgs = []string{"codex", "exec", "--json", large}
+			}
+			structured, _, cleanup, err := withCrosscheckOutputSchema(cliName, adapterArgs, t.TempDir(), "value", map[string]any{"type": "object"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cleanup()
+			argv, stdin := crosscheckPromptOnStdin(cliName, structured)
+			if stdin != large {
+				t.Fatalf("prompt did not move to stdin")
+			}
+			for _, arg := range argv {
+				if len(arg) > linuxMaxArgStrlen {
+					t.Fatalf("argv string of %d bytes exceeds the Linux limit", len(arg))
+				}
+			}
+			if cliName == "claude" {
+				last := argv[len(argv)-2:]
+				if last[0] != "--json-schema" || !json.Valid([]byte(last[1])) {
+					t.Fatalf("claude argv must end with the schema flag, got %q", last)
+				}
+				for _, arg := range argv {
+					if arg == "--" {
+						t.Fatalf("claude argv keeps a flag terminator without a prompt: %q", argv)
+					}
+				}
+			} else if argv[len(argv)-1] != "-" {
+				t.Fatalf("codex argv must read instructions from stdin, got %q", argv)
+			}
+		})
+	}
+}
+
+func TestClaudeCrosscheckSchemaPrecedesPromptSeparator(t *testing.T) {
+	args := []string{"claude", "-p", "--output-format", "stream-json", "--verbose", "--", "judge this"}
+	structured, _, cleanup, err := withCrosscheckOutputSchema("claude", args, t.TempDir(), "value", map[string]any{"type": "object"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	n := len(structured)
+	if structured[n-4] != "--json-schema" || structured[n-2] != "--" || structured[n-1] != "judge this" {
+		t.Fatalf("schema flag must precede the prompt separator: %q", structured)
+	}
+}
+
+func TestCrosscheckSendsPromptOnStdin(t *testing.T) {
+	for _, stage := range []string{"value", "correctness"} {
+		t.Run(stage, func(t *testing.T) {
+			request, pkg := crosscheckFixture(t)
+			output := `{"candidates":[]}`
+			if stage == "value" {
+				output = `{"batch_id":"` + pkg.BatchID + `","observations":[]}`
+			}
+			stdinFile := filepath.Join(t.TempDir(), "stdin")
+			original := crosscheckCommand
+			t.Cleanup(func() { crosscheckCommand = original })
+			crosscheckCommand = func(args []string, workspace, outputDir string) (*exec.Cmd, error) {
+				response := `{"type":"result","subtype":"success","is_error":false,"result":"done","structured_output":` + output + `}`
+				return exec.Command("sh", "-c", `cat > "$1"; printf '%s' "$2"`, "stub", stdinFile, response), nil
+			}
+			var err error
+			if stage == "value" {
+				_, err = invokeCrosscheckValueBatch(request, pkg)
+			} else {
+				_, err = invokeCrosscheckCorrectness(request)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(stdinFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(data) == 0 {
+				t.Fatalf("%s prompt was not written to stdin", stage)
+			}
+		})
+	}
+}
+
+func TestValuePackagesKeepOutputSchemaWithinArgumentLimit(t *testing.T) {
+	leaves := make([]LeafEvidence, 400)
+	for i := range leaves {
+		leaves[i] = LeafEvidence{
+			Skeleton: ObservationSkeleton{ObservationID: fmt.Sprintf("observation-%04d", i), StepID: fmt.Sprintf("step-%04d", i)},
+			Evidence: []EvidenceReference{{ID: fmt.Sprintf("evidence-%04d", i), Category: "git", Status: "available"}},
+		}
+	}
+	packages, err := buildValuePackages(leaves)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(packages) < 2 {
+		t.Fatalf("expected small leaves to split by schema size, got %d package", len(packages))
+	}
+	total := 0
+	for _, pkg := range packages {
+		total += len(pkg.Leaves)
+		schema, err := json.Marshal(valueOutputSchema(pkg))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(schema) > defaultSchemaBytes {
+			t.Fatalf("%s schema is %d bytes", pkg.BatchID, len(schema))
+		}
+	}
+	if total != len(leaves) {
+		t.Fatalf("packages hold %d of %d leaves", total, len(leaves))
+	}
+}
+
+func TestClaudeCrosscheckTempDirectoryIsInsideWritableOutput(t *testing.T) {
+	request, _ := crosscheckFixture(t)
+	adapter, err := cli.Get("claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputDir := filepath.Join(request.AuditSessionDir, "model-output")
+	env, cleanup, err := cliEnvironment(adapter, request, nil, t.TempDir(), outputDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	temp := ""
+	for _, entry := range env {
+		if value, ok := strings.CutPrefix(entry, "TMPDIR="); ok {
+			temp = value
+		}
+	}
+	if !strings.HasPrefix(temp, outputDir+string(filepath.Separator)) {
+		t.Fatalf("Claude TMPDIR = %q, want below %q", temp, outputDir)
+	}
+	if info, err := os.Stat(temp); err != nil || !info.IsDir() {
+		t.Fatalf("Claude TMPDIR missing: %v", err)
+	}
+	cleanup()
+	if _, err := os.Stat(temp); !os.IsNotExist(err) {
+		t.Fatalf("Claude TMPDIR survived cleanup: %v", err)
 	}
 }
