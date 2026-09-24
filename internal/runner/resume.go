@@ -163,7 +163,7 @@ func restoreResumeContext(state *model.RunState) restoredResumeContext {
 		// Top-level loop step captured mid-iteration. Carry the iteration (and
 		// any deeper chain) through as ChildState for ExecuteLoopStep to resume.
 		result.childState = &model.NestedStepState{
-			StepID: nested.StepID, Iteration: nested.Iteration, Child: nested.Child,
+			StepID: nested.StepID, Iteration: nested.Iteration, LoopVar: nested.LoopVar, Child: nested.Child,
 		}
 	} else {
 		result.childState = nested.Child
