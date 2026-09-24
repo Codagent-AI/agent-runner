@@ -5,8 +5,10 @@ package devaudit
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/audit"
@@ -23,7 +25,7 @@ func TestReplayExcludesEvidenceWithoutHistoricalSessionOwnership(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(project, ".agent-runner"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	config := "profiles:\n  default:\n    agents:\n      crosscheck:\n        default_mode: autonomous\n        cli: codex\n        model: gpt-5.6-sol\n        effort: low\n"
+	config := "profiles:\n  default:\n    agents:\n      lead:\n        default_mode: interactive\n        cli: claude\n        model: opus\n        effort: high\n      crosscheck:\n        default_mode: autonomous\n        cli: codex\n        model: gpt-5.6-sol\n        effort: low\n"
 	if err := os.WriteFile(filepath.Join(project, ".agent-runner", "config.yaml"), []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -80,14 +82,17 @@ func TestReplayExcludesEvidenceWithoutHistoricalSessionOwnership(t *testing.T) {
 
 	var request Request
 	t.Chdir(t.TempDir())
-	if err := Replay(source, "session-1", func(got Request) error {
+	if _, err := Replay(source, "session-1", func(got Request) error {
 		request = got
 		return nil
 	}); err != nil {
 		t.Fatalf("Replay() error = %v", err)
 	}
-	if request.Project != filepath.Base(project) || request.Crosscheck.CLI != "codex" {
-		t.Fatalf("replay source context = project %q crosscheck %#v", request.Project, request.Crosscheck)
+	if request.Project != filepath.Base(project) {
+		t.Fatalf("replay source project = %q", request.Project)
+	}
+	if want := (AgentProvenance{CLI: "claude", Model: "opus", Effort: "high"}); request.Auditor != want {
+		t.Fatalf("replay auditor = %#v, want lead agent %#v", request.Auditor, want)
 	}
 	if _, err := os.Stat(filepath.Join(request.SnapshotPath, "output", "later-session.out")); !os.IsNotExist(err) {
 		t.Fatalf("ambiguous later-session output remains in replay snapshot: %v", err)
@@ -119,6 +124,58 @@ func TestReplayExcludesEvidenceWithoutHistoricalSessionOwnership(t *testing.T) {
 		if count != 1 {
 			t.Fatalf("replay %s reference count = %d, want 1", category, count)
 		}
+	}
+}
+
+func TestReconcileReservedAutomaticAuditUsesOriginalIdentity(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(project, ".agent-runner"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".agent-runner", "config.yaml"), []byte("profiles:\n  default:\n    agents:\n      crosscheck:\n        default_mode: autonomous\n        cli: codex\n        model: gpt-5.6-sol\n        effort: low\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	projectState := filepath.Join(home, ".agent-runner", "projects", audit.EncodePath(project))
+	source := filepath.Join(projectState, "runs", "source")
+	auditDir := filepath.Join(projectState, "runs", "audit-original")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(auditDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectState, "meta.json"), []byte(`{"path":`+strconv.Quote(project)+`}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := stateio.WriteState(&model.RunState{RunID: "source", WorkflowFile: "builtin:openspec/change-v1.0.yaml", WorkflowName: "change"}, source); err != nil {
+		t.Fatal(err)
+	}
+	writeJSON(t, filepath.Join(source, metrics.FileName), metrics.Artifact{Sessions: []metrics.SessionRecord{{ExecutionSessionID: "session"}}})
+	if err := stateio.WriteState(&model.RunState{RunID: "audit-original", Audit: &model.AuditMetadata{}}, auditDir); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := filepath.Join(auditDir, "snapshot")
+	if err := os.MkdirAll(snapshot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeJSON(t, filepath.Join(source, lifecycleFileName), Lifecycle{Version: 1, SourceRunID: "source", Links: []Link{{AuditRunID: "audit-original", ExecutionSessionID: "session", Trigger: "automatic", State: LaunchReserved, SnapshotPath: snapshot}}})
+
+	var launched Request
+	id, err := Reconcile(source, "session", func(request Request) error { launched = request; return nil })
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if id != "audit-original" || launched.AuditRunID != "audit-original" {
+		t.Fatalf("reconcile identity = %q, launched %#v", id, launched)
+	}
+	lifecycle, err := ReadLifecycle(filepath.Join(source, lifecycleFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lifecycle.Links[0].State != LaunchStarted {
+		t.Fatalf("lifecycle state = %q, want started", lifecycle.Links[0].State)
 	}
 }
 
@@ -171,7 +228,8 @@ func TestCoordinatorOnlyAuditsTopLevelCanonicalWorkflowNamespaces(t *testing.T) 
 		summary runner.PostFinalizationSummary
 		want    bool
 	}{
-		{"openspec", runner.PostFinalizationSummary{WorkflowFile: "builtin:openspec/change-v1.0.yaml", ExecutionSessionID: "session", Result: runner.ResultStopped, TopLevel: true}, true},
+		{"openspec", runner.PostFinalizationSummary{WorkflowFile: "builtin:openspec/change-v1.0.yaml", ExecutionSessionID: "session", Result: runner.ResultSuccess, TopLevel: true}, true},
+		{"user stopped", runner.PostFinalizationSummary{WorkflowFile: "builtin:openspec/change-v1.0.yaml", ExecutionSessionID: "session", Result: runner.ResultStopped, TopLevel: true}, false},
 		{"spec driven", runner.PostFinalizationSummary{WorkflowFile: "builtin:spec-driven/change-v1.0.yaml", ExecutionSessionID: "session", Result: runner.ResultFailed, TopLevel: true}, true},
 		{"nested", runner.PostFinalizationSummary{WorkflowFile: "builtin:openspec/change-v1.0.yaml", Result: runner.ResultSuccess}, false},
 		{"unrelated", runner.PostFinalizationSummary{WorkflowFile: "builtin:core/intake-v1.0.yaml", Result: runner.ResultSuccess, TopLevel: true}, false},
@@ -213,5 +271,95 @@ func TestSnapshotRunnerSourceKeepsUnavailableGitMetadataDistinctFromBuildDiagnos
 	}
 	if got.BuildRevision != "build-revision" || got.BuildDirty != "true" {
 		t.Fatalf("build diagnostics unexpectedly changed: %#v", got)
+	}
+}
+
+func TestCopySourceTreeOmitsGitIgnoredArtifactsAndVCSMetadata(t *testing.T) {
+	source := t.TempDir()
+	for _, args := range [][]string{{"init"}, {"config", "user.email", "audit@example.test"}, {"config", "user.name", "Audit Test"}} {
+		if output, err := exec.Command("git", append([]string{"-C", source}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(source, "go.mod"), []byte("module github.com/codagent/agent-runner\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"cmd/agent-runner", "internal/runner", "workflows"} {
+		if err := os.MkdirAll(filepath.Join(source, path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(source, "cmd", "agent-runner", "main.go"), []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "internal", "runner", "runner.go"), []byte("package runner\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "workflows", "example.yaml"), []byte("name: example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitignore := ".validator/cache/\nbin/\nvalidator_logs/\nartifacts/\nworktrees/\n"
+	if err := os.WriteFile(filepath.Join(source, ".gitignore"), []byte(gitignore), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "."}, {"commit", "-m", "tracked source"}} {
+		if output, err := exec.Command("git", append([]string{"-C", source}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(source, ".validator", "cache", "mod"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, ".validator", "cache", "mod", "cache.dat"), []byte("build cache"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "internal", "runner", "untracked.go"), []byte("package runner\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(source, "worktrees", "other"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "worktrees", "other", "file.go"), []byte("package other\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	destination := t.TempDir()
+	if err := copySourceTree(source, destination); err != nil {
+		t.Fatalf("copySourceTree() error = %v", err)
+	}
+
+	for _, path := range []string{"go.mod", "cmd/agent-runner/main.go", "internal/runner/runner.go", "workflows/example.yaml", "internal/runner/untracked.go"} {
+		if _, err := os.Stat(filepath.Join(destination, path)); err != nil {
+			t.Fatalf("snapshot missing %s: %v", path, err)
+		}
+	}
+	for _, path := range []string{".git", "worktrees", ".validator/cache", ".validator/cache/mod/cache.dat"} {
+		if _, err := os.Stat(filepath.Join(destination, path)); !os.IsNotExist(err) {
+			t.Fatalf("snapshot includes %s: %v", path, err)
+		}
+	}
+	if !runnerSnapshotComplete(destination) {
+		t.Fatal("runnerSnapshotComplete() = false, want true")
+	}
+}
+
+func TestCopySourceTreeFailsClosedWhenGitListingUnavailable(t *testing.T) {
+	source := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(source, ".validator", "cache"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, ".validator", "cache", "cache.dat"), []byte("build cache"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	destination := t.TempDir()
+	err := copySourceTree(source, destination)
+	if err == nil {
+		t.Fatal("copySourceTree() error = nil, want listing failure")
+	}
+	if !strings.Contains(err.Error(), "build source-tree filters") {
+		t.Fatalf("copySourceTree() error = %v, want filter construction failure", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(destination, ".validator", "cache", "cache.dat")); !os.IsNotExist(statErr) {
+		t.Fatalf("snapshot copied ignored cache after listing failure: %v", statErr)
 	}
 }

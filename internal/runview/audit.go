@@ -80,6 +80,7 @@ type prefixToken struct {
 	iteration *int
 	subName   string
 	callID    string
+	attempt   *int
 }
 
 // parsePrefix splits a bracketed prefix like "[task-loop:2, verify, sub:verify-task, check]"
@@ -105,6 +106,13 @@ func parsePrefix(prefix string) []prefixToken {
 		if strings.HasPrefix(p, "call:") {
 			tokens = append(tokens, prefixToken{callID: strings.TrimPrefix(p, "call:")})
 			continue
+		}
+		if strings.HasPrefix(p, "attempt:") {
+			if n, err := strconv.Atoi(strings.TrimPrefix(p, "attempt:")); err == nil {
+				v := n
+				tokens = append(tokens, prefixToken{attempt: &v})
+				continue
+			}
 		}
 		if colon := strings.LastIndexByte(p, ':'); colon > 0 {
 			if n, err := strconv.Atoi(p[colon+1:]); err == nil {
@@ -349,7 +357,10 @@ func reconstructAgentCallParent(root *StepNode, tokens []prefixToken) {
 }
 
 func auditNodeType(event RawEvent, tokens []prefixToken) (NodeType, bool) {
-	if len(tokens) > 1 {
+	// A repair-attempt token says nothing about the owning step's type: the
+	// owner is always the shell or script check itself, described by the
+	// event's own data.
+	if len(tokens) > 1 && tokens[1].attempt == nil {
 		switch {
 		case tokens[1].subName != "":
 			return NodeSubWorkflow, true
@@ -359,6 +370,12 @@ func auditNodeType(event RawEvent, tokens []prefixToken) (NodeType, bool) {
 			return NodeGroup, true
 		}
 	}
+	return auditNodeTypeFromData(event)
+}
+
+// auditNodeTypeFromData classifies a node from a single event's own payload,
+// without consulting the nesting prefix.
+func auditNodeTypeFromData(event RawEvent) (NodeType, bool) {
 	if event.Type == "sub_workflow_start" || event.Type == "sub_workflow_end" {
 		return NodeSubWorkflow, true
 	}
@@ -447,6 +464,12 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 		t.addWarning(e.Data)
 	case "step_start", "step_end":
 		t.applyStepEvent(e, tokens)
+	case "repair_attempt_start":
+		t.applyRepairAttemptStart(e, tokens)
+	case "repair_attempt_end":
+		t.applyRepairAttemptEnd(e, tokens)
+	case "repair_blocked":
+		t.applyRepairBlocked(e, tokens)
 	case "iteration_start", "iteration_end":
 		t.applyIterationEvent(e, tokens)
 	case "sub_workflow_start", "sub_workflow_end":
@@ -455,6 +478,17 @@ func (t *Tree) ApplyEvent(e RawEvent) {
 }
 
 func (t *Tree) applyStepEvent(event RawEvent, tokens []prefixToken) {
+	if event.Type == "step_start" {
+		if check := t.checkRerunOwner(tokens); check != nil {
+			// The check's own rerun inside an attempt decides its outcome, so
+			// the check row follows that run's persisted output from now on
+			// instead of the first failing run recorded under its own prefix.
+			check.OutputPrefix = event.Prefix
+			check.OutputLoaded = false
+			check.Stdout = ""
+			check.Stderr = ""
+		}
+	}
 	n := t.resolve(tokens, true)
 	if n == nil {
 		return
@@ -470,6 +504,13 @@ func (t *Tree) applyStepEvent(event RawEvent, tokens []prefixToken) {
 		}
 		return
 	}
+	if n.RepairDynamic {
+		// Nodes materialized from a repair-scoped prefix have no workflow
+		// definition behind them; the event that creates them names their type.
+		if nodeType, ok := auditNodeTypeFromData(event); ok {
+			n.Type = nodeType
+		}
+	}
 	t.assignStartOrdinal(n)
 	n.OutputPrefix = event.Prefix
 	n.OutputLoaded = false
@@ -483,6 +524,86 @@ func (t *Tree) applyStepEvent(event RawEvent, tokens []prefixToken) {
 	n.Outcome = ""
 	n.StartedAt = parseEventTime(event.Timestamp)
 	applyStepStart(n, event.Data)
+}
+
+// applyRepairAttemptStart opens an attempt on the owning check and records the
+// failed check run that triggered it as an "attempt N" child row.
+func (t *Tree) applyRepairAttemptStart(event RawEvent, tokens []prefixToken) {
+	check := t.resolve(tokens, true)
+	if check == nil {
+		return
+	}
+	attempt, ok := intField(event.Data, "attempt")
+	if !ok || attempt <= 0 {
+		return
+	}
+	if form, ok := stringField(event.Data, "form"); ok && form != "" {
+		check.RepairForm = form
+	}
+	if target, ok := stringField(event.Data, "target"); ok && target != "" {
+		check.RepairTarget = target
+	}
+	if budget, ok := intField(event.Data, "max"); ok && budget > 0 {
+		check.RepairBudget = budget
+	}
+	check.RepairActiveAttempt = attempt
+
+	id := fmt.Sprintf("attempt %d", attempt)
+	node := childByID(check, id)
+	if node == nil {
+		node = appendRepairChild(check, id, NodeRepairAttempt)
+	}
+	node.Type = NodeRepairAttempt
+	node.Status = StatusFailed
+	node.Outcome = "failed"
+	if exitCode, ok := intField(event.Data, "exit_code"); ok {
+		value := exitCode
+		node.ExitCode = &value
+	}
+	if stdout, ok := stringField(event.Data, "stdout"); ok {
+		node.Stdout = stdout
+	}
+	if stderr, ok := stringField(event.Data, "stderr"); ok {
+		node.Stderr = stderr
+	}
+	node.StartedAt = parseEventTime(event.Timestamp)
+}
+
+// applyRepairAttemptEnd closes an attempt: the check's completed-attempt count
+// advances, the rerun container (when there is one) takes the attempt's
+// outcome, and a passing attempt marks the owning check successful.
+func (t *Tree) applyRepairAttemptEnd(event RawEvent, tokens []prefixToken) {
+	check := t.resolve(tokens, true)
+	if check == nil {
+		return
+	}
+	attempt, _ := intField(event.Data, "attempt")
+	if attempt > check.RepairAttempts {
+		check.RepairAttempts = attempt
+	}
+	check.RepairActiveAttempt = 0
+	outcome, _ := stringField(event.Data, "outcome")
+	if container := childByID(check, fmt.Sprintf("rerun %d", attempt)); container != nil {
+		applyOutcome(container, outcome)
+	}
+	if outcome == "success" {
+		check.Status = StatusSuccess
+	}
+}
+
+// applyRepairBlocked records a REPAIR_BLOCKED declaration against the check.
+func (t *Tree) applyRepairBlocked(event RawEvent, tokens []prefixToken) {
+	check := t.resolve(tokens, true)
+	if check == nil {
+		return
+	}
+	check.RepairBlocked = true
+	check.RepairActiveAttempt = 0
+	record := check.ensureFailure()
+	record.Blocked = true
+	if response, ok := stringField(event.Data, "response"); ok {
+		record.BlockedBy = response
+	}
 }
 
 func (t *Tree) applyIterationEvent(event RawEvent, tokens []prefixToken) {
@@ -627,51 +748,148 @@ func (t *Tree) applyAgentCallEvent(event RawEvent, tokens []prefixToken) bool {
 // body. Returns nil if the path cannot be fully resolved.
 func (t *Tree) resolve(tokens []prefixToken, createIterations bool) *StepNode {
 	current := t.Root
+	// inlineAttempt is non-zero while the next token names an execution that
+	// belongs to an inline repair attempt of the current (check) node.
+	inlineAttempt := 0
 	for _, tok := range tokens {
 		switch {
+		case tok.attempt != nil:
+			scope, inline := t.repairScope(current, *tok.attempt, createIterations)
+			if scope == nil {
+				return nil
+			}
+			current = scope
+			inlineAttempt = 0
+			if inline {
+				inlineAttempt = *tok.attempt
+			}
 		case tok.callID != "":
 			current = callChildByID(current, tok.callID)
-			if current == nil {
-				return nil
-			}
 		case tok.subName != "":
-			if err := t.ensureSubWorkflowLoaded(current); err != nil {
-				// Lazy-load failure: record on the node so the UI can display it;
-				// resolution stays here so the node itself remains targetable, but
-				// further descent will yield nil (no children).
-				if current.ErrorMessage == "" {
-					current.ErrorMessage = err.Error()
-				}
-			}
+			t.loadSubWorkflowForResolve(current)
 			// Stay at the sub-workflow node — its children now hold the body.
 		case tok.iteration != nil:
-			loop := childByID(current, tok.stepID)
-			if loop == nil {
-				return nil
-			}
-			iter := findIteration(loop, *tok.iteration)
-			if iter == nil {
-				if !createIterations {
-					return nil
-				}
-				iter = ensureIteration(loop, *tok.iteration)
-			}
-			current = iter
+			current = resolveIterationToken(current, tok, createIterations)
 		default:
-			child := groupDescendantByID(current, tok.stepID, true)
-			if child == nil {
-				child = childByID(current, tok.stepID)
-			}
-			if child == nil {
-				child = groupDescendantByID(current, tok.stepID, false)
-			}
-			if child == nil {
-				return nil
-			}
-			current = child
+			current = t.resolveStepToken(current, tok.stepID, inlineAttempt, createIterations)
+			inlineAttempt = 0
+		}
+		if current == nil {
+			return nil
 		}
 	}
 	return current
+}
+
+// loadSubWorkflowForResolve lazily attaches a sub-workflow body during
+// resolution. A load failure is recorded on the node so the UI can display it;
+// the node itself stays targetable and further descent simply finds no child.
+func (t *Tree) loadSubWorkflowForResolve(node *StepNode) {
+	if err := t.ensureSubWorkflowLoaded(node); err != nil && node.ErrorMessage == "" {
+		node.ErrorMessage = err.Error()
+	}
+}
+
+func resolveIterationToken(current *StepNode, tok prefixToken, createIterations bool) *StepNode {
+	loop := childByID(current, tok.stepID)
+	if loop == nil {
+		return nil
+	}
+	if iter := findIteration(loop, *tok.iteration); iter != nil {
+		return iter
+	}
+	if !createIterations {
+		return nil
+	}
+	return ensureIteration(loop, *tok.iteration)
+}
+
+// resolveStepToken resolves an ordinary step token, including the two
+// repair-scoped shapes: an execution named per inline attempt, and a child of
+// a rerun container, both of which exist only in audit.
+func (t *Tree) resolveStepToken(current *StepNode, stepID string, inlineAttempt int, createIterations bool) *StepNode {
+	if inlineAttempt > 0 {
+		return t.inlineRepairChild(current, stepID, inlineAttempt, createIterations)
+	}
+	if current.RepairDynamic && current.Type == NodeGroup {
+		// Inside a rerun container every child is materialized from audit: the
+		// workflow definition contributes no such steps.
+		if child := childByID(current, stepID); child != nil {
+			return child
+		}
+		if !createIterations {
+			return nil
+		}
+		return appendRepairChild(current, stepID, NodeShell)
+	}
+	if child := groupDescendantByID(current, stepID, true); child != nil {
+		return child
+	}
+	if child := childByID(current, stepID); child != nil {
+		return child
+	}
+	return groupDescendantByID(current, stepID, false)
+}
+
+// repairScope returns the node that owns executions recorded under an
+// "attempt:N" token of check. For the rerun form that is a "rerun N"
+// container child; for the inline form the check itself owns them, and the
+// second return value asks the caller to name them per attempt.
+func (t *Tree) repairScope(check *StepNode, attempt int, create bool) (scope *StepNode, inline bool) {
+	if check == nil {
+		return nil, false
+	}
+	if check.RepairForm != "rerun" {
+		return check, true
+	}
+	id := fmt.Sprintf("rerun %d", attempt)
+	if existing := childByID(check, id); existing != nil {
+		return existing, false
+	}
+	if !create {
+		return nil, false
+	}
+	container := appendRepairChild(check, id, NodeGroup)
+	container.Status = StatusInProgress
+	return container, false
+}
+
+// checkRerunOwner returns the check whose own rerun a prefix of the shape
+// [..., check, attempt:N, check] records, for either repair form, or nil.
+func (t *Tree) checkRerunOwner(tokens []prefixToken) *StepNode {
+	last := len(tokens) - 1
+	if last < 2 || tokens[last].stepID == "" || tokens[last].iteration != nil || tokens[last-1].attempt == nil {
+		return nil
+	}
+	check := t.resolve(tokens[:last-1], false)
+	if check == nil || check.ID != tokens[last].stepID {
+		return nil
+	}
+	return check
+}
+
+// inlineRepairChild resolves one execution recorded under an inline attempt.
+// The check's own rerun inside the attempt ("[check, attempt:N, check]") is
+// not a row of its own: its outcome is already carried by the next attempt
+// node or by the check's terminal result.
+func (t *Tree) inlineRepairChild(check *StepNode, stepID string, attempt int, create bool) *StepNode {
+	if stepID == "" || stepID == check.ID {
+		return nil
+	}
+	id := fmt.Sprintf("%s %d", stepID, attempt)
+	if existing := childByID(check, id); existing != nil {
+		return existing
+	}
+	if !create {
+		return nil
+	}
+	return appendRepairChild(check, id, NodeHeadlessAgent)
+}
+
+func appendRepairChild(parent *StepNode, id string, nodeType NodeType) *StepNode {
+	child := &StepNode{ID: id, Type: nodeType, Status: StatusPending, Parent: parent, RepairDynamic: true}
+	parent.Children = append(parent.Children, child)
+	return child
 }
 
 func (t *Tree) applyAgentCallStart(event RawEvent, tokens []prefixToken) {
@@ -1095,6 +1313,7 @@ func applyStepEnd(n *StepNode, data map[string]any) {
 	if s, ok := stringField(data, "discovered_session_id"); ok && s != "" {
 		n.SessionID = s
 	}
+	applyRepairStepEnd(n, data)
 	if !dataCarriesMetrics(data) {
 		return
 	}
@@ -1109,7 +1328,7 @@ func applyStepEnd(n *StepNode, data map[string]any) {
 			agentInvoked = v
 		}
 	}
-	metrics := AttemptMetrics{Attempt: attempt, Outcome: outcome, AgentInvoked: agentInvoked}
+	metrics := AttemptMetrics{Attempt: attempt, Outcome: outcome, AgentInvoked: agentInvoked, Stdout: n.Stdout, Stderr: n.Stderr}
 	if n.DurationMs != nil {
 		v := *n.DurationMs
 		metrics.DurationMs = &v
@@ -1129,6 +1348,59 @@ func applyStepEnd(n *StepNode, data map[string]any) {
 		}
 	}
 	n.Attempts = append(n.Attempts, metrics)
+}
+
+// applyRepairStepEnd copies a check's terminal repair outcome and its durable
+// failure record off a step_end. Audit logs recorded before repair existed
+// carry none of these fields, so such a step_end leaves the node untouched.
+func applyRepairStepEnd(n *StepNode, data map[string]any) {
+	if form, ok := stringField(data, "repair_form"); ok && form != "" {
+		n.RepairForm = form
+	}
+	if target, ok := stringField(data, "repair_target"); ok && target != "" {
+		n.RepairTarget = target
+	}
+	if budget, ok := intField(data, "repair_max"); ok && budget > 0 {
+		n.RepairBudget = budget
+	}
+	if attempts, ok := intField(data, "repair_attempts"); ok {
+		n.RepairAttempts = attempts
+		n.RepairActiveAttempt = 0
+	}
+	if blocked, ok := boolField(data, "repair_blocked"); ok && blocked {
+		n.RepairBlocked = true
+	}
+
+	if n.Status != StatusFailed {
+		return
+	}
+	guardedPrefix, hasGuarded := stringField(data, "guarded_prefix")
+	if !hasGuarded && !n.RepairBlocked && n.RepairForm == "" {
+		// A plain failure with no guarded execution and no repair block has no
+		// failure record to show; rendering stays exactly as it was.
+		return
+	}
+	record := n.ensureFailure()
+	record.StepID = n.ID
+	if exitCode, ok := intField(data, "exit_code"); ok {
+		record.ExitCode = exitCode
+	}
+	if stdout, ok := stringField(data, "stdout"); ok {
+		record.Stdout = stdout
+	}
+	if stderr, ok := stringField(data, "stderr"); ok {
+		record.Stderr = stderr
+	}
+	if hasGuarded {
+		record.GuardedPrefix = guardedPrefix
+		if attempt, ok := intField(data, "guarded_attempt"); ok {
+			record.GuardedAttempt = attempt
+		}
+	}
+	if n.RepairBlocked {
+		record.Blocked = true
+	}
+	record.RepairAttempts = n.RepairAttempts
 }
 
 func eventCarriesMetrics(event RawEvent) bool {

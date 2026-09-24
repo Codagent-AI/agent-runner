@@ -931,3 +931,99 @@ func TestLiveUIRequestLFollowWorksWhileUIVisible(t *testing.T) {
 		t.Fatal("l should re-enable auto-follow while live UI is visible")
 	}
 }
+
+func TestLiveFollowRepairEntersInlineRepairAgent(t *testing.T) {
+	wf := fixtureRepairPlanChange()
+	tree := BuildTree(&wf, fixturePath("openspec/plan-change-v1.0.yaml"))
+	applyFixtureAudit(t, tree, inProgressInlineRepairAuditFixture())
+
+	m := newTestModel(tree, FromLiveRun)
+	m.running = true
+	m.followActive = true
+	m.activeStepPrefix = "[check-plan, attempt:1, repair]"
+	m.applyAutoFollowCursor()
+
+	check := childByID(tree.Root, "check-plan")
+	repair := tree.FindByPrefix("[check-plan, attempt:1, repair]")
+	if repair == nil {
+		t.Fatal("inline repair agent node missing")
+	}
+	if got := m.selectedNode(); got != repair {
+		t.Fatalf("selected node = %v, want the repair agent row", got)
+	}
+	if len(m.path) != 1 || m.path[0] != tree.Root {
+		t.Fatalf("auto-follow changed the manual scope: %#v", m.path)
+	}
+	_, suffix := stepRowLabel(check)
+	if suffix != " (repairing 1/1)" {
+		t.Fatalf("check suffix = %q", suffix)
+	}
+
+	rows := []string{}
+	for _, row := range m.buildProjectedRenderedRows() {
+		rows = append(rows, stripANSI(row.text))
+	}
+	joined := strings.Join(rows, "\n")
+	if !strings.Contains(joined, "attempt 1") || !strings.Contains(joined, "repair 1") {
+		t.Fatalf("attempt children were not expanded inline:\n%s", joined)
+	}
+}
+
+func TestLiveFollowRepairEntersReplayedStepUnderRerun(t *testing.T) {
+	wf := fixtureRepairImplementChange()
+	tree := BuildTree(&wf, fixturePath("openspec/implement-change-v1.0.yaml"))
+	applyFixtureAudit(t, tree, inProgressRerunAuditFixture())
+
+	m := newTestModel(tree, FromLiveRun)
+	m.running = true
+	m.followActive = true
+	m.activeStepPrefix = "[verify-draft-pr, attempt:1, open-draft-pr]"
+	m.applyAutoFollowCursor()
+
+	replayed := tree.FindByPrefix("[verify-draft-pr, attempt:1, open-draft-pr]")
+	if replayed == nil {
+		t.Fatal("replayed step node missing")
+	}
+	if got := m.selectedNode(); got != replayed {
+		t.Fatalf("selected node = %v, want the replayed step under rerun 1", got)
+	}
+	if len(m.path) != 1 || m.path[0] != tree.Root {
+		t.Fatalf("auto-follow changed the breadcrumb scope: %#v", m.path)
+	}
+	if replayed.Parent == nil || replayed.Parent.ID != "rerun 1" {
+		t.Fatalf("replayed step parent = %v", replayed.Parent)
+	}
+}
+
+func TestLiveFollowRepairRecoveryCollapsesToCheckAndMovesOn(t *testing.T) {
+	wf := fixtureRepairImplementChange()
+	tree := BuildTree(&wf, fixturePath("openspec/implement-change-v1.0.yaml"))
+	applyFixtureAudit(t, tree, recoveredRerunAuditFixture())
+
+	m := newTestModel(tree, FromLiveRun)
+	m.running = true
+	m.followActive = true
+	m.activeStepPrefix = "[finalize]"
+	m.applyAutoFollowCursor()
+
+	check := childByID(tree.Root, "verify-draft-pr")
+	if check.Status != StatusSuccess {
+		t.Fatalf("recovered check status = %v", check.Status)
+	}
+	_, suffix := stepRowLabel(check)
+	if suffix != " (repaired 1/1)" {
+		t.Fatalf("check suffix = %q", suffix)
+	}
+	finalize := childByID(tree.Root, "finalize")
+	if got := m.selectedNode(); got != finalize {
+		t.Fatalf("selected node = %v, want the next peer step", got)
+	}
+	rows := []string{}
+	for _, row := range m.buildProjectedRenderedRows() {
+		rows = append(rows, stripANSI(row.text))
+	}
+	joined := strings.Join(rows, "\n")
+	if strings.Contains(joined, "attempt 1") || strings.Contains(joined, "rerun 1") {
+		t.Fatalf("attempt children stayed expanded after recovery:\n%s", joined)
+	}
+}

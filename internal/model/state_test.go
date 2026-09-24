@@ -162,6 +162,113 @@ func TestNestedStepStateCapturedVariablesUseTypedEnvelope(t *testing.T) {
 	}
 }
 
+func TestResolveResumeStep(t *testing.T) {
+	steps := []Step{{ID: "a"}, {ID: "b"}, {ID: "c"}}
+
+	t.Run("no frame, not completed, stays at recorded step", func(t *testing.T) {
+		got, err := ResolveResumeStep(steps, "b", false, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.StepID != "b" || got.AllDone {
+			t.Fatalf("got %+v", got)
+		}
+	})
+
+	t.Run("no frame, completed, advances to next step", func(t *testing.T) {
+		got, err := ResolveResumeStep(steps, "b", true, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.StepID != "c" {
+			t.Fatalf("got %+v", got)
+		}
+	})
+
+	t.Run("no frame, completed on last step, all done", func(t *testing.T) {
+		got, err := ResolveResumeStep(steps, "c", true, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !got.AllDone {
+			t.Fatalf("got %+v", got)
+		}
+	})
+
+	t.Run("no frame, recorded step missing errors", func(t *testing.T) {
+		_, err := ResolveResumeStep(steps, "missing", false, nil)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	for _, phase := range []string{RepairPhaseChecking, RepairPhaseRepairing, RepairPhaseReplaying} {
+		t.Run("frame phase "+phase+" keeps attempts and recorded step", func(t *testing.T) {
+			frame := &RepairFrame{CheckID: "check", Form: "inline", Phase: phase, Attempts: 1, Budget: 2}
+			got, err := ResolveResumeStep(steps, "b", false, frame)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.StepID != "b" {
+				t.Fatalf("got %+v", got)
+			}
+			if frame.Attempts != 1 || frame.Phase != phase {
+				t.Fatalf("frame mutated unexpectedly: %+v", frame)
+			}
+		})
+	}
+
+	t.Run("frame phase replaying, recorded step completed, advances", func(t *testing.T) {
+		frame := &RepairFrame{CheckID: "check", Form: "rerun", Phase: RepairPhaseReplaying, Attempts: 1, Budget: 2, Target: "a"}
+		got, err := ResolveResumeStep(steps, "a", true, frame)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.StepID != "b" {
+			t.Fatalf("got %+v", got)
+		}
+	})
+
+	t.Run("frame phase failed, form rerun, resumes at target with fresh budget", func(t *testing.T) {
+		frame := &RepairFrame{CheckID: "check", Form: "rerun", Phase: RepairPhaseFailed, Attempts: 2, Budget: 2, Target: "a"}
+		got, err := ResolveResumeStep(steps, "check", false, frame)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.StepID != "a" {
+			t.Fatalf("got %+v", got)
+		}
+		if frame.Attempts != 0 {
+			t.Fatalf("expected reset attempts, got %d", frame.Attempts)
+		}
+		if frame.Phase != RepairPhaseReplaying {
+			t.Fatalf("expected phase replaying, got %q", frame.Phase)
+		}
+	})
+
+	t.Run("frame phase failed, form inline, resumes at check with fresh budget", func(t *testing.T) {
+		frame := &RepairFrame{CheckID: "check", Form: "inline", Phase: RepairPhaseFailed, Attempts: 2, Budget: 2}
+		got, err := ResolveResumeStep(steps, "b", false, frame)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.StepID != "b" {
+			t.Fatalf("got %+v", got)
+		}
+		if frame.Attempts != 0 {
+			t.Fatalf("expected reset attempts, got %d", frame.Attempts)
+		}
+	})
+
+	t.Run("frame phase failed, form rerun, stale target errors naming the target", func(t *testing.T) {
+		frame := &RepairFrame{CheckID: "check", Form: "rerun", Phase: RepairPhaseFailed, Attempts: 2, Budget: 2, Target: "gone"}
+		_, err := ResolveResumeStep(steps, "check", false, frame)
+		if err == nil || !strings.Contains(err.Error(), "gone") {
+			t.Fatalf("expected error naming missing target, got %v", err)
+		}
+	})
+}
+
 func TestNestedStepStateReadsLegacyStringCaptures(t *testing.T) {
 	raw := `{"workflowFile":"w.yaml","workflowName":"w","currentStep":{"stepId":"s","sessionIds":{},"capturedVariables":{"out":"legacy"}},"params":{},"workflowHash":"hash"}`
 

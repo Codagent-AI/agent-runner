@@ -26,7 +26,7 @@ steps:
 
       {{artifact_location_instruction}}
 
-      Once the proposal draft is complete, use codagent:call-agent with a fresh `agent: crosscheck` to obtain one adversarial review. The task-specific child instructions must require it to use the codagent:proposal-review skill, read the proposal under `{{change_dir}}/`, inspect relevant repository context, provide clear actionable feedback with recommended resolutions, and never modify files.
+      Once the proposal draft is complete, use the codagent:call-agent skill with a fresh `agent: crosscheck` to obtain one adversarial review. Do not run that review yourself. The task-specific child instructions must require it to use the codagent:proposal-review skill, read the proposal under `{{change_dir}}/`, inspect relevant repository context, provide clear actionable feedback with recommended resolutions, and never modify files.
 
       Follow codagent:call-agent's verification and user-facing reporting rules. Discuss every consequential finding with the user. Do not modify the proposal or any other file in response to review feedback until you have presented your assessment and received the user's explicit confirmation about which changes to make. Apply only the changes the user confirms.
 
@@ -61,7 +61,9 @@ steps:
     mode: interactive
     tools: [call_agent]
     prompt: |
-      Perform the final definition review with the user for {{change_label}} "{{change_name}}". Use codagent:call-agent with a fresh `agent: crosscheck`. The task-specific child instructions must require it to use the codagent:review-approach skill and independently review the proposal, every specification, the design, and `test-plan.md` under `{{change_dir}}/` together.
+      You MUST use the codagent:call-agent skill with a fresh `agent: crosscheck` to obtain one independent definition review for {{change_label}} "{{change_name}}". Do not perform that review yourself.
+
+      The task-specific child instructions must require the child to use the codagent:review-approach skill and independently review the proposal, every specification, the design, and `test-plan.md` under `{{change_dir}}/` together.
 
       Require the child to check cross-artifact consistency and testability; find consequential behavioral, architectural, or testing-strategy gaps, missing decisions, weak tradeoffs, failure modes, and better alternatives; inspect relevant repository patterns; avoid reviewing implementation tasks; and never modify files.
 

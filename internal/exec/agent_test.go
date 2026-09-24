@@ -192,6 +192,33 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("publishes LastAgentExecution on completion", func(t *testing.T) {
+		auditLog := &recordingAuditLogger{}
+		ctx := makeCtx()
+		ctx.AuditLogger = auditLog
+		step := model.Step{ID: "open-draft-pr", Mode: model.ModeAutonomous, Prompt: "do something", Session: model.SessionNew}
+
+		outcome, err := ExecuteAgentStep(&step, ctx, &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: claudeUsageOutput("opened the PR", 0.1)}}}, &mockLogger{})
+		if err != nil || outcome != OutcomeSuccess {
+			t.Fatalf("ExecuteAgentStep() = (%q, %v), want success", outcome, err)
+		}
+		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
+		identity := end.Data["identity"].(model.ExecutionIdentity)
+
+		if ctx.LastAgentExecution == nil {
+			t.Fatal("expected LastAgentExecution to be published")
+		}
+		if ctx.LastAgentExecution.Ref.Prefix != "[open-draft-pr]" {
+			t.Fatalf("ref prefix = %q, want [open-draft-pr]", ctx.LastAgentExecution.Ref.Prefix)
+		}
+		if ctx.LastAgentExecution.Ref.Attempt != identity.Attempt {
+			t.Fatalf("ref attempt = %d, want to match identity.attempt %d", ctx.LastAgentExecution.Ref.Attempt, identity.Attempt)
+		}
+		if ctx.LastAgentExecution.Response != "opened the PR" {
+			t.Fatalf("response = %q, want %q", ctx.LastAgentExecution.Response, "opened the PR")
+		}
+	})
+
 	t.Run("usage parse failure does not change successful outcome", func(t *testing.T) {
 		auditLog := &recordingAuditLogger{}
 		ctx := makeCtx()

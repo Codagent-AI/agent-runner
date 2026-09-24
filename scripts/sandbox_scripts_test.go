@@ -481,7 +481,7 @@ func TestSandboxSyncHomeCopiesAllowedFilesWritable(t *testing.T) {
 	}
 
 	cmd := exec.Command("bash", "./sandbox-sync-home.sh")
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(withoutHostLauncherEnv(os.Environ()),
 		"HOME="+containerHome,
 		"SANDBOX_HOST_HOME_ROOT="+hostHome,
 		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
@@ -593,7 +593,7 @@ func TestSandboxSyncHomeCopiesAllowedFilesWritable(t *testing.T) {
 	}
 	githubCredentialHelper := filepath.Join(dir, "workspace", "bin", "github-credential-helper")
 	helperCmd := exec.Command(githubCredentialHelper, "get")
-	helperCmd.Env = append(os.Environ(), "HOME="+containerHome)
+	helperCmd.Env = append(withoutHostLauncherEnv(os.Environ()), "HOME="+containerHome)
 	helperCmd.Stdin = strings.NewReader("protocol=https\nhost=github.com\n\n")
 	helperOutput, err := helperCmd.CombinedOutput()
 	if err != nil {
@@ -632,7 +632,7 @@ func TestSandboxSyncHomeCopiesAllowedFilesWritable(t *testing.T) {
 	}
 	for _, tc := range wrapperCases {
 		wrapperCmd := exec.Command(tc.path, tc.args...)
-		wrapperCmd.Env = append(os.Environ(),
+		wrapperCmd.Env = append(withoutHostLauncherEnv(os.Environ()),
 			"HOME="+containerHome,
 			tc.envName+"="+fakeAgentCLI,
 		)
@@ -661,7 +661,7 @@ func TestSandboxSyncHomeCopiesAllowedFilesWritable(t *testing.T) {
 		t.Fatalf("write local codex config: %v", err)
 	}
 	cmd = exec.Command("bash", "./sandbox-sync-home.sh")
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(withoutHostLauncherEnv(os.Environ()),
 		"HOME="+containerHome,
 		"SANDBOX_HOST_HOME_ROOT="+hostHome,
 		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
@@ -1281,4 +1281,21 @@ func sliceContainsSubstring(items []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// withoutHostLauncherEnv drops variables a host launcher (such as the agent factory's
+// fix wrapper) exports for its own processes. Inherited, they override the isolated
+// HOME a test sets up: a private GIT_CONFIG_GLOBAL replaces $HOME/.gitconfig, and
+// AGENT_RUNNER_NO_TUI switches a spawned runner onto its headless path.
+func withoutHostLauncherEnv(base []string) []string {
+	result := make([]string, 0, len(base))
+	for _, entry := range base {
+		name, _, _ := strings.Cut(entry, "=")
+		switch name {
+		case "AGENT_RUNNER_NO_TUI", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM":
+			continue
+		}
+		result = append(result, entry)
+	}
+	return result
 }

@@ -53,6 +53,6 @@ steps:
     continue_on_failure: true
 
   - id: archive
-    script: archive-change.sh
-    script_inputs:
+    workflow: archive-change-v1.0.yaml
+    params:
       change_name: "{{change_name}}"

@@ -175,6 +175,42 @@ func TestCollectorProjectsTerminalEventsAndNormalizesAttempts(t *testing.T) {
 	}
 }
 
+func TestPipelineAttemptForMatchesAssignedIdentityAttempt(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	collector := NewCollector(dir, "run-1", "workflow", started)
+	pipeline := NewExecutionPipeline(collector, nil, t.TempDir(), "execution-1")
+	identity := model.ExecutionIdentity{StepID: "open-draft-pr", Prefix: "[open-draft-pr]", StepType: "agent", Kind: "step"}
+
+	predicted := pipeline.AttemptFor(&identity)
+	pipeline.Emit(stepEvent(started.Add(time.Second), identity, model.UsageRecord{Status: model.UsageUnavailable, Source: "agent-runner"}, nil, "success", 100))
+
+	assigned := 0
+	for _, s := range readArtifact(t, dir).Steps {
+		if s.ID == "open-draft-pr" {
+			assigned = s.Attempt
+		}
+	}
+	if predicted != assigned {
+		t.Fatalf("Pipeline.AttemptFor predicted %d, artifact recorded attempt %d", predicted, assigned)
+	}
+}
+
+func TestCollectorAttemptForMatchesAssignedIdentityAttempt(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(dir, "run-1", "workflow", started)
+	identity := model.ExecutionIdentity{StepID: "open-draft-pr", Prefix: "[open-draft-pr]", StepType: "agent", Kind: "step"}
+
+	predicted := c.AttemptFor(&identity)
+	end := c.Process(stepEvent(started.Add(time.Second), identity, model.UsageRecord{Status: model.UsageUnavailable, Source: "agent-runner"}, nil, "success", 100))
+	assigned := end.Data[DataIdentity].(model.ExecutionIdentity).Attempt
+
+	if predicted != assigned {
+		t.Fatalf("AttemptFor predicted %d before completion, but identity.attempt assigned %d", predicted, assigned)
+	}
+}
+
 func TestCollectorPreservesStableRoleAndToolIdentity(t *testing.T) {
 	dir := t.TempDir()
 	started := mustTime(t, "2026-07-17T10:00:00Z")

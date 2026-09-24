@@ -2,6 +2,11 @@ name: finalize-pr
 description: "Push changes, mark a draft PR ready, and fix CI or review failures (max 3 cycles)."
 hidden: true
 
+params:
+  - name: ci_fix_cycles
+    required: false
+    default: "3"
+
 sessions:
   - name: lead-agent
     agent: lead
@@ -26,11 +31,13 @@ steps:
       gh pr list --head "$branch" --state open --json url --limit 1 | jq -r '.[0].url // empty' || true
 
   - id: ci-fix-loop
+    # An exhausted fix budget must fall through so the last push is verified.
+    continue_on_failure: true
     loop:
-      max: 3
+      max_param: ci_fix_cycles
     steps:
       - id: wait-ci
-        session: resume
+        session: lead-agent
         mode: autonomous
         capture: ci_report
         continue_on_failure: true
@@ -61,7 +68,7 @@ steps:
         continue_on_failure: true
 
       - id: fix-pr
-        session: resume
+        session: lead-agent
         mode: autonomous
         skip_if: previous_success
         prompt: |

@@ -35,26 +35,26 @@ Agent Runner SHALL compile the automatic audit hook, hidden workflow asset, repl
 
 A development-audit build SHALL automatically attempt to audit every eligible finalized execution. Audit enablement, model selection, and an Agent Runner repository path SHALL NOT be added to layered user or project configuration.
 
-Both model stages SHALL resolve the existing `crosscheck` role using the profile-set name recorded by the source run and the profile configuration available at audit launch. The audit SHALL freeze the resolved CLI, model, and reasoning-effort provenance that it actually invokes. It SHALL NOT claim that a profile-set name alone reproduces an earlier resolved agent definition. Existing configuration layering, inheritance, and built-in role defaults SHALL apply; an absent explicit project `crosscheck` entry SHALL NOT by itself constitute a resolution failure. Failure to resolve or invoke that agent SHALL fail or degrade only the linked audit and SHALL NOT alter the source execution. An explicitly recorded profile-set name that cannot be resolved SHALL NOT silently fall back to a different profile set.
+Both model stages SHALL resolve the existing `lead` role, the same agent that leads the source workflow, using the profile-set name recorded by the source run and the profile configuration available at audit launch. The audit SHALL freeze the resolved CLI, model, and reasoning-effort provenance that it actually invokes. It SHALL NOT claim that a profile-set name alone reproduces an earlier resolved agent definition. Existing configuration layering, inheritance, and built-in role defaults SHALL apply; an absent explicit project `lead` entry SHALL NOT by itself constitute a resolution failure. Failure to resolve or invoke that agent SHALL fail or degrade only the linked audit and SHALL NOT alter the source execution. An explicitly recorded profile-set name that cannot be resolved SHALL NOT silently fall back to a different profile set.
 
 #### Scenario: Eligible local execution completes
 - **WHEN** an eligible workflow execution is finalized by a development-audit build
 - **THEN** Agent Runner attempts to launch the linked audit without consulting an enablement setting
 
-#### Scenario: Source profile resolves crosscheck
-- **WHEN** the source run's recorded profile-set name resolves a valid `crosscheck` agent at audit launch
+#### Scenario: Source profile resolves lead
+- **WHEN** the source run's recorded profile-set name resolves a valid `lead` agent at audit launch
 - **THEN** both model audit stages use that resolved definition and the audit freezes its actual CLI, model, and effort provenance
 
-#### Scenario: Source profile cannot resolve crosscheck
-- **WHEN** the source run's recorded profile-set name cannot resolve `crosscheck` at audit launch
+#### Scenario: Source profile cannot resolve lead
+- **WHEN** the source run's recorded profile-set name cannot resolve `lead` at audit launch
 - **THEN** the audit records a diagnostic failure and preserves the source result
 
-#### Scenario: Source configuration inherits crosscheck
-- **WHEN** the selected source profile inherits a valid `crosscheck` definition without declaring one explicitly in project configuration
+#### Scenario: Source configuration inherits lead
+- **WHEN** the selected source profile inherits a valid `lead` definition without declaring one explicitly in project configuration
 - **THEN** the audit uses and records the inherited resolved CLI, model, and effort
 
-#### Scenario: Built-in crosscheck default applies
-- **WHEN** no user or project override replaces the applicable built-in `crosscheck` definition
+#### Scenario: Built-in lead default applies
+- **WHEN** no user or project override replaces the applicable built-in `lead` definition
 - **THEN** the audit resolves that default through the existing profile mechanism
 
 #### Scenario: Recorded profile takes precedence at audit launch
@@ -62,7 +62,7 @@ Both model stages SHALL resolve the existing `crosscheck` role using the profile
 - **THEN** the audit resolves the recorded profile name using launch-time configuration and freezes the resulting invocation definition
 
 #### Scenario: Profile configuration changes after audit launch
-- **WHEN** configuration changes after the audit has frozen its resolved crosscheck definition
+- **WHEN** configuration changes after the audit has frozen its resolved lead definition
 - **THEN** both model stages retain that frozen definition rather than independently re-resolving configuration
 
 #### Scenario: Recorded profile or agent invocation is unavailable
@@ -92,6 +92,10 @@ Build revision and dirty values SHALL remain build-time diagnostics. Unavailable
 #### Scenario: Checkout changed after build
 - **WHEN** the current checkout revision or dirty state materially differs from the recorded build provenance
 - **THEN** the discrepancy is retained locally while the verified audit-launch snapshot remains authoritative for current-defect assessment
+
+#### Scenario: Launch snapshot excludes gitignored artifacts
+- **WHEN** the injected checkout contains gitignored build artifacts, VCS metadata, or worktrees
+- **THEN** the launch-time snapshot includes tracked and untracked non-ignored source and excludes those trees
 
 #### Scenario: Launch snapshot is not Agent Runner source
 - **WHEN** the injected path resolves at launch but its snapshot does not identify the Agent Runner module

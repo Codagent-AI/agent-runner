@@ -1480,8 +1480,7 @@ func TestCursorAdapter(t *testing.T) {
 	})
 
 	t.Run("discover interactive session ID returns matching chat after spawn", func(t *testing.T) {
-		fakeHome := t.TempDir()
-		t.Setenv("HOME", fakeHome)
+		fakeHome := isolateCursorHome(t)
 
 		spawnTime := time.Now().Add(-10 * time.Second)
 		wrongWorkspaceID := "11111111-1111-1111-1111-111111111111"
@@ -1504,8 +1503,7 @@ func TestCursorAdapter(t *testing.T) {
 	})
 
 	t.Run("discover interactive session ID prefers live chat metadata", func(t *testing.T) {
-		fakeHome := t.TempDir()
-		t.Setenv("HOME", fakeHome)
+		fakeHome := isolateCursorHome(t)
 
 		spawnTime := time.Now().Add(-10 * time.Second)
 		matchingID := "77777777-7777-7777-7777-777777777777"
@@ -1530,8 +1528,7 @@ func TestCursorAdapter(t *testing.T) {
 	})
 
 	t.Run("discover interactive session ID reads an active WAL", func(t *testing.T) {
-		fakeHome := t.TempDir()
-		t.Setenv("HOME", fakeHome)
+		fakeHome := isolateCursorHome(t)
 
 		spawnTime := time.Now().Add(-10 * time.Second)
 		matchingID := "66666666-6666-6666-6666-666666666666"
@@ -1553,8 +1550,7 @@ func TestCursorAdapter(t *testing.T) {
 	})
 
 	t.Run("discover interactive session ID falls back to current directory", func(t *testing.T) {
-		fakeHome := t.TempDir()
-		t.Setenv("HOME", fakeHome)
+		fakeHome := isolateCursorHome(t)
 
 		workdir := t.TempDir()
 		t.Chdir(workdir)
@@ -1572,8 +1568,7 @@ func TestCursorAdapter(t *testing.T) {
 	})
 
 	t.Run("discover interactive session ID returns empty when no cursor chats match", func(t *testing.T) {
-		fakeHome := t.TempDir()
-		t.Setenv("HOME", fakeHome)
+		fakeHome := isolateCursorHome(t)
 		writeCursorStoreDB(t, fakeHome, "workspace-a", "11111111-1111-1111-1111-111111111111", time.Now().Add(-10*time.Second), t.TempDir())
 
 		id := adapter.DiscoverSessionID(&DiscoverOptions{
@@ -1587,8 +1582,7 @@ func TestCursorAdapter(t *testing.T) {
 	})
 
 	t.Run("discover interactive session ID returns empty when cursor chats are ambiguous", func(t *testing.T) {
-		fakeHome := t.TempDir()
-		t.Setenv("HOME", fakeHome)
+		fakeHome := isolateCursorHome(t)
 		workdir := t.TempDir()
 		spawnTime := time.Now().Add(-10 * time.Second)
 		writeCursorStoreDB(t, fakeHome, "workspace-a", "11111111-1111-1111-1111-111111111111", time.Now().Add(-2*time.Second), workdir)
@@ -1604,9 +1598,50 @@ func TestCursorAdapter(t *testing.T) {
 		}
 	})
 
+	t.Run("discover interactive session ID ignores excluded nested call chats", func(t *testing.T) {
+		fakeHome := isolateCursorHome(t)
+
+		spawnTime := time.Now().Add(-10 * time.Second)
+		parentID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+		childID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+		workdir := t.TempDir()
+		writeCursorStoreDB(t, fakeHome, "workspace-parent", parentID, time.Now().Add(-2*time.Second), workdir)
+		writeCursorStoreDB(t, fakeHome, "workspace-child", childID, time.Now().Add(-1*time.Second), workdir)
+
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			SpawnTime:         spawnTime,
+			Headless:          false,
+			Workdir:           workdir,
+			ExcludeSessionIDs: []string{childID},
+		})
+		if id != parentID {
+			t.Fatalf("expected parent cursor chat %q after excluding nested call, got %q", parentID, id)
+		}
+	})
+
+	t.Run("discover interactive session ID ignores excluded nested metadata chats", func(t *testing.T) {
+		fakeHome := isolateCursorHome(t)
+
+		spawnTime := time.Now().Add(-10 * time.Second)
+		parentID := "cccccccc-cccc-cccc-cccc-cccccccccccc"
+		childID := "dddddddd-dddd-dddd-dddd-dddddddddddd"
+		workdir := t.TempDir()
+		writeCursorChatMeta(t, fakeHome, "workspace-parent", parentID, spawnTime.Add(time.Second), workdir)
+		writeCursorChatMeta(t, fakeHome, "workspace-child", childID, spawnTime.Add(2*time.Second), workdir)
+
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			SpawnTime:         spawnTime,
+			Headless:          false,
+			Workdir:           workdir,
+			ExcludeSessionIDs: []string{childID},
+		})
+		if id != parentID {
+			t.Fatalf("expected parent cursor metadata chat %q after excluding nested call, got %q", parentID, id)
+		}
+	})
+
 	t.Run("discover interactive session ID skips oversized cursor stores", func(t *testing.T) {
-		fakeHome := t.TempDir()
-		t.Setenv("HOME", fakeHome)
+		fakeHome := isolateCursorHome(t)
 		workdir := t.TempDir()
 		spawnTime := time.Now().Add(-10 * time.Second)
 		matchingID := "55555555-5555-5555-5555-555555555555"
@@ -2385,6 +2420,14 @@ func hasFlagValue(values []string, flag, value string) bool {
 	return false
 }
 
+func isolateCursorHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CURSOR_CONFIG_DIR", "")
+	return home
+}
+
 func writeCursorStoreDB(t *testing.T, home, workspaceHash, chatID string, modTime time.Time, workdir string) {
 	t.Helper()
 	path := filepath.Join(home, ".cursor", "chats", workspaceHash, chatID, "store.db")
@@ -2397,5 +2440,17 @@ func writeCursorStoreDB(t *testing.T, home, workspaceHash, chatID string, modTim
 	}
 	if err := os.Chtimes(path, modTime, modTime); err != nil {
 		t.Fatalf("chtimes cursor store.db: %v", err)
+	}
+}
+
+func writeCursorChatMeta(t *testing.T, home, workspaceHash, chatID string, createdAt time.Time, workdir string) {
+	t.Helper()
+	dir := filepath.Join(home, ".cursor", "chats", workspaceHash, chatID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir cursor chat dir: %v", err)
+	}
+	meta := fmt.Sprintf(`{"schemaVersion":1,"createdAtMs":%d,"cwd":%q}`, createdAt.UnixMilli(), workdir)
+	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(meta), 0o600); err != nil {
+		t.Fatalf("write cursor meta.json: %v", err)
 	}
 }

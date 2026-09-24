@@ -46,11 +46,13 @@ not as a clean checkout and not as a substitute for build diagnostics.
 Automatic audit eligibility is intentionally narrow: the resolved canonical
 workflow reference must be in the `openspec/` or `spec-driven/` namespace (with
 an optional `builtin:` prefix), and only a finalized top-level execution with
-an execution-session identity qualifies. A display name, project directory, or
-an absolute path that merely contains those words does not qualify. The audit
-resolves the source run's recorded profile set at launch using normal profile
-layering, inheritance, and built-in defaults, then freezes the resolved
-`crosscheck` CLI, model, and reasoning effort for both model stages.
+an execution-session identity qualifies. Only successful and failed runs are
+audited; a run the user interrupted and exited (finalized as stopped) is not. A
+display name, project directory, or an absolute path that merely contains those
+words does not qualify. The audit resolves the source run's recorded profile
+set at launch using normal profile layering, inheritance, and built-in
+defaults, then freezes the resolved `lead` CLI, model, and reasoning effort for
+both model stages.
 
 On Linux the development image uses Bubblewrap to make the ordinary filesystem
 read-only and grants write access only to the audit-owned model-output tree.

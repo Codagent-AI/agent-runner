@@ -49,16 +49,23 @@ type Options struct {
 	AgentOverride          *model.AgentOverride
 	// ProjectRoot and WorkingDir may be supplied by embedding callers. When
 	// empty, PrepareRun discovers and canonicalizes them once for the run.
-	ProjectRoot        string
-	WorkingDir         string
-	SessionDir         string // Override session directory (for testing); computed automatically if empty.
-	Engine             engine.Engine
-	ProfileStore       *config.Config
-	ProfileOverride    config.ProfileOverride
-	SessionIDs         map[string]string
-	SessionProfiles    map[string]string
-	CapturedVariables  map[string]model.CapturedValue
-	LastSessionStepID  string
+	ProjectRoot       string
+	WorkingDir        string
+	SessionDir        string // Override session directory (for testing); computed automatically if empty.
+	Engine            engine.Engine
+	ProfileStore      *config.Config
+	ProfileOverride   config.ProfileOverride
+	SessionIDs        map[string]string
+	SessionProfiles   map[string]string
+	CapturedVariables map[string]model.CapturedValue
+	LastSessionStepID string
+	// LastAgent restores the top-level scope's guarded execution reference on
+	// --resume; the full response is rebuilt from audit on demand.
+	LastAgent *model.ExecutionRef
+	// RepairFrame restores an open repair frame owned by the top-level scope
+	// on --resume. ResolveResumeStep has already applied any budget reset for
+	// a resumed terminal failure before this is set.
+	RepairFrame        *model.RepairFrame
 	ChildState         *model.NestedStepState
 	InteractiveAttempt *model.InteractiveAttemptMetadata
 	// NamedSessions and NamedSessionDecls are restored from state on --resume.
@@ -522,6 +529,12 @@ func buildExecutionContext(
 	if opts.LastSessionStepID != "" {
 		ctx.LastSessionStepID = opts.LastSessionStepID
 	}
+	if opts.LastAgent != nil {
+		ctx.LastAgentExecution = &model.AgentExecutionRecord{Ref: *opts.LastAgent}
+	}
+	if opts.RepairFrame != nil {
+		ctx.RepairFrame = opts.RepairFrame
+	}
 	ctx.InteractiveAttempt = opts.InteractiveAttempt
 	if opts.From != "" {
 		ctx.WorkflowResumed = true
@@ -579,9 +592,19 @@ func auditProfileSource(cfg *config.Config) string {
 }
 
 func executeSteps(rs *runState, startIndex int) WorkflowResult {
-	for i := startIndex; i < len(rs.workflow.Steps); i++ {
-		step := &rs.workflow.Steps[i]
-		result, terminal := executeTopLevelStep(rs, step, i)
+	steps := rs.workflow.Steps
+	basePath := rs.ctx.NestingPath
+	if err := exec.PrimeReplayResume(rs.ctx, basePath); err != nil {
+		rs.log.Printf("\nagent-runner: %v\n", err)
+		return ResultFailed
+	}
+	for i := startIndex; i < len(steps); i++ {
+		step := &steps[i]
+		result, terminal, rewound, nextIndex := executeTopLevelStep(rs, step, i, steps, basePath)
+		if rewound {
+			i = nextIndex - 1
+			continue
+		}
 		if terminal {
 			return result
 		}
@@ -590,36 +613,50 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 	return ResultSuccess
 }
 
-func executeTopLevelStep(rs *runState, step *model.Step, index int) (WorkflowResult, bool) {
+func executeTopLevelStep(rs *runState, step *model.Step, index int, steps []model.Step, basePath []model.NestingSegment) (result WorkflowResult, terminal, rewound bool, nextIndex int) {
 	skip, err := exec.ShouldSkipStep(step.SkipIf, rs.ctx.LastStepOutcome, rs.ctx, step.ID)
 	if err != nil {
 		rs.log.Printf("\nagent-runner: step %q skip_if evaluation failed: %v\n", step.ID, err)
-		return ResultFailed, true
+		return ResultFailed, true, false, 0
 	}
 	if skip {
 		emitSkippedStep(rs, step, index)
 		if step.ID == rs.until {
 			writeStepState(step, rs.ctx, &rs.workflow, rs.workflowHash, rs.sessionDir, nil, true)
 		}
-		return ResultSuccess, stopAfterUntil(rs, step.ID, index)
+		return ResultSuccess, stopAfterUntil(rs, step.ID, index), false, 0
 	}
 
 	outcome, err := runAndPersistTopLevelStep(rs, step)
 	if err != nil {
 		rs.log.Printf("\nagent-runner: step %q error: %v\n", step.ID, err)
-		return ResultFailed, true
+		return ResultFailed, true, false, 0
 	}
+
+	rw, absorbed := exec.AfterStepDispatch(rs.ctx, steps, index, basePath, outcome)
+	if rw.Stopped {
+		rs.log.Printf("\nagent-runner: step %q failed. Stopping.\n", step.ID)
+		return ResultFailed, true, false, 0
+	}
+	if rw.Rewound {
+		return ResultSuccess, false, true, rw.NextIndex
+	}
+	if absorbed {
+		return ResultSuccess, false, false, 0
+	}
+
 	if outcome == exec.OutcomeAborted {
 		rs.log.Println("\nagent-runner: workflow stopped.")
-		return ResultStopped, true
+		return ResultStopped, true, false, 0
 	}
 	if outcome == exec.OutcomeFailed {
-		return handleFailedTopLevelStep(rs, step, index)
+		result, terminal = handleFailedTopLevelStep(rs, step, index)
+		return result, terminal, false, 0
 	}
 
 	o := "success"
 	rs.ctx.LastStepOutcome = &o
-	return ResultSuccess, stopAfterUntil(rs, step.ID, index)
+	return ResultSuccess, stopAfterUntil(rs, step.ID, index), false, 0
 }
 
 func runAndPersistTopLevelStep(rs *runState, step *model.Step) (exec.StepOutcome, error) {
@@ -635,6 +672,11 @@ func runAndPersistTopLevelStep(rs *runState, step *model.Step) (exec.StepOutcome
 	outcome, loopResult, err := runStep(step, rs)
 	rs.ctx.FlushState = nil
 	warning := exec.IsWarningOutcome(step, outcome)
+	if outcome == exec.OutcomeFailed && (warning || step.ContinueOnFailure) {
+		// A failed check that flow control lets the run advance past is
+		// done: its repair frame (if any) must not be persisted as open.
+		rs.ctx.RepairFrame = nil
+	}
 	completed := err == nil && outcome != exec.OutcomeAborted && (outcome != exec.OutcomeFailed || warning)
 	if !completed && rs.ctx.LastSubWorkflowChild == nil && resumeChild != nil {
 		// A resume can fail before any child step starts, for example when the
@@ -741,6 +783,10 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 			rs.log.Printf("agent-runner: warning: close control endpoint: %v\n", err)
 		}
 	}
+	failureReason := ""
+	if result == ResultFailed {
+		failureReason = classifyRunFailure(rs)
+	}
 	switch result {
 	case ResultSuccess:
 		if !rs.untilLeavesRemaining {
@@ -749,6 +795,12 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 			}
 		}
 	case ResultFailed:
+		if failureReason != "" {
+			if err := writeStateFailureReason(rs.sessionDir, failureReason); err != nil {
+				rs.log.Printf("agent-runner: warning: could not record failure reason: %v\n", err)
+			}
+			rs.log.Printf("\n%s\n", failureReason)
+		}
 		rs.log.Printf("\nto resume: agent-runner --resume %s\n", rs.sessionID)
 	}
 
@@ -757,13 +809,7 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 		emitAudit(rs.ctx, audit.Event{
 			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 			Type:      audit.EventRunEnd,
-			Data: map[string]any{
-				"outcome":                 string(result),
-				"completed_with_warnings": result == ResultSuccess && rs.ctx.WarningOrigins.Count() > 0,
-				"warning_count":           rs.ctx.WarningOrigins.Count(),
-				"duration_ms":             time.Since(rs.runStartTime).Milliseconds(),
-				metrics.DataTotals:        totals,
-			},
+			Data:      runEndData(rs, result, &totals, failureReason),
 		})
 		for _, metricsErr := range rs.metricsCollector.Errors() {
 			rs.log.Printf("agent-runner: warning: metrics: %v\n", metricsErr)
@@ -794,18 +840,60 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 	runlock.Delete(rs.sessionDir)
 }
 
+// classifyRunFailure returns the classified root failure reason for a failed
+// run, derived from the failing check's FailureRecord. A nested check's
+// failure has already been copied onto rs.ctx by ExecutionContext.PropagateFailure
+// as its scope unwound, so rs.ctx.LastFailure always names the actual
+// failing check rather than a container. Returns "" when the run failed for
+// a reason other than a classified check failure (e.g. an agent step error),
+// so callers fall back to their own derivation.
+func classifyRunFailure(rs *runState) string {
+	if rs.ctx.LastFailure == nil {
+		return ""
+	}
+	return exec.ClassifyFailure(rs.ctx.LastFailure)
+}
+
+// writeStateFailureReason reads the run's state.json and rewrites it with
+// the classified failure reason for a failed run.
+func writeStateFailureReason(sessionDir, reason string) error {
+	return updateState(sessionDir, func(state *model.RunState) { state.FailureReason = reason })
+}
+
+// updateState reads the run's state.json, applies mutate, and rewrites it.
+func updateState(sessionDir string, mutate func(*model.RunState)) error {
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		return err
+	}
+	mutate(&state)
+	return stateio.WriteState(&state, sessionDir)
+}
+
+// runEndData builds the run_end audit event's data, including the classified
+// failure_reason for a failed run.
+func runEndData(rs *runState, result WorkflowResult, totals *model.RunTotals, failureReason string) map[string]any {
+	data := map[string]any{
+		"outcome":                 string(result),
+		"completed_with_warnings": result == ResultSuccess && rs.ctx.WarningOrigins.Count() > 0,
+		"warning_count":           rs.ctx.WarningOrigins.Count(),
+		"duration_ms":             time.Since(rs.runStartTime).Milliseconds(),
+		metrics.DataTotals:        *totals,
+	}
+	if result == ResultFailed && failureReason != "" {
+		data["failure_reason"] = failureReason
+	}
+	return data
+}
+
 // markStateCompleted reads the run's state.json, sets Completed=true, and
 // rewrites it so the TUI can continue to display the run's metadata after it
 // finishes. The state file is intentionally preserved rather than deleted.
 func markStateCompleted(sessionDir string, warningCount int) error {
-	statePath := filepath.Join(sessionDir, "state.json")
-	state, err := stateio.ReadState(statePath)
-	if err != nil {
-		return err
-	}
-	state.Completed = true
-	state.WarningCount = warningCount
-	return stateio.WriteState(&state, sessionDir)
+	return updateState(sessionDir, func(state *model.RunState) {
+		state.Completed = true
+		state.WarningCount = warningCount
+	})
 }
 
 // PrepareRun initializes the session directory, writes the lock file, opens
@@ -983,6 +1071,8 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		Iteration:          iteration,
 		Child:              child,
 		InteractiveAttempt: ctx.InteractiveAttempt,
+		LastAgent:          ctx.LastAgentRef(),
+		Repair:             ctx.RepairFrame,
 	}
 
 	state := model.RunState{

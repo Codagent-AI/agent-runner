@@ -5,7 +5,7 @@ TBD - created by archiving change audit-step. Update Purpose after archive.
 ## Requirements
 ### Requirement: Eligible executions trigger automatic auditing
 
-In a development-audit build, Agent Runner SHALL automatically launch exactly one audit run for each finalized top-level execution session of a workflow in the canonical `openspec` or `spec-driven` namespace. Successful, failed, and stopped outcomes SHALL all be eligible.
+In a development-audit build, Agent Runner SHALL automatically launch exactly one audit run for each finalized top-level execution session of a workflow in the canonical `openspec` or `spec-driven` namespace. Successful and failed outcomes SHALL be eligible. A stopped outcome, where the user interrupted and exited a resumable run, SHALL NOT trigger an audit.
 
 Nested sub-workflows, audit workflows, and workflows outside those namespaces SHALL NOT trigger automatic auditing. Eligibility SHALL use the resolved canonical workflow reference recorded for execution: after an optional `builtin:` prefix, the namespace segment SHALL be exactly `openspec/` or `spec-driven/`. A workflow display name, basename, project directory name, or arbitrary absolute path containing one of those words SHALL NOT independently grant eligibility. A top-level finalized execution SHALL have a nonempty execution-session identity to trigger an audit.
 
@@ -17,9 +17,9 @@ Nested sub-workflows, audit workflows, and workflows outside those namespaces SH
 - **WHEN** a development-audit build finalizes a failed top-level `spec-driven` execution session and its durable evidence
 - **THEN** Agent Runner launches exactly one linked audit run for that execution session
 
-#### Scenario: Stopped eligible execution triggers audit
-- **WHEN** a development-audit build finalizes the durable evidence for a stopped eligible execution session
-- **THEN** Agent Runner launches exactly one linked audit run for that execution session
+#### Scenario: User-stopped execution does not trigger audit
+- **WHEN** the user interrupts and exits an otherwise eligible execution session, finalizing it as stopped
+- **THEN** Agent Runner does not launch an audit run for that execution session
 
 #### Scenario: Production build launches nothing
 - **WHEN** an eligible execution session reaches a terminal outcome in an untagged or release build
@@ -52,6 +52,14 @@ Nested sub-workflows, audit workflows, and workflows outside those namespaces SH
 #### Scenario: Incomplete session identity cannot launch audit
 - **WHEN** terminal handling lacks an execution-session identity
 - **THEN** it does not create an automatic linked audit
+
+### Requirement: Reserved launches can be explicitly reconciled
+
+A development-audit build SHALL provide `audit reconcile <source-run> --session <execution-session-id>` for an existing automatic audit reservation. It SHALL preserve the original audit identity, refuse an active source run, and never rerun the source workflow. Launching, started, and completed links SHALL be safe no-ops; failed or inconsistent reservations SHALL be rejected.
+
+#### Scenario: Interrupted reservation is reconciled
+- **WHEN** an automatic audit link is durably `reserved` after the source run is no longer active
+- **THEN** explicit reconciliation launches that original audit identity
 
 ### Requirement: Audit launch is independent of the run view
 
@@ -158,4 +166,3 @@ The initial capability SHALL require no new TUI placement, navigation, or separa
 #### Scenario: Production binary encounters local audit history
 - **WHEN** an untagged or release binary reads a runs directory containing audit runs created by a development-audit build
 - **THEN** ordinary list and view operations do not fail and no audit command or automatic capability becomes available
-

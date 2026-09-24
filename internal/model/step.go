@@ -91,11 +91,13 @@ type SessionDecl struct {
 
 // Loop defines iteration behavior for a step.
 type Loop struct {
-	Max            *int   `yaml:"max,omitempty" json:"max,omitempty"`
-	Over           string `yaml:"over,omitempty" json:"over,omitempty"`
-	As             string `yaml:"as,omitempty" json:"as,omitempty"`
-	AsIndex        string `yaml:"as_index,omitempty" json:"as_index,omitempty"`
-	RequireMatches *bool  `yaml:"require_matches,omitempty" json:"require_matches,omitempty"`
+	Max      *int   `yaml:"max,omitempty" json:"max,omitempty"`
+	MaxParam string `yaml:"max_param,omitempty" json:"max_param,omitempty"`
+	Over     string `yaml:"over,omitempty" json:"over,omitempty"`
+	As       string `yaml:"as,omitempty" json:"as,omitempty"`
+	AsIndex  string `yaml:"as_index,omitempty" json:"as_index,omitempty"`
+	// RequireMatches applies to "over"/"as" loops only.
+	RequireMatches *bool `yaml:"require_matches,omitempty" json:"require_matches,omitempty"`
 }
 
 type UIAction struct {
@@ -127,12 +129,16 @@ type UIStepResult struct {
 
 // Validate checks that a Loop has valid field combinations.
 func (l *Loop) Validate() error {
-	hasMax := l.Max != nil
+	if l.Max != nil && l.MaxParam != "" {
+		return fmt.Errorf(`loop must use either "max" or "max_param", not both`)
+	}
+
+	hasMax := l.Max != nil || l.MaxParam != ""
 	hasOver := l.Over != ""
 	hasAs := l.As != ""
 
 	if hasMax && (hasOver || hasAs) {
-		return fmt.Errorf(`loop must use either "max" or both "over" and "as", not both`)
+		return fmt.Errorf(`loop must use either "max" (or "max_param") or both "over" and "as", not both`)
 	}
 
 	if !hasMax && hasOver != hasAs {
@@ -140,10 +146,10 @@ func (l *Loop) Validate() error {
 	}
 
 	if !hasMax && !hasOver && !hasAs {
-		return fmt.Errorf(`loop requires "max" or both "over" and "as"`)
+		return fmt.Errorf(`loop requires "max", "max_param", or both "over" and "as"`)
 	}
 
-	if hasMax && *l.Max <= 0 {
+	if l.Max != nil && *l.Max <= 0 {
 		return fmt.Errorf(`loop "max" must be a positive integer`)
 	}
 
@@ -189,6 +195,8 @@ type Step struct {
 	// MetricsSource declares that a shell or script step launches a tool which may invoke
 	// nested models and participates in Runner's correlated metrics protocol.
 	MetricsSource string `yaml:"metrics_source,omitempty" json:"metrics_source,omitempty"`
+	// Repair declares how a failed shell or script check may be repaired.
+	Repair *Repair `yaml:"repair,omitempty" json:"repair,omitempty"`
 }
 
 // HasTool reports whether the step enables a Runner-owned tool.
@@ -285,6 +293,13 @@ func (s *Step) Validate(knownCLIs []string) error {
 
 	if err := s.validateFieldConstraints(knownCLIs); err != nil {
 		return err
+	}
+
+	if s.Repair != nil {
+		isCheckStep := s.Command != "" || s.Script != ""
+		if err := s.Repair.validate(isCheckStep); err != nil {
+			return err
+		}
 	}
 
 	if s.Loop != nil {
@@ -759,6 +774,10 @@ func (w *Workflow) Validate(knownCLIs []string) error {
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("workflow validation failed: %s", strings.Join(errs, "; "))
+	}
+
+	if err := validateRepairTargets(w.Steps); err != nil {
+		return err
 	}
 
 	return nil
