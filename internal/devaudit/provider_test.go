@@ -107,14 +107,16 @@ func TestSandboxExecArgsBindsOutputDirectoryAsParameter(t *testing.T) {
 // Claude Code's Bun runtime aborts at startup without a usable /dev, so the
 // sandbox mounts a private device filesystem over the read-only root and then
 // remounts it read-only: device nodes such as /dev/null stay usable, but the
-// model cannot create files under /dev.
+// model cannot create files under /dev outside its output directory.
 func TestLinuxSandboxArgsProvidesReadOnlyDeviceFilesystem(t *testing.T) {
 	args := linuxSandboxArgs([]string{"crosscheck", "--batch"}, "/audit/workspace", "/audit/output")
 	joined := "\x00" + strings.Join(args, "\x00") + "\x00"
 	ordered := []string{
 		"\x00--ro-bind\x00/\x00/\x00",
-		"\x00--bind\x00/audit/output\x00/audit/output\x00",
 		"\x00--dev\x00/dev\x00",
+		// The output bind follows --dev so an output under /dev/shm is not
+		// hidden, and precedes the /dev remount so it stays writable.
+		"\x00--bind\x00/audit/output\x00/audit/output\x00",
 		"\x00--remount-ro\x00/dev\x00",
 		"\x00--\x00crosscheck\x00--batch\x00",
 	}

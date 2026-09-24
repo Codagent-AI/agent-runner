@@ -168,3 +168,26 @@ if touch /dev/shm/escape; then echo "/dev/shm writable"; exit 53; fi
 		t.Fatalf("device probe: %v\n%s", err, data)
 	}
 }
+
+// The private /dev must not hide an output directory that lives under the
+// host's /dev/shm, and that output must stay writable after /dev is remounted.
+func TestLinuxAuditOutputUnderDevShmStaysWritable(t *testing.T) {
+	requireLinuxAuditSandbox(t)
+	shm, err := os.MkdirTemp("/dev/shm", "audit-output-")
+	if err != nil {
+		t.Skipf("/dev/shm unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(shm) })
+	workspace, output := t.TempDir(), filepath.Join(shm, "output")
+	script := `printf allowed > "$1/result"`
+	command, err := sandboxedCrosscheckCommand([]string{"/bin/sh", "-c", script, "probe", output}, workspace, output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("output probe: %v\n%s", err, data)
+	}
+	if data, err := os.ReadFile(filepath.Join(output, "result")); err != nil || string(data) != "allowed" {
+		t.Fatalf("output under /dev/shm not written: %q, %v", data, err)
+	}
+}

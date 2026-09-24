@@ -1457,11 +1457,13 @@ func sandboxExecArgs(args []string, outputDir string) []string {
 // user namespace, and Claude Code's Bun runtime aborts at startup without
 // /dev/null. A private device filesystem supplies the standard nodes; it is
 // then remounted read-only so /dev and /dev/shm cannot hold model writes.
+// Mounts apply in argument order: the output bind follows --dev so an output
+// under /dev/shm is not hidden, and precedes the remount so it stays writable.
 func linuxSandboxArgs(args []string, workspace, outputDir string) []string {
 	argv := []string{
 		"--die-with-parent", "--new-session", "--unshare-user", "--uid", "0", "--gid", "0",
-		"--ro-bind", "/", "/", "--bind", outputDir, outputDir,
-		"--proc", "/proc", "--dev", "/dev", "--remount-ro", "/dev",
+		"--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev",
+		"--bind", outputDir, outputDir, "--remount-ro", "/dev",
 		"--chdir", workspace, "--",
 	}
 	return append(argv, args...)
