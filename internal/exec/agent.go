@@ -1139,7 +1139,7 @@ func extractAgentUsage(adapter cli.Adapter, cliName string, invocationContext cl
 func defaultAgentUsage(cliName string, headless bool) model.UsageRecord {
 	reason := model.UnavailableUnsupportedAdapter
 	if !headless {
-		reason = model.UnavailablePTYContext
+		reason = model.UnavailableInteractiveContext
 	}
 	return model.UsageRecord{
 		Status: model.UsageUnavailable, Reason: reason, CLI: cliName, Source: "agent-runner",

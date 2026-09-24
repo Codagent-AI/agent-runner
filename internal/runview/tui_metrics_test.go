@@ -93,8 +93,8 @@ func TestAgentDetailMetricsRenderCollectedUnavailableAndLatestAttempt(t *testing
 		},
 		{
 			name:     "unavailable usage and cost",
-			attempts: []AttemptMetrics{{Attempt: 1, Usage: &model.UsageRecord{Status: model.UsageUnavailable, Reason: model.UnavailablePTYContext, CLI: "claude", Source: "agent-runner"}, DurationMs: int64Pointer(1000), Outcome: "success"}},
-			want:     []string{"usage: ? (pty-context)", "cost: ?"},
+			attempts: []AttemptMetrics{{Attempt: 1, Usage: &model.UsageRecord{Status: model.UsageUnavailable, Reason: model.UnavailableInteractiveContext, CLI: "claude", Source: "agent-runner"}, DurationMs: int64Pointer(1000), Outcome: "success"}},
+			want:     []string{"usage: ? (interactive-context)", "cost: ?"},
 			dontWant: []string{"unavailable", "$0.00", "input 0", "output 0"},
 		},
 		{

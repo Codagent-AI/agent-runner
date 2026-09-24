@@ -296,16 +296,16 @@ func (a *ClaudeAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) 
 	usage := model.UsageRecord{
 		Status: model.UsageCollected, CLI: "claude", Provider: "anthropic", Model: modelName,
 		Tokens: tokens, Source: "claude:result-event", Completeness: completeness(complete),
+		// total_cost_usd accumulates across resumed invocations of a session,
+		// while usage is per invocation. The metrics collector attributes it.
+		RawCumulativeCostUSD: lastCost,
 	}
 	if complete {
 		input := tokens[model.TokenInput] + tokens[model.TokenCachedInput] + tokens[model.TokenCacheWrite]
 		output := tokens[model.TokenOutput]
 		usage.TokenTotals = &model.TokenTotals{Input: input, Output: output, Total: input + output}
 	}
-	return UsageExtraction{
-		Usage:            usage,
-		EstimatedCostUSD: lastCost,
-	}, nil
+	return UsageExtraction{Usage: usage}, nil
 }
 
 var claudePathUnsafeRe = regexp.MustCompile(`[/._]`)

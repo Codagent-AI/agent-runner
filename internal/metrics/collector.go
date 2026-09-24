@@ -130,6 +130,7 @@ type Collector struct {
 	seenCalls                 map[string]struct{}
 	baselines                 map[string]model.TokenCounts
 	totalBaselines            map[string]model.TokenTotals
+	costBaselines             map[string]float64
 	errors                    []error
 	writeFailures             int
 	lastWriteError            error
@@ -153,6 +154,7 @@ func NewCollector(sessionDir, runID, workflow string, sessionStart time.Time) *C
 		seenCalls:      make(map[string]struct{}),
 		baselines:      make(map[string]model.TokenCounts),
 		totalBaselines: make(map[string]model.TokenTotals),
+		costBaselines:  make(map[string]float64),
 		now:            time.Now,
 	}
 	c.rehydrate(sessionStart)
@@ -315,6 +317,9 @@ func (c *Collector) processTerminal(event *audit.Event) {
 		usage = c.attribute(&identity, &usage)
 		event.Data[DataUsage] = usage
 		record.Usage = &usage
+		if cost, cumulative := c.attributeCost(&identity, &usage); cumulative {
+			event.Data[DataEstimatedAPICostUSD] = cost
+		}
 		if cost, ok := event.Data[DataEstimatedAPICostUSD].(*float64); ok && cost != nil {
 			value := *cost
 			record.EstimatedAPICostUSD = &value
@@ -404,6 +409,34 @@ func (c *Collector) attribute(identity *model.ExecutionIdentity, input *model.Us
 		}
 	}
 	return usage
+}
+
+// attributeCost converts a session-cumulative reported cost into the
+// invocation's share. It reports false when the usage carries no cumulative
+// cost, leaving the event's own cost untouched. Any invocation on a session
+// that reports no cumulative cost clears the baseline: its usage is folded
+// into the next cumulative value and cannot be separated out.
+func (c *Collector) attributeCost(identity *model.ExecutionIdentity, usage *model.UsageRecord) (*float64, bool) {
+	key := baselineKey(identity.CLI, identity.SessionID)
+	if usage.RawCumulativeCostUSD == nil {
+		if identity.SessionID != "" {
+			delete(c.costBaselines, key)
+		}
+		return nil, false
+	}
+	current := *usage.RawCumulativeCostUSD
+	prior, found := c.costBaselines[key]
+	if identity.SessionID != "" {
+		c.costBaselines[key] = current
+	}
+	if !sessionWasResumed(identity) {
+		return &current, true
+	}
+	if !found || current < prior {
+		return nil, true
+	}
+	delta := current - prior
+	return &delta, true
 }
 
 func sessionWasResumed(identity *model.ExecutionIdentity) bool {
@@ -680,6 +713,11 @@ func (c *Collector) rehydrate(sessionStart time.Time) {
 			continue
 		}
 		baseline := baselineKey(record.Usage.CLI, record.SessionID)
+		if record.Usage.RawCumulativeCostUSD != nil {
+			c.costBaselines[baseline] = *record.Usage.RawCumulativeCostUSD
+		} else {
+			delete(c.costBaselines, baseline)
+		}
 		if len(record.Usage.RawCumulative) == 0 {
 			delete(c.baselines, baseline)
 			delete(c.totalBaselines, baseline)
@@ -916,6 +954,10 @@ func cloneUsage(usage *model.UsageRecord) model.UsageRecord {
 	cloned.RawCumulative = cloneCounts(usage.RawCumulative)
 	cloned.TokenTotals = cloneTokenTotals(usage.TokenTotals)
 	cloned.RawCumulativeTokenTotals = cloneTokenTotals(usage.RawCumulativeTokenTotals)
+	if usage.RawCumulativeCostUSD != nil {
+		cost := *usage.RawCumulativeCostUSD
+		cloned.RawCumulativeCostUSD = &cost
+	}
 	return cloned
 }
 

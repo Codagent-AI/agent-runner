@@ -180,15 +180,16 @@ func TestExecuteAgentStep(t *testing.T) {
 				model.TokenInput: 10, model.TokenCachedInput: 20,
 				model.TokenCacheWrite: 3, model.TokenOutput: 4,
 			},
-			TokenTotals: &model.TokenTotals{Input: 33, Output: 4, Total: 37},
-			Source:      "claude:result-event", Completeness: model.CompletenessComplete,
+			TokenTotals:          &model.TokenTotals{Input: 33, Output: 4, Total: 37},
+			RawCumulativeCostUSD: float64Pointer(0.42),
+			Source:               "claude:result-event", Completeness: model.CompletenessComplete,
 		}
 		if diff := cmp.Diff(wantUsage, end.Data["usage"]); diff != "" {
 			t.Fatalf("usage mismatch (-want +got):\n%s", diff)
 		}
-		cost, ok := end.Data["estimated_api_cost_usd"].(*float64)
-		if !ok || cost == nil || *cost != 0.42 {
-			t.Fatalf("cost = %#v, want 0.42", end.Data["estimated_api_cost_usd"])
+		// The metrics collector attributes Claude's session-cumulative cost.
+		if cost, ok := end.Data["estimated_api_cost_usd"].(*float64); !ok || cost != nil {
+			t.Fatalf("cost = %#v, want unattributed nil", end.Data["estimated_api_cost_usd"])
 		}
 	})
 
@@ -258,9 +259,8 @@ func TestExecuteAgentStep(t *testing.T) {
 		if usage.Status != model.UsageCollected || usage.Tokens[model.TokenInput] != 10 {
 			t.Fatalf("usage = %#v, want collected failed-step usage", usage)
 		}
-		cost := end.Data["estimated_api_cost_usd"].(*float64)
-		if cost == nil || *cost != 0.25 {
-			t.Fatalf("cost = %#v, want 0.25", cost)
+		if cost := usage.RawCumulativeCostUSD; cost == nil || *cost != 0.25 {
+			t.Fatalf("raw cumulative cost = %#v, want 0.25", cost)
 		}
 	})
 
@@ -440,7 +440,7 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
 		usage := end.Data["usage"].(model.UsageRecord)
-		if usage.Status != model.UsageUnavailable || usage.Reason != model.UnavailablePTYContext {
+		if usage.Status != model.UsageUnavailable || usage.Reason != model.UnavailableInteractiveContext {
 			t.Fatalf("usage = %+v", usage)
 		}
 	})

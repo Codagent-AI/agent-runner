@@ -37,9 +37,11 @@ func TestClaudeUsageExtraction(t *testing.T) {
 				model.TokenCacheWrite: 11, model.TokenOutput: 2,
 			},
 			TokenTotals: &model.TokenTotals{Input: 115, Output: 2, Total: 117},
-			Source:      "claude:result-event", Completeness: model.CompletenessComplete,
+			// Claude's total_cost_usd is session-cumulative; the metrics
+			// collector attributes the per-invocation share.
+			RawCumulativeCostUSD: &wantCost,
+			Source:               "claude:result-event", Completeness: model.CompletenessComplete,
 		},
-		EstimatedCostUSD: &wantCost,
 	}
 	got, err := extractor.ExtractUsage(raw)
 	if err != nil {
@@ -383,7 +385,7 @@ func TestUsageExtractionEdgeSemantics(t *testing.T) {
 		if diff := cmp.Diff(wantTokens, got.Usage.Tokens); diff != "" {
 			t.Fatalf("tokens mismatch (-want +got):\n%s", diff)
 		}
-		if got.Usage.Completeness != model.CompletenessPartial || got.EstimatedCostUSD == nil || *got.EstimatedCostUSD != 0.2 {
+		if got.Usage.Completeness != model.CompletenessPartial || got.EstimatedCostUSD != nil || got.Usage.RawCumulativeCostUSD == nil || *got.Usage.RawCumulativeCostUSD != 0.2 {
 			t.Fatalf("extraction = %#v", got)
 		}
 	})

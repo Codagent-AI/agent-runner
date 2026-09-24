@@ -41,11 +41,13 @@ const (
 type UnavailableReason string
 
 const (
-	UnavailablePTYContext   UnavailableReason = "pty-context"
-	UnavailableParseFailure UnavailableReason = "parse-failure"
-	UnavailableNoUsageEvent UnavailableReason = "no-usage-event"
-	UnavailableNoBaseline   UnavailableReason = "no-baseline"
-	UnavailableCounterReset UnavailableReason = "counter-reset"
+	// UnavailableInteractiveContext means the step handed the terminal to the
+	// agent CLI, so there was no structured output to read usage from.
+	UnavailableInteractiveContext UnavailableReason = "interactive-context"
+	UnavailableParseFailure       UnavailableReason = "parse-failure"
+	UnavailableNoUsageEvent       UnavailableReason = "no-usage-event"
+	UnavailableNoBaseline         UnavailableReason = "no-baseline"
+	UnavailableCounterReset       UnavailableReason = "counter-reset"
 
 	// UnavailableNotInvoked means the step's agent CLI was never launched.
 	UnavailableNotInvoked UnavailableReason = "not-invoked"
@@ -95,8 +97,12 @@ type UsageRecord struct {
 	RawCumulative            TokenCounts        `json:"raw_cumulative,omitempty"`
 	TokenTotals              *TokenTotals       `json:"token_totals,omitempty"`
 	RawCumulativeTokenTotals *TokenTotals       `json:"raw_cumulative_token_totals,omitempty"`
-	Source                   string             `json:"source"`
-	Completeness             Completeness       `json:"completeness,omitempty"`
+	// RawCumulativeCostUSD is a provider-reported session-cumulative cost. The
+	// metrics collector attributes the difference from the session's prior
+	// value to the invocation.
+	RawCumulativeCostUSD *float64     `json:"raw_cumulative_cost_usd,omitempty"`
+	Source               string       `json:"source"`
+	Completeness         Completeness `json:"completeness,omitempty"`
 }
 
 // ExecutionIdentity identifies one terminal step or loop-iteration event.
