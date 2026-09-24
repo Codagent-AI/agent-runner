@@ -68,6 +68,7 @@ type Finding struct {
 	DuplicateURL     string               `json:"duplicate_url,omitempty"`
 	PriorClosedIssue string               `json:"prior_closed_issue,omitempty"`
 	Failure          string               `json:"failure,omitempty"`
+	Warning          string               `json:"warning,omitempty"`
 	Redacted         bool                 `json:"redacted,omitempty"`
 }
 
@@ -579,7 +580,23 @@ func publishCandidate(request *Request, candidate *CorrectnessCandidate, runner 
 		return finding, nil
 	}
 	finding.PublicationState = "created"
+	match := regexp.MustCompile(`/issues/(\d+)$`).FindStringSubmatch(finding.IssueURL)
+	if err := setBugIssueType(runner, match[1]); err != nil {
+		finding.Warning = err.Error()
+	}
 	return finding, nil
+}
+
+func setBugIssueType(runner CommandRunner, number string) error {
+	output, err := runGitHubCommand(runner, []string{"api", "--method", "PATCH", "repos/" + auditIssueRepository + "/issues/" + number, "-f", "type=Bug"}, nil)
+	if err != nil {
+		warning := strings.TrimSpace(output)
+		if warning == "" {
+			warning = err.Error()
+		}
+		return fmt.Errorf("%s", warning)
+	}
+	return nil
 }
 
 // republishRejectedFindings re-validates findings an earlier audit rejected and
@@ -675,6 +692,9 @@ func repairIssueBodies(report *LocalReport, runner CommandRunner) (int, error) {
 		if _, err := runGitHubCommand(runner, []string{"issue", "edit", match[1], "--repo", auditIssueRepository, "--body-file", "-"}, []byte(body)); err != nil {
 			return repaired, fmt.Errorf("repair issue %s: %w", finding.IssueURL, err)
 		}
+		if err := setBugIssueType(runner, match[1]); err != nil {
+			finding.Warning = err.Error()
+		}
 		repaired++
 	}
 	return repaired, nil
@@ -691,7 +711,17 @@ func RepairIssueBodies(auditSessionDir string) (int, error) {
 	if err := json.Unmarshal(data, &report); err != nil {
 		return 0, fmt.Errorf("decode local report: %w", err)
 	}
-	return repairIssueBodies(&report, ghRunner)
+	repaired, err := repairIssueBodies(&report, ghRunner)
+	if err != nil || repaired == 0 {
+		return repaired, err
+	}
+	if err := stateio.WriteJSONAtomic(filepath.Join(auditSessionDir, "local-report.json"), report); err != nil {
+		return repaired, fmt.Errorf("write local report: %w", err)
+	}
+	if err := persistCorrectnessOutcome(&Request{AuditSessionDir: auditSessionDir}, &report.Correctness); err != nil {
+		return repaired, err
+	}
+	return repaired, nil
 }
 
 func verifySelectedDuplicate(runner CommandRunner, duplicate Duplicate) (ghIssue, error) {

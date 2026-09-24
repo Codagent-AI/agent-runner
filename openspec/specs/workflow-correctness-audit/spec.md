@@ -21,7 +21,7 @@ The correctness stage SHALL examine the selected source execution for behavior a
 
 ### Requirement: Confirmed new defects create focused GitHub issues
 
-For each confirmed, non-duplicate Agent Runner defect, the correctness stage SHALL create one GitHub issue in `Codagent-AI/agent-runner`. Each created issue title SHALL begin with `[auto-audit]`. Each issue SHALL describe observed and expected behavior, affected run context, reproduction or verification guidance, and concise evidence sufficient for a maintainer to investigate.
+For each confirmed, non-duplicate Agent Runner defect, the correctness stage SHALL create one GitHub issue in `Codagent-AI/agent-runner`. Each created issue SHALL be assigned the `Bug` issue type; a failure to set that type SHALL be recorded as a local warning without failing publication. Each created issue title SHALL begin with `[auto-audit]`. Each issue SHALL describe observed and expected behavior, affected run context, reproduction or verification guidance, and concise evidence sufficient for a maintainer to investigate.
 
 Issue content SHALL redact credentials, secret-like values, private URLs, and identifying local paths. It SHALL avoid full transcripts, large command outputs, source dumps, or other unnecessary detailed evidence. The local audit report SHALL retain the relationship between the finding and the created issue.
 
