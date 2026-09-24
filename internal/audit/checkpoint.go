@@ -5,9 +5,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
-	"hash"
 	"io"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -19,30 +17,31 @@ import (
 // GitFileStat describes the observable dirty state for one path at a step
 // boundary. It intentionally keeps file names in the local audit artifact.
 type GitFileStat struct {
-	Path    string `json:"path"`
-	Added   int64  `json:"added"`
-	Deleted int64  `json:"deleted"`
+	Path        string `json:"path"`
+	Added       int64  `json:"added"`
+	Deleted     int64  `json:"deleted"`
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 // GitCheckpoint is a conservative local Git observation. An unavailable
 // checkpoint is evidence of a limitation, not evidence of zero change.
 type GitCheckpoint struct {
-	Available         bool              `json:"available"`
-	Reason            string            `json:"reason,omitempty"`
-	HEAD              string            `json:"head,omitempty"`
-	Index             []GitFileStat     `json:"index,omitempty"`
-	Worktree          []GitFileStat     `json:"worktree,omitempty"`
-	Untracked         []GitFileStat     `json:"untracked,omitempty"`
-	Committed         []GitFileStat     `json:"committed,omitempty"`
-	CommittedObserved bool              `json:"committed_observed,omitempty"`
-	Commits           []string          `json:"commits,omitempty"`
-	DirtySignatures   map[string]string `json:"dirty_signatures,omitempty"`
+	Available         bool          `json:"available"`
+	Reason            string        `json:"reason,omitempty"`
+	HEAD              string        `json:"head,omitempty"`
+	Index             []GitFileStat `json:"index,omitempty"`
+	Worktree          []GitFileStat `json:"worktree,omitempty"`
+	Untracked         []GitFileStat `json:"untracked,omitempty"`
+	Committed         []GitFileStat `json:"committed,omitempty"`
+	CommittedObserved bool          `json:"committed_observed,omitempty"`
+	Commits           []string      `json:"commits,omitempty"`
 }
 
 const (
-	maxUntrackedFiles     = 256
-	maxUntrackedFileBytes = 4 << 20
-	maxUntrackedPathBytes = 32 << 10
+	maxTrackedFingerprintPaths = 256
+	maxUntrackedFiles          = 256
+	maxUntrackedFileBytes      = 4 << 20
+	maxUntrackedPathBytes      = 32 << 10
 )
 
 // GitChangeCounts is the aggregate projection used by metrics consumers.
@@ -145,181 +144,20 @@ func observeGit(root string) GitCheckpoint {
 	if err != nil {
 		return GitCheckpoint{Reason: "git worktree state unavailable"}
 	}
+	if len(index)+len(worktree) > maxTrackedFingerprintPaths {
+		return GitCheckpoint{Reason: "tracked Git fingerprint limit exceeded"}
+	}
+	if err := fingerprintDiffStats(root, index, true); err != nil {
+		return GitCheckpoint{Reason: "git index content unavailable"}
+	}
+	if err := fingerprintDiffStats(root, worktree, false); err != nil {
+		return GitCheckpoint{Reason: "git worktree content unavailable"}
+	}
 	untracked, err := gitUntrackedStats(root)
 	if err != nil {
 		return GitCheckpoint{Reason: "git untracked state unavailable"}
 	}
-	checkpoint := GitCheckpoint{Available: true, HEAD: strings.TrimSpace(head), Index: index, Worktree: worktree, Untracked: untracked}
-	checkpoint.DirtySignatures, err = gitDirtySignatures(root, &checkpoint)
-	if err != nil {
-		return GitCheckpoint{Reason: "git dirty state unavailable"}
-	}
-	return checkpoint
-}
-
-func gitDirtySignatures(root string, checkpoint *GitCheckpoint) (map[string]string, error) {
-	paths := flattenCheckpoint(checkpoint)
-	signatures := make(map[string]string)
-	if len(paths) == 0 {
-		return signatures, nil
-	}
-	indexEntries, err := gitIndexEntries(root, paths)
-	if err != nil {
-		return nil, err
-	}
-	untracked := make(map[string]struct{}, len(checkpoint.Untracked))
-	for _, stat := range checkpoint.Untracked {
-		untracked[stat.Path] = struct{}{}
-	}
-	worktree := make(map[string]struct{}, len(checkpoint.Worktree))
-	for _, stat := range checkpoint.Worktree {
-		worktree[stat.Path] = struct{}{}
-	}
-	for path := range paths {
-		signature := sha256.New()
-		gitlink := false
-		for _, entry := range indexEntries[path] {
-			_, _ = io.WriteString(signature, entry)
-			_, _ = signature.Write([]byte{0})
-			gitlink = gitlink || strings.HasPrefix(entry, "160000 ")
-		}
-		_, isUntracked := untracked[path]
-		_, hasWorktreeDelta := worktree[path]
-		if isUntracked || hasWorktreeDelta {
-			if err := hashWorktreePath(signature, filepath.Join(root, filepath.FromSlash(path)), isUntracked, gitlink); err != nil {
-				return nil, err
-			}
-		}
-		signatures[path] = fmt.Sprintf("%x", signature.Sum(nil))
-	}
-	return signatures, nil
-}
-
-func gitIndexEntries(root string, dirtyPaths map[string]gitCounts) (map[string][]string, error) {
-	command := exec.Command("git", "-C", root, "ls-files", "--stage", "-z") // #nosec G204 -- root is the runner's resolved project root.
-	stdout, err := command.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	if err := command.Start(); err != nil {
-		return nil, err
-	}
-	entries := make(map[string][]string)
-	reader := bufio.NewReader(stdout)
-	for {
-		record, readErr := reader.ReadBytes(0)
-		if readErr == io.EOF && len(record) == 0 {
-			break
-		}
-		if readErr != nil || len(record) == 0 || record[len(record)-1] != 0 {
-			_ = command.Process.Kill()
-			_ = command.Wait()
-			if readErr != nil {
-				return nil, readErr
-			}
-			return nil, fmt.Errorf("unterminated git index entry")
-		}
-		metadata, path, found := bytes.Cut(record[:len(record)-1], []byte{'\t'})
-		if !found {
-			_ = command.Process.Kill()
-			_ = command.Wait()
-			return nil, fmt.Errorf("invalid git index entry")
-		}
-		if _, dirty := dirtyPaths[string(path)]; dirty {
-			entries[string(path)] = append(entries[string(path)], string(metadata))
-		}
-	}
-	if err := command.Wait(); err != nil {
-		return nil, err
-	}
-	return entries, nil
-}
-
-func hashWorktreePath(signature hash.Hash, path string, bounded, gitlink bool) error {
-	info, err := os.Lstat(path)
-	if os.IsNotExist(err) {
-		_, _ = io.WriteString(signature, "missing")
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if info.Mode().IsRegular() {
-		file, err := openUntrackedFileNoFollow(path)
-		if err != nil {
-			return err
-		}
-		openedInfo, err := file.Stat()
-		if err != nil || !openedInfo.Mode().IsRegular() {
-			_ = file.Close()
-			return fmt.Errorf("dirty path is not a regular file: %q", path)
-		}
-		_, _ = fmt.Fprintf(signature, "regular:%d\x00", openedInfo.Mode().Perm()&0o111)
-		var reader io.Reader = file
-		if bounded {
-			reader = io.LimitReader(file, maxUntrackedFileBytes+1)
-		}
-		copied, copyErr := io.Copy(signature, reader)
-		closeErr := file.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if bounded && copied > maxUntrackedFileBytes {
-			return fmt.Errorf("untracked file exceeds %d bytes", maxUntrackedFileBytes)
-		}
-		return closeErr
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		target, err := os.Readlink(path)
-		if err != nil {
-			return err
-		}
-		_, _ = io.WriteString(signature, "symlink:\x00"+target)
-		return nil
-	}
-	if info.IsDir() && gitlink {
-		clean, err := submoduleClean(path)
-		if err != nil {
-			return err
-		}
-		if !clean {
-			return fmt.Errorf("submodule has uncommitted changes: %q", path)
-		}
-		head, err := gitOutput(path, "rev-parse", "HEAD")
-		if err != nil {
-			return err
-		}
-		_, _ = io.WriteString(signature, "submodule:\x00"+strings.TrimSpace(head))
-		return nil
-	}
-	return fmt.Errorf("unsupported dirty path type %q", path)
-}
-
-func submoduleClean(path string) (bool, error) {
-	command := exec.Command("git", "-C", path, "status", "--porcelain", "-z") // #nosec G204 -- path is a Git-reported submodule under the resolved project root.
-	stdout, err := command.StdoutPipe()
-	if err != nil {
-		return false, err
-	}
-	if err := command.Start(); err != nil {
-		return false, err
-	}
-	var first [1]byte
-	count, readErr := io.ReadFull(stdout, first[:])
-	if count != 0 {
-		_ = command.Process.Kill()
-		_ = command.Wait()
-		return false, nil
-	}
-	if readErr != io.EOF {
-		_ = command.Process.Kill()
-		_ = command.Wait()
-		return false, readErr
-	}
-	if err := command.Wait(); err != nil {
-		return false, err
-	}
-	return true, nil
+	return GitCheckpoint{Available: true, HEAD: strings.TrimSpace(head), Index: index, Worktree: worktree, Untracked: untracked}
 }
 
 func gitOutput(root string, args ...string) (string, error) {
@@ -339,7 +177,31 @@ func gitNumstat(root string, args ...string) ([]GitFileStat, error) {
 	return parseNumstat([]byte(output))
 }
 
+func fingerprintDiffStats(root string, stats []GitFileStat, staged bool) error {
+	for index := range stats {
+		args := []string{"-C", root, "diff", "--no-ext-diff", "--no-textconv", "--binary"}
+		if staged {
+			args = append(args, "--cached")
+		}
+		// Numstat paths are relative to the worktree top, not to root.
+		args = append(args, "--", ":(top,literal)"+stats[index].Path)
+		command := exec.Command("git", args...) // #nosec G204 -- root and paths come from the runner's Git observation.
+		hash := sha256.New()
+		command.Stdout = hash
+		if err := command.Run(); err != nil {
+			return err
+		}
+		stats[index].Fingerprint = fmt.Sprintf("%x", hash.Sum(nil))
+	}
+	return nil
+}
+
 func gitUntrackedStats(root string) ([]GitFileStat, error) {
+	top, err := gitOutput(root, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return nil, err
+	}
+	top = strings.TrimSuffix(top, "\n")
 	paths, err := gitUntrackedPaths(root)
 	if err != nil {
 		return nil, err
@@ -350,7 +212,7 @@ func gitUntrackedStats(root string) ([]GitFileStat, error) {
 		if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 			return nil, fmt.Errorf("unsafe untracked path %q", path)
 		}
-		filePath := filepath.Join(root, clean)
+		filePath := filepath.Join(top, clean)
 		data, readErr := readBoundedUntrackedFile(filePath)
 		if readErr != nil {
 			return nil, fmt.Errorf("untracked file %q cannot be measured within limits: %w", path, readErr)
@@ -358,7 +220,8 @@ func gitUntrackedStats(root string) ([]GitFileStat, error) {
 		if bytes.IndexByte(data, 0) >= 0 {
 			return nil, fmt.Errorf("untracked binary file %q", path)
 		}
-		stats = append(stats, GitFileStat{Path: path, Added: countLines(data)})
+		fingerprint := sha256.Sum256(data)
+		stats = append(stats, GitFileStat{Path: path, Added: countLines(data), Fingerprint: fmt.Sprintf("%x", fingerprint)})
 	}
 	return stats, nil
 }
@@ -389,7 +252,8 @@ func readBoundedUntrackedFile(path string) ([]byte, error) {
 }
 
 func gitUntrackedPaths(root string) ([]string, error) {
-	command := exec.Command("git", "-C", root, "ls-files", "--others", "--exclude-standard", "-z") // #nosec G204 -- root is the runner's resolved project root.
+	// --full-name keeps paths relative to the worktree top, matching numstat.
+	command := exec.Command("git", "-C", root, "ls-files", "--others", "--exclude-standard", "--full-name", "-z") // #nosec G204 -- root is the runner's resolved project root.
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -468,6 +332,7 @@ func parseNumstat(output []byte) ([]GitFileStat, error) {
 		if len(fields) != 3 {
 			return nil, fmt.Errorf("invalid numstat %q", part)
 		}
+		// Binary changes have no line counts; fingerprints still record them.
 		if fields[0] == "-" && fields[1] == "-" {
 			stats = append(stats, GitFileStat{Path: fields[2]})
 			continue
@@ -518,37 +383,87 @@ func deriveGitChanges(start, end *GitCheckpoint) GitChangeCounts {
 			return GitChangeCounts{Reason: "committed Git delta unavailable"}
 		}
 		committed := statsMap(end.Committed)
+		// Preexisting dirty state is attributable only when the step left it
+		// byte-for-byte untouched and did not commit it.
 		for path, counts := range before {
 			current, remains := after[path]
-			if _, overlaps := committed[path]; overlaps || !remains || current != counts || start.DirtySignatures[path] == "" || start.DirtySignatures[path] != end.DirtySignatures[path] {
+			_, overlaps := committed[path]
+			if overlaps || !remains || current != counts || !counts.fingerprinted() {
 				return GitChangeCounts{Reason: "preexisting dirty state prevents conservative commit attribution"}
 			}
 		}
 		dirtyDelta := make(map[string]gitCounts, len(after))
 		for path, counts := range after {
-			previous, existed := before[path]
-			if !existed || counts != previous {
-				dirtyDelta[path] = gitCounts{added: counts.added - previous.added, deleted: counts.deleted - previous.deleted}
+			if _, existed := before[path]; !existed {
+				dirtyDelta[path] = counts
 			}
 		}
 		return countGitStats(mergeGitStats(committed, dirtyDelta))
 	}
-	return countDirtyDelta(start, end, before, after)
+	return countDirtyDelta(before, after)
 }
 
-type gitCounts struct{ added, deleted int64 }
+type gitCounts struct {
+	added, deleted                        int64
+	indexFingerprint, worktreeFingerprint string
+	untrackedFingerprint                  string
+}
+
+func (c gitCounts) fingerprinted() bool {
+	return c.indexFingerprint != "" || c.worktreeFingerprint != "" || c.untrackedFingerprint != ""
+}
 
 func flattenCheckpoint(checkpoint *GitCheckpoint) map[string]gitCounts {
 	result := make(map[string]gitCounts)
-	for _, group := range [][]GitFileStat{checkpoint.Index, checkpoint.Worktree, checkpoint.Untracked} {
+	for groupIndex, group := range [][]GitFileStat{checkpoint.Index, checkpoint.Worktree, checkpoint.Untracked} {
 		for _, stat := range group {
 			current := result[stat.Path]
 			current.added += stat.Added
 			current.deleted += stat.Deleted
+			switch groupIndex {
+			case 0:
+				current.indexFingerprint = stat.Fingerprint
+			case 1:
+				current.worktreeFingerprint = stat.Fingerprint
+			case 2:
+				current.untrackedFingerprint = stat.Fingerprint
+			}
 			result[stat.Path] = current
 		}
 	}
 	return result
+}
+
+// ChangedDirtyPaths returns paths whose dirty line counts changed between checkpoints.
+// A missing start checkpoint represents an initially clean working tree.
+func ChangedDirtyPaths(start, end *GitCheckpoint) []string {
+	before := make(map[string]gitCounts)
+	if start != nil {
+		before = flattenCheckpoint(start)
+	}
+	after := make(map[string]gitCounts)
+	if end != nil {
+		after = flattenCheckpoint(end)
+	}
+	return changedDirtyPaths(before, after)
+}
+
+func changedDirtyPaths(before, after map[string]gitCounts) []string {
+	paths := make(map[string]struct{}, len(before)+len(after))
+	for path := range before {
+		paths[path] = struct{}{}
+	}
+	for path := range after {
+		paths[path] = struct{}{}
+	}
+	changed := make([]string, 0, len(paths))
+	for path := range paths {
+		if before[path] != after[path] {
+			changed = append(changed, path)
+		}
+	}
+	sort.Strings(changed)
+	return changed
 }
 
 func statsMap(stats []GitFileStat) map[string]gitCounts {
@@ -573,16 +488,9 @@ func mergeGitStats(left, right map[string]gitCounts) map[string]gitCounts {
 	return result
 }
 
-func countDirtyDelta(start, end *GitCheckpoint, before, after map[string]gitCounts) GitChangeCounts {
-	paths := make(map[string]struct{}, len(before)+len(after))
-	for path := range before {
-		paths[path] = struct{}{}
-	}
-	for path := range after {
-		paths[path] = struct{}{}
-	}
+func countDirtyDelta(before, after map[string]gitCounts) GitChangeCounts {
 	result := GitChangeCounts{Available: true}
-	for path := range paths {
+	for _, path := range changedDirtyPaths(before, after) {
 		left, existedBefore := before[path]
 		right, existsAfter := after[path]
 		if existedBefore && !existsAfter {
@@ -591,14 +499,9 @@ func countDirtyDelta(start, end *GitCheckpoint, before, after map[string]gitCoun
 		if right.added < left.added || right.deleted < left.deleted {
 			return GitChangeCounts{Reason: "repository change cannot be derived conservatively"}
 		}
-		if existedBefore && existsAfter && (start.DirtySignatures[path] == "" || end.DirtySignatures[path] == "") {
-			return GitChangeCounts{Reason: "repository change cannot be derived conservatively"}
-		}
-		if !existedBefore || right != left || start.DirtySignatures[path] != end.DirtySignatures[path] {
-			result.FilesChanged++
-			result.LinesAdded += right.added - left.added
-			result.LinesDeleted += right.deleted - left.deleted
-		}
+		result.FilesChanged++
+		result.LinesAdded += right.added - left.added
+		result.LinesDeleted += right.deleted - left.deleted
 	}
 	return result
 }

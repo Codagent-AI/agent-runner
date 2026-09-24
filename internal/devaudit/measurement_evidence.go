@@ -91,16 +91,20 @@ func leafModelPopulation(artifact *metrics.Artifact, keys []string, session, pat
 	}
 	return population, hasChildren
 }
-func leafModelScalars(population []*metrics.StepRecord, gaps []string) (tokenResult *int64, costResult *float64, dispatches int) {
+func leafModelScalars(population []*metrics.StepRecord, gaps []string) (tokenResult *int64, costResult *float64, dispatches int, models map[string]struct{}) {
 	var tokens int64
 	var cost float64
 	dispatches = 0
+	models = map[string]struct{}{}
 	tokenKnown, costKnown := len(gaps) == 0, len(gaps) == 0
 	for _, record := range population {
 		if !record.AgentInvoked || record.Type != "agent" {
 			continue
 		}
 		dispatches++
+		if record.Usage != nil && record.Usage.Model != "" {
+			models[record.Usage.Model] = struct{}{}
+		}
 		if record.Usage == nil || record.Usage.Status != model.UsageCollected || record.Usage.TokenTotals == nil {
 			tokenKnown = false
 		} else {
@@ -118,7 +122,7 @@ func leafModelScalars(population []*metrics.StepRecord, gaps []string) (tokenRes
 	if costKnown {
 		costResult = &cost
 	}
-	return tokenResult, costResult, dispatches
+	return tokenResult, costResult, dispatches, models
 }
 func (e *leafModelEvidence) observedModels() []string {
 	models := map[string]struct{}{}
@@ -144,8 +148,12 @@ func attachMeasurementEvidence(leaf *LeafEvidence, artifact *metrics.Artifact, k
 	if !children && len(evidence.Heads) == 0 && len(evidence.Native) == 0 && len(evidence.Contexts) == 0 && len(evidence.Gaps) == 0 {
 		return
 	}
-	leaf.Skeleton.Cost.TotalTokens, leaf.Skeleton.Cost.CostUSD, evidence.Dispatches = leafModelScalars(population, evidence.Gaps)
-	leaf.Skeleton.Cost.SourceModels = evidence.observedModels()
+	var models map[string]struct{}
+	leaf.Skeleton.Cost.TotalTokens, leaf.Skeleton.Cost.CostUSD, evidence.Dispatches, models = leafModelScalars(population, evidence.Gaps)
+	for _, observed := range evidence.observedModels() {
+		models[observed] = struct{}{}
+	}
+	leaf.Skeleton.Cost.SourceModels = sortedKeys(models)
 	detail, _ := json.Marshal(evidence)
 	leaf.Evidence = append(leaf.Evidence, EvidenceReference{ID: "measurements-" + leaf.Skeleton.ObservationID, Category: "metrics", Status: "available", ProducerExecutionSession: session, Lineage: leaf.Skeleton.Lineage, Detail: string(detail), LocalPath: metrics.FileName})
 }
