@@ -11,11 +11,11 @@ import (
 )
 
 func TestAggregateGitExcludesPreexistingDirtyPaths(t *testing.T) {
-	start := &audit.GitCheckpoint{
+	start := &audit.GitCheckpoint{Available: true,
 		Worktree:  []audit.GitFileStat{{Path: "a", Added: 3, Deleted: 1}, {Path: "a2", Added: 1}},
 		Untracked: []audit.GitFileStat{{Path: "b", Added: 5}},
 	}
-	end := &audit.GitCheckpoint{
+	end := &audit.GitCheckpoint{Available: true,
 		Worktree:  []audit.GitFileStat{{Path: "a", Added: 3, Deleted: 1}, {Path: "a2", Added: 2}, {Path: "c", Added: 1}},
 		Untracked: []audit.GitFileStat{{Path: "b", Added: 5}},
 	}
@@ -36,13 +36,13 @@ func TestAggregateGitExcludesPreexistingDirtyPaths(t *testing.T) {
 func TestAggregateGitUnionsStepLocalDirtyPaths(t *testing.T) {
 	records := []metrics.StepRecord{
 		{
-			GitStart:   &audit.GitCheckpoint{Worktree: []audit.GitFileStat{{Path: "existing", Added: 1}}},
-			GitEnd:     &audit.GitCheckpoint{Worktree: []audit.GitFileStat{{Path: "existing", Added: 1}, {Path: "c", Added: 1}}},
+			GitStart:   &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "existing", Added: 1}}},
+			GitEnd:     &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "existing", Added: 1}, {Path: "c", Added: 1}}},
 			GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1},
 		},
 		{
-			GitStart:   &audit.GitCheckpoint{Worktree: []audit.GitFileStat{{Path: "existing", Added: 1}, {Path: "c", Added: 1}}},
-			GitEnd:     &audit.GitCheckpoint{Worktree: []audit.GitFileStat{{Path: "existing", Added: 1}, {Path: "c", Added: 1}, {Path: "d", Added: 1}}},
+			GitStart:   &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "existing", Added: 1}, {Path: "c", Added: 1}}},
+			GitEnd:     &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "existing", Added: 1}, {Path: "c", Added: 1}, {Path: "d", Added: 1}}},
 			GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1},
 		},
 	}
@@ -62,13 +62,13 @@ func TestAggregateGitUnionsStepLocalDirtyPaths(t *testing.T) {
 func TestAggregateGitCountsRepeatedPathOnce(t *testing.T) {
 	records := []metrics.StepRecord{
 		{
-			GitStart:   &audit.GitCheckpoint{},
-			GitEnd:     &audit.GitCheckpoint{Worktree: []audit.GitFileStat{{Path: "c", Added: 1}}},
+			GitStart:   &audit.GitCheckpoint{Available: true},
+			GitEnd:     &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "c", Added: 1}}},
 			GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1},
 		},
 		{
-			GitStart:   &audit.GitCheckpoint{Worktree: []audit.GitFileStat{{Path: "c", Added: 1}}},
-			GitEnd:     &audit.GitCheckpoint{Worktree: []audit.GitFileStat{{Path: "c", Added: 2}}},
+			GitStart:   &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "c", Added: 1}}},
+			GitEnd:     &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "c", Added: 2}}},
 			GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1},
 		},
 	}
@@ -90,17 +90,17 @@ func TestAggregateGitCountsRepeatedPathOnce(t *testing.T) {
 
 func TestAggregateGitRetainsCountsWhenCheckpointPathsAreIncomplete(t *testing.T) {
 	complete := metrics.StepRecord{
-		GitStart:   &audit.GitCheckpoint{},
-		GitEnd:     &audit.GitCheckpoint{Worktree: []audit.GitFileStat{{Path: "c", Added: 1}}},
+		GitStart:   &audit.GitCheckpoint{Available: true},
+		GitEnd:     &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "c", Added: 1}}},
 		GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1},
 	}
 	cases := []struct {
 		name   string
 		record metrics.StepRecord
 	}{
-		{name: "missing start", record: metrics.StepRecord{GitEnd: &audit.GitCheckpoint{Worktree: []audit.GitFileStat{{Path: "c", Added: 2}}}, GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1}}},
-		{name: "missing end", record: metrics.StepRecord{GitStart: &audit.GitCheckpoint{Worktree: []audit.GitFileStat{{Path: "c", Added: 1}}}, GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1}}},
-		{name: "missing path details", record: metrics.StepRecord{GitStart: &audit.GitCheckpoint{}, GitEnd: &audit.GitCheckpoint{}, GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1}}},
+		{name: "missing start", record: metrics.StepRecord{GitEnd: &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "c", Added: 2}}}, GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1}}},
+		{name: "missing end", record: metrics.StepRecord{GitStart: &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "c", Added: 1}}}, GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1}}},
+		{name: "missing path details", record: metrics.StepRecord{GitStart: &audit.GitCheckpoint{Available: true}, GitEnd: &audit.GitCheckpoint{Available: true}, GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -120,8 +120,8 @@ func TestAggregateGitRetainsCountsWhenCheckpointPathsAreIncomplete(t *testing.T)
 
 func TestAggregateGitIncludesSameCountContentChanges(t *testing.T) {
 	records := []metrics.StepRecord{{
-		GitStart:   &audit.GitCheckpoint{Worktree: []audit.GitFileStat{{Path: "tracked.txt", Added: 1, Deleted: 1, Fingerprint: "first"}}},
-		GitEnd:     &audit.GitCheckpoint{Worktree: []audit.GitFileStat{{Path: "tracked.txt", Added: 1, Deleted: 1, Fingerprint: "later"}}},
+		GitStart:   &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "tracked.txt", Added: 1, Deleted: 1, Fingerprint: "first"}}},
+		GitEnd:     &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "tracked.txt", Added: 1, Deleted: 1, Fingerprint: "later"}}},
 		GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1},
 	}}
 
@@ -238,5 +238,27 @@ func TestDeferredCommitAttributionIgnoresPathRemovedByEarlierStep(t *testing.T) 
 	}
 	if diff := cmp.Diff([]string{"shared.txt"}, leaves[0].Skeleton.Git.ChangedPaths); diff != "" {
 		t.Errorf("removal step changed paths (-want +got):\n%s", diff)
+	}
+}
+
+func TestDirtyChangedPathsSkipsUnavailableCheckpoint(t *testing.T) {
+	dirty := []audit.GitFileStat{{Path: "dirty.txt", Added: 1}}
+	records := []metrics.StepRecord{
+		{
+			GitStart: &audit.GitCheckpoint{Available: true, Worktree: dirty},
+			GitEnd:   &audit.GitCheckpoint{Reason: "Git capture failed"},
+		},
+		{
+			GitStart: &audit.GitCheckpoint{Reason: "Git capture failed"},
+			GitEnd:   &audit.GitCheckpoint{Available: true, Worktree: dirty},
+		},
+	}
+
+	changed, present := dirtyChangedPaths(records)
+	if diff := cmp.Diff([]string{}, changed); diff != "" {
+		t.Errorf("changed paths (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{}, present); diff != "" {
+		t.Errorf("deferral paths (-want +got):\n%s", diff)
 	}
 }
