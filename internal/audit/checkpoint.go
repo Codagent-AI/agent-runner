@@ -136,11 +136,11 @@ func observeGit(root string) GitCheckpoint {
 	if err != nil {
 		return GitCheckpoint{Reason: "git revision unavailable"}
 	}
-	index, err := gitNumstat(root, "diff", "--cached", "--numstat", "-z")
+	index, err := gitNumstat(root, "diff", "--cached", "--no-renames", "--numstat", "-z")
 	if err != nil {
 		return GitCheckpoint{Reason: "git index state unavailable"}
 	}
-	worktree, err := gitNumstat(root, "diff", "--numstat", "-z")
+	worktree, err := gitNumstat(root, "diff", "--no-renames", "--numstat", "-z")
 	if err != nil {
 		return GitCheckpoint{Reason: "git worktree state unavailable"}
 	}
@@ -332,6 +332,11 @@ func parseNumstat(output []byte) ([]GitFileStat, error) {
 		if len(fields) != 3 {
 			return nil, fmt.Errorf("invalid numstat %q", part)
 		}
+		// Binary changes have no line counts; fingerprints still record them.
+		if fields[0] == "-" && fields[1] == "-" {
+			stats = append(stats, GitFileStat{Path: fields[2]})
+			continue
+		}
 		added, addErr := strconv.ParseInt(fields[0], 10, 64)
 		deleted, deleteErr := strconv.ParseInt(fields[1], 10, 64)
 		if addErr != nil || deleteErr != nil {
@@ -346,7 +351,7 @@ func completeHeadTransition(root string, start, end *GitCheckpoint) {
 	if !end.Available || start.HEAD == end.HEAD {
 		return
 	}
-	committed, err := gitNumstat(root, "diff", "--numstat", "-z", start.HEAD, end.HEAD)
+	committed, err := gitNumstat(root, "diff", "--no-renames", "--numstat", "-z", start.HEAD, end.HEAD)
 	if err != nil {
 		end.Available = false
 		end.Reason = "committed Git delta unavailable"
@@ -377,10 +382,23 @@ func deriveGitChanges(start, end *GitCheckpoint) GitChangeCounts {
 		if !end.CommittedObserved {
 			return GitChangeCounts{Reason: "committed Git delta unavailable"}
 		}
-		if len(before) != 0 {
-			return GitChangeCounts{Reason: "preexisting dirty state prevents conservative commit attribution"}
+		committed := statsMap(end.Committed)
+		// Preexisting dirty state is attributable only when the step left it
+		// byte-for-byte untouched and did not commit it.
+		for path, counts := range before {
+			current, remains := after[path]
+			_, overlaps := committed[path]
+			if overlaps || !remains || current != counts || !counts.fingerprinted() {
+				return GitChangeCounts{Reason: "preexisting dirty state prevents conservative commit attribution"}
+			}
 		}
-		return countGitStats(mergeGitStats(statsMap(end.Committed), after))
+		dirtyDelta := make(map[string]gitCounts, len(after))
+		for path, counts := range after {
+			if _, existed := before[path]; !existed {
+				dirtyDelta[path] = counts
+			}
+		}
+		return countGitStats(mergeGitStats(committed, dirtyDelta))
 	}
 	return countDirtyDelta(before, after)
 }
@@ -389,6 +407,10 @@ type gitCounts struct {
 	added, deleted                        int64
 	indexFingerprint, worktreeFingerprint string
 	untrackedFingerprint                  string
+}
+
+func (c gitCounts) fingerprinted() bool {
+	return c.indexFingerprint != "" || c.worktreeFingerprint != "" || c.untrackedFingerprint != ""
 }
 
 func flattenCheckpoint(checkpoint *GitCheckpoint) map[string]gitCounts {
@@ -469,7 +491,11 @@ func mergeGitStats(left, right map[string]gitCounts) map[string]gitCounts {
 func countDirtyDelta(before, after map[string]gitCounts) GitChangeCounts {
 	result := GitChangeCounts{Available: true}
 	for _, path := range changedDirtyPaths(before, after) {
-		left, right := before[path], after[path]
+		left, existedBefore := before[path]
+		right, existsAfter := after[path]
+		if existedBefore && !existsAfter {
+			return GitChangeCounts{Reason: "repository change cannot be derived conservatively"}
+		}
 		if right.added < left.added || right.deleted < left.deleted {
 			return GitChangeCounts{Reason: "repository change cannot be derived conservatively"}
 		}
