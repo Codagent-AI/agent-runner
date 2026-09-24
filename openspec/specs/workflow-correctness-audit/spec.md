@@ -15,6 +15,22 @@ The correctness stage SHALL examine the selected source execution for behavior a
 - **WHEN** run evidence and current Agent Runner code or specifications support a reproducible orchestration defect
 - **THEN** the correctness audit may confirm the defect
 
+#### Scenario: Behavior matches a documented contract
+- **WHEN** the observed behavior is what current Agent Runner specifications or documentation describe, including a documented limitation, or deciding the correct behavior requires a product or specification decision
+- **THEN** the correctness audit excludes it and does not file an issue
+
+### Requirement: Only workflow-execution defects are filed
+
+The correctness stage SHALL classify each candidate's scope as `workflow_execution` (how Agent Runner executed the source workflow: step sequencing and outcomes, sessions, agent invocation, loops, retries, repair, flow control, captures, sub-workflows, dispatch, resume, persisted state, and step effects such as commits) or `telemetry` (usage, token, cost, duration, Git change attribution, and other measurements of the run). Only confirmed `workflow_execution` candidates SHALL be eligible for issue filing. Other confirmed candidates, including those with no scope, SHALL be retained in the local report without creating an issue.
+
+#### Scenario: Confirmed telemetry discrepancy
+- **WHEN** the auditor confirms that a step's recorded token usage or cost disagrees with the evidence
+- **THEN** the finding is retained locally with its scope and no GitHub issue is created
+
+#### Scenario: Confirmed execution defect
+- **WHEN** the auditor confirms that Agent Runner resumed the wrong session for a step
+- **THEN** the finding is eligible for issue filing under the existing publication rules
+
 #### Scenario: Evidence remains inconclusive
 - **WHEN** the auditor cannot verify a suspicion after inspecting relevant evidence
 - **THEN** it retains the suspicion only in the local report and does not file an issue

@@ -778,7 +778,7 @@ func TestE2E001AutomaticAuditCompletesLocallyWhenSheetsIsUnavailable(t *testing.
 	if ref == "" {
 		t.Fatal("prepared fixture has no available evidence reference")
 	}
-	correctness := CorrectnessCandidates{Candidates: []CorrectnessCandidate{{Status: "confirmed", DefectKey: "runner-retry-loss", Title: "retry state is lost", Observed: "retry loses state", Expected: "retry preserves state", Verification: "run the retry workflow", AffectedComponent: "internal/runner", EvidenceRefs: []string{ref}, Confidence: "high", SemanticDuplicate: Duplicate{State: "none"}}}}
+	correctness := CorrectnessCandidates{Candidates: []CorrectnessCandidate{{Status: "confirmed", DefectKey: "runner-retry-loss", Title: "retry state is lost", Observed: "retry loses state", Expected: "retry preserves state", Verification: "run the retry workflow", AffectedComponent: "internal/runner", Scope: "workflow_execution", EvidenceRefs: []string{ref}, Confidence: "high", SemanticDuplicate: Duplicate{State: "none"}}}}
 	if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "model-output", correctnessOutput), correctness); err != nil {
 		t.Fatal(err)
 	}

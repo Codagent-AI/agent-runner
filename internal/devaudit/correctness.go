@@ -37,13 +37,16 @@ type CorrectnessCandidates struct {
 }
 
 type CorrectnessCandidate struct {
-	Status            string    `json:"status"`
-	DefectKey         string    `json:"defect_key,omitempty"`
-	Title             string    `json:"title,omitempty"`
-	Observed          string    `json:"observed,omitempty"`
-	Expected          string    `json:"expected,omitempty"`
-	Verification      string    `json:"verification,omitempty"`
-	AffectedComponent string    `json:"affected_component,omitempty"`
+	Status            string `json:"status"`
+	DefectKey         string `json:"defect_key,omitempty"`
+	Title             string `json:"title,omitempty"`
+	Observed          string `json:"observed,omitempty"`
+	Expected          string `json:"expected,omitempty"`
+	Verification      string `json:"verification,omitempty"`
+	AffectedComponent string `json:"affected_component,omitempty"`
+	// Scope classifies what the defect affects. Only workflow_execution
+	// findings are filed; others stay in the local report.
+	Scope             string    `json:"scope,omitempty"`
 	EvidenceRefs      []string  `json:"evidence_refs,omitempty"`
 	Consultations     []string  `json:"consultations,omitempty"`
 	Confidence        string    `json:"confidence,omitempty"`
@@ -128,6 +131,21 @@ func writeCorrectnessDiagnostic(request *Request, message string) error {
 	return stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "correctness-model-diagnostics.json"), map[string]string{"error": message})
 }
 
+// correctnessPrompt directs the auditor at defects in how Agent Runner
+// executed the source workflow. Measurement discrepancies and behavior the
+// current specifications already describe are not filed.
+const correctnessPrompt = `Investigate only reproducible Agent Runner defects in how the source workflow was executed, using this immutable audit evidence and the read-only Runner source under evidence/runner-source.
+
+In scope (scope "workflow_execution"): step sequencing and outcomes, session new/resume/inherit handling, agent CLI invocation and arguments, loops, retries, repair cycles, skip_if and break_if, captures and interpolation, sub-workflows, dispatch, run resume, state persistence, and Git commits or other effects a step produced. The question is whether Agent Runner did what the workflow and its specifications say it should.
+
+Out of scope (scope "telemetry"): discrepancies in usage, token, cost, duration, Git change attribution, or other measurements the audit evidence reports about the run. Use scope "telemetry" for these even when they look wrong; they are kept in the local report and not filed.
+
+Mark a candidate "excluded" when the behavior matches current Agent Runner specifications or documentation (including documented limitations), when choosing the correct behavior needs a product or specification decision, or when the cause is the project, the user, or an external dependency rather than Agent Runner. Confirm a defect only when current code or specifications show Agent Runner behaved differently from its own contract.
+
+Return exactly one JSON object with candidates. A candidate has status (confirmed, inconclusive, excluded), scope (workflow_execution, telemetry), normalized defect_key, title, observed, expected, verification, affected_component, evidence_refs, consultations, confidence, symptoms, and semantic_duplicate {url,state,defect_key}. Do not edit repositories, run GitHub commands, include transcripts, paths, URLs other than duplicate issue URLs, secrets, or prose outside JSON.
+
+`
+
 func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error) {
 	trusted, err := trustedAuditInputsFingerprint(request)
 	if err != nil {
@@ -148,7 +166,7 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 	if err != nil {
 		return CorrectnessCandidates{}, err
 	}
-	prompt := "Investigate only reproducible Agent Runner defects using this immutable audit evidence and the read-only Runner source under evidence/runner-source. Return exactly one JSON object with candidates. A candidate has status (confirmed, inconclusive, excluded), normalized defect_key, title, observed, expected, verification, affected_component, evidence_refs, consultations, confidence, symptoms, and semantic_duplicate {url,state,defect_key}. Do not edit repositories, run GitHub commands, include transcripts, paths, URLs other than duplicate issue URLs, secrets, or prose outside JSON. Project, user, and external failures are excluded unless evidence verifies an Agent Runner cause.\n\n" + string(input)
+	prompt := correctnessPrompt + string(input)
 	workspace, err := prepareModelWorkspace(request)
 	if err != nil {
 		return CorrectnessCandidates{}, err
@@ -357,6 +375,10 @@ func PublishCorrectness(request Request, prepared PreparedValueAudit, output Cor
 			result.Findings = append(result.Findings, findingFor(candidate, key, "retained", "", ""))
 			continue
 		}
+		if !filedScope(candidate) {
+			result.Findings = append(result.Findings, findingFor(candidate, key, "retained", "", fmt.Sprintf("scope %q is not filed", candidate.Scope)))
+			continue
+		}
 		if err := validateCorrectnessCandidate(candidate, key, known, &request.RunnerSource); err != nil {
 			result.Findings = append(result.Findings, findingFor(candidate, key, "rejected", "", err.Error()))
 			continue
@@ -391,6 +413,16 @@ func PublishCorrectness(request Request, prepared PreparedValueAudit, output Cor
 	}
 	return result, nil
 }
+
+// filedScope reports whether a confirmed finding concerns how Agent Runner
+// executed the workflow. Usage, cost, Git-attribution, and other measurement
+// findings describe the evidence the audit reads rather than the run itself,
+// so they are retained locally instead of filed.
+func filedScope(candidate *CorrectnessCandidate) bool {
+	return candidate.Scope == correctnessScopeWorkflowExecution
+}
+
+const correctnessScopeWorkflowExecution = "workflow_execution"
 
 func persistCorrectnessOutcome(request *Request, result *CorrectnessResult) error {
 	if request.AuditSessionDir == "" {
@@ -647,6 +679,11 @@ func republishRejectedFindings(auditSessionDir string, runner CommandRunner) ([]
 		}
 		candidate := finding.Candidate
 		key := normalizeDefectKey(candidate.DefectKey)
+		if !filedScope(&candidate) {
+			finding.PublicationState = "retained"
+			finding.Failure = fmt.Sprintf("scope %q is not filed", candidate.Scope)
+			continue
+		}
 		if err := validateCorrectnessCandidate(&candidate, key, known, &report.RunnerSource); err != nil {
 			// Record why it is still rejected so the report stops citing a
 			// reason that no longer applies.
