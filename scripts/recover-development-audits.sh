@@ -102,14 +102,20 @@ recover_session() {
     return
   fi
   if [ -f "$lifecycle" ]; then
-    while IFS=$'\t' read -r linked_id linked_session; do
+    while IFS=$'\t' read -r linked_id linked_session linked_state; do
       [ "$linked_session" = "$session" ] || continue
       case "$(delivery_state "$(dirname "$source_dir")/$linked_id")" in
         delivered) echo "SKIP delivered-session  $label  $session"; return ;;
         pending) pending="$linked_id" ;;
+        *)
+          # A running audit may still deliver; a second replay would duplicate its rows.
+          case "$linked_state" in
+            launching|started) echo "SKIP active  $label  $linked_id"; return ;;
+          esac
+          ;;
       esac
     done <<EOF_LINKS
-$(jq -r '.links[]? | [.audit_run_id, .execution_session_id] | @tsv' "$lifecycle")
+$(jq -r '.links[]? | [.audit_run_id, .execution_session_id, .state] | @tsv' "$lifecycle")
 EOF_LINKS
   fi
   actionable=$((actionable + 1))

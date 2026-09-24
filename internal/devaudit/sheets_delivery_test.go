@@ -375,3 +375,35 @@ func TestRetryReportAdoptsLocalDestinationForUnconfiguredSandboxReport(t *testin
 		t.Fatalf("report after retry = %q to %#v", delivered.DeliveryState, delivered.Destination)
 	}
 }
+
+func TestRetryReportFreezesAdoptedDestinationBeforeDelivery(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	store := ConnectionStore{Home: t.TempDir(), allowInsecureTokenURI: true}
+	if err := store.Write(&Connection{SpreadsheetID: "sheet", Tab: "audit", ClientID: "client", ClientSecret: "secret", TokenURI: server.URL + "/token", RefreshToken: "refresh"}); err != nil {
+		t.Fatal(err)
+	}
+	oldReporter, oldDestination := defaultSheetsReporter, destinationResolver
+	defaultSheetsReporter = SheetsReporter{Store: store, HTTPClient: server.Client(), SheetsBaseURL: server.URL + "/v4"}
+	destinationResolver = fakeDestination{state: DestinationState{State: "configured", SpreadsheetID: "sheet", Tab: "audit"}}
+	t.Cleanup(func() { defaultSheetsReporter, destinationResolver = oldReporter, oldDestination })
+
+	dir := t.TempDir()
+	writeJSON(t, filepath.Join(dir, "local-report.json"), LocalReport{AuditRunID: "audit", DeliveryState: "pending", Destination: DestinationState{State: "unavailable"}})
+	if err := RetryReport(dir); err == nil {
+		t.Fatal("RetryReport() succeeded against an unavailable Sheets API")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "local-report.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report LocalReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Destination.State != "configured" || report.Destination.SpreadsheetID != "sheet" || report.DeliveryState != "pending" {
+		t.Fatalf("report after failed retry = %q to %#v", report.DeliveryState, report.Destination)
+	}
+}

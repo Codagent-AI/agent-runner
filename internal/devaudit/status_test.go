@@ -25,6 +25,7 @@ func TestReadStatusDerivesDeliveryOutcome(t *testing.T) {
 		{AuditRunID: "audit-launch-failed", State: LaunchFailed, Warning: "resolve auditor profile"},
 		{AuditRunID: "audit-running", State: LaunchStarted},
 		{AuditRunID: "audit-corrupt", State: LaunchCompleted},
+		{AuditRunID: "audit-interrupted", State: LaunchReserved},
 	}}
 	if err := writeLifecycle(filepath.Join(source, lifecycleFileName), lifecycle); err != nil {
 		t.Fatal(err)
@@ -55,6 +56,7 @@ func TestReadStatusDerivesDeliveryOutcome(t *testing.T) {
 		"audit-launch-failed": {OutcomeFailed, "resolve auditor profile"},
 		"audit-running":       {OutcomeActive, ""},
 		"audit-corrupt":       {OutcomeFailed, "decode local report: unexpected end of JSON input"},
+		"audit-interrupted":   {OutcomeFailed, "audit reservation was never launched; run `agent-runner audit reconcile` for its execution session"},
 	}
 	if len(status.Links) != len(want) {
 		t.Fatalf("status has %d links", len(status.Links))

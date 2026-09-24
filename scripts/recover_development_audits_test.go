@@ -210,6 +210,16 @@ func TestRecoveryScriptRecoversExplicitSessionOutsideDataRoot(t *testing.T) {
 	replay := filepath.Join(root, "claim", "attempt-1", "agent-runner-session")
 	retry := filepath.Join(root, "claim", "attempt-2", "agent-runner-session")
 	delivered := filepath.Join(root, "claim", "attempt-3", "agent-runner-session")
+	running := filepath.Join(root, "claim", "attempt-4", "agent-runner-session")
+	if err := os.MkdirAll(running, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(running, "run-metrics.json"), []byte(`{"sessions":[{"execution_session_id":"exec"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(running, "audit-lifecycle.json"), []byte(`{"links":[{"audit_run_id":"audit-live","execution_session_id":"exec","trigger":"replay","state":"started"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	for _, dir := range []string{replay, retry, delivered, filepath.Join(filepath.Dir(retry), "audit-pending"), filepath.Join(filepath.Dir(delivered), "audit-done")} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
@@ -238,6 +248,7 @@ func TestRecoveryScriptRecoversExplicitSessionOutsideDataRoot(t *testing.T) {
 		"--session", retry+":exec",
 		"--session", delivered+":exec",
 		"--session", replay+":unknown",
+		"--session", running+":exec",
 	).CombinedOutput()
 	if err != nil {
 		t.Fatalf("recovery dry run: %v\n%s", err, output)
@@ -247,6 +258,7 @@ func TestRecoveryScriptRecoversExplicitSessionOutsideDataRoot(t *testing.T) {
 		"RETRY  attempt-2/agent-runner-session  audit-pending",
 		"SKIP delivered-session  attempt-3/agent-runner-session  exec",
 		"SKIP unavailable  attempt-1/agent-runner-session  unknown",
+		"SKIP active  attempt-4/agent-runner-session  audit-live",
 		"actionable=2",
 	} {
 		if !strings.Contains(string(output), want) {

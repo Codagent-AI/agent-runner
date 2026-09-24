@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
 
@@ -47,15 +48,22 @@ func ReadStatus(sourceSessionDir string) (Status, error) {
 	for index := range lifecycle.Links {
 		link := &lifecycle.Links[index]
 		dir := auditSessionDir(sourceSessionDir, link.AuditRunID)
-		outcome, reason := linkOutcome(link, dir)
+		outcome, reason := linkOutcome(sourceSessionDir, link, dir)
 		status.Links = append(status.Links, LinkStatus{Link: *link, AuditSessionDir: dir, Outcome: outcome, Reason: reason})
 	}
 	return status, nil
 }
 
-func linkOutcome(link *Link, dir string) (outcome, reason string) {
+func linkOutcome(sourceSessionDir string, link *Link, dir string) (outcome, reason string) {
 	switch link.State {
-	case LaunchReserved, LaunchLaunching, LaunchStarted:
+	case LaunchReserved:
+		// A reservation is launched when its source run finalizes. One that
+		// outlives its source run was interrupted and needs reconciliation.
+		if runlock.Check(sourceSessionDir) == runlock.LockActive {
+			return OutcomeActive, ""
+		}
+		return OutcomeFailed, "audit reservation was never launched; run `agent-runner audit reconcile` for its execution session"
+	case LaunchLaunching, LaunchStarted:
 		return OutcomeActive, ""
 	case LaunchFailed:
 		return OutcomeFailed, firstNonEmpty(link.Warning, auditFailureReason(dir), "audit launch failed")
