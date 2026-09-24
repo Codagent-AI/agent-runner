@@ -82,7 +82,7 @@ func TestReplayExcludesEvidenceWithoutHistoricalSessionOwnership(t *testing.T) {
 
 	var request Request
 	t.Chdir(t.TempDir())
-	if _, err := Replay(source, "session-1", func(got Request) error {
+	if _, err := Replay(source, "session-1", "", func(got Request) error {
 		request = got
 		return nil
 	}); err != nil {
@@ -163,7 +163,7 @@ func TestReconcileReservedAutomaticAuditUsesOriginalIdentity(t *testing.T) {
 	writeJSON(t, filepath.Join(source, lifecycleFileName), Lifecycle{Version: 1, SourceRunID: "source", Links: []Link{{AuditRunID: "audit-original", ExecutionSessionID: "session", Trigger: "automatic", State: LaunchReserved, SnapshotPath: snapshot}}})
 
 	var launched Request
-	id, err := Reconcile(source, "session", func(request Request) error { launched = request; return nil })
+	id, err := Reconcile(source, "session", "", func(request Request) error { launched = request; return nil })
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -361,5 +361,76 @@ func TestCopySourceTreeFailsClosedWhenGitListingUnavailable(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(destination, ".validator", "cache", "cache.dat")); !os.IsNotExist(statErr) {
 		t.Fatalf("snapshot copied ignored cache after listing failure: %v", statErr)
+	}
+}
+
+func TestReplayUsesExplicitProjectForCustomSessionDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(project, ".agent-runner"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := "profiles:\n  factory:\n    agents:\n      lead:\n        default_mode: autonomous\n        cli: claude\n        model: opus\n        effort: high\n"
+	if err := os.WriteFile(filepath.Join(project, ".agent-runner", "config.yaml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Factory runs pass --session-dir, so the session is not under a recorded
+	// project's runs directory.
+	source := filepath.Join(t.TempDir(), "attempt-1", "agent-runner-session")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = filepath.WalkDir(filepath.Dir(source), func(path string, entry os.DirEntry, err error) error {
+			if err == nil {
+				_ = os.Chmod(path, 0o700)
+			}
+			return nil
+		})
+	})
+	if err := stateio.WriteState(&model.RunState{RunID: "agent-runner-session", WorkflowFile: ".agent-runner/workflows/factory-fix-v1.0.yaml", WorkflowName: "factory-fix", ProfileSet: "factory"}, source); err != nil {
+		t.Fatal(err)
+	}
+	artifact := metrics.Artifact{
+		SchemaVersion: metrics.SchemaVersion, RunID: "agent-runner-session", Workflow: "factory-fix",
+		Sessions: []metrics.SessionRecord{{ExecutionSessionID: "session", Status: metrics.SessionClosed}},
+		Steps:    []metrics.StepRecord{{RecordID: "first", ID: "implement", Kind: "step", Type: "agent", ExecutionSessionID: "session"}},
+	}
+	data, err := json.Marshal(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, metrics.FileName), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	launch := func(Request) error { return nil }
+	if _, err := Replay(source, "session", "", launch); err == nil || !strings.Contains(err.Error(), "recorded source project is unavailable") {
+		t.Fatalf("Replay() without project error = %v", err)
+	}
+	var request Request
+	if _, err := Replay(source, "session", project, func(got Request) error { request = got; return nil }); err != nil {
+		t.Fatalf("Replay() with project error = %v", err)
+	}
+	if want := (AgentProvenance{CLI: "claude", Model: "opus", Effort: "high"}); request.Auditor != want {
+		t.Fatalf("replay auditor = %#v, want factory lead %#v", request.Auditor, want)
+	}
+	if filepath.Dir(request.AuditSessionDir) != filepath.Dir(source) {
+		t.Fatalf("audit session %q is not beside the source session", request.AuditSessionDir)
+	}
+}
+
+func TestReplayArgsAcceptProjectInAnyPosition(t *testing.T) {
+	for _, args := range [][]string{
+		{"run", "--session", "s", "--project", "/p"},
+		{"--project", "/p", "run", "--session", "s"},
+	} {
+		source, session, project, ok := replayArgs(args)
+		if !ok || source != "run" || session != "s" || project != "/p" {
+			t.Fatalf("replayArgs(%q) = %q %q %q %v", args, source, session, project, ok)
+		}
+	}
+	if _, _, _, ok := replayArgs([]string{"run"}); ok {
+		t.Fatal("replayArgs accepted a missing session")
 	}
 }

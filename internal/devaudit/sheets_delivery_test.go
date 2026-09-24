@@ -322,3 +322,88 @@ func contains(value, needle string) bool {
 	}
 	return false
 }
+
+func TestRetryReportAdoptsLocalDestinationForUnconfiguredSandboxReport(t *testing.T) {
+	const sheetHeader = "schema_version,observation_id,observed_at_utc,project,workflow,source_run_id,execution_session_id,audit_run_id,trigger,source_outcome,step_id,step_outcome,lineage,duration_ms,cost_usd,total_tokens,source_models,git_attribution,commit_shas,files_changed,lines_added,lines_deleted,overall_value,change_effect,unique_contribution,downstream_evidence,confidence,evidence_coverage,judge_model,rubric_version,note"
+	appended := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/token":
+			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "access", "token_type": "Bearer"})
+		case r.Method == http.MethodGet && r.URL.Path == "/v4/spreadsheets/sheet/values/'audit'!1:1":
+			_ = json.NewEncoder(w).Encode(map[string]any{"values": [][]string{strings.Split(sheetHeader, ",")}})
+		case r.Method == http.MethodGet && r.URL.Path == "/v4/spreadsheets/sheet/values/'audit'!B:B":
+			_ = json.NewEncoder(w).Encode(map[string]any{"values": [][]string{{"observation_id"}}})
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v4/spreadsheets/sheet/"):
+			appended++
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+	store := ConnectionStore{Home: t.TempDir(), allowInsecureTokenURI: true}
+	if err := store.Write(&Connection{SpreadsheetID: "sheet", Tab: "audit", ClientID: "client", ClientSecret: "secret", TokenURI: server.URL + "/token", RefreshToken: "refresh"}); err != nil {
+		t.Fatal(err)
+	}
+	oldReporter, oldDestination := defaultSheetsReporter, destinationResolver
+	defaultSheetsReporter = SheetsReporter{Store: store, HTTPClient: server.Client(), SheetsBaseURL: server.URL + "/v4"}
+	destinationResolver = fakeDestination{state: DestinationState{State: "configured", SpreadsheetID: "sheet", Tab: "audit"}}
+	t.Cleanup(func() { defaultSheetsReporter, destinationResolver = oldReporter, oldDestination })
+
+	dir := t.TempDir()
+	report := LocalReport{AuditRunID: "audit", DeliveryState: "pending", Destination: DestinationState{State: "unavailable", Diagnostic: "reporting destination is not configured"}, Values: ValueValidationResult{Observations: []ValueObservation{{
+		ObservationSkeleton: ObservationSkeleton{SchemaVersion: valueSchemaVersion, ObservationID: "obs-1", ObservedAtUTC: "2026-09-01T00:00:00Z", Project: "Codagent-AI/and-scene", Workflow: "core:implement-change", SourceRunID: "source", ExecutionSessionID: "session", AuditRunID: "audit", Trigger: "replay", SourceOutcome: "success", StepID: "build", StepOutcome: "success", Lineage: "new", Git: GitEvidence{Attribution: "no_change"}},
+		OverallValue:        "high", ChangeEffect: "intended", UniqueContribution: "unique", DownstreamEvidence: "confirmed", Confidence: "high", EvidenceCoverage: "complete", JudgeModel: "judge", RubricVersion: rubricVersion, Note: "Result.",
+	}}}}
+	writeJSON(t, filepath.Join(dir, "local-report.json"), report)
+	if err := RetryReport(dir); err != nil {
+		t.Fatalf("RetryReport() = %v", err)
+	}
+	if appended != 1 {
+		t.Fatalf("appends = %d, want 1", appended)
+	}
+	var delivered LocalReport
+	data, err := os.ReadFile(filepath.Join(dir, "local-report.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &delivered); err != nil {
+		t.Fatal(err)
+	}
+	if delivered.DeliveryState != "delivered" || delivered.Destination.SpreadsheetID != "sheet" {
+		t.Fatalf("report after retry = %q to %#v", delivered.DeliveryState, delivered.Destination)
+	}
+}
+
+func TestRetryReportFreezesAdoptedDestinationBeforeDelivery(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	store := ConnectionStore{Home: t.TempDir(), allowInsecureTokenURI: true}
+	if err := store.Write(&Connection{SpreadsheetID: "sheet", Tab: "audit", ClientID: "client", ClientSecret: "secret", TokenURI: server.URL + "/token", RefreshToken: "refresh"}); err != nil {
+		t.Fatal(err)
+	}
+	oldReporter, oldDestination := defaultSheetsReporter, destinationResolver
+	defaultSheetsReporter = SheetsReporter{Store: store, HTTPClient: server.Client(), SheetsBaseURL: server.URL + "/v4"}
+	destinationResolver = fakeDestination{state: DestinationState{State: "configured", SpreadsheetID: "sheet", Tab: "audit"}}
+	t.Cleanup(func() { defaultSheetsReporter, destinationResolver = oldReporter, oldDestination })
+
+	dir := t.TempDir()
+	writeJSON(t, filepath.Join(dir, "local-report.json"), LocalReport{AuditRunID: "audit", DeliveryState: "pending", Destination: DestinationState{State: "unavailable"}})
+	if err := RetryReport(dir); err == nil {
+		t.Fatal("RetryReport() succeeded against an unavailable Sheets API")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "local-report.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report LocalReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Destination.State != "configured" || report.Destination.SpreadsheetID != "sheet" || report.DeliveryState != "pending" {
+		t.Fatalf("report after failed retry = %q to %#v", report.DeliveryState, report.Destination)
+	}
+}

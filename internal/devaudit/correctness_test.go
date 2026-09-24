@@ -372,7 +372,7 @@ func TestPublishCorrectnessCreatesOneFocusedRedactedIssue(t *testing.T) {
 	if got := runner.createCalls(); got != 1 {
 		t.Fatalf("issue creates = %d, want 1 (%#v)", got, runner.calls)
 	}
-	create := runner.calls[len(runner.calls)-1]
+	create := runner.calls[len(runner.calls)-2]
 	if got := strings.Join(create.args, " "); !strings.Contains(got, "--repo Codagent-AI/agent-runner") || !strings.Contains(got, "--title [auto-audit]") {
 		t.Fatalf("create argv = %q", got)
 	}
@@ -384,6 +384,48 @@ func TestPublishCorrectnessCreatesOneFocusedRedactedIssue(t *testing.T) {
 	}
 	if !strings.Contains(body, result.Findings[0].Marker) || !strings.Contains(body, "## Expected behavior") || !strings.Contains(body, "## Verification") {
 		t.Fatalf("focused issue body = %q", body)
+	}
+}
+
+func TestPublishCorrectnessSetsBugTypeAfterCreatingIssue(t *testing.T) {
+	request, prepared := correctnessFixture(t)
+	runner := &recordingGH{}
+	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{confirmedCandidate()}}, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Findings[0].PublicationState != "created" {
+		t.Fatalf("finding = %#v", result.Findings[0])
+	}
+	if got, want := runner.callArgs(), []string{
+		"gh issue create --repo Codagent-AI/agent-runner --title [auto-audit] retry state is lost --body-file -",
+		"gh api --method PATCH repos/Codagent-AI/agent-runner/issues/42 -f type=Bug",
+	}; !strings.Contains(strings.Join(got, "\n"), strings.Join(want, "\n")) {
+		t.Fatalf("GitHub calls = %#v, want create followed by type PATCH", got)
+	}
+}
+
+func TestPublishCorrectnessRecordsBugTypeFailureWithoutFailingPublication(t *testing.T) {
+	request, prepared := correctnessFixture(t)
+	runner := &recordingGH{patchErr: errors.New("type update rejected")}
+	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{confirmedCandidate()}}, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finding := result.Findings[0]
+	if finding.PublicationState != "created" || finding.IssueURL != "https://github.com/Codagent-AI/agent-runner/issues/42" {
+		t.Fatalf("finding = %#v", finding)
+	}
+	data, err := json.Marshal(finding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if fields["warning"] != "type update rejected" {
+		t.Fatalf("warning = %#v, want PATCH failure", fields["warning"])
 	}
 }
 
@@ -400,6 +442,11 @@ func TestPublishCorrectnessLinksOpenDuplicateWithoutMutation(t *testing.T) {
 	}
 	if got := runner.createCalls(); got != 0 {
 		t.Fatalf("duplicate mutated GitHub %d times", got)
+	}
+	for _, call := range runner.calls {
+		if len(call.args) < 3 || call.args[1] != "issue" || call.args[2] != "list" {
+			t.Fatalf("duplicate triggered a GitHub mutation: %#v", call.args)
+		}
 	}
 }
 
@@ -505,7 +552,7 @@ func TestPublishCorrectnessGroupsSameCauseCandidates(t *testing.T) {
 	if len(result.Findings) != 1 || runner.createCalls() != 1 {
 		t.Fatalf("findings=%#v calls=%#v", result.Findings, runner.calls)
 	}
-	if body := string(runner.calls[len(runner.calls)-1].stdin); !strings.Contains(body, "first symptom") || !strings.Contains(body, "second symptom") {
+	if body := string(runner.calls[len(runner.calls)-2].stdin); !strings.Contains(body, "first symptom") || !strings.Contains(body, "second symptom") {
 		t.Fatalf("grouped body = %q", body)
 	}
 }
@@ -528,6 +575,57 @@ func TestPublishCorrectnessRetriesFailedCreationThroughExactMarker(t *testing.T)
 	}
 	if second.Findings[0].PublicationState != "created" || retry.createCalls() != 0 {
 		t.Fatalf("retry finding=%#v calls=%#v", second.Findings[0], retry.calls)
+	}
+}
+
+func TestPublishCorrectnessSetsBugTypeOnRecoveredOwnIssue(t *testing.T) {
+	request, prepared := correctnessFixture(t)
+	candidate := confirmedCandidate()
+	marker := findingFor(&candidate, candidate.DefectKey, "pending", "", "").Marker
+	runner := &recordingGH{marker: []ghIssue{{URL: "https://github.com/Codagent-AI/agent-runner/issues/73", State: "OPEN", Body: marker}}}
+	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{candidate}}, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finding := result.Findings[0]; finding.PublicationState != "created" || finding.IssueURL != runner.marker[0].URL {
+		t.Fatalf("recovered finding = %#v", finding)
+	}
+	if got := runner.callArgs(); len(got) != 3 || got[2] != "gh api --method PATCH repos/Codagent-AI/agent-runner/issues/73 -f type=Bug" {
+		t.Fatalf("GitHub calls = %#v, want recovered issue type PATCH", got)
+	}
+	if runner.createCalls() != 0 {
+		t.Fatalf("recovered issue was created again: %#v", runner.calls)
+	}
+}
+
+func TestPublishCorrectnessRecordsRecoveredIssueTypeFailure(t *testing.T) {
+	request, prepared := correctnessFixture(t)
+	candidate := confirmedCandidate()
+	marker := findingFor(&candidate, candidate.DefectKey, "pending", "", "").Marker
+	runner := &recordingGH{marker: []ghIssue{{URL: "https://github.com/Codagent-AI/agent-runner/issues/73", State: "OPEN", Body: marker}}, patchErr: errors.New("type update rejected")}
+	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{candidate}}, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finding := result.Findings[0]; finding.PublicationState != "created" || finding.IssueURL != runner.marker[0].URL || finding.Warning != "type update rejected" {
+		t.Fatalf("recovered finding = %#v, want created issue with type warning", finding)
+	}
+}
+
+func TestPublishCorrectnessDoesNotPatchRecoveredIssueOutsideAuditRepository(t *testing.T) {
+	request, prepared := correctnessFixture(t)
+	candidate := confirmedCandidate()
+	marker := findingFor(&candidate, candidate.DefectKey, "pending", "", "").Marker
+	runner := &recordingGH{marker: []ghIssue{{URL: "https://github.com/example/other/issues/73", State: "OPEN", Body: marker}}}
+	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{candidate}}, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finding := result.Findings[0]; finding.PublicationState != "created" || finding.Warning == "" {
+		t.Fatalf("recovered finding = %#v, want warning for invalid issue URL", finding)
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("unexpected GitHub mutation: %#v", runner.callArgs())
 	}
 }
 
@@ -579,12 +677,87 @@ func TestRepairIssueBodiesRestoresOnlyBlankAutoAuditIssues(t *testing.T) {
 	if repaired, err := repairIssueBodies(&report, runner); err != nil || repaired != 1 {
 		t.Fatalf("repair issue bodies = %d, %v", repaired, err)
 	}
-	edit := runner.calls[len(runner.calls)-1]
+	edit := runner.calls[len(runner.calls)-2]
 	if got, want := strings.Join(edit.args, " "), "gh issue edit 42 --repo Codagent-AI/agent-runner --body-file -"; got != want {
 		t.Fatalf("edit args = %q, want %q", got, want)
 	}
 	if body := string(edit.stdin); !strings.Contains(body, "## Observed behavior") || !strings.Contains(body, findingMarker("finding-1")) || !strings.Contains(body, causeMarker(report.Correctness.Findings[0].Candidate.DefectKey)) {
 		t.Fatalf("repaired issue body = %q", body)
+	}
+}
+
+func TestRepairIssueBodiesSetsBugTypeAfterBodyRepair(t *testing.T) {
+	report := LocalReport{Correctness: CorrectnessResult{Findings: []Finding{{
+		PublicationState: "created", IssueURL: "https://github.com/Codagent-AI/agent-runner/issues/42",
+		Marker: findingMarker("finding-1"), Candidate: confirmedCandidate(),
+	}}}}
+	runner := &recordingGH{view: &ghIssue{URL: report.Correctness.Findings[0].IssueURL, State: "OPEN", Title: "[auto-audit] retry state is lost", Body: "-"}}
+	if repaired, err := repairIssueBodies(&report, runner); err != nil || repaired != 1 {
+		t.Fatalf("repair issue bodies = %d, %v", repaired, err)
+	}
+	if got := runner.callArgs(); len(got) < 3 || got[len(got)-2] != "gh issue edit 42 --repo Codagent-AI/agent-runner --body-file -" || got[len(got)-1] != "gh api --method PATCH repos/Codagent-AI/agent-runner/issues/42 -f type=Bug" {
+		t.Fatalf("GitHub calls = %#v, want edit followed by type PATCH", got)
+	}
+}
+
+func TestRepairIssueBodiesRecordsBugTypeFailure(t *testing.T) {
+	report := LocalReport{Correctness: CorrectnessResult{Findings: []Finding{{
+		PublicationState: "created", IssueURL: "https://github.com/Codagent-AI/agent-runner/issues/42",
+		Marker: findingMarker("finding-1"), Candidate: confirmedCandidate(),
+	}}}}
+	runner := &recordingGH{view: &ghIssue{URL: report.Correctness.Findings[0].IssueURL, State: "OPEN", Title: "[auto-audit] retry state is lost", Body: "-"}, patchErr: errors.New("type update rejected")}
+	if repaired, err := repairIssueBodies(&report, runner); err != nil || repaired != 1 {
+		t.Fatalf("repair issue bodies = %d, %v", repaired, err)
+	}
+	data, err := json.Marshal(report.Correctness.Findings[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if fields["warning"] != "type update rejected" {
+		t.Fatalf("warning = %#v, want PATCH failure", fields["warning"])
+	}
+}
+
+func TestRepairIssueBodiesClearsResolvedTypeWarning(t *testing.T) {
+	report := LocalReport{Correctness: CorrectnessResult{Findings: []Finding{{
+		PublicationState: "created", IssueURL: "https://github.com/Codagent-AI/agent-runner/issues/42",
+		Marker: findingMarker("finding-1"), Candidate: confirmedCandidate(), Warning: "type update rejected",
+	}}}}
+	runner := &recordingGH{view: &ghIssue{URL: report.Correctness.Findings[0].IssueURL, State: "OPEN", Title: "[auto-audit] retry state is lost", Body: "-"}}
+	if repaired, err := repairIssueBodies(&report, runner); err != nil || repaired != 1 {
+		t.Fatalf("repair issue bodies = %d, %v", repaired, err)
+	}
+	if warning := report.Correctness.Findings[0].Warning; warning != "" {
+		t.Fatalf("resolved type warning = %q, want empty", warning)
+	}
+}
+
+func TestRepairIssueBodiesRetriesCorrectnessPersistenceWithoutRemoteEdit(t *testing.T) {
+	dir := t.TempDir()
+	report := LocalReport{Correctness: CorrectnessResult{SchemaVersion: correctnessSchema, Findings: []Finding{}}}
+	if err := stateio.WriteJSONAtomic(filepath.Join(dir, "local-report.json"), report); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "correctness-findings.json"), []byte(`{"schema_version":"stale","findings":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if repaired, err := RepairIssueBodies(dir); err != nil || repaired != 0 {
+		t.Fatalf("repair issue bodies = %d, %v", repaired, err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "correctness-findings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result CorrectnessResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.SchemaVersion != correctnessSchema {
+		t.Fatalf("persisted correctness schema = %q, want %q", result.SchemaVersion, correctnessSchema)
 	}
 }
 
@@ -757,6 +930,7 @@ type recordingGH struct {
 	calls        []recordedGHCall
 	beforeCreate func()
 	createErr    error
+	patchErr     error
 }
 
 func (runner *recordingGH) Run(_ context.Context, name string, args []string, stdin []byte) (string, error) {
@@ -781,6 +955,12 @@ func (runner *recordingGH) Run(_ context.Context, name string, args []string, st
 	if len(args) >= 2 && args[0] == "issue" && args[1] == "edit" {
 		return "", nil
 	}
+	if len(args) >= 2 && args[0] == "api" && args[1] == "--method" {
+		if runner.patchErr != nil {
+			return "type update rejected\n", runner.patchErr
+		}
+		return "{}", nil
+	}
 	query := args[indexOf(args, "--search")+1]
 	issues := runner.semantic
 	if strings.Contains(query, "<!-- agent-runner-audit:") {
@@ -788,6 +968,14 @@ func (runner *recordingGH) Run(_ context.Context, name string, args []string, st
 	}
 	data, _ := json.Marshal(issues)
 	return string(data), nil
+}
+
+func (runner *recordingGH) callArgs() []string {
+	args := make([]string, 0, len(runner.calls))
+	for _, call := range runner.calls {
+		args = append(args, strings.Join(call.args, " "))
+	}
+	return args
 }
 
 func (runner *recordingGH) createCalls() int {
