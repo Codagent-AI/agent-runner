@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/codagent/agent-runner/internal/stateio"
@@ -60,18 +61,23 @@ func linkOutcome(link *Link, dir string) (outcome, reason string) {
 		return OutcomeFailed, firstNonEmpty(link.Warning, auditFailureReason(dir), "audit launch failed")
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "local-report.json")) // #nosec G304 -- fixed artifact under the linked audit directory.
-	if err == nil {
-		var report LocalReport
-		if json.Unmarshal(data, &report) == nil {
-			switch report.DeliveryState {
-			case "delivered":
-				return OutcomeDelivered, ""
-			case "pending":
-				return OutcomePendingDelivery, firstNonEmpty(link.ReportingWarning, report.DeliveryError, "Sheets reporting pending")
-			}
-		}
+	if os.IsNotExist(err) {
+		return OutcomeFailed, firstNonEmpty(link.Warning, auditFailureReason(dir), "audit finished without a local report")
 	}
-	return OutcomeFailed, firstNonEmpty(link.Warning, auditFailureReason(dir), "audit finished without a local report")
+	if err != nil {
+		return OutcomeFailed, "read local report: " + err.Error()
+	}
+	var report LocalReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		return OutcomeFailed, "decode local report: " + err.Error()
+	}
+	switch report.DeliveryState {
+	case "delivered":
+		return OutcomeDelivered, ""
+	case "pending":
+		return OutcomePendingDelivery, firstNonEmpty(link.ReportingWarning, report.DeliveryError, "Sheets reporting pending")
+	}
+	return OutcomeFailed, firstNonEmpty(link.Warning, auditFailureReason(dir), "local report has delivery state "+strconv.Quote(report.DeliveryState))
 }
 
 func auditFailureReason(dir string) string {

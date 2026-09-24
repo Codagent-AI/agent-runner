@@ -24,6 +24,7 @@ func TestReadStatusDerivesDeliveryOutcome(t *testing.T) {
 		{AuditRunID: "audit-no-warning", State: LaunchCompleted},
 		{AuditRunID: "audit-launch-failed", State: LaunchFailed, Warning: "resolve auditor profile"},
 		{AuditRunID: "audit-running", State: LaunchStarted},
+		{AuditRunID: "audit-corrupt", State: LaunchCompleted},
 	}}
 	if err := writeLifecycle(filepath.Join(source, lifecycleFileName), lifecycle); err != nil {
 		t.Fatal(err)
@@ -34,6 +35,12 @@ func TestReadStatusDerivesDeliveryOutcome(t *testing.T) {
 		}
 	}
 	if err := stateio.WriteState(&model.RunState{RunID: "audit-no-warning", FailureReason: "correctness-audit failed"}, filepath.Join(root, "audit-no-warning")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "audit-corrupt"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "audit-corrupt", "local-report.json"), []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	status, err := ReadStatus(source)
@@ -47,6 +54,7 @@ func TestReadStatusDerivesDeliveryOutcome(t *testing.T) {
 		"audit-no-warning":    {OutcomeFailed, "correctness-audit failed"},
 		"audit-launch-failed": {OutcomeFailed, "resolve auditor profile"},
 		"audit-running":       {OutcomeActive, ""},
+		"audit-corrupt":       {OutcomeFailed, "decode local report: unexpected end of JSON input"},
 	}
 	if len(status.Links) != len(want) {
 		t.Fatalf("status has %d links", len(status.Links))

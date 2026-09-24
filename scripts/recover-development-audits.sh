@@ -79,7 +79,8 @@ wait_for_delivery() {
     if [ -f "$state_file" ] && [ "$(jq -r '.completed // false' "$state_file" 2>/dev/null || true)" = true ]; then
       sleep 2
       if [ "$(delivery_state "$audit_dir")" = delivered ]; then break; fi
-      if [ "$(delivery_state "$audit_dir")" = pending ] && "$runner" audit retry "$audit_dir"; then break; fi
+      if [ "$(delivery_state "$audit_dir")" = pending ] && "$runner" audit retry "$audit_dir" \
+        && [ "$(delivery_state "$audit_dir")" = delivered ]; then break; fi
       reason=$(jq -r '.failureReason // "audit finished without delivering"' "$state_file" 2>/dev/null | tr '\n' ' ' | cut -c1-200)
       echo "FAILED  $label  $(basename "$audit_dir")  ${reason:-audit finished without delivering}" >&2
       failed=$((failed + 1))
