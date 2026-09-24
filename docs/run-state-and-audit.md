@@ -87,6 +87,9 @@ invocation, including a resume; it is separate from an agent CLI's `session_id`
 and does not replace the stable run ID. A per-session rollup includes only work
 performed during that invocation, while the run totals remain cumulative.
 
+Codex reports session-cumulative usage; step metrics attribute the difference
+from the prior snapshot for the same Codex session.
+
 Executable leaf-step boundaries also retain local Git checkpoint evidence. When
 available it contains HEAD plus index, worktree, and untracked state; the
 metrics projection exposes aggregate `files_changed`, `lines_added`, and

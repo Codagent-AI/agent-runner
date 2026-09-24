@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
@@ -711,18 +713,61 @@ func TestCollectorKeepsResumedPerTurnUsageWithoutSessionDelta(t *testing.T) {
 	c := NewCollector(t.TempDir(), "run", "workflow", started)
 	c.Process(event(audit.EventRunStart, started, nil))
 	c.Process(stepEvent(started.Add(time.Second), model.ExecutionIdentity{
-		StepID: "first", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: "new", AgentInvoked: true,
-	}, model.UsageRecord{Status: model.UsageCollected, CLI: "codex", Tokens: model.TokenCounts{model.TokenInput: 100}, Source: "codex:turn.completed"}, nil, "completed", 1))
+		StepID: "first", StepType: "agent", Kind: "step", CLI: "claude", SessionID: "session", SessionStrategy: "new", AgentInvoked: true,
+	}, model.UsageRecord{Status: model.UsageCollected, CLI: "claude", Tokens: model.TokenCounts{model.TokenInput: 100}, Source: "claude:result-event"}, nil, "completed", 1))
 
 	gotEvent := c.Process(stepEvent(started.Add(2*time.Second), model.ExecutionIdentity{
-		StepID: "resumed", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: "resume", SessionResumed: true, AgentInvoked: true,
-	}, model.UsageRecord{Status: model.UsageCollected, CLI: "codex", Tokens: model.TokenCounts{model.TokenInput: 3}, Source: "codex:turn.completed"}, nil, "completed", 1))
+		StepID: "resumed", StepType: "agent", Kind: "step", CLI: "claude", SessionID: "session", SessionStrategy: "resume", SessionResumed: true, AgentInvoked: true,
+	}, model.UsageRecord{Status: model.UsageCollected, CLI: "claude", Tokens: model.TokenCounts{model.TokenInput: 3}, Source: "claude:result-event"}, nil, "completed", 1))
 	got := gotEvent.Data[DataUsage].(model.UsageRecord)
 	if diff := cmp.Diff(model.TokenCounts{model.TokenInput: 3}, got.Tokens); diff != "" {
 		t.Fatalf("resumed per-turn usage mismatch (-want +got):\n%s", diff)
 	}
 	if got.Status != model.UsageCollected || got.Reason != "" {
 		t.Fatalf("resumed per-turn status = %q reason = %q", got.Status, got.Reason)
+	}
+}
+
+func TestCollectorAttributesResumedCodexSnapshotsFromAdapter(t *testing.T) {
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(t.TempDir(), "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+
+	tests := []struct {
+		id       string
+		strategy string
+		raw      model.TokenCounts
+		want     model.TokenCounts
+		totals   model.TokenTotals
+	}{
+		{"first", "new", model.TokenCounts{model.TokenInput: 3213078, model.TokenCachedInput: 3000000, model.TokenOutput: 16658, model.TokenReasoning: 1000}, model.TokenCounts{model.TokenInput: 3213078, model.TokenCachedInput: 3000000, model.TokenOutput: 16658, model.TokenReasoning: 1000}, model.TokenTotals{Input: 3213078, Output: 16658, Total: 3229736}},
+		{"second", "resume", model.TokenCounts{model.TokenInput: 6398673, model.TokenCachedInput: 6000000, model.TokenOutput: 20000, model.TokenReasoning: 1500}, model.TokenCounts{model.TokenInput: 3185595, model.TokenCachedInput: 3000000, model.TokenOutput: 3342, model.TokenReasoning: 500}, model.TokenTotals{Input: 3185595, Output: 3342, Total: 3188937}},
+		{"third", "resume", model.TokenCounts{model.TokenInput: 7387602, model.TokenCachedInput: 6900000, model.TokenOutput: 23973, model.TokenReasoning: 1800}, model.TokenCounts{model.TokenInput: 988929, model.TokenCachedInput: 900000, model.TokenOutput: 3973, model.TokenReasoning: 300}, model.TokenTotals{Input: 988929, Output: 3973, Total: 992902}},
+	}
+
+	for i, tt := range tests {
+		stdout := fmt.Sprintf("{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":%d,\"cached_input_tokens\":%d,\"output_tokens\":%d,\"reasoning_output_tokens\":%d}}\n",
+			tt.raw[model.TokenInput], tt.raw[model.TokenCachedInput], tt.raw[model.TokenOutput], tt.raw[model.TokenReasoning])
+		extracted, err := (&cli.CodexAdapter{}).ExtractUsage(stdout)
+		if err != nil {
+			t.Fatalf("ExtractUsage() error = %v", err)
+		}
+		gotEvent := c.Process(stepEvent(started.Add(time.Duration(i+1)*time.Second), model.ExecutionIdentity{
+			StepID: tt.id, StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: tt.strategy, SessionResumed: i > 0, AgentInvoked: true,
+		}, extracted.Usage, nil, "completed", 1))
+		got := gotEvent.Data[DataUsage].(model.UsageRecord)
+		if diff := cmp.Diff(tt.want, got.Tokens); diff != "" {
+			t.Errorf("%s tokens mismatch (-want +got):\n%s", tt.id, diff)
+		}
+		if diff := cmp.Diff(&tt.totals, got.TokenTotals); diff != "" {
+			t.Errorf("%s totals mismatch (-want +got):\n%s", tt.id, diff)
+		}
+		if diff := cmp.Diff(tt.raw, got.RawCumulative); diff != "" {
+			t.Errorf("%s raw snapshot mismatch (-want +got):\n%s", tt.id, diff)
+		}
+	}
+	if diff := cmp.Diff(&model.TokenTotals{Input: 7387602, Output: 23973, Total: 7411575}, c.Totals().TokenTotals); diff != "" {
+		t.Errorf("run totals mismatch (-want +got):\n%s", diff)
 	}
 }
 

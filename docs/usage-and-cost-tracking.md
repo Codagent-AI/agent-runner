@@ -99,7 +99,7 @@ show only that invocation's work, while run totals cover every session. Active
 duration excludes time spent paused between invocations. This identity is not
 the agent CLI `session_id` used to resume a model conversation.
 
-Codex defines `turn.completed.usage` as the usage during that completed turn. Agent Runner therefore records that snapshot directly for new and resumed turns; it does not subtract the preceding turn. Cache and reasoning values remain detail categories within the canonical input/output totals and are not added to those totals again.
+Codex `turn.completed.usage` is a cumulative session snapshot. Agent Runner records the full snapshot for a new session and attributes only the difference from the preceding snapshot to each resumed step. If a resumed session has no recorded baseline, that step's usage is unavailable. Cache and reasoning values remain detail categories within the canonical input/output totals and are not added to those totals again.
 
 ## The Metrics Artifact
 
