@@ -119,9 +119,9 @@ Non-agent steps (shell, UI, and other step types that invoke no agent CLI) SHALL
 
 Agent Runner SHALL distinguish per-turn reports from cumulative session counters. A per-turn report SHALL be recorded directly for every invocation, including resumed sessions; it MUST NOT be subtracted from a prior turn. When an adapter explicitly identifies a report as cumulative, the existing baseline/delta safeguards apply and missing baselines or resets remain unavailable rather than fabricated.
 
-#### Scenario: Resumed Codex turn is recorded directly
+#### Scenario: Resumed Codex turn is attributed by delta
 - **WHEN** a resumed Codex invocation emits `turn.completed.usage`
-- **THEN** the complete reported snapshot is attributed to that invocation without comparing it to or subtracting the preceding turn
+- **THEN** only the difference from the prior recorded snapshot for that session is attributed to the invocation; without a baseline, usage is unavailable
 
 ### Requirement: Per-step attribution for cumulative usage sources
 
@@ -146,4 +146,3 @@ When a CLI reports cumulative session totals rather than per-invocation usage, t
 #### Scenario: Category appears mid-session
 - **WHEN** the current report contains a token category absent from the session's previously recorded total
 - **THEN** that category's attributed value equals the newly reported value (attributed from zero)
-
