@@ -295,6 +295,27 @@ func TestEmitSkippedStepIncludesNestingPrefixInMetricsIdentity(t *testing.T) {
 	}
 }
 
+func TestEmitSkippedAgentStepReportsNotInvokedUsage(t *testing.T) {
+	sink := &recordingAuditSink{}
+	rs := &runState{ctx: &model.ExecutionContext{AuditLogger: sink}}
+	step := model.Step{ID: "skipped", CLI: "claude", Mode: model.ModeAutonomous, Prompt: "do work", SkipIf: "previous_success"}
+
+	emitSkippedStep(rs, &step, 0)
+
+	if len(sink.events) != 2 || sink.events[1].Type != audit.EventStepEnd {
+		t.Fatalf("events = %+v, want step_start and step_end", sink.events)
+	}
+	gotUsage := sink.events[1].Data[metrics.DataUsage].(model.UsageRecord)
+	wantUsage := model.UsageRecord{Status: model.UsageUnavailable, Reason: "not-invoked", CLI: "claude", Source: "agent-runner"}
+	if diff := cmp.Diff(wantUsage, gotUsage); diff != "" {
+		t.Fatalf("skipped usage mismatch (-want +got):\n%s", diff)
+	}
+	identity := sink.events[1].Data[metrics.DataIdentity].(model.ExecutionIdentity)
+	if identity.AgentInvoked {
+		t.Fatalf("skipped step identity unexpectedly invoked agent: %+v", identity)
+	}
+}
+
 func TestRunWorkflowRoutesRunLifecycleAndTotalsThroughPipeline(t *testing.T) {
 	dir := t.TempDir()
 	w := model.Workflow{Name: "test", Steps: []model.Step{shellStep("s1", "echo hi")}}

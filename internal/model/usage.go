@@ -41,11 +41,15 @@ const (
 type UnavailableReason string
 
 const (
-	UnavailablePTYContext           UnavailableReason = "pty-context"
-	UnavailableParseFailure         UnavailableReason = "parse-failure"
-	UnavailableNoUsageEvent         UnavailableReason = "no-usage-event"
-	UnavailableNoBaseline           UnavailableReason = "no-baseline"
-	UnavailableCounterReset         UnavailableReason = "counter-reset"
+	UnavailablePTYContext   UnavailableReason = "pty-context"
+	UnavailableParseFailure UnavailableReason = "parse-failure"
+	UnavailableNoUsageEvent UnavailableReason = "no-usage-event"
+	UnavailableNoBaseline   UnavailableReason = "no-baseline"
+	UnavailableCounterReset UnavailableReason = "counter-reset"
+
+	// UnavailableNotInvoked means the step's agent CLI was never launched.
+	UnavailableNotInvoked UnavailableReason = "not-invoked"
+
 	UnavailableUnsupportedAdapter   UnavailableReason = "unsupported-adapter"
 	UnavailableNestedMetricsMissing UnavailableReason = "nested-metrics-missing"
 	UnavailableNestedMetricsInvalid UnavailableReason = "nested-metrics-invalid"

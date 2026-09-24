@@ -757,7 +757,7 @@ func metricsIdentityPrefix(ctx *model.ExecutionContext) string {
 func skippedStepUsage(step *model.Step) model.UsageRecord {
 	if step.StepType() == "agent" {
 		return model.UsageRecord{
-			Status: model.UsageUnavailable, Reason: model.UnavailableUnsupportedAdapter, CLI: step.CLI, Source: "agent-runner",
+			Status: model.UsageUnavailable, Reason: model.UnavailableNotInvoked, CLI: step.CLI, Source: "agent-runner",
 		}
 	}
 	return model.UsageRecord{

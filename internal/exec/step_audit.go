@@ -37,8 +37,12 @@ func emitStepEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time
 	}
 	if _, ok := data["usage"]; !ok {
 		if step.StepType() == "agent" {
+			reason := model.UnavailableNotInvoked
+			if identity, ok := data["identity"].(model.ExecutionIdentity); ok && identity.AgentInvoked {
+				reason = model.UnavailableUnsupportedAdapter
+			}
 			data["usage"] = model.UsageRecord{
-				Status: model.UsageUnavailable, Reason: model.UnavailableUnsupportedAdapter, CLI: step.CLI, Source: "agent-runner",
+				Status: model.UsageUnavailable, Reason: reason, CLI: step.CLI, Source: "agent-runner",
 			}
 		} else {
 			data["usage"] = model.UsageRecord{
