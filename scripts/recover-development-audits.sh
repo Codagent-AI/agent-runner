@@ -6,9 +6,11 @@ execute=false
 data_root="${HOME}/.agent-runner"
 timeout_seconds=3600
 include_temp_projects=false
+explicit_sessions=()
 
 usage() {
-  echo "Usage: $0 [--execute] [--data-root <dir>] [--timeout-seconds <seconds>] [--include-temp-projects]" >&2
+  echo "Usage: $0 [--execute] [--data-root <dir>] [--timeout-seconds <seconds>] [--include-temp-projects] [--session <session-dir>:<execution-session-id>[:<project-dir>]]..." >&2
+  echo "  --session recovers only the named sessions, including runs started with --session-dir (for example Agent Factory attempts), instead of scanning the data root." >&2
 }
 
 while [ "$#" -gt 0 ]; do
@@ -17,6 +19,7 @@ while [ "$#" -gt 0 ]; do
     --data-root) shift; data_root="${1:-}" ;;
     --timeout-seconds) shift; timeout_seconds="${1:-}" ;;
     --include-temp-projects) include_temp_projects=true ;;
+    --session) shift; explicit_sessions+=("${1:-}") ;;
     -h|--help) usage; exit 0 ;;
     *) usage; exit 2 ;;
   esac
@@ -26,7 +29,9 @@ done
 case "$timeout_seconds" in *[!0-9]*|'') echo "timeout must be a positive integer" >&2; exit 2;; esac
 if [ "$timeout_seconds" -eq 0 ]; then echo "timeout must be positive" >&2; exit 2; fi
 for command in git go jq; do command -v "$command" >/dev/null || { echo "missing required command: $command" >&2; exit 2; }; done
-[ -d "$data_root/projects" ] || { echo "data root has no projects directory: $data_root" >&2; exit 2; }
+if [ "${#explicit_sessions[@]}" -eq 0 ]; then
+  [ -d "$data_root/projects" ] || { echo "data root has no projects directory: $data_root" >&2; exit 2; }
+fi
 
 repo_root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd -P)
 tmp_dir=""
@@ -56,6 +61,107 @@ actionable=0
 failed=0
 runner=""
 if [ "$execute" = true ]; then build_runner; fi
+
+delivery_state() {
+  local report="$1/local-report.json"
+  if [ -f "$report" ]; then jq -r '.delivery_state // "missing"' "$report" 2>/dev/null || echo missing; else echo missing; fi
+}
+
+# wait_for_delivery <audit-dir> <label>: poll one audit until its report is
+# delivered, the audit run finishes without delivering, or the timeout passes.
+wait_for_delivery() {
+  local audit_dir="$1" label="$2" state_file="$1/state.json" deadline reason
+  deadline=$(( $(date +%s) + timeout_seconds ))
+  while [ "$(delivery_state "$audit_dir")" != delivered ]; do
+    # An audit run that already finished never delivers later, so report it
+    # instead of waiting out the whole timeout. The recheck covers a report
+    # written just after the run recorded completion.
+    if [ -f "$state_file" ] && [ "$(jq -r '.completed // false' "$state_file" 2>/dev/null || true)" = true ]; then
+      sleep 2
+      if [ "$(delivery_state "$audit_dir")" = delivered ]; then break; fi
+      if [ "$(delivery_state "$audit_dir")" = pending ] && "$runner" audit retry "$audit_dir" \
+        && [ "$(delivery_state "$audit_dir")" = delivered ]; then break; fi
+      reason=$(jq -r '.failureReason // "audit finished without delivering"' "$state_file" 2>/dev/null | tr '\n' ' ' | cut -c1-200)
+      echo "FAILED  $label  $(basename "$audit_dir")  ${reason:-audit finished without delivering}" >&2
+      failed=$((failed + 1))
+      return
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then echo "TIMEOUT $label $(basename "$audit_dir")" >&2; failed=$((failed + 1)); return; fi
+    sleep 2
+  done
+  echo "DELIVERED  $label  $(basename "$audit_dir")"
+}
+
+# audit_live <audit-dir>: the audit run's lock names a live process.
+audit_live() {
+  local lock="$1/lock" pid
+  [ -f "$lock" ] || return 1
+  pid=$(tr -d '[:space:]' < "$lock")
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null
+}
+
+# recover_session <session-dir> <execution-session-id> <project-dir>: recover
+# one explicitly named session whose runs directory may not be recorded.
+recover_session() {
+  local source_dir="$1" session="$2" project="$3" lifecycle="$1/audit-lifecycle.json" label audit_id pending=""
+  label=$(basename "$(dirname "$source_dir")")/$(basename "$source_dir")
+  if [ ! -f "$source_dir/run-metrics.json" ] || ! jq -e --arg session "$session" '.sessions[]? | select(.execution_session_id == $session)' "$source_dir/run-metrics.json" >/dev/null; then
+    echo "SKIP unavailable  $label  $session"
+    return
+  fi
+  if [ -f "$lifecycle" ]; then
+    while IFS=$'\t' read -r linked_id linked_session linked_state; do
+      [ "$linked_session" = "$session" ] || continue
+      case "$(delivery_state "$(dirname "$source_dir")/$linked_id")" in
+        delivered) echo "SKIP delivered-session  $label  $session"; return ;;
+        pending) pending="$linked_id" ;;
+        *)
+          # A running audit may still deliver; a second replay would duplicate its
+          # rows. An audit whose process is gone is recovered like any other.
+          case "$linked_state" in
+            launching|started)
+              if audit_live "$(dirname "$source_dir")/$linked_id"; then
+                echo "SKIP active  $label  $linked_id"
+                return
+              fi
+              ;;
+          esac
+          ;;
+      esac
+    done <<EOF_LINKS
+$(jq -r '.links[]? | [.audit_run_id, .execution_session_id, .state] | @tsv' "$lifecycle")
+EOF_LINKS
+  fi
+  actionable=$((actionable + 1))
+  if [ -n "$pending" ]; then
+    echo "RETRY  $label  $pending"
+    [ "$execute" = true ] || return 0
+    if ! "$runner" audit retry "$(dirname "$source_dir")/$pending"; then failed=$((failed + 1)); return; fi
+    audit_id="$pending"
+  else
+    echo "REPLAY  $label  $session"
+    [ "$execute" = true ] || return 0
+    local project_args=()
+    if [ -n "$project" ]; then project_args=(--project "$project"); fi
+    if ! audit_id=$("$runner" audit replay "$source_dir" --session "$session" ${project_args[@]+"${project_args[@]}"}); then failed=$((failed + 1)); return; fi
+  fi
+  wait_for_delivery "$(dirname "$source_dir")/$audit_id" "$label"
+}
+
+if [ "${#explicit_sessions[@]}" -gt 0 ]; then
+  for spec in "${explicit_sessions[@]}"; do
+    IFS=: read -r spec_dir spec_session spec_project <<<"$spec"
+    if [ -z "$spec_dir" ] || [ -z "$spec_session" ] || [ ! -d "$spec_dir" ]; then
+      echo "invalid --session value: $spec" >&2
+      exit 2
+    fi
+    recover_session "$(cd "$spec_dir" && pwd -P)" "$spec_session" "$spec_project"
+  done
+  echo "Recovery inventory: actionable=$actionable failed=$failed execute=$execute"
+  [ "$failed" -eq 0 ]
+  exit
+fi
 
 for meta in "$data_root"/projects/*/meta.json; do
   [ -f "$meta" ] || continue
@@ -115,24 +221,7 @@ EOF
         replay) if ! audit_id=$("$runner" audit replay "$source_dir" --session "$target"); then failed=$((failed + 1)); continue; fi ;;
       esac
       if [ "$action" = retry ]; then audit_id="$target"; fi
-      report="$project_dir/runs/$audit_id/local-report.json"
-      state_file="$project_dir/runs/$audit_id/state.json"
-      deadline=$(( $(date +%s) + timeout_seconds ))
-      while [ ! -f "$report" ] || [ "$(jq -r '.delivery_state // empty' "$report" 2>/dev/null || true)" != delivered ]; do
-        # An audit run that already finished never delivers later, so report it
-        # instead of waiting out the whole timeout. The recheck covers a report
-        # written just after the run recorded completion.
-        if [ -f "$state_file" ] && [ "$(jq -r '.completed // false' "$state_file" 2>/dev/null || true)" = true ]; then
-          sleep 2
-          if [ -f "$report" ] && [ "$(jq -r '.delivery_state // empty' "$report" 2>/dev/null || true)" = delivered ]; then break; fi
-          reason=$(jq -r '.failureReason // "audit finished without delivering"' "$state_file" 2>/dev/null | tr '\n' ' ' | cut -c1-200)
-          echo "FAILED  $source_name  $audit_id  ${reason:-audit finished without delivering}" >&2
-          failed=$((failed + 1))
-          break
-        fi
-        if [ "$(date +%s)" -ge "$deadline" ]; then echo "TIMEOUT $source_name $audit_id" >&2; failed=$((failed + 1)); break; fi
-        sleep 2
-      done
+      wait_for_delivery "$project_dir/runs/$audit_id" "$source_name"
     done <<EOF
 $(jq -r '.links[]? | [.audit_run_id, .execution_session_id, .trigger, .state] | @tsv' "$lifecycle")
 EOF
