@@ -442,6 +442,11 @@ for arg in "$@"; do
     capture_output_path="true"
   fi
 done
+# Audit prompts arrive on stdin: "codex exec -" and Claude print mode without
+# a positional prompt.
+if [ "$prompt" = "-" ] || [ -n "${AUDIT_E2E_CLAUDE:-}" ]; then
+  prompt=$(cat)
+fi
 sleep "${AUDIT_E2E_DELAY_SECONDS:-0}"
 printf 'call\n' >> "$AUDIT_E2E_MODEL_CALLS"
 "$AUDIT_E2E_PYTHON" - "$prompt" "$output_path" "$schema" <<'PY'

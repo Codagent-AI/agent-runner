@@ -164,9 +164,13 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 		return CorrectnessCandidates{}, err
 	}
 	defer removeStructuredFiles()
+	args, stdinPrompt := crosscheckPromptOnStdin(request.Auditor.CLI, args)
 	command, err := crosscheckCommand(args, workspace, filepath.Join(request.AuditSessionDir, "model-output"))
 	if err != nil {
 		return CorrectnessCandidates{}, err
+	}
+	if stdinPrompt != "" {
+		command.Stdin = strings.NewReader(stdinPrompt)
 	}
 	env, cleanup, err := cliEnvironment(adapter, request, input, workspace, filepath.Join(request.AuditSessionDir, "model-output"))
 	if err != nil {

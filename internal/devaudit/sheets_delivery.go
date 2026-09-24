@@ -606,6 +606,14 @@ func RetryReport(auditSessionDir string) error {
 	if err := json.Unmarshal(data, &report); err != nil {
 		return fmt.Errorf("decode local report: %w", err)
 	}
+	if report.Destination.State != "configured" && report.DeliveryState == "pending" {
+		// The audit ran where no reporting connection existed (for example a
+		// disposable eval sandbox). Adopt this machine's destination; a report
+		// frozen to a configured destination is only replaced by migration.
+		if destination := destinationResolver.ResolveDestination(); destination.State == "configured" {
+			report.Destination = destination
+		}
+	}
 	if err := defaultSheetsReporter.Deliver(context.Background(), &report); err != nil {
 		return err
 	}

@@ -202,3 +202,55 @@ func TestRecoveryScriptStopsWhenReplayedAuditFinishesWithoutDelivery(t *testing.
 }
 
 func strconvQuote(value string) string { return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"` }
+
+func TestRecoveryScriptRecoversExplicitSessionOutsideDataRoot(t *testing.T) {
+	root := t.TempDir()
+	// A factory attempt: --session-dir places the session outside any recorded
+	// project's runs directory, and the run never had an audit lifecycle.
+	replay := filepath.Join(root, "claim", "attempt-1", "agent-runner-session")
+	retry := filepath.Join(root, "claim", "attempt-2", "agent-runner-session")
+	delivered := filepath.Join(root, "claim", "attempt-3", "agent-runner-session")
+	for _, dir := range []string{replay, retry, delivered, filepath.Join(filepath.Dir(retry), "audit-pending"), filepath.Join(filepath.Dir(delivered), "audit-done")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, dir := range []string{replay, retry, delivered} {
+		if err := os.WriteFile(filepath.Join(dir, "run-metrics.json"), []byte(`{"sessions":[{"execution_session_id":"exec"}]}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(retry, "audit-lifecycle.json"), []byte(`{"links":[{"audit_run_id":"audit-pending","execution_session_id":"exec","trigger":"replay","state":"completed"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(retry), "audit-pending", "local-report.json"), []byte(`{"delivery_state":"pending"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(delivered, "audit-lifecycle.json"), []byte(`{"links":[{"audit_run_id":"audit-done","execution_session_id":"exec","trigger":"replay","state":"completed"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(delivered), "audit-done", "local-report.json"), []byte(`{"delivery_state":"delivered"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", "recover-development-audits.sh"),
+		"--data-root", filepath.Join(root, "no-such-state"),
+		"--session", replay+":exec:"+root,
+		"--session", retry+":exec",
+		"--session", delivered+":exec",
+		"--session", replay+":unknown",
+	).CombinedOutput()
+	if err != nil {
+		t.Fatalf("recovery dry run: %v\n%s", err, output)
+	}
+	for _, want := range []string{
+		"REPLAY  attempt-1/agent-runner-session  exec",
+		"RETRY  attempt-2/agent-runner-session  audit-pending",
+		"SKIP delivered-session  attempt-3/agent-runner-session  exec",
+		"SKIP unavailable  attempt-1/agent-runner-session  unknown",
+		"actionable=2",
+	} {
+		if !strings.Contains(string(output), want) {
+			t.Fatalf("dry run missing %q:\n%s", want, output)
+		}
+	}
+}
