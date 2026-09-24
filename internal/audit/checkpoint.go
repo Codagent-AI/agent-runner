@@ -3,6 +3,7 @@ package audit
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os/exec"
@@ -16,9 +17,10 @@ import (
 // GitFileStat describes the observable dirty state for one path at a step
 // boundary. It intentionally keeps file names in the local audit artifact.
 type GitFileStat struct {
-	Path    string `json:"path"`
-	Added   int64  `json:"added"`
-	Deleted int64  `json:"deleted"`
+	Path        string `json:"path"`
+	Added       int64  `json:"added"`
+	Deleted     int64  `json:"deleted"`
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 // GitCheckpoint is a conservative local Git observation. An unavailable
@@ -36,9 +38,10 @@ type GitCheckpoint struct {
 }
 
 const (
-	maxUntrackedFiles     = 256
-	maxUntrackedFileBytes = 4 << 20
-	maxUntrackedPathBytes = 32 << 10
+	maxTrackedFingerprintPaths = 256
+	maxUntrackedFiles          = 256
+	maxUntrackedFileBytes      = 4 << 20
+	maxUntrackedPathBytes      = 32 << 10
 )
 
 // GitChangeCounts is the aggregate projection used by metrics consumers.
@@ -141,6 +144,15 @@ func observeGit(root string) GitCheckpoint {
 	if err != nil {
 		return GitCheckpoint{Reason: "git worktree state unavailable"}
 	}
+	if len(index)+len(worktree) > maxTrackedFingerprintPaths {
+		return GitCheckpoint{Reason: "tracked Git fingerprint limit exceeded"}
+	}
+	if err := fingerprintDiffStats(root, index, true); err != nil {
+		return GitCheckpoint{Reason: "git index content unavailable"}
+	}
+	if err := fingerprintDiffStats(root, worktree, false); err != nil {
+		return GitCheckpoint{Reason: "git worktree content unavailable"}
+	}
 	untracked, err := gitUntrackedStats(root)
 	if err != nil {
 		return GitCheckpoint{Reason: "git untracked state unavailable"}
@@ -165,7 +177,31 @@ func gitNumstat(root string, args ...string) ([]GitFileStat, error) {
 	return parseNumstat([]byte(output))
 }
 
+func fingerprintDiffStats(root string, stats []GitFileStat, staged bool) error {
+	for index := range stats {
+		args := []string{"-C", root, "diff", "--no-ext-diff", "--no-textconv", "--binary"}
+		if staged {
+			args = append(args, "--cached")
+		}
+		// Numstat paths are relative to the worktree top, not to root.
+		args = append(args, "--", ":(top,literal)"+stats[index].Path)
+		command := exec.Command("git", args...) // #nosec G204 -- root and paths come from the runner's Git observation.
+		hash := sha256.New()
+		command.Stdout = hash
+		if err := command.Run(); err != nil {
+			return err
+		}
+		stats[index].Fingerprint = fmt.Sprintf("%x", hash.Sum(nil))
+	}
+	return nil
+}
+
 func gitUntrackedStats(root string) ([]GitFileStat, error) {
+	top, err := gitOutput(root, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return nil, err
+	}
+	top = strings.TrimSuffix(top, "\n")
 	paths, err := gitUntrackedPaths(root)
 	if err != nil {
 		return nil, err
@@ -176,7 +212,7 @@ func gitUntrackedStats(root string) ([]GitFileStat, error) {
 		if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 			return nil, fmt.Errorf("unsafe untracked path %q", path)
 		}
-		filePath := filepath.Join(root, clean)
+		filePath := filepath.Join(top, clean)
 		data, readErr := readBoundedUntrackedFile(filePath)
 		if readErr != nil {
 			return nil, fmt.Errorf("untracked file %q cannot be measured within limits: %w", path, readErr)
@@ -184,7 +220,8 @@ func gitUntrackedStats(root string) ([]GitFileStat, error) {
 		if bytes.IndexByte(data, 0) >= 0 {
 			return nil, fmt.Errorf("untracked binary file %q", path)
 		}
-		stats = append(stats, GitFileStat{Path: path, Added: countLines(data)})
+		fingerprint := sha256.Sum256(data)
+		stats = append(stats, GitFileStat{Path: path, Added: countLines(data), Fingerprint: fmt.Sprintf("%x", fingerprint)})
 	}
 	return stats, nil
 }
@@ -215,7 +252,8 @@ func readBoundedUntrackedFile(path string) ([]byte, error) {
 }
 
 func gitUntrackedPaths(root string) ([]string, error) {
-	command := exec.Command("git", "-C", root, "ls-files", "--others", "--exclude-standard", "-z") // #nosec G204 -- root is the runner's resolved project root.
+	// --full-name keeps paths relative to the worktree top, matching numstat.
+	command := exec.Command("git", "-C", root, "ls-files", "--others", "--exclude-standard", "--full-name", "-z") // #nosec G204 -- root is the runner's resolved project root.
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -347,19 +385,63 @@ func deriveGitChanges(start, end *GitCheckpoint) GitChangeCounts {
 	return countDirtyDelta(before, after)
 }
 
-type gitCounts struct{ added, deleted int64 }
+type gitCounts struct {
+	added, deleted                        int64
+	indexFingerprint, worktreeFingerprint string
+	untrackedFingerprint                  string
+}
 
 func flattenCheckpoint(checkpoint *GitCheckpoint) map[string]gitCounts {
 	result := make(map[string]gitCounts)
-	for _, group := range [][]GitFileStat{checkpoint.Index, checkpoint.Worktree, checkpoint.Untracked} {
+	for groupIndex, group := range [][]GitFileStat{checkpoint.Index, checkpoint.Worktree, checkpoint.Untracked} {
 		for _, stat := range group {
 			current := result[stat.Path]
 			current.added += stat.Added
 			current.deleted += stat.Deleted
+			switch groupIndex {
+			case 0:
+				current.indexFingerprint = stat.Fingerprint
+			case 1:
+				current.worktreeFingerprint = stat.Fingerprint
+			case 2:
+				current.untrackedFingerprint = stat.Fingerprint
+			}
 			result[stat.Path] = current
 		}
 	}
 	return result
+}
+
+// ChangedDirtyPaths returns paths whose dirty line counts changed between checkpoints.
+// A missing start checkpoint represents an initially clean working tree.
+func ChangedDirtyPaths(start, end *GitCheckpoint) []string {
+	before := make(map[string]gitCounts)
+	if start != nil {
+		before = flattenCheckpoint(start)
+	}
+	after := make(map[string]gitCounts)
+	if end != nil {
+		after = flattenCheckpoint(end)
+	}
+	return changedDirtyPaths(before, after)
+}
+
+func changedDirtyPaths(before, after map[string]gitCounts) []string {
+	paths := make(map[string]struct{}, len(before)+len(after))
+	for path := range before {
+		paths[path] = struct{}{}
+	}
+	for path := range after {
+		paths[path] = struct{}{}
+	}
+	changed := make([]string, 0, len(paths))
+	for path := range paths {
+		if before[path] != after[path] {
+			changed = append(changed, path)
+		}
+	}
+	sort.Strings(changed)
+	return changed
 }
 
 func statsMap(stats []GitFileStat) map[string]gitCounts {
@@ -385,24 +467,15 @@ func mergeGitStats(left, right map[string]gitCounts) map[string]gitCounts {
 }
 
 func countDirtyDelta(before, after map[string]gitCounts) GitChangeCounts {
-	paths := make(map[string]struct{}, len(before)+len(after))
-	for path := range before {
-		paths[path] = struct{}{}
-	}
-	for path := range after {
-		paths[path] = struct{}{}
-	}
 	result := GitChangeCounts{Available: true}
-	for path := range paths {
+	for _, path := range changedDirtyPaths(before, after) {
 		left, right := before[path], after[path]
 		if right.added < left.added || right.deleted < left.deleted {
 			return GitChangeCounts{Reason: "repository change cannot be derived conservatively"}
 		}
-		if right != left {
-			result.FilesChanged++
-			result.LinesAdded += right.added - left.added
-			result.LinesDeleted += right.deleted - left.deleted
-		}
+		result.FilesChanged++
+		result.LinesAdded += right.added - left.added
+		result.LinesDeleted += right.deleted - left.deleted
 	}
 	return result
 }

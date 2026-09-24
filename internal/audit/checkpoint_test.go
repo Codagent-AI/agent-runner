@@ -9,7 +9,231 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 )
+
+func TestChangedDirtyPaths(t *testing.T) {
+	start := &GitCheckpoint{
+		Index:     []GitFileStat{{Path: "unchanged", Added: 2}, {Path: "modified", Added: 1}},
+		Untracked: []GitFileStat{{Path: "old-untracked", Added: 5}},
+	}
+	end := &GitCheckpoint{
+		Index:     []GitFileStat{{Path: "unchanged", Added: 2}, {Path: "modified", Added: 3}},
+		Worktree:  []GitFileStat{{Path: "new", Added: 1}},
+		Untracked: []GitFileStat{{Path: "old-untracked", Added: 5}},
+	}
+
+	if diff := cmp.Diff([]string{"modified", "new"}, ChangedDirtyPaths(start, end)); diff != "" {
+		t.Errorf("changed paths mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{"modified", "new", "old-untracked", "unchanged"}, ChangedDirtyPaths(nil, end)); diff != "" {
+		t.Errorf("nil start paths mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestDirtyCheckpointDetectsContentChangeWithSameLineCounts(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	path := filepath.Join(repo, "tracked.txt")
+	if err := os.WriteFile(path, []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "tracked.txt")
+	runGit(t, repo, "commit", "-m", "initial")
+	if err := os.WriteFile(path, []byte("first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	start := observeGit(repo)
+	if err := os.WriteFile(path, []byte("later\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	end := observeGit(repo)
+	if !start.Available || !end.Available {
+		t.Fatalf("checkpoints unavailable: start=%q end=%q", start.Reason, end.Reason)
+	}
+	if diff := cmp.Diff([]string{"tracked.txt"}, ChangedDirtyPaths(&start, &end)); diff != "" {
+		t.Errorf("changed paths mismatch (-want +got):\n%s", diff)
+	}
+	if got := deriveGitChanges(&start, &end); !got.Available || got.FilesChanged != 1 || got.LinesAdded != 0 || got.LinesDeleted != 0 {
+		t.Errorf("changes = %+v, want one changed file with zero line delta", got)
+	}
+}
+
+func TestDirtyCheckpointDetectsContentChangeFromSubdirectoryRoot(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	root := filepath.Join(repo, "sub")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "tracked.txt")
+	if err := os.WriteFile(path, []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "sub/tracked.txt")
+	runGit(t, repo, "commit", "-m", "initial")
+	if err := os.WriteFile(path, []byte("first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	start := observeGit(root)
+	if err := os.WriteFile(path, []byte("later\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	end := observeGit(root)
+	if !start.Available || !end.Available {
+		t.Fatalf("checkpoints unavailable: start=%q end=%q", start.Reason, end.Reason)
+	}
+	if diff := cmp.Diff([]string{"sub/tracked.txt"}, ChangedDirtyPaths(&start, &end)); diff != "" {
+		t.Errorf("changed paths mismatch (-want +got):\n%s", diff)
+	}
+	if got := deriveGitChanges(&start, &end); !got.Available || got.FilesChanged != 1 || got.LinesAdded != 0 || got.LinesDeleted != 0 {
+		t.Errorf("changes = %+v, want one changed file with zero line delta", got)
+	}
+}
+
+func TestDirtyCheckpointUsesTopLevelUntrackedPathsFromSubdirectoryRoot(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	runGit(t, repo, "commit", "--allow-empty", "-m", "initial")
+	root := filepath.Join(repo, "sub")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "new.txt"), []byte("first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	start := observeGit(root)
+	runGit(t, repo, "add", "sub/new.txt")
+	end := observeGit(root)
+	if !start.Available || !end.Available {
+		t.Fatalf("checkpoints unavailable: start=%q end=%q", start.Reason, end.Reason)
+	}
+	if diff := cmp.Diff([]string{"sub/new.txt"}, ChangedDirtyPaths(&start, &end)); diff != "" {
+		t.Errorf("changed paths mismatch (-want +got):\n%s", diff)
+	}
+	if got := deriveGitChanges(&start, &end); !got.Available || got.FilesChanged != 1 || got.LinesAdded != 0 || got.LinesDeleted != 0 {
+		t.Errorf("changes = %+v, want one changed file with zero line delta", got)
+	}
+}
+
+func TestDirtyCheckpointDetectsStagedContentChangeWithSameLineCounts(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	path := filepath.Join(repo, "tracked.txt")
+	if err := os.WriteFile(path, []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "tracked.txt")
+	runGit(t, repo, "commit", "-m", "initial")
+	if err := os.WriteFile(path, []byte("first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "tracked.txt")
+	start := observeGit(repo)
+	if err := os.WriteFile(path, []byte("later\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "tracked.txt")
+	end := observeGit(repo)
+	if !start.Available || !end.Available {
+		t.Fatalf("checkpoints unavailable: start=%q end=%q", start.Reason, end.Reason)
+	}
+	if diff := cmp.Diff([]string{"tracked.txt"}, ChangedDirtyPaths(&start, &end)); diff != "" {
+		t.Errorf("changed paths mismatch (-want +got):\n%s", diff)
+	}
+	if got := deriveGitChanges(&start, &end); !got.Available || got.FilesChanged != 1 || got.LinesAdded != 0 || got.LinesDeleted != 0 {
+		t.Errorf("changes = %+v, want one changed file with zero line delta", got)
+	}
+}
+
+func TestDirtyCheckpointDetectsUntrackedContentChangeWithSameLineCounts(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	runGit(t, repo, "commit", "--allow-empty", "-m", "initial")
+	path := filepath.Join(repo, "untracked.txt")
+	if err := os.WriteFile(path, []byte("first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	start := observeGit(repo)
+	if err := os.WriteFile(path, []byte("later\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	end := observeGit(repo)
+	if !start.Available || !end.Available {
+		t.Fatalf("checkpoints unavailable: start=%q end=%q", start.Reason, end.Reason)
+	}
+	if diff := cmp.Diff([]string{"untracked.txt"}, ChangedDirtyPaths(&start, &end)); diff != "" {
+		t.Errorf("changed paths mismatch (-want +got):\n%s", diff)
+	}
+	if got := deriveGitChanges(&start, &end); !got.Available || got.FilesChanged != 1 || got.LinesAdded != 0 || got.LinesDeleted != 0 {
+		t.Errorf("changes = %+v, want one changed file with zero line delta", got)
+	}
+}
+
+func TestDirtyCheckpointFingerprintsLiteralGitPath(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	name := ":(literal)tracked.txt"
+	path := filepath.Join(repo, name)
+	if err := os.WriteFile(path, []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "-A")
+	runGit(t, repo, "commit", "-m", "initial")
+	if err := os.WriteFile(path, []byte("first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	start := observeGit(repo)
+	if err := os.WriteFile(path, []byte("later\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	end := observeGit(repo)
+	if !start.Available || !end.Available {
+		t.Fatalf("checkpoints unavailable: start=%q end=%q", start.Reason, end.Reason)
+	}
+	if diff := cmp.Diff([]string{name}, ChangedDirtyPaths(&start, &end)); diff != "" {
+		t.Errorf("changed paths mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCheckpointDeclinesExcessiveTrackedFingerprintWork(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	for i := 0; i < 257; i++ {
+		path := filepath.Join(repo, fmt.Sprintf("tracked-%03d.txt", i))
+		if err := os.WriteFile(path, []byte("base\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGit(t, repo, "add", "-A")
+	runGit(t, repo, "commit", "-m", "initial")
+	for i := 0; i < 257; i++ {
+		path := filepath.Join(repo, fmt.Sprintf("tracked-%03d.txt", i))
+		if err := os.WriteFile(path, []byte("changed\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	checkpoint := observeGit(repo)
+	if checkpoint.Available || checkpoint.Reason != "tracked Git fingerprint limit exceeded" {
+		t.Errorf("checkpoint available = %t, reason = %q; want tracked fingerprint limit reason", checkpoint.Available, checkpoint.Reason)
+	}
+}
 
 type capturedLogger struct{ events []Event }
 
