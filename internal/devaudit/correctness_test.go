@@ -29,6 +29,22 @@ func TestPublishCorrectnessRejectsCandidateWithoutSemanticDuplicateResult(t *tes
 	}
 }
 
+func TestPublishCorrectnessRetainsFindingsOutsideWorkflowExecution(t *testing.T) {
+	for _, scope := range []string{"", "telemetry", "audit"} {
+		request, prepared := correctnessFixture(t)
+		candidate := confirmedCandidate()
+		candidate.Scope = scope
+
+		result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{candidate}}, failingGH{t: t})
+		if err != nil {
+			t.Fatalf("publish correctness: %v", err)
+		}
+		if len(result.Findings) != 1 || result.Findings[0].PublicationState != "retained" || result.Findings[0].IssueURL != "" {
+			t.Fatalf("scope %q: findings = %#v, want a locally retained finding", scope, result.Findings)
+		}
+	}
+}
+
 func TestPublishCorrectnessNormalizesSuppliedDefectKeys(t *testing.T) {
 	for _, supplied := range []string{
 		"agent_runner.agent_usage_telemetry_unavailable_in_pty_context",
@@ -322,7 +338,7 @@ func correctnessFixture(t *testing.T) (Request, PreparedValueAudit) {
 }
 
 func confirmedCandidate() CorrectnessCandidate {
-	return CorrectnessCandidate{Status: "confirmed", DefectKey: "runner-retry-loss", Title: "retry state is lost", Observed: "retry loses state", Expected: "retry preserves state", Verification: "run the retry workflow", AffectedComponent: "internal/runner", EvidenceRefs: []string{"evidence-1"}, Confidence: "high", SemanticDuplicate: Duplicate{State: "none"}}
+	return CorrectnessCandidate{Status: "confirmed", DefectKey: "runner-retry-loss", Title: "retry state is lost", Observed: "retry loses state", Expected: "retry preserves state", Verification: "run the retry workflow", AffectedComponent: "internal/runner", Scope: "workflow_execution", EvidenceRefs: []string{"evidence-1"}, Confidence: "high", SemanticDuplicate: Duplicate{State: "none"}}
 }
 
 type fakeGH struct{}
@@ -995,4 +1011,12 @@ func indexOf(values []string, target string) int {
 		}
 	}
 	return -1
+}
+
+// failingGH fails the test if publication reaches GitHub.
+type failingGH struct{ t *testing.T }
+
+func (g failingGH) Run(_ context.Context, name string, args []string, _ []byte) (string, error) {
+	g.t.Fatalf("unexpected GitHub command: %s %v", name, args)
+	return "", nil
 }

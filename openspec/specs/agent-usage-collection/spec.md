@@ -65,11 +65,11 @@ Native normalization SHALL preserve category inclusion relationships and explici
 
 ### Requirement: Unavailable usage is explicit
 
-When usage cannot be collected for an agent step, Agent Runner SHALL record an explicit unavailable state with the reason. Missing usage SHALL never be represented as zero tokens. Situations that produce an unavailable record include: PTY-backed invocation contexts (interactive and autonomous-interactive), structured-output parse failures, missing usage events in otherwise valid output, and adapters that do not support extraction.
+When usage cannot be collected for an agent step, Agent Runner SHALL record an explicit unavailable state with the reason. Missing usage SHALL never be represented as zero tokens. Situations that produce an unavailable record include: interactive invocation contexts (interactive and autonomous-interactive, where the agent CLI owns the terminal), reported as `interactive-context`; structured-output parse failures, missing usage events in otherwise valid output, and adapters that do not support extraction.
 
-#### Scenario: PTY-backed agent step reports unavailable
-- **WHEN** an agent step runs in an interactive or autonomous-interactive context (no stdout captured)
-- **THEN** the step's usage record is an explicit unavailable state with a reason indicating the invocation context
+#### Scenario: Interactive agent step reports unavailable
+- **WHEN** an agent step runs in an interactive or autonomous-interactive context (the CLI owns the terminal, so no stdout is captured)
+- **THEN** the step's usage record is an explicit unavailable state with reason `interactive-context`
 
 #### Scenario: Parse failure reports unavailable
 - **WHEN** an autonomous-headless agent step completes but its stdout cannot be parsed as the expected structured format

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
@@ -1403,4 +1404,89 @@ func mustTime(t *testing.T, value string) time.Time {
 		t.Fatal(err)
 	}
 	return got
+}
+
+func TestCollectorAttributesCumulativeClaudeCostPerStep(t *testing.T) {
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(t.TempDir(), "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+
+	tests := []struct {
+		id       string
+		strategy string
+		raw      float64
+		want     *float64
+	}{
+		{"first", "new", 0.25, floatPtr(0.25)},
+		{"second", "resume", 0.75, floatPtr(0.5)},
+		{"third", "resume", 1.0, floatPtr(0.25)},
+		{"reset", "resume", 0.1, nil},
+		{"after-reset", "resume", 0.4, floatPtr(0.3)},
+	}
+	for i, tt := range tests {
+		raw := tt.raw
+		gotEvent := c.Process(stepEvent(started.Add(time.Duration(i+1)*time.Second), model.ExecutionIdentity{
+			StepID: tt.id, StepType: "agent", Kind: "step", CLI: "claude", SessionID: "session", SessionStrategy: tt.strategy, SessionResumed: i > 0, AgentInvoked: true,
+		}, model.UsageRecord{Status: model.UsageCollected, CLI: "claude", Tokens: model.TokenCounts{model.TokenInput: 1}, RawCumulativeCostUSD: &raw, Source: "claude:result-event"}, nil, "completed", 1))
+		got, _ := gotEvent.Data[DataEstimatedAPICostUSD].(*float64)
+		if diff := cmp.Diff(tt.want, got, cmpopts.EquateApprox(0, 1e-9)); diff != "" {
+			t.Errorf("%s event cost mismatch (-want +got):\n%s", tt.id, diff)
+		}
+		record := c.artifact.Steps[i]
+		if diff := cmp.Diff(tt.want, record.EstimatedAPICostUSD, cmpopts.EquateApprox(0, 1e-9)); diff != "" {
+			t.Errorf("%s record cost mismatch (-want +got):\n%s", tt.id, diff)
+		}
+	}
+}
+
+func TestCollectorLeavesResumedClaudeCostUnknownWithoutBaseline(t *testing.T) {
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(t.TempDir(), "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+	raw := 0.5
+	claude := func(cost *float64) model.UsageRecord {
+		return model.UsageRecord{Status: model.UsageCollected, CLI: "claude", Tokens: model.TokenCounts{model.TokenInput: 1}, RawCumulativeCostUSD: cost, Source: "claude:result-event"}
+	}
+	identity := func(id, strategy string) model.ExecutionIdentity {
+		return model.ExecutionIdentity{StepID: id, StepType: "agent", Kind: "step", CLI: "claude", SessionID: "session", SessionStrategy: strategy, SessionResumed: strategy != "new", AgentInvoked: true}
+	}
+
+	// A resumed session with no recorded baseline cannot be attributed.
+	first := c.Process(stepEvent(started.Add(time.Second), identity("resumed", "resume"), claude(&raw), nil, "completed", 1))
+	if got, _ := first.Data[DataEstimatedAPICostUSD].(*float64); got != nil {
+		t.Fatalf("resumed without baseline cost = %v, want nil", *got)
+	}
+	// An interactive step on the session reports no cost, so the next resumed
+	// step's cumulative total includes unobserved usage.
+	c.Process(stepEvent(started.Add(2*time.Second), identity("interactive", "resume"), model.UsageRecord{Status: model.UsageUnavailable, Reason: model.UnavailableInteractiveContext, CLI: "claude", Source: "agent-runner"}, nil, "completed", 1))
+	later := 0.9
+	second := c.Process(stepEvent(started.Add(3*time.Second), identity("after-interactive", "resume"), claude(&later), nil, "completed", 1))
+	if got, _ := second.Data[DataEstimatedAPICostUSD].(*float64); got != nil {
+		t.Fatalf("resumed after unobserved step cost = %v, want nil", *got)
+	}
+	if totals := c.Totals(); totals.CostCoverage == model.CoverageComplete {
+		t.Fatalf("cost coverage = %q, want incomplete", totals.CostCoverage)
+	}
+}
+
+func TestCollectorRestoresClaudeCostBaselineOnResume(t *testing.T) {
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	dir := t.TempDir()
+	c := NewCollector(dir, "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+	raw := 0.5
+	c.Process(stepEvent(started.Add(time.Second), model.ExecutionIdentity{
+		StepID: "first", StepType: "agent", Kind: "step", CLI: "claude", SessionID: "session", SessionStrategy: "new", AgentInvoked: true,
+	}, model.UsageRecord{Status: model.UsageCollected, CLI: "claude", RawCumulativeCostUSD: &raw, Source: "claude:result-event"}, nil, "completed", 1))
+
+	restored := NewCollector(dir, "run", "workflow", started)
+	restored.Process(event(audit.EventRunStart, started.Add(2*time.Second), map[string]any{"resumed": true}))
+	later := 0.8
+	gotEvent := restored.Process(stepEvent(started.Add(3*time.Second), model.ExecutionIdentity{
+		StepID: "second", StepType: "agent", Kind: "step", CLI: "claude", SessionID: "session", SessionStrategy: "resume", SessionResumed: true, AgentInvoked: true,
+	}, model.UsageRecord{Status: model.UsageCollected, CLI: "claude", RawCumulativeCostUSD: &later, Source: "claude:result-event"}, nil, "completed", 1))
+	got, _ := gotEvent.Data[DataEstimatedAPICostUSD].(*float64)
+	if diff := cmp.Diff(floatPtr(0.3), got, cmpopts.EquateApprox(0, 1e-9)); diff != "" {
+		t.Fatalf("restored cost mismatch (-want +got):\n%s", diff)
+	}
 }
