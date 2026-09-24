@@ -1452,11 +1452,17 @@ func sandboxExecArgs(args []string, outputDir string) []string {
 // write access only for the already-validated audit-owned output tree. The
 // user namespace is deliberate: it lets a non-root Docker user mount this
 // boundary without granting the container privileged mode.
+//
+// The host /dev seen through the read-only root bind is unusable inside the
+// user namespace, and Claude Code's Bun runtime aborts at startup without
+// /dev/null. A private device filesystem supplies the standard nodes; it is
+// then remounted read-only so /dev and /dev/shm cannot hold model writes.
 func linuxSandboxArgs(args []string, workspace, outputDir string) []string {
 	argv := []string{
 		"--die-with-parent", "--new-session", "--unshare-user", "--uid", "0", "--gid", "0",
 		"--ro-bind", "/", "/", "--bind", outputDir, outputDir,
-		"--proc", "/proc", "--chdir", workspace, "--",
+		"--proc", "/proc", "--dev", "/dev", "--remount-ro", "/dev",
+		"--chdir", workspace, "--",
 	}
 	return append(argv, args...)
 }

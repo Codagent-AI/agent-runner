@@ -143,3 +143,28 @@ func TestLinuxAuditDockerRetainsSeccomp(t *testing.T) {
 		t.Fatal("supported audit container is not running with a seccomp filter")
 	}
 }
+
+// Claude Code's Bun runtime aborts before model work when the sandbox has no
+// usable /dev, so device nodes must work while /dev itself stays read-only.
+func TestLinuxAuditDeviceFilesystemUsableAndReadOnly(t *testing.T) {
+	requireLinuxAuditSandbox(t)
+	root := t.TempDir()
+	workspace, output := filepath.Join(root, "workspace"), filepath.Join(root, "output")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := `
+set -eu
+printf probe > /dev/null || { echo "/dev/null unusable"; exit 50; }
+head -c 4 /dev/urandom > /dev/null || { echo "/dev/urandom unusable"; exit 51; }
+if touch /dev/escape; then echo "/dev writable"; exit 52; fi
+if touch /dev/shm/escape; then echo "/dev/shm writable"; exit 53; fi
+`
+	command, err := sandboxedCrosscheckCommand([]string{"/bin/sh", "-c", script}, workspace, output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("device probe: %v\n%s", err, data)
+	}
+}

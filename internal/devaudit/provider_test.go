@@ -104,20 +104,36 @@ func TestSandboxExecArgsBindsOutputDirectoryAsParameter(t *testing.T) {
 	}
 }
 
-func TestLinuxSandboxArgsKeepsDeviceFilesystemReadOnly(t *testing.T) {
+// Claude Code's Bun runtime aborts at startup without a usable /dev, so the
+// sandbox mounts a private device filesystem over the read-only root and then
+// remounts it read-only: device nodes such as /dev/null stay usable, but the
+// model cannot create files under /dev.
+func TestLinuxSandboxArgsProvidesReadOnlyDeviceFilesystem(t *testing.T) {
 	args := linuxSandboxArgs([]string{"crosscheck", "--batch"}, "/audit/workspace", "/audit/output")
-	for _, arg := range args {
-		if arg == "--dev" {
-			t.Fatalf("Linux sandbox must not create a writable device filesystem: %v", args)
-		}
+	joined := "\x00" + strings.Join(args, "\x00") + "\x00"
+	ordered := []string{
+		"\x00--ro-bind\x00/\x00/\x00",
+		"\x00--bind\x00/audit/output\x00/audit/output\x00",
+		"\x00--dev\x00/dev\x00",
+		"\x00--remount-ro\x00/dev\x00",
+		"\x00--\x00crosscheck\x00--batch\x00",
 	}
-	joined := strings.Join(args, "\x00")
-	for _, want := range []string{
-		"--ro-bind\x00/\x00/",
-		"--bind\x00/audit/output\x00/audit/output",
-	} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("Linux sandbox args missing %q: %v", want, args)
+	last := -1
+	for _, want := range ordered {
+		index := strings.Index(joined, want)
+		if index < 0 {
+			t.Fatalf("Linux sandbox args missing %q: %v", strings.ReplaceAll(want, "\x00", " "), args)
+		}
+		if index <= last {
+			t.Fatalf("Linux sandbox args out of order at %q: %v", strings.ReplaceAll(want, "\x00", " "), args)
+		}
+		last = index
+	}
+	for _, forbidden := range []string{"--dev-bind", "--dev-bind-try"} {
+		for _, arg := range args {
+			if arg == forbidden {
+				t.Fatalf("Linux sandbox must not expose the host device filesystem via %s: %v", forbidden, args)
+			}
 		}
 	}
 }
