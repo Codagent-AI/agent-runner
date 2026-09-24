@@ -694,6 +694,8 @@ func repairIssueBodies(report *LocalReport, runner CommandRunner) (int, error) {
 		}
 		if err := setBugIssueType(runner, match[1]); err != nil {
 			finding.Warning = err.Error()
+		} else {
+			finding.Warning = ""
 		}
 		repaired++
 	}
@@ -712,11 +714,13 @@ func RepairIssueBodies(auditSessionDir string) (int, error) {
 		return 0, fmt.Errorf("decode local report: %w", err)
 	}
 	repaired, err := repairIssueBodies(&report, ghRunner)
-	if err != nil || repaired == 0 {
+	if err != nil {
 		return repaired, err
 	}
-	if err := stateio.WriteJSONAtomic(filepath.Join(auditSessionDir, "local-report.json"), report); err != nil {
-		return repaired, fmt.Errorf("write local report: %w", err)
+	if repaired > 0 {
+		if err := stateio.WriteJSONAtomic(filepath.Join(auditSessionDir, "local-report.json"), report); err != nil {
+			return repaired, fmt.Errorf("write local report: %w", err)
+		}
 	}
 	if err := persistCorrectnessOutcome(&Request{AuditSessionDir: auditSessionDir}, &report.Correctness); err != nil {
 		return repaired, err

@@ -671,6 +671,45 @@ func TestRepairIssueBodiesRecordsBugTypeFailure(t *testing.T) {
 	}
 }
 
+func TestRepairIssueBodiesClearsResolvedTypeWarning(t *testing.T) {
+	report := LocalReport{Correctness: CorrectnessResult{Findings: []Finding{{
+		PublicationState: "created", IssueURL: "https://github.com/Codagent-AI/agent-runner/issues/42",
+		Marker: findingMarker("finding-1"), Candidate: confirmedCandidate(), Warning: "type update rejected",
+	}}}}
+	runner := &recordingGH{view: &ghIssue{URL: report.Correctness.Findings[0].IssueURL, State: "OPEN", Title: "[auto-audit] retry state is lost", Body: "-"}}
+	if repaired, err := repairIssueBodies(&report, runner); err != nil || repaired != 1 {
+		t.Fatalf("repair issue bodies = %d, %v", repaired, err)
+	}
+	if warning := report.Correctness.Findings[0].Warning; warning != "" {
+		t.Fatalf("resolved type warning = %q, want empty", warning)
+	}
+}
+
+func TestRepairIssueBodiesRetriesCorrectnessPersistenceWithoutRemoteEdit(t *testing.T) {
+	dir := t.TempDir()
+	report := LocalReport{Correctness: CorrectnessResult{SchemaVersion: correctnessSchema, Findings: []Finding{}}}
+	if err := stateio.WriteJSONAtomic(filepath.Join(dir, "local-report.json"), report); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "correctness-findings.json"), []byte(`{"schema_version":"stale","findings":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if repaired, err := RepairIssueBodies(dir); err != nil || repaired != 0 {
+		t.Fatalf("repair issue bodies = %d, %v", repaired, err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "correctness-findings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result CorrectnessResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.SchemaVersion != correctnessSchema {
+		t.Fatalf("persisted correctness schema = %q, want %q", result.SchemaVersion, correctnessSchema)
+	}
+}
+
 func TestRepairIssueBodiesRejectsIssueOutsideAuditRepository(t *testing.T) {
 	report := LocalReport{Correctness: CorrectnessResult{Findings: []Finding{{
 		PublicationState: "created", IssueURL: "https://github.com/example/other/issues/42",
