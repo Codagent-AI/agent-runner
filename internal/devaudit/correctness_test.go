@@ -578,6 +578,57 @@ func TestPublishCorrectnessRetriesFailedCreationThroughExactMarker(t *testing.T)
 	}
 }
 
+func TestPublishCorrectnessSetsBugTypeOnRecoveredOwnIssue(t *testing.T) {
+	request, prepared := correctnessFixture(t)
+	candidate := confirmedCandidate()
+	marker := findingFor(&candidate, candidate.DefectKey, "pending", "", "").Marker
+	runner := &recordingGH{marker: []ghIssue{{URL: "https://github.com/Codagent-AI/agent-runner/issues/73", State: "OPEN", Body: marker}}}
+	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{candidate}}, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finding := result.Findings[0]; finding.PublicationState != "created" || finding.IssueURL != runner.marker[0].URL {
+		t.Fatalf("recovered finding = %#v", finding)
+	}
+	if got := runner.callArgs(); len(got) != 3 || got[2] != "gh api --method PATCH repos/Codagent-AI/agent-runner/issues/73 -f type=Bug" {
+		t.Fatalf("GitHub calls = %#v, want recovered issue type PATCH", got)
+	}
+	if runner.createCalls() != 0 {
+		t.Fatalf("recovered issue was created again: %#v", runner.calls)
+	}
+}
+
+func TestPublishCorrectnessRecordsRecoveredIssueTypeFailure(t *testing.T) {
+	request, prepared := correctnessFixture(t)
+	candidate := confirmedCandidate()
+	marker := findingFor(&candidate, candidate.DefectKey, "pending", "", "").Marker
+	runner := &recordingGH{marker: []ghIssue{{URL: "https://github.com/Codagent-AI/agent-runner/issues/73", State: "OPEN", Body: marker}}, patchErr: errors.New("type update rejected")}
+	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{candidate}}, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finding := result.Findings[0]; finding.PublicationState != "created" || finding.IssueURL != runner.marker[0].URL || finding.Warning != "type update rejected" {
+		t.Fatalf("recovered finding = %#v, want created issue with type warning", finding)
+	}
+}
+
+func TestPublishCorrectnessDoesNotPatchRecoveredIssueOutsideAuditRepository(t *testing.T) {
+	request, prepared := correctnessFixture(t)
+	candidate := confirmedCandidate()
+	marker := findingFor(&candidate, candidate.DefectKey, "pending", "", "").Marker
+	runner := &recordingGH{marker: []ghIssue{{URL: "https://github.com/example/other/issues/73", State: "OPEN", Body: marker}}}
+	result, err := PublishCorrectness(request, prepared, CorrectnessCandidates{Candidates: []CorrectnessCandidate{candidate}}, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finding := result.Findings[0]; finding.PublicationState != "created" || finding.Warning == "" {
+		t.Fatalf("recovered finding = %#v, want warning for invalid issue URL", finding)
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("unexpected GitHub mutation: %#v", runner.callArgs())
+	}
+}
+
 func TestExecutableRunnerUsesFixedGHArgumentsAndStdin(t *testing.T) {
 	request, prepared := correctnessFixture(t)
 	bin := t.TempDir()

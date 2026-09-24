@@ -532,6 +532,14 @@ func publishCandidate(request *Request, candidate *CorrectnessCandidate, runner 
 	for _, issue := range markerMatches {
 		if strings.Contains(issue.Body, finding.Marker) {
 			finding.PublicationState, finding.IssueURL = "created", issue.URL
+			if !githubIssueURL(issue.URL) {
+				finding.Warning = "GitHub CLI returned an unexpected issue URL"
+				return finding, nil
+			}
+			match := regexp.MustCompile(`/issues/(\d+)$`).FindStringSubmatch(issue.URL)
+			if err := setBugIssueType(runner, match[1]); err != nil {
+				finding.Warning = err.Error()
+			}
 			return finding, nil
 		}
 	}
