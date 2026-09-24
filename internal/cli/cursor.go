@@ -395,7 +395,7 @@ func prepareCursorPrivateConfigAt(sourceDir, cacheRoot string, command Completio
 }
 
 func prepareCursorPrivateConfigWithIntegrationAt(sourceDir, cacheRoot string, commands []RunnerCommand, integration *RunnerIntegration, autonomous bool) (cursorPrivateConfig, error) {
-	shellRules, agentCallRule, err := cursorPrivateConfigRules(commands, integration, autonomous)
+	shellRules, agentCallRules, err := cursorPrivateConfigRules(commands, integration, autonomous)
 	if err != nil {
 		return cursorPrivateConfig{}, err
 	}
@@ -417,7 +417,7 @@ func prepareCursorPrivateConfigWithIntegrationAt(sourceDir, cacheRoot string, co
 		config["permissions"] = permissions
 	}
 	allow, _ := permissions["allow"].([]any)
-	for _, rule := range append(append([]string{}, shellRules...), agentCallRule) {
+	for _, rule := range append(append([]string{}, shellRules...), agentCallRules...) {
 		if rule == "" {
 			continue
 		}
@@ -453,7 +453,7 @@ func prepareCursorPrivateConfigWithIntegrationAt(sourceDir, cacheRoot string, co
 	// The source directory participates in the digest because the chats
 	// symlink below is tied to it: identical configs from different sources
 	// must not share a private dir.
-	digest := sha256.Sum256([]byte("cursor-config-v4\x00" + sourceDir + "\x00" + strings.Join(shellRules, "\x00") + "\x00" + agentCallRule + "\x00" + string(raw)))
+	digest := sha256.Sum256([]byte("cursor-config-v4\x00" + sourceDir + "\x00" + strings.Join(shellRules, "\x00") + "\x00" + strings.Join(agentCallRules, "\x00") + "\x00" + string(raw)))
 	dir := filepath.Join(cacheRoot, "cursor-config", hex.EncodeToString(digest[:6]))
 	if err := os.MkdirAll(dir, 0o700); err != nil { // #nosec G703 -- dir combines the local user's cache root with a content digest; creating it is this function's purpose
 		return cursorPrivateConfig{}, fmt.Errorf("create cursor private config dir: %w", err)
@@ -490,7 +490,7 @@ func prepareCursorPrivateConfigWithIntegrationAt(sourceDir, cacheRoot string, co
 	return result, nil
 }
 
-func cursorPrivateConfigRules(commands []RunnerCommand, integration *RunnerIntegration, autonomous bool) (shellRules []string, agentCallRule string, err error) {
+func cursorPrivateConfigRules(commands []RunnerCommand, integration *RunnerIntegration, autonomous bool) (shellRules, agentCallRules []string, err error) {
 	// One narrow rule per granted runner command. Cursor is the only adapter
 	// with a real shell allow-list, so this is where the exact-string guarantee
 	// for `step submit-route` is actually expressed.
@@ -500,17 +500,20 @@ func cursorPrivateConfigRules(commands []RunnerCommand, integration *RunnerInteg
 		}
 		rule, ruleErr := cursorRunnerPermission(command.Executable, command.Args())
 		if ruleErr != nil {
-			return nil, "", ruleErr
+			return nil, nil, ruleErr
 		}
 		shellRules = append(shellRules, rule)
 	}
 	if integration != nil && !integration.Valid() {
-		return nil, "", fmt.Errorf("invalid Runner agent-call integration descriptor")
+		return nil, nil, fmt.Errorf("invalid Runner agent-call integration descriptor")
 	}
 	if integration != nil && autonomous {
-		agentCallRule = "Mcp(agent-runner:call_agent)"
+		agentCallRules = make([]string, 0, len(agentCallMCPToolNames))
+		for _, name := range agentCallMCPToolNames {
+			agentCallRules = append(agentCallRules, "Mcp(agent-runner:"+name+")")
+		}
 	}
-	return shellRules, agentCallRule, nil
+	return shellRules, agentCallRules, nil
 }
 
 func firstBlockingCursorMCPDenyRule(deny []any) string {
@@ -524,9 +527,13 @@ func firstBlockingCursorMCPDenyRule(deny []any) string {
 			continue
 		}
 		serverPattern, toolPattern, ok := strings.Cut(strings.TrimSuffix(inner, ")"), ":")
-		if ok && cursorGlobMatch(strings.ToLower(strings.TrimSpace(serverPattern)), agentCallMCPServerName) &&
-			cursorGlobMatch(strings.ToLower(strings.TrimSpace(toolPattern)), agentCallMCPToolName) {
-			return rule
+		if ok && cursorGlobMatch(strings.ToLower(strings.TrimSpace(serverPattern)), agentCallMCPServerName) {
+			tool := strings.ToLower(strings.TrimSpace(toolPattern))
+			for _, name := range agentCallMCPToolNames {
+				if cursorGlobMatch(tool, name) {
+					return rule
+				}
+			}
 		}
 	}
 	return ""
@@ -669,7 +676,7 @@ func (a *CursorAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
 		return opts.PresetID
 	}
 	if !opts.Headless {
-		return discoverCursorInteractiveSession(opts.SpawnTime, opts.Workdir)
+		return discoverCursorInteractiveSession(opts.SpawnTime, opts.Workdir, opts.ExcludeSessionIDs)
 	}
 	return discoverCursorSessionID(opts.ProcessOutput)
 }
@@ -846,7 +853,7 @@ func discoverCursorSessionID(output string) string {
 	return ""
 }
 
-func discoverCursorInteractiveSession(spawnTime time.Time, workdir string) string {
+func discoverCursorInteractiveSession(spawnTime time.Time, workdir string, excludeIDs []string) string {
 	if workdir == "" {
 		var err error
 		workdir, err = os.Getwd()
@@ -870,7 +877,8 @@ func discoverCursorInteractiveSession(spawnTime time.Time, workdir string) strin
 	}
 	defer func() { _ = rootDir.Close() }()
 	rootFS := rootDir.FS()
-	if sessionID := discoverCursorMetadataSession(rootFS, spawnTime, workdir); sessionID != "" {
+	excluded := excludedSessionIDSet(excludeIDs)
+	if sessionID := discoverCursorMetadataSession(rootFS, spawnTime, workdir, excluded); sessionID != "" {
 		return sessionID
 	}
 
@@ -900,11 +908,15 @@ func discoverCursorInteractiveSession(spawnTime time.Time, workdir string) strin
 			return nil
 		}
 		chatID := filepath.Base(filepath.Dir(path))
-		if chatID != "" {
-			matches = append(matches, chatID)
-			if len(matches) > 1 {
-				return fs.SkipAll
-			}
+		if chatID == "" {
+			return nil
+		}
+		if _, skip := excluded[chatID]; skip {
+			return nil
+		}
+		matches = append(matches, chatID)
+		if len(matches) > 1 {
+			return fs.SkipAll
 		}
 		return nil
 	}); err != nil {
@@ -916,7 +928,7 @@ func discoverCursorInteractiveSession(spawnTime time.Time, workdir string) strin
 	return matches[0]
 }
 
-func discoverCursorMetadataSession(rootFS fs.FS, spawnTime time.Time, workdir string) string {
+func discoverCursorMetadataSession(rootFS fs.FS, spawnTime time.Time, workdir string, excluded map[string]struct{}) string {
 	type cursorChatMetadata struct {
 		CreatedAtMS int64  `json:"createdAtMs"`
 		CWD         string `json:"cwd"`
@@ -944,11 +956,15 @@ func discoverCursorMetadataSession(rootFS fs.FS, spawnTime time.Time, workdir st
 			return nil
 		}
 		chatID := filepath.Base(filepath.Dir(path))
-		if chatID != "" {
-			matches = append(matches, chatID)
-			if len(matches) > 1 {
-				return fs.SkipAll
-			}
+		if chatID == "" {
+			return nil
+		}
+		if _, skip := excluded[chatID]; skip {
+			return nil
+		}
+		matches = append(matches, chatID)
+		if len(matches) > 1 {
+			return fs.SkipAll
 		}
 		return nil
 	})
@@ -956,6 +972,17 @@ func discoverCursorMetadataSession(rootFS fs.FS, spawnTime time.Time, workdir st
 		return ""
 	}
 	return matches[0]
+}
+
+func excludedSessionIDSet(ids []string) map[string]struct{} {
+	excluded := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			excluded[id] = struct{}{}
+		}
+	}
+	return excluded
 }
 
 func cursorStoreContains(rootFS fs.FS, path string, needle []byte) (bool, error) {

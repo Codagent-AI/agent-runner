@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +32,11 @@ type AgentCallParent struct {
 	Workdir          string
 	Prefix           string
 	ResolveSessionID func() string
+	// Attempt is the parent agent step's own predicted audit identity.attempt
+	// (see attemptForIdentity). Stamped on every agent_call_end this handler
+	// emits so a rebuild from audit can attribute calls to the exact parent
+	// execution instead of any step sharing the same prefix.
+	Attempt int
 }
 
 type AgentCallAccepted struct {
@@ -44,7 +51,7 @@ type AgentCallAccepted struct {
 
 // AgentCallLifecycleNotifier lets the live process wrapper move the run view
 // into a dynamic child as soon as acceptance evidence is durable, then back to
-// the still-active parent after the synchronous child finishes.
+// the still-active parent after the child finishes.
 type AgentCallLifecycleNotifier interface {
 	NotifyAgentCallAccepted(*AgentCallAccepted)
 	NotifyAgentCallFinished(*AgentCallAccepted)
@@ -57,11 +64,19 @@ type AgentCallHandlerOptions struct {
 	Eligible bool
 	Parent   AgentCallParent
 
-	Adapter    func(string) (cli.Adapter, error)
-	NewID      func() string
-	Now        func() time.Time
-	OnAccepted func(AgentCallAccepted)
-	OnFinished func(AgentCallAccepted)
+	// WaitBudget caps how long call_agent and get_agent_call hold one open
+	// request while the child runs. Zero waits for the child, which keeps a
+	// parent from ending its turn on a call it never collected. Only a parent
+	// whose MCP client aborts a long tools/call needs a budget; the default is
+	// derived from the parent CLI.
+	WaitBudget time.Duration
+
+	Adapter        func(string) (cli.Adapter, error)
+	NewID          func() string
+	Now            func() time.Time
+	AttemptContext context.Context
+	OnAccepted     func(AgentCallAccepted)
+	OnFinished     func(AgentCallAccepted)
 }
 
 type acceptedAgentCall struct {
@@ -70,8 +85,11 @@ type acceptedAgentCall struct {
 	parentAttemptID string
 	target          agentcall.Target
 	started         time.Time
+	status          string
+	cancel          context.CancelFunc
 	done            chan struct{}
 	response        json.RawMessage
+	childSessionID  string
 }
 
 type agentCallExecution struct {
@@ -80,14 +98,33 @@ type agentCallExecution struct {
 	errorMessage string
 }
 
+// cursorAgentCallWaitBudget keeps one open request inside the roughly 60s
+// tools/call limit Cursor's MCP client enforces. Measured against a headless
+// cursor-agent parent: an open call fails with "MCP error -32001: Request timed
+// out" at 60.3s, and Runner's progress notifications do not extend it.
+const cursorAgentCallWaitBudget = 45 * time.Second
+
+// agentCallWaitBudget reports how long a parent CLI can hold one MCP request
+// open while a child runs. Zero, the default, waits for the child so the parent
+// cannot proceed on a result it never collected. Cursor is the one supported
+// parent that aborts a long tools/call, so it trades that safety for polling.
+func agentCallWaitBudget(parentCLI string) time.Duration {
+	if strings.EqualFold(strings.TrimSpace(parentCLI), "cursor") {
+		return cursorAgentCallWaitBudget
+	}
+	return 0
+}
+
 // AgentCallHandler is attempt-scoped. It owns validation, acceptance,
 // deduplication, serialization, and execution while control owns only
-// authenticated admission and the connection lease.
+// authenticated admission. After acceptance the child is leased to the
+// parent attempt, not a live MCP or control connection.
 type AgentCallHandler struct {
 	options AgentCallHandlerOptions
 
 	mu       sync.Mutex
 	accepted map[string]*acceptedAgentCall
+	byCallID map[string]*acceptedAgentCall
 	active   *acceptedAgentCall
 
 	parentMu        sync.Mutex
@@ -111,8 +148,11 @@ func NewAgentCallHandler(input *AgentCallHandlerOptions) *AgentCallHandler {
 	if options.Log == nil {
 		options.Log = discardLogger{}
 	}
+	if options.WaitBudget <= 0 {
+		options.WaitBudget = agentCallWaitBudget(options.Parent.CLI)
+	}
 	return &AgentCallHandler{
-		options: options, accepted: make(map[string]*acceptedAgentCall),
+		options: options, accepted: make(map[string]*acceptedAgentCall), byCallID: make(map[string]*acceptedAgentCall),
 		parentSessionID: options.Parent.SessionID,
 	}
 }
@@ -123,7 +163,7 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 	h.mu.Lock()
 	if existing := h.accepted[envelope.RequestID]; existing != nil {
 		h.mu.Unlock()
-		return waitForAgentCallResponse(ctx, existing)
+		return h.awaitAgentCallResult(ctx, existing)
 	}
 	h.mu.Unlock()
 
@@ -137,28 +177,29 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 	// have reserved it while profile/model/workdir validation ran.
 	if existing := h.accepted[envelope.RequestID]; existing != nil {
 		h.mu.Unlock()
-		return waitForAgentCallResponse(ctx, existing)
+		return h.awaitAgentCallResult(ctx, existing)
 	}
 	if h.active != nil {
 		active := h.active
-		elapsed := h.options.Now().Sub(active.started).Round(time.Second)
-		if elapsed < 0 {
-			elapsed = 0
-		}
+		elapsed := h.elapsedLocked(active)
 		h.mu.Unlock()
 		message := fmt.Sprintf(
-			"agent calls are serial; active call %s:%s has been running for %s and must finish or be canceled first",
-			active.target.Kind, active.target.Name, elapsed,
+			"agent calls are serial; active call %s (%s:%s) has been running for %s; poll get_agent_call or cancel cancel_agent_call before starting another",
+			active.callID, active.target.Kind, active.target.Name, elapsed,
 		)
 		return h.reject(envelope, &agentcall.Error{
 			Code: agentcall.CodeCallInProgress, Message: message, Target: &active.target,
+			CallID: active.callID, Elapsed: elapsed,
 		})
 	}
+	parent := h.childParentContext(ctx)
+	childCtx, cancel := context.WithCancel(parent)
 	record := &acceptedAgentCall{
 		callID: h.options.NewID(), requestID: envelope.RequestID, parentAttemptID: envelope.AttemptID, target: resolved.target,
-		started: h.options.Now(), done: make(chan struct{}),
+		started: h.options.Now(), status: agentcall.StatusAccepted, cancel: cancel, done: make(chan struct{}),
 	}
 	h.accepted[envelope.RequestID] = record
+	h.byCallID[record.callID] = record
 	h.active = record
 	h.mu.Unlock()
 	h.emitAgentCallStart(record, resolved)
@@ -167,10 +208,113 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 		h.options.OnAccepted(h.lifecycleEvent(record, resolved.target))
 	}
 
+	go h.finishAccepted(childCtx, record, resolved)
+	return h.awaitAgentCallResult(ctx, record)
+}
+
+// awaitAgentCallResult blocks until the call is terminal, the wait budget
+// expires, or the requesting context ends, then returns the current snapshot.
+// Ending the request never cancels the child, which is leased to the parent
+// attempt rather than to one MCP request.
+func (h *AgentCallHandler) awaitAgentCallResult(ctx context.Context, record *acceptedAgentCall) json.RawMessage {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var expired <-chan time.Time
+	if budget := h.options.WaitBudget; budget > 0 {
+		timer := time.NewTimer(budget)
+		defer timer.Stop()
+		expired = timer.C
+	}
+	select {
+	case <-record.done:
+	case <-ctx.Done():
+	case <-expired:
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.marshalSnapshotLocked(record)
+}
+
+func (h *AgentCallHandler) HandleGetAgentCall(ctx context.Context, envelope control.AgentCallRequest) json.RawMessage {
+	request, failure := agentcall.DecodeCallIDRequest(envelope.Payload)
+	if failure != nil {
+		return marshalAgentCallResponse(agentcall.Response{Error: failure})
+	}
+	h.mu.Lock()
+	record := h.byCallID[request.CallID]
+	if record == nil {
+		h.mu.Unlock()
+		return marshalAgentCallResponse(agentcall.Response{Error: &agentcall.Error{
+			Code: agentcall.CodeUnknownCall, Message: "call_id does not belong to the active parent attempt",
+		}})
+	}
+	h.mu.Unlock()
+	return h.awaitAgentCallResult(ctx, record)
+}
+
+func (h *AgentCallHandler) HandleCancelAgentCall(ctx context.Context, envelope control.AgentCallRequest) json.RawMessage {
+	request, failure := agentcall.DecodeCallIDRequest(envelope.Payload)
+	if failure != nil {
+		return marshalAgentCallResponse(agentcall.Response{Error: failure})
+	}
+	h.mu.Lock()
+	record := h.byCallID[request.CallID]
+	if record == nil {
+		h.mu.Unlock()
+		return marshalAgentCallResponse(agentcall.Response{Error: &agentcall.Error{
+			Code: agentcall.CodeUnknownCall, Message: "call_id does not belong to the active parent attempt",
+		}})
+	}
+	if len(record.response) > 0 {
+		raw := h.marshalSnapshotLocked(record)
+		h.mu.Unlock()
+		return raw
+	}
+	cancel := record.cancel
+	done := record.done
+	h.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+	h.mu.Lock()
+	raw := h.marshalSnapshotLocked(record)
+	h.mu.Unlock()
+	return raw
+}
+
+func (h *AgentCallHandler) finishAccepted(ctx context.Context, record *acceptedAgentCall, resolved *resolvedAgentCall) {
+	h.mu.Lock()
+	record.status = agentcall.StatusRunning
+	h.mu.Unlock()
+
 	execution := h.execute(ctx, record, resolved)
-	h.emitAgentCallEnd(record, resolved, &execution)
+	h.finalizeExecution(record, resolved, &execution)
+}
+
+func (h *AgentCallHandler) finalizeExecution(record *acceptedAgentCall, resolved *resolvedAgentCall, execution *agentCallExecution) {
+	h.emitAgentCallEnd(record, resolved, execution)
 	if h.options.OnFinished != nil {
 		h.options.OnFinished(h.lifecycleEvent(record, resolved.target))
+	}
+	execution.response.CallID = record.callID
+	target := resolved.target
+	execution.response.Target = &target
+	if execution.response.Error != nil {
+		if execution.response.Error.Code == agentcall.CodeCallCanceled {
+			execution.response.Status = agentcall.StatusCanceled
+		} else {
+			execution.response.Status = agentcall.StatusFailed
+		}
+	} else {
+		execution.response.Status = agentcall.StatusSucceeded
 	}
 	var raw json.RawMessage
 	if successfulAgentCallResponseDefinitelyTooLarge(execution.response) {
@@ -185,12 +329,263 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 	}
 	h.mu.Lock()
 	record.response = raw
+	record.status = execution.response.Status
+	record.childSessionID = strings.TrimSpace(execution.invocation.DiscoveredSessionID)
 	if h.active == record {
 		h.active = nil
 	}
 	close(record.done)
 	h.mu.Unlock()
-	return append(json.RawMessage(nil), raw...)
+}
+
+// UncollectedCalls returns the ids of accepted calls that never reached a
+// terminal status, oldest first. A parent that ends its turn with one
+// outstanding leaves the child to be killed at attempt teardown, so its work
+// never reaches the workflow.
+func (h *AgentCallHandler) UncollectedCalls() []string {
+	if h == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var pending []*acceptedAgentCall
+	for _, record := range h.accepted {
+		if len(record.response) == 0 {
+			pending = append(pending, record)
+		}
+	}
+	sort.Slice(pending, func(i, j int) bool { return pending[i].started.Before(pending[j].started) })
+	ids := make([]string, 0, len(pending))
+	for _, record := range pending {
+		ids = append(ids, record.callID)
+	}
+	return ids
+}
+
+func (h *AgentCallHandler) ChildSessionIDs() []string {
+	if h == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var ids []string
+	seen := make(map[string]struct{}, len(h.accepted))
+	for _, record := range h.accepted {
+		id := strings.TrimSpace(record.childSessionID)
+		if id == "" {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// CollectedCallResponses returns the final response of every call that
+// reached a terminal state, ordered by acceptance time and labeled by call
+// ID. The parent agent step's executor reads this when it publishes its
+// AgentExecutionRecord at completion.
+func (h *AgentCallHandler) CollectedCallResponses() []model.CallResponse {
+	if h == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	records := make([]*acceptedAgentCall, 0, len(h.accepted))
+	for _, record := range h.accepted {
+		records = append(records, record)
+	}
+	sort.Slice(records, func(i, j int) bool { return records[i].started.Before(records[j].started) })
+	var out []model.CallResponse
+	for _, record := range records {
+		if len(record.response) == 0 {
+			continue
+		}
+		var response agentcall.Response
+		if err := json.Unmarshal(record.response, &response); err != nil {
+			continue
+		}
+		text := ""
+		if response.Result != nil {
+			text = response.Result.Response
+		}
+		out = append(out, model.CallResponse{CallID: record.callID, Response: text})
+	}
+	return out
+}
+
+func agentCallChildSessionIDs(handler control.AgentCallHandler) []string {
+	provider, ok := handler.(interface{ ChildSessionIDs() []string })
+	if !ok {
+		return nil
+	}
+	return provider.ChildSessionIDs()
+}
+
+func (h *AgentCallHandler) probeChildSessionID(ctx context.Context, record *acceptedAgentCall, call *resolvedAgentCall, output *synchronizedBuffer) {
+	if output == nil {
+		return
+	}
+	defer output.Close()
+	if h.publishDiscoveredChildSession(record, call, output.String()) {
+		return
+	}
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			h.publishDiscoveredChildSession(record, call, output.String())
+			return
+		case <-ticker.C:
+			if h.publishDiscoveredChildSession(record, call, output.String()) {
+				return
+			}
+		}
+	}
+}
+
+func (h *AgentCallHandler) publishDiscoveredChildSession(record *acceptedAgentCall, call *resolvedAgentCall, output string) bool {
+	id := h.discoverRunningChildSessionID(record, call, output)
+	if id == "" {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if record.childSessionID == "" {
+		record.childSessionID = id
+	}
+	return record.childSessionID != ""
+}
+
+func (h *AgentCallHandler) discoverRunningChildSessionID(record *acceptedAgentCall, call *resolvedAgentCall, output string) string {
+	if call == nil || call.adapter == nil {
+		return ""
+	}
+	if id := strings.TrimSpace(call.adapter.DiscoverSessionID(&cli.DiscoverOptions{
+		SpawnTime: record.started, PresetID: call.sessionID,
+		Headless: true, ProcessOutput: output, Workdir: call.workdir,
+	})); id != "" {
+		return id
+	}
+	exclude := append([]string(nil), h.ChildSessionIDs()...)
+	h.parentMu.Lock()
+	parentID := h.parentSessionID
+	h.parentMu.Unlock()
+	if parentID != "" {
+		exclude = append(exclude, parentID)
+	}
+	return strings.TrimSpace(call.adapter.DiscoverSessionID(&cli.DiscoverOptions{
+		SpawnTime: record.started, PresetID: call.sessionID,
+		Headless: false, ProcessOutput: output, Workdir: call.workdir,
+		ExcludeSessionIDs: exclude,
+	}))
+}
+
+func childStdoutCapture(adapter cli.Adapter, capture io.Writer) func(io.Writer) io.Writer {
+	return func(w io.Writer) io.Writer {
+		next := w
+		if wrapper, ok := adapter.(cli.StdoutWrapper); ok {
+			next = wrapper.WrapStdout(next)
+		}
+		if capture == nil {
+			return next
+		}
+		return io.MultiWriter(next, capture)
+	}
+}
+
+const maxChildSessionProbeBytes = 64 * 1024
+
+type synchronizedBuffer struct {
+	mu     sync.Mutex
+	buf    strings.Builder
+	limit  int
+	closed bool
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	if b == nil {
+		return len(p), nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return len(p), nil
+	}
+	limit := b.limit
+	if limit <= 0 {
+		limit = maxChildSessionProbeBytes
+	}
+	remain := limit - b.buf.Len()
+	if remain <= 0 {
+		return len(p), nil
+	}
+	if len(p) > remain {
+		_, err := b.buf.Write(p[:remain])
+		return len(p), err
+	}
+	return b.buf.Write(p)
+}
+
+func (b *synchronizedBuffer) String() string {
+	if b == nil {
+		return ""
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return ""
+	}
+	return b.buf.String()
+}
+
+func (b *synchronizedBuffer) Close() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.closed = true
+	b.buf.Reset()
+}
+
+func (h *AgentCallHandler) childParentContext(requestCtx context.Context) context.Context {
+	if h.options.AttemptContext != nil {
+		return h.options.AttemptContext
+	}
+	if requestCtx != nil {
+		return requestCtx
+	}
+	return context.Background()
+}
+
+func (h *AgentCallHandler) elapsedLocked(record *acceptedAgentCall) string {
+	elapsed := h.options.Now().Sub(record.started).Round(time.Second)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return elapsed.String()
+}
+
+func (h *AgentCallHandler) marshalSnapshotLocked(record *acceptedAgentCall) json.RawMessage {
+	elapsed := h.elapsedLocked(record)
+	if len(record.response) > 0 {
+		var stored agentcall.Response
+		if err := json.Unmarshal(record.response, &stored); err == nil {
+			stored.Elapsed = elapsed
+			return marshalAgentCallResponse(stored)
+		}
+		return append(json.RawMessage(nil), record.response...)
+	}
+	target := record.target
+	return marshalAgentCallResponse(agentcall.Response{
+		CallID: record.callID, Status: record.status, Target: &target, Elapsed: elapsed,
+	})
 }
 
 func waitForAgentCallResponse(ctx context.Context, call *acceptedAgentCall) json.RawMessage {
@@ -423,6 +818,9 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 	if err != nil {
 		return h.preLaunchFailure(record, call, "prepare called agent environment: "+err.Error())
 	}
+	probeCtx, stopProbe := context.WithCancel(ctx)
+	defer stopProbe()
+	output := &synchronizedBuffer{limit: maxChildSessionProbeBytes}
 	invocation, runErr := InvokeAgent(&AgentInvocation{
 		Context: ctx, Adapter: call.adapter, Args: args,
 		Env: spawnEnv, DropEnv: cli.DropSpawnEnvVars(call.adapter),
@@ -430,6 +828,10 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 		InvocationContext: cli.ContextAutonomousHeadless,
 		CLI:               call.cliName, Model: call.model, Effort: call.profile.Effort, SessionID: sessionID, SessionResumed: call.resume,
 		Log: h.options.Log, Now: h.options.Now,
+		StdoutWrapper: childStdoutCapture(call.adapter, output),
+		OnStarted: func() {
+			go h.probeChildSessionID(probeCtx, record, call, output)
+		},
 	}, h.options.Runner, h.options.Log)
 	if runErr != nil {
 		if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) || ctx.Err() != nil {
@@ -512,6 +914,12 @@ func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *res
 		Role: call.profileName, Tool: "agent-runner",
 	}
 	data := agentCallAuditData(record, call)
+	// parent_execution_attempt identifies the exact parent agent step
+	// execution this call belongs to (its own predicted identity.attempt),
+	// distinct from parent_attempt_id (the control-layer MCP attempt). A
+	// rebuild from audit requires this so calls from an earlier or later
+	// attempt of the same-prefix step are never attributed to the wrong one.
+	data["parent_execution_attempt"] = h.options.Parent.Attempt
 	data["outcome"] = string(invocation.Outcome)
 	data["duration_ms"] = duration.Milliseconds()
 	data["cli_launched"] = invocation.CLILaunched
@@ -528,6 +936,12 @@ func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *res
 	}
 	if invocation.Stderr != "" {
 		data["stderr"] = invocation.Stderr
+	}
+	// The response is durable evidence for a guarded execution: a check that
+	// fails after this call's parent must be able to rebuild the call's
+	// final response from audit alone if interrupted before it ran.
+	if invocation.Response != "" {
+		data["response"] = truncateForAudit(invocation.Response)
 	}
 	if invocation.UsageError != nil {
 		data["usage_error"] = invocation.UsageError.Error()
@@ -576,7 +990,11 @@ func agentCallIdentityPrefix(parent string) string {
 }
 
 func acceptedFailure(record *acceptedAgentCall, code, message string, target agentcall.Target) agentcall.Response {
-	return agentcall.Response{CallID: record.callID, Error: callFailure(code, message, target)}
+	status := agentcall.StatusFailed
+	if code == agentcall.CodeCallCanceled {
+		status = agentcall.StatusCanceled
+	}
+	return agentcall.Response{CallID: record.callID, Status: status, Target: &target, Error: callFailure(code, message, target)}
 }
 
 func callFailure(code, message string, target agentcall.Target) *agentcall.Error {

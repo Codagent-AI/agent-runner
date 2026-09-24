@@ -72,7 +72,9 @@ printf '%s\n' "$@" > validator-args
 	cmd := exec.Command("sh", coreRunValidatorScript(t))
 	cmd.Dir = workdir
 	cmd.Stdin = strings.NewReader(`{"task_file":"$(touch should-not-exist)"}`)
-	cmd.Env = append(os.Environ(), "PATH="+binDir, "AGENT_RUNNER_EXECUTABLE="+filepath.Join(binDir, "agent-runner"))
+	cmd.Env = append(os.Environ(), "PATH="+binDir,
+		"AGENT_RUNNER_EXECUTABLE="+filepath.Join(binDir, "agent-runner"),
+		"AGENT_RUNNER_VALIDATOR_EXECUTABLE="+filepath.Join(binDir, "agent-validator"))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("run-validator failed: %v\n%s", err, out)
 	}
@@ -100,7 +102,9 @@ printf '%s\n' "$@" > validator-args
 
 	cmd := exec.Command("sh", coreRunValidatorScript(t))
 	cmd.Dir = workdir
-	cmd.Env = append(os.Environ(), "PATH="+binDir, "AGENT_RUNNER_EXECUTABLE="+filepath.Join(binDir, "agent-runner"),
+	cmd.Env = append(os.Environ(), "PATH="+binDir,
+		"AGENT_RUNNER_EXECUTABLE="+filepath.Join(binDir, "agent-runner"),
+		"AGENT_RUNNER_VALIDATOR_EXECUTABLE="+filepath.Join(binDir, "agent-validator"),
 		"AGENT_RUNNER_METRICS_CONSUMER=agent-runner", "AGENT_RUNNER_METRICS_CONTEXT=opaque-context")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("run-validator failed: %v\n%s", err, out)

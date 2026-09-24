@@ -224,6 +224,11 @@ func ExecuteAgentStep(
 		buildWorkflowDirectInvocation(step, ctx, adapter, cliName, sessionID, spawnEnv, agentCallEligible, callHandler, routeEligible),
 		intakeDelivery.Started,
 	), runner, log)
+	if runErr == nil && invocation.Outcome == OutcomeSuccess {
+		if pending := callHandler.UncollectedCalls(); len(pending) > 0 {
+			failAgentStepForUncollectedCalls(&invocation, pending)
+		}
+	}
 	if runErr == nil {
 		if step.Capture != "" {
 			captureAgentResponse(step, ctx, invocation.Response)
@@ -235,7 +240,24 @@ func ExecuteAgentStep(
 			}
 		}
 	}
-	return finishAgentStep(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, &invocation, runErr, log)
+	return finishAgentStep(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, &invocation, runErr, log, callHandler)
+}
+
+// failAgentStepForUncollectedCalls turns a parent that ended its turn with a
+// child still running into a step failure. Attempt teardown kills that child,
+// so its evidence never lands, and recording the step as a success lets later
+// steps consume output that was never written.
+func failAgentStepForUncollectedCalls(invocation *AgentInvocationResult, callIDs []string) {
+	message := fmt.Sprintf(
+		"parent ended with %d agent call(s) still running (%s); each child was canceled and its result was never collected",
+		len(callIDs), strings.Join(callIDs, ", "),
+	)
+	invocation.Outcome = OutcomeFailed
+	if strings.TrimSpace(invocation.Stderr) == "" {
+		invocation.Stderr = message
+		return
+	}
+	invocation.Stderr = invocation.Stderr + "\n" + message
 }
 
 func finishAgentStep(
@@ -249,11 +271,48 @@ func finishAgentStep(
 	invocation *AgentInvocationResult,
 	runErr error,
 	log Logger,
+	callHandler *AgentCallHandler,
 ) (StepOutcome, error) {
 	discoveredID := storeDiscoveredSession(step, ctx, invocation.DiscoveredSessionID, log)
+	resolvedSessionID := discoveredID
+	if resolvedSessionID == "" {
+		resolvedSessionID = sessionID
+	}
+	identity := executionIdentity(ctx, step, "step", 0, invocation.CLILaunched, cliName, resolvedSessionID)
+	attempt := attemptForIdentity(ctx, &identity)
 	extraction := cli.UsageExtraction{Usage: invocation.Usage, EstimatedCostUSD: invocation.EstimatedCostUSD}
 	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, invocation.CLILaunched, discoveredID, invocation.Outcome, invocation.Response, invocation.Stderr, &invocation.ExitCode, runErr, &extraction, invocation.UsageError)
+	if runErr == nil {
+		publishLastAgentExecution(ctx, prefix, attempt, invocation.Response, callHandler)
+	}
 	return invocation.Outcome, runErr
+}
+
+// attemptForIdentity reports the attempt number the audit pipeline will
+// stamp on identity's step_end. Falls back to identity.Attempt (0 in tests
+// without a real metrics collector) when the configured audit logger does
+// not expose attempt prediction.
+func attemptForIdentity(ctx *model.ExecutionContext, identity *model.ExecutionIdentity) int {
+	if provider, ok := ctx.AuditLogger.(interface {
+		AttemptFor(*model.ExecutionIdentity) int
+	}); ok {
+		return provider.AttemptFor(identity)
+	}
+	return identity.Attempt
+}
+
+// publishLastAgentExecution records the just-completed agent step as the
+// guarded execution for later checks in this scope, including the final
+// responses of any agent calls it made.
+func publishLastAgentExecution(ctx *model.ExecutionContext, prefix string, attempt int, response string, callHandler *AgentCallHandler) {
+	record := &model.AgentExecutionRecord{
+		Ref:      model.ExecutionRef{Prefix: prefix, Attempt: attempt},
+		Response: response,
+	}
+	if callHandler != nil {
+		record.CallResponses = callHandler.CollectedCallResponses()
+	}
+	ctx.LastAgentExecution = record
 }
 
 func captureAgentResponse(step *model.Step, ctx *model.ExecutionContext, response string) {
@@ -315,14 +374,13 @@ func prepareAgentCallRuntime(
 		parentNamedSession = string(step.Session)
 	}
 	spawnTime := time.Now()
+	parentIdentity := executionIdentity(ctx, step, "step", 0, false, "", "")
 	options := &AgentCallHandlerOptions{
 		Context: ctx, Runner: runner, Log: log, Eligible: true,
 		Parent: AgentCallParent{
 			CLI: cliName, SessionID: sessionID, NamedSession: parentNamedSession,
 			Worktree: ctx.ProjectRoot, Workdir: parentWorkdir, Prefix: prefix,
-			ResolveSessionID: func() string {
-				return adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: spawnTime, Workdir: parentWorkdir})
-			},
+			Attempt: attemptForIdentity(ctx, &parentIdentity),
 		},
 	}
 	if notifier, ok := runner.(AgentCallLifecycleNotifier); ok {
@@ -330,6 +388,9 @@ func prepareAgentCallRuntime(
 		options.OnFinished = func(call AgentCallAccepted) { notifier.NotifyAgentCallFinished(&call) }
 	}
 	handler = NewAgentCallHandler(options)
+	handler.options.Parent.ResolveSessionID = func() string {
+		return discoverParentSessionID(adapter, spawnTime, parentWorkdir, handler)
+	}
 	if !invocationContext.IsHeadless() {
 		return handler, spawnEnv, nil, nil
 	}
@@ -340,6 +401,7 @@ func prepareAgentCallRuntime(
 	attempt := server.ActivateAttempt(context.Background(), step.ID, control.AttemptOptions{
 		AgentCallEligible: true, AgentCallHandler: handler,
 	})
+	handler.options.AttemptContext = attempt.Context
 	return handler, append(spawnEnv, attempt.Environment()...), server.Deactivate, nil
 }
 
@@ -359,7 +421,7 @@ func buildWorkflowDirectInvocation(
 		ctx: ctx, stepID: step.ID, cliName: cliName, sessionID: sessionID, probe: probe,
 		spawnEnv: spawnEnv, dropEnv: cli.DropSpawnEnvVars(adapter),
 		resolveSessionID: func() string {
-			return adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: spawnTime, Workdir: step.Workdir})
+			return discoverParentSessionID(adapter, spawnTime, step.Workdir, agentCallHandler)
 		},
 		agentCallEligible: agentCallEligible,
 		agentCallHandler:  agentCallHandler,
@@ -370,6 +432,15 @@ func buildWorkflowDirectInvocation(
 		invocation.routeValidation = routeValidationOptions(ctx)
 	}
 	return invocation
+}
+
+func discoverParentSessionID(adapter cli.Adapter, spawnTime time.Time, workdir string, handler control.AgentCallHandler) string {
+	if adapter == nil {
+		return ""
+	}
+	return adapter.DiscoverSessionID(&cli.DiscoverOptions{
+		SpawnTime: spawnTime, Workdir: workdir, ExcludeSessionIDs: agentCallChildSessionIDs(handler),
+	})
 }
 
 func isRouteEligible(step *model.Step, ctx *model.ExecutionContext) bool {
@@ -1119,6 +1190,11 @@ func buildAgentPrompt(step *model.Step, ctx *model.ExecutionContext, includeInta
 	}
 	if includeIntakeHandoff && !strings.Contains(prompt, ctx.IntakeHandoffContents) {
 		prompt = "Context from the intake conversation (already provided by the user; do not ask them to repeat it):\n\n" + ctx.IntakeHandoffContents + "\n\n---\n\n" + prompt
+	}
+
+	if frame := ctx.RepairFrame; frame != nil && frame.Form == string(model.RepairRerun) && step.ID == frame.Target && ctx.LastFailure != nil {
+		evidence := buildRepairEvidenceBlock(ctx.LastFailure.Stdout, ctx.LastFailure.Stderr, guardedResponse(ctx.LastFailure))
+		prompt = evidence + "\n\n" + prompt
 	}
 
 	return prompt, enrichment, nil

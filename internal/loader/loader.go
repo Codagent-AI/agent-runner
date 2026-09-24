@@ -111,7 +111,9 @@ func ReadWorkflowFile(filePath string) ([]byte, error) {
 }
 
 func ResolveRelativeWorkflowPath(parentFile, workflowField string) string {
-	if parentFile == "" {
+	if parentFile == "" || builtinworkflows.IsRef(workflowField) {
+		// A builtin reference names an embedded workflow directly, so a project or
+		// user workflow can call a built-in sub-workflow without a relative path.
 		return workflowField
 	}
 	if builtinworkflows.IsRef(parentFile) {

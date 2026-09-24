@@ -30,7 +30,9 @@ const (
 	rubricVersion          = "value-rubric-v2"
 	defaultPackageBytes    = 256 * 1024
 	defaultLeafDetailBytes = 32 * 1024
-	auditSandboxProfile    = "(version 1)\n(allow default)\n(deny file-write* (require-not (subpath (param \"OUTPUT_DIR\"))))\n"
+	// Discarding to the null device persists nothing, so denying it protects no
+	// evidence while breaking ordinary shell launchers that redirect there.
+	auditSandboxProfile = "(version 1)\n(allow default)\n(deny file-write* (require-not (subpath (param \"OUTPUT_DIR\"))))\n(allow file-write-data (literal \"/dev/null\"))\n"
 )
 
 var crosscheckCommand = sandboxedCrosscheckCommand
@@ -845,6 +847,7 @@ func ValidateValueOutputs(request Request, prepared PreparedValueAudit, outputs 
 		return ValueValidationResult{}, fmt.Errorf("value output batches = %d, want %d", len(outputs), len(prepared.Packages))
 	}
 	observations := []ValueObservation{}
+	diagnostics := []string{}
 	seenBatches := map[string]struct{}{}
 	for _, pkg := range prepared.Packages {
 		batch := findValueBatch(outputs, pkg.BatchID)
@@ -863,11 +866,12 @@ func ValidateValueOutputs(request Request, prepared PreparedValueAudit, outputs 
 				}
 			}
 		}
-		validated, err := validateValueBatch(&request, pkg, batch, knownRefs)
+		validated, batchDiagnostics, err := validateValueBatch(&request, pkg, batch, knownRefs)
 		if err != nil {
 			return ValueValidationResult{}, err
 		}
 		observations = append(observations, validated...)
+		diagnostics = append(diagnostics, batchDiagnostics...)
 	}
 	outputAfter, err := fingerprintTree(filepath.Join(request.AuditSessionDir, "model-output"))
 	if err != nil {
@@ -876,7 +880,7 @@ func ValidateValueOutputs(request Request, prepared PreparedValueAudit, outputs 
 	return ValueValidationResult{SchemaVersion: evidenceSchemaVersion, Fingerprints: Fingerprints{
 		SnapshotBefore: prepared.Index.Fingerprints.SnapshotBefore, SnapshotAfter: currentSnapshot,
 		OutputBefore: prepared.Index.Fingerprints.OutputBefore, OutputAfter: outputAfter,
-	}, Observations: observations}, nil
+	}, Observations: observations, Diagnostics: diagnostics}, nil
 }
 
 func findValueBatch(outputs []ModelValueBatch, batchID string) *ModelValueBatch {
@@ -888,35 +892,42 @@ func findValueBatch(outputs []ModelValueBatch, batchID string) *ModelValueBatch 
 	return nil
 }
 
-func validateValueBatch(request *Request, pkg ValuePackage, batch *ModelValueBatch, knownRefs map[string]struct{}) ([]ValueObservation, error) {
+func validateValueBatch(request *Request, pkg ValuePackage, batch *ModelValueBatch, knownRefs map[string]struct{}) ([]ValueObservation, []string, error) {
 	expected, incomplete := expectedValueObservations(pkg)
 	if len(batch.Observations) != len(expected) {
-		return nil, fmt.Errorf("%s observations = %d, want %d", pkg.BatchID, len(batch.Observations), len(expected))
+		return nil, nil, fmt.Errorf("%s observations = %d, want %d", pkg.BatchID, len(batch.Observations), len(expected))
 	}
 	provenance := batch.Provenance
 	if provenance.CLI == "" {
-		provenance = BatchProvenance{CLI: request.Crosscheck.CLI, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, SessionID: "unknown"}
+		provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: "unknown"}
 	}
 	observations := make([]ValueObservation, 0, len(batch.Observations))
+	diagnostics := []string{}
 	for index := range batch.Observations {
-		judgment := &batch.Observations[index]
+		judgment := batch.Observations[index]
 		skeleton, exists := expected[judgment.ObservationID]
 		if !exists {
-			return nil, fmt.Errorf("%s has unknown observation %q", pkg.BatchID, judgment.ObservationID)
+			return nil, nil, fmt.Errorf("%s has unknown observation %q", pkg.BatchID, judgment.ObservationID)
 		}
 		delete(expected, judgment.ObservationID)
-		if err := validateJudgment(judgment, knownRefs); err != nil {
-			return nil, fmt.Errorf("%s observation %q: %w", pkg.BatchID, judgment.ObservationID, err)
+		if err := validateJudgment(&judgment, knownRefs); err != nil {
+			return nil, nil, fmt.Errorf("%s observation %q: %w", pkg.BatchID, judgment.ObservationID, err)
 		}
 		if incomplete[judgment.ObservationID] && judgment.EvidenceCoverage == "complete" {
-			return nil, fmt.Errorf("%s observation %q claims complete coverage despite omitted evidence", pkg.BatchID, judgment.ObservationID)
+			return nil, nil, fmt.Errorf("%s observation %q claims complete coverage despite omitted evidence", pkg.BatchID, judgment.ObservationID)
 		}
-		observations = append(observations, valueObservation(&skeleton, judgment, provenance))
+		// Notes are optional. Keep rejected detail in the original local model
+		// output, but do not let it block otherwise valid observations.
+		if reason := unsafeValueNote(judgment.Note); reason != "" {
+			judgment.Note = ""
+			diagnostics = append(diagnostics, "value note omitted: "+reason)
+		}
+		observations = append(observations, valueObservation(&skeleton, &judgment, provenance))
 	}
 	if len(expected) != 0 {
-		return nil, fmt.Errorf("%s omitted one or more observations", pkg.BatchID)
+		return nil, nil, fmt.Errorf("%s omitted one or more observations", pkg.BatchID)
 	}
-	return observations, nil
+	return observations, diagnostics, nil
 }
 
 func expectedValueObservations(pkg ValuePackage) (expected map[string]ObservationSkeleton, incomplete map[string]bool) {
@@ -971,9 +982,6 @@ func validateJudgment(judgment *ModelValueJudgment, knownRefs map[string]struct{
 	if !oneOf(judgment.EvidenceCoverage, "complete", "partial", "limited") {
 		return fmt.Errorf("invalid evidence_coverage")
 	}
-	if err := safeValueNote(judgment.Note); err != nil {
-		return err
-	}
 	for _, consultation := range judgment.Consultations {
 		if _, exists := knownRefs[consultation]; !exists {
 			return fmt.Errorf("unknown consultation %q", consultation)
@@ -992,18 +1000,25 @@ func oneOf(value string, allowed ...string) bool {
 }
 
 func safeValueNote(note string) error {
+	if reason := unsafeValueNote(note); reason != "" {
+		return fmt.Errorf("note contains %s", reason)
+	}
+	return nil
+}
+
+func unsafeValueNote(note string) string {
 	if note == "" {
-		return nil
+		return ""
 	}
 	if utf8.RuneCountInString(note) > 280 || strings.ContainsAny(note, "\r\n") {
-		return fmt.Errorf("note is not a bounded single line")
+		return "a bounded single line"
 	}
 	lower := strings.ToLower(note)
 	if strings.Contains(note, "://") || strings.ContainsAny(note, "\\") || strings.Contains(note, "/") ||
 		strings.Contains(lower, "ghp_") || strings.Contains(lower, "sk-") || strings.Contains(lower, "token=") {
-		return fmt.Errorf("note contains unsafe detailed evidence")
+		return "unsafe detailed evidence"
 	}
-	return nil
+	return ""
 }
 
 func loadPreparedValueAudit(auditSessionDir string) (PreparedValueAudit, error) {
@@ -1184,10 +1199,10 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 	if err != nil {
 		return ModelValueBatch{}, err
 	}
-	if request.Crosscheck.CLI == "" {
-		return ModelValueBatch{}, fmt.Errorf("frozen crosscheck CLI is unavailable")
+	if request.Auditor.CLI == "" {
+		return ModelValueBatch{}, fmt.Errorf("frozen auditor CLI is unavailable")
 	}
-	adapter, err := cli.Get(request.Crosscheck.CLI)
+	adapter, err := cli.Get(request.Auditor.CLI)
 	if err != nil {
 		return ModelValueBatch{}, err
 	}
@@ -1204,7 +1219,7 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 		return ModelValueBatch{}, err
 	}
 	args, err := cli.BuildInvocationArgs(adapter, &cli.BuildArgsInput{
-		Prompt: prompt, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort,
+		Prompt: prompt, Model: request.Auditor.Model, Effort: request.Auditor.Effort,
 		Context: cli.ContextAutonomousHeadless, Workdir: workspace,
 		DisallowedTools: []string{"AskUserQuestion"},
 	})
@@ -1214,7 +1229,7 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 	if len(args) == 0 {
 		return ModelValueBatch{}, fmt.Errorf("crosscheck adapter produced no command")
 	}
-	args, finalResponsePath, removeStructuredFiles, err := withCrosscheckOutputSchema(request.Crosscheck.CLI, args, filepath.Join(request.AuditSessionDir, "model-output"), "value", valueOutputSchema(pkg))
+	args, finalResponsePath, removeStructuredFiles, err := withCrosscheckOutputSchema(request.Auditor.CLI, args, filepath.Join(request.AuditSessionDir, "model-output"), "value", valueOutputSchema(pkg))
 	if err != nil {
 		return ModelValueBatch{}, err
 	}
@@ -1252,7 +1267,7 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 	if err != nil {
 		return ModelValueBatch{}, fmt.Errorf("decode crosscheck result: %w; response: %s", err, crosscheckDiagnostic(response))
 	}
-	output.Provenance = BatchProvenance{CLI: request.Crosscheck.CLI, Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, SessionID: adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: time.Now(), Headless: true, ProcessOutput: response, Workdir: workspace})}
+	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: time.Now(), Headless: true, ProcessOutput: response, Workdir: workspace})}
 	if output.Provenance.SessionID == "" {
 		output.Provenance.SessionID = "unknown"
 	}
@@ -1458,13 +1473,13 @@ func pathContains(parent, child string) bool {
 func cliEnvironment(adapter cli.Adapter, request *Request, input []byte, workdir, outputDir string) (environment []string, cleanup func(), err error) {
 	// Adapters may require isolated process-local setup. It is derived from this
 	// batch only and never persisted in the source snapshot.
-	build := &cli.BuildArgsInput{Prompt: string(input), Model: request.Crosscheck.Model, Effort: request.Crosscheck.Effort, Context: cli.ContextAutonomousHeadless, Workdir: workdir}
+	build := &cli.BuildArgsInput{Prompt: string(input), Model: request.Auditor.Model, Effort: request.Auditor.Effort, Context: cli.ContextAutonomousHeadless, Workdir: workdir}
 	extra, err := cli.SpawnEnvForInvocation(adapter, build)
 	if err != nil {
 		return nil, nil, fmt.Errorf("prepare crosscheck environment: %w", err)
 	}
 	cleanup = func() {}
-	if request.Crosscheck.CLI == "codex" {
+	if request.Auditor.CLI == "codex" {
 		var runtimeEnv []string
 		runtimeEnv, cleanup, err = prepareAuditCodexRuntime(outputDir)
 		if err != nil {

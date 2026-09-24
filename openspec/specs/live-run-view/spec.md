@@ -151,7 +151,7 @@ When the workflow dispatches an interactive agent step, the run-view TUI SHALL s
 
 ### Requirement: Cursor auto-follows the active step
 
-While the workflow is running, active-step auto-follow SHALL begin engaged. It SHALL expand the active ancestry in the root workflow tree, select the active leaf itself, and keep that row visible. Active leaves include ordinary steps, iterations when they are the execution frontier, UI steps, and agent calls.
+While the workflow is running, active-step auto-follow SHALL begin engaged. It SHALL expand the active ancestry in the root workflow tree, select the active leaf itself, and keep that row visible. Active leaves include ordinary steps, iterations when they are the execution frontier, UI steps, agent calls, and steps executing inside a repair attempt (the inline repair agent, or a replayed step under a `rerun` container). While a repair attempt is active, the owning check row SHALL show a static in-progress indicator and the `(repairing N/M)` suffix, and its attempt children SHALL be expanded inline.
 
 Auto-follow SHALL NEVER drill into or out of a sub-workflow, loop, iteration, group, or agent parent. Entering and leaving nested execution SHALL change inline expansion and selection without changing the manual breadcrumb scope.
 
@@ -202,6 +202,18 @@ Pressing `l` SHALL return to root manual scope when needed, expand the current a
 #### Scenario: Failure jumps cursor to the failed step
 - **WHEN** the workflow reaches failed terminal state
 - **THEN** the root tree expands and selects the failed leaf without creating a drill scope, regardless of the prior follow state
+
+#### Scenario: Active step enters an inline repair
+- **WHEN** auto-follow is engaged and a check starts its inline repair agent
+- **THEN** the check row shows `(repairing 1/1)`, its attempt children expand, and selection moves to the `repair 1` row
+
+#### Scenario: Active step replays under a rerun
+- **WHEN** auto-follow is engaged and a rerun replays `open-draft-pr`
+- **THEN** selection moves to the replayed `open-draft-pr` row under `rerun 1` without changing the breadcrumb scope
+
+#### Scenario: Recovery collapses to the check
+- **WHEN** the replayed check passes
+- **THEN** the check row shows `✓` with `(repaired 1/1)` and auto-follow moves to the next peer
 
 ### Requirement: Detail-pane tail-follow
 

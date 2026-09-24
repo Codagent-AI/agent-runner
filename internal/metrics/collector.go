@@ -194,6 +194,19 @@ func (c *Collector) Process(event audit.Event) audit.Event {
 	return event
 }
 
+// AttemptFor reports the attempt number that will be stamped on
+// identity.Attempt the next time a terminal event with this identity's
+// prefix, step ID, kind, and iteration is processed. Callers that need to
+// know an execution's attempt number before its terminal event reaches the
+// audit pipeline (e.g. to publish a guarded-execution record) call this
+// immediately before emitting that event, so the two never disagree.
+func (c *Collector) AttemptFor(identity *model.ExecutionIdentity) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := attemptKey(identity.Prefix, identity.StepID, identity.Kind, identity.Iteration)
+	return c.attempts[key] + 1
+}
+
 func (c *Collector) eventTimestamp(event audit.Event) (time.Time, bool) {
 	at, err := parseTimestamp(event.Timestamp)
 	if err != nil {

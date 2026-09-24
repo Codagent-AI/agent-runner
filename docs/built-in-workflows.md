@@ -49,6 +49,7 @@ Some `core:*` workflows are hidden from normal browsing because they are intende
 
 | Workflow | Purpose |
 | --- | --- |
+| `openspec:archive-change` | Move an approved change into the archive, verify the commit, and advance the Validator baseline. |
 | `openspec:change` | Define, plan, implement, validate, prepare evidence, support human acceptance, and finalize a feature change. |
 | `openspec:implement-change` | Implement reviewed task files, validate the result, open a draft PR, and prepare test-plan-driven acceptance evidence. |
 | `openspec:plan-change` | Validate an approved proposal, specs, design, and test plan, then create and review implementation tasks. |

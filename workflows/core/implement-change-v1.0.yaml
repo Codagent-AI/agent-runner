@@ -72,6 +72,10 @@ steps:
         echo "tasks.md still contains incomplete task entries" >&2
         exit 1
       fi
+    repair:
+      session: lead-agent
+      prompt: |
+        `{{change_dir}}/tasks.md` still has unchecked task entries. Update it so each checklist entry corresponding to a task file under `{{change_dir}}/tasks/*.md` is checked, without changing task wording, task-file content, requirements, design, or implementation. Commit only that file, following the project's commit message conventions. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
 
   - id: review-assumptions
     session: lead-agent
@@ -91,6 +95,10 @@ steps:
 
   - id: verify-assumptions-handoff
     command: test -s "{{session_dir}}/output/acceptance-assumptions.md"
+    repair:
+      session: lead-agent
+      prompt: |
+        `{{session_dir}}/output/acceptance-assumptions.md` is missing or empty. Write it now: list every unresolved finding or context gap concisely, with its source task or session report, why it is undecided, the decision needed from the user, and the likely impact of each option. If none remain, write an explicit `No unresolved assumptions or context gaps.` statement. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
 
   - id: simplify
     session: lead-agent
@@ -112,6 +120,10 @@ steps:
         echo "working tree changes remain after validation; commit or remove them before opening the draft pull request" >&2
         exit 1
       fi
+    repair:
+      session: lead-agent
+      prompt: |
+        There are uncommitted changes leftover after implementing and validating {{change_label}} "{{change_name}}". Run git status and git diff to review them. Only stage and commit files that are related to this change and appropriate to check into git — ignore unrelated changes, generated artifacts, or files that should be gitignored. Follow the project's commit message conventions. Summarize which files you committed and which you left out, and why. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
 
   - id: open-draft-pr
     session: lead-agent
@@ -128,8 +140,12 @@ steps:
 
       Verify the final state by querying the open pull request for the current head branch. Do not signal completion unless it is open, its base branch is non-empty, it is a draft, and its head SHA equals local `HEAD`. Report the pull request URL and actual base branch.
 
+      If pushing or opening the pull request is blocked by a missing credential, an insufficient permission or token scope, or a decision only a human can make, do not retry indefinitely. Explain exactly what is blocked and what a human must do, then end your response with the line `REPAIR_BLOCKED`.
+
   - id: verify-draft-pr
     capture: pr_url
+    repair:
+      rerun: open-draft-pr
     command: |
       branch=$(git branch --show-current)
       local_head=$(git rev-parse HEAD)

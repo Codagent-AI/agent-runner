@@ -4,6 +4,7 @@
 package devaudit
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -47,7 +48,7 @@ type Request struct {
 	SourceWorkflow     string           `json:"source_workflow"`
 	Project            string           `json:"project"`
 	RunnerSource       SourceProvenance `json:"runner_source"`
-	Crosscheck         AgentProvenance  `json:"crosscheck"`
+	Auditor            AgentProvenance  `json:"auditor"`
 }
 
 // AgentProvenance freezes the resolved definition actually used by audit
@@ -88,6 +89,7 @@ type Link struct {
 	StartedAt          string `json:"started_at,omitempty"`
 	FailedAt           string `json:"failed_at,omitempty"`
 	Warning            string `json:"warning,omitempty"`
+	ReportingWarning   string `json:"reporting_warning,omitempty"`
 }
 
 // Lifecycle is deliberately source-local so an untagged binary can safely
@@ -122,7 +124,9 @@ func Eligible(summary *runner.PostFinalizationSummary) bool {
 		return false
 	}
 	switch summary.Result {
-	case runner.ResultSuccess, runner.ResultFailed, runner.ResultStopped:
+	// A stopped run was interrupted by the user and can still be resumed, so
+	// only runs that actually terminated are audited.
+	case runner.ResultSuccess, runner.ResultFailed:
 	default:
 		return false
 	}
@@ -184,11 +188,11 @@ func (c Coordinator) reserveAutomaticAudit(summary *runner.PostFinalizationSumma
 }
 
 func (c Coordinator) launch(summary *runner.PostFinalizationSummary, lifecycle *Lifecycle, link *Link, now func() time.Time) error {
-	crosscheck, err := resolveCrosscheck(summary)
+	auditor, err := resolveAuditor(summary)
 	if err != nil {
 		return c.persistFailure(summary, lifecycle, link.AuditRunID, err, now())
 	}
-	request := Request{AuditRunID: link.AuditRunID, AuditSessionDir: auditSessionDir(summary.SessionDir, link.AuditRunID), SourceSessionDir: summary.SessionDir, SourceRunID: summary.RunID, ExecutionSessionID: summary.ExecutionSessionID, Trigger: link.Trigger, SnapshotPath: link.SnapshotPath, ProfileSet: summary.ProfileSet, SourceWorkflow: summary.WorkflowFile, Project: projectForRepository(summary.WorkingDir), RunnerSource: snapshotRunnerSource(link.SnapshotPath), Crosscheck: crosscheck}
+	request := Request{AuditRunID: link.AuditRunID, AuditSessionDir: auditSessionDir(summary.SessionDir, link.AuditRunID), SourceSessionDir: summary.SessionDir, SourceRunID: summary.RunID, ExecutionSessionID: summary.ExecutionSessionID, Trigger: link.Trigger, SnapshotPath: link.SnapshotPath, ProfileSet: summary.ProfileSet, SourceWorkflow: summary.WorkflowFile, Project: projectForRepository(summary.WorkingDir), RunnerSource: snapshotRunnerSource(link.SnapshotPath), Auditor: auditor}
 	if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "request.json"), request); err != nil {
 		return c.persistFailure(summary, lifecycle, link.AuditRunID, err, now())
 	}
@@ -265,7 +269,8 @@ func updateAuditState(sessionDir string, link *Link, completed bool) error {
 	return stateio.WriteState(&state, sessionDir)
 }
 
-func resolveCrosscheck(summary *runner.PostFinalizationSummary) (AgentProvenance, error) {
+// resolveAuditor returns the source run's lead agent, which performs the audit.
+func resolveAuditor(summary *runner.PostFinalizationSummary) (AgentProvenance, error) {
 	projectConfig := filepath.Join(summary.WorkingDir, ".agent-runner", "config.yaml")
 	override := config.ProfileOverride{}
 	if summary.ProfileSet != "" {
@@ -275,9 +280,9 @@ func resolveCrosscheck(summary *runner.PostFinalizationSummary) (AgentProvenance
 	if err != nil {
 		return AgentProvenance{}, fmt.Errorf("resolve audit profile: %w", err)
 	}
-	agent, err := profiles.Resolve("crosscheck")
+	agent, err := profiles.Resolve("lead")
 	if err != nil {
-		return AgentProvenance{}, fmt.Errorf("resolve crosscheck: %w", err)
+		return AgentProvenance{}, fmt.Errorf("resolve lead agent: %w", err)
 	}
 	return AgentProvenance{CLI: agent.CLI, Model: agent.Model, Effort: agent.Effort}, nil
 }
@@ -304,11 +309,11 @@ func findLink(links []Link, executionID, trigger string) *Link {
 }
 
 func newAuditID() (string, error) {
-	bytes := make([]byte, 8)
-	if _, err := rand.Read(bytes); err != nil {
+	idBytes := make([]byte, 8)
+	if _, err := rand.Read(idBytes); err != nil {
 		return "", fmt.Errorf("generate audit ID: %w", err)
 	}
-	return "audit-" + hex.EncodeToString(bytes), nil
+	return "audit-" + hex.EncodeToString(idBytes), nil
 }
 
 // snapshotEvidenceForProject records Git facts while the source run still
@@ -596,7 +601,12 @@ func snapshotRunnerSource(snapshotDir string) SourceProvenance {
 		}
 	}
 	destination := filepath.Join(snapshotDir, "runner-source")
-	if err := copySourceTree(absRoot, destination); err != nil {
+	copyTree := copySourceTree
+	if !provenance.LaunchGitAvailable {
+		// Without readable Git metadata there are no ignore rules to consult; snapshot the actual contents.
+		copyTree = copyUnlistedSourceTree
+	}
+	if err := copyTree(absRoot, destination); err != nil {
 		provenance.Diagnostic = fmt.Sprintf("snapshot injected checkout: %v", err)
 		return provenance
 	}
@@ -635,6 +645,20 @@ func gitOutputAvailable(root string, args ...string) (string, bool) {
 }
 
 func copySourceTree(source, destination string) error {
+	ignoredDirs, included, err := sourceTreeFilters(source)
+	if err != nil {
+		return fmt.Errorf("build source-tree filters: %w", err)
+	}
+	return copyTreeFiltered(source, destination, ignoredDirs, included)
+}
+
+// copyUnlistedSourceTree copies a checkout whose Git metadata is unavailable, excluding only VCS metadata and worktrees.
+func copyUnlistedSourceTree(source, destination string) error {
+	return copyTreeFiltered(source, destination, nil, nil)
+}
+
+// copyTreeFiltered skips ignoredDirs and, when included is non-nil, copies only the listed files.
+func copyTreeFiltered(source, destination string, ignoredDirs, included map[string]struct{}) error {
 	return filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -649,6 +673,14 @@ func copySourceTree(source, destination string) error {
 		if entry.IsDir() && (entry.Name() == ".git" || entry.Name() == "worktrees") {
 			return filepath.SkipDir
 		}
+		slashRel := filepath.ToSlash(rel)
+		if entry.IsDir() {
+			if _, ignored := ignoredDirs[slashRel]; ignored {
+				return filepath.SkipDir
+			}
+		} else if _, keep := included[slashRel]; included != nil && !keep {
+			return nil
+		}
 		target := filepath.Join(destination, rel)
 		if entry.IsDir() {
 			return os.MkdirAll(target, 0o700)
@@ -661,6 +693,38 @@ func copySourceTree(source, destination string) error {
 		}
 		return os.Chmod(target, 0o400)
 	})
+}
+
+func sourceTreeFilters(root string) (ignoredDirs, included map[string]struct{}, err error) {
+	ignoredDirs, err = gitNulPaths(root, "ls-files", "-z", "-o", "-i", "--exclude-standard", "--directory")
+	if err != nil {
+		return nil, nil, err
+	}
+	included, err = gitNulPaths(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	if err != nil {
+		return nil, nil, err
+	}
+	return ignoredDirs, included, nil
+}
+
+func gitNulPaths(root string, args ...string) (map[string]struct{}, error) {
+	command := exec.Command("git", append([]string{"-C", root}, args...)...) // #nosec G204 -- fixed git listing argv for the injected local checkout.
+	data, err := command.Output()
+	if err != nil {
+		return nil, err
+	}
+	paths := make(map[string]struct{})
+	for _, raw := range bytes.Split(data, []byte{0}) {
+		if len(raw) == 0 {
+			continue
+		}
+		rel := strings.Trim(filepath.ToSlash(string(raw)), "/")
+		if rel == "" || rel == "." {
+			continue
+		}
+		paths[rel] = struct{}{}
+	}
+	return paths, nil
 }
 
 func sealSnapshot(root string) error {

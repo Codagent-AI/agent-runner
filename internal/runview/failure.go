@@ -13,7 +13,19 @@ func FailureReasonForSession(sessionDir string) string {
 	}
 	projectDir := filepath.Dir(filepath.Dir(sessionDir))
 	m, err := New(sessionDir, projectDir, FromInspect)
-	if err != nil || m == nil || m.tree == nil {
+	if err != nil || m == nil {
+		return ""
+	}
+	return m.failureReason()
+}
+
+// failureReason returns the run's persisted classified reason when present,
+// otherwise the reason derived from the audit tree.
+func (m *Model) failureReason() string {
+	if m.persistedFailureReason != "" {
+		return m.persistedFailureReason
+	}
+	if m.tree == nil {
 		return ""
 	}
 	return failureReason(m.tree.Root)

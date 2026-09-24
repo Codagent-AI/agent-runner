@@ -389,6 +389,36 @@ steps:
 	}
 }
 
+func TestResolveRelativeWorkflowPathPassesBuiltinReferencesThrough(t *testing.T) {
+	got := ResolveRelativeWorkflowPath(filepath.Join("home", ".agent-runner", "workflows", "fix-v1.0.yaml"), "builtin:core/finalize-pr-v1.0.yaml")
+	if got != "builtin:core/finalize-pr-v1.0.yaml" {
+		t.Fatalf("builtin reference was rewritten to %q", got)
+	}
+	got = ResolveRelativeWorkflowPath("builtin:spec-driven/change-v1.0.yaml", "builtin:core/finalize-pr-v1.0.yaml")
+	if got != "builtin:core/finalize-pr-v1.0.yaml" {
+		t.Fatalf("builtin reference from a builtin parent was rewritten to %q", got)
+	}
+}
+
+func TestValidateComposition_ProjectWorkflowCallsBuiltinSubworkflow(t *testing.T) {
+	t.Chdir(t.TempDir())
+	writeWorkflow(t, filepath.Join(".agent-runner", "workflows"), "wrap-v1.0.yaml", `
+name: wrap
+sessions:
+  - name: lead-agent
+    agent: lead
+steps:
+  - id: finalize
+    workflow: builtin:core/finalize-pr-v1.0.yaml
+    params:
+      ci_fix_cycles: "1"
+`)
+
+	if err := ValidateComposition(filepath.Join(".agent-runner", "workflows", "wrap-v1.0.yaml")); err != nil {
+		t.Fatalf("expected a project workflow to call a builtin sub-workflow, got %v", err)
+	}
+}
+
 func TestParseWorkflowSourceRejectsSubmitRouteOutsideBuiltInIntake(t *testing.T) {
 	data := []byte("name: example\nsteps:\n  - id: plan\n    agent: lead\n    prompt: route\n    tools: [submit_route]\n")
 	_, err := ParseWorkflowSource(data, "example-v1.0.yaml", Options{})
