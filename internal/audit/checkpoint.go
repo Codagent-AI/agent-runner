@@ -434,7 +434,8 @@ func flattenCheckpoint(checkpoint *GitCheckpoint) map[string]gitCounts {
 	return result
 }
 
-// ChangedDirtyPaths returns paths whose dirty line counts changed between checkpoints.
+// ChangedDirtyPaths returns paths whose dirty state appeared, disappeared, or
+// changed between checkpoints.
 // A missing start checkpoint represents an initially clean working tree.
 func ChangedDirtyPaths(start, end *GitCheckpoint) []string {
 	before := make(map[string]gitCounts)
@@ -458,7 +459,9 @@ func changedDirtyPaths(before, after map[string]gitCounts) []string {
 	}
 	changed := make([]string, 0, len(paths))
 	for path := range paths {
-		if before[path] != after[path] {
+		left, existedBefore := before[path]
+		right, existsAfter := after[path]
+		if existedBefore != existsAfter || left != right {
 			changed = append(changed, path)
 		}
 	}

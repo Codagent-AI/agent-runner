@@ -69,6 +69,10 @@ type GitEvidence struct {
 	LinesDeleted *int64   `json:"lines_deleted"`
 	Reason       string   `json:"reason,omitempty"`
 	ChangedPaths []string `json:"changed_paths,omitempty"`
+	// DeferralPaths lists the working-tree ChangedPaths still dirty at the
+	// step's final checkpoint. Deferred-commit matching uses it so a path the
+	// step removed cannot claim a later commit. Never serialized.
+	DeferralPaths []string `json:"-"`
 }
 
 type CostEvidence struct {
@@ -501,7 +505,7 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 	}
 	if files != 0 || added != 0 || deleted != 0 {
 		result.Attribution = "working_tree"
-		result.ChangedPaths = dirtyChangedPaths(records)
+		result.ChangedPaths, result.DeferralPaths = dirtyChangedPaths(records)
 		if pathsComplete {
 			files = int64(len(result.ChangedPaths))
 		}
@@ -513,23 +517,40 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 	return result
 }
 
-func dirtyChangedPaths(records []metrics.StepRecord) []string {
+// dirtyChangedPaths returns the start-to-end dirty-path delta across records,
+// plus the subset of those paths still dirty at the final end checkpoint.
+func dirtyChangedPaths(records []metrics.StepRecord) (changed, present []string) {
 	paths := map[string]struct{}{}
+	var final *audit.GitCheckpoint
 	for index := range records {
 		record := &records[index]
 		if record.GitStart == nil || !record.GitStart.Available || record.GitEnd == nil || !record.GitEnd.Available {
 			continue
 		}
+		final = record.GitEnd
 		for _, path := range audit.ChangedDirtyPaths(record.GitStart, record.GitEnd) {
 			paths[path] = struct{}{}
 		}
 	}
-	result := make([]string, 0, len(paths))
-	for path := range paths {
-		result = append(result, path)
+	finalPaths := map[string]struct{}{}
+	if final != nil {
+		for _, stats := range [][]audit.GitFileStat{final.Index, final.Worktree, final.Untracked} {
+			for _, stat := range stats {
+				finalPaths[stat.Path] = struct{}{}
+			}
+		}
 	}
-	sort.Strings(result)
-	return result
+	changed = make([]string, 0, len(paths))
+	present = make([]string, 0, len(paths))
+	for path := range paths {
+		changed = append(changed, path)
+		if _, ok := finalPaths[path]; ok {
+			present = append(present, path)
+		}
+	}
+	sort.Strings(changed)
+	sort.Strings(present)
+	return changed, present
 }
 
 func readGitEvidence(path string) map[string]snapshottedGitCommit {
@@ -557,7 +578,7 @@ func applyDeferredCommitAttribution(leaves []LeafEvidence) {
 			if leaves[prior].Skeleton.Git.Attribution != "working_tree" || leaves[prior].Skeleton.Git.FilesChanged == nil || *leaves[prior].Skeleton.Git.FilesChanged == 0 {
 				continue
 			}
-			if !hasPathOverlap(leaves[prior].Skeleton.Git.ChangedPaths, leaves[index].Skeleton.Git.ChangedPaths) {
+			if !hasPathOverlap(leaves[prior].Skeleton.Git.DeferralPaths, leaves[index].Skeleton.Git.ChangedPaths) {
 				continue
 			}
 			leaves[prior].Skeleton.Git.Attribution = "deferred_commit"
