@@ -21,10 +21,12 @@ type NestedStepState struct {
 	// NamedSessions and NamedSessionDecls are only meaningful at the root
 	// NestedStepState level (written by runner.writeStepState). Nested entries
 	// produced by sub-workflow and loop progress records leave these nil.
-	NamedSessions      map[string]string           `json:"namedSessions,omitempty"`
-	NamedSessionDecls  map[string]string           `json:"namedSessionDecls,omitempty"`
-	Completed          bool                        `json:"completed,omitempty"`
-	Iteration          *int                        `json:"iteration,omitempty"`
+	NamedSessions     map[string]string `json:"namedSessions,omitempty"`
+	NamedSessionDecls map[string]string `json:"namedSessionDecls,omitempty"`
+	Completed         bool              `json:"completed,omitempty"`
+	Iteration         *int              `json:"iteration,omitempty"`
+	// LoopVar is the binding for the iteration named by Iteration.
+	LoopVar            map[string]string           `json:"loopVar,omitempty"`
 	Child              *NestedStepState            `json:"child"`
 	InteractiveAttempt *InteractiveAttemptMetadata `json:"interactiveAttempt,omitempty"`
 	// LastAgent identifies the most recent completed agent execution in this

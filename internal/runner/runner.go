@@ -1029,6 +1029,7 @@ func RunWorkflow(
 func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *model.Workflow, workflowHash, stateDir string, loopResult *exec.LoopResult, completed bool) {
 	var child *model.NestedStepState
 	var iteration *int
+	var loopVar map[string]string
 
 	// When the loop executor wrote iteration metadata onto ctx.LastSubWorkflowChild
 	// (top-level loop case), promote Iteration onto the top-level NestedStepState
@@ -1047,6 +1048,7 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		ctx.LastSubWorkflowChild.StepID == step.ID &&
 		ctx.LastSubWorkflowChild.Iteration != nil:
 		iteration = ctx.LastSubWorkflowChild.Iteration
+		loopVar = ctx.LastSubWorkflowChild.LoopVar
 		child = ctx.LastSubWorkflowChild.Child
 	case ctx.LastSubWorkflowChild != nil:
 		child = ctx.LastSubWorkflowChild
@@ -1069,6 +1071,7 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		NamedSessionDecls:  copyMap(ctx.NamedSessionDecls),
 		Completed:          completed,
 		Iteration:          iteration,
+		LoopVar:            loopVar,
 		Child:              child,
 		InteractiveAttempt: ctx.InteractiveAttempt,
 		LastAgent:          ctx.LastAgentRef(),

@@ -51,10 +51,15 @@ Captured variables SHALL be persisted in the state file alongside session IDs. T
 ### Requirement: Resume from nested position
 
 `agent-runner -resume` SHALL restore execution to the exact nested position recorded in the state file, including loop iteration and sub-workflow depth. Execution continues from the step after the last completed step at the deepest nesting level. When the recorded position carries an open repair frame, resume SHALL restore the frame before resolving the step to execute and continue the repair cycle from the recorded phase. When the recorded step is a check whose repair cycle ended in failure, resume SHALL start at the check's `rerun` target for the rerun form, or at the check for the inline form, with a fresh attempt budget.
+For-each iteration positions record the bound loop variable; if the loop yields a different value for the recorded index on resume, the runner restarts that iteration from its first step and discards state captured by the stale iteration.
 
 #### Scenario: Resume into a loop
 - **WHEN** the state file records position inside a for-each loop at iteration 3 of 5
 - **THEN** Agent Runner resumes at iteration 3, skipping iterations 1 and 2
+
+#### Scenario: Resume into a loop whose items changed
+- **WHEN** the state file records a for-each iteration in progress and the item at that index changes before resume
+- **THEN** Agent Runner starts that iteration at its first body step using the new item, without the stale iteration's captured variables or repair frame
 
 #### Scenario: Resume into a sub-workflow
 - **WHEN** the state file records position inside a sub-workflow with step 2 of 3 as the last completed step
@@ -169,4 +174,3 @@ already completed under the previous profile set SHALL NOT be re-executed on acc
 - **WHEN** `agent-runner --resume --profile work` continues a run that had completed three steps under
   `copilot`
 - **THEN** execution continues from the recorded position and the three completed steps are not re-executed
-

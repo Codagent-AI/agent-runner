@@ -3,7 +3,6 @@
 package devaudit
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/audit"
@@ -11,87 +10,145 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-func TestAggregateGitWorkingTreeChangedPathsExcludeEarlierDirtyState(t *testing.T) {
-	stat := func(path string, added int64) audit.GitFileStat {
-		return audit.GitFileStat{Path: path, Added: added}
+func TestAggregateGitExcludesPreexistingDirtyPaths(t *testing.T) {
+	start := &audit.GitCheckpoint{Available: true,
+		Worktree:  []audit.GitFileStat{{Path: "a", Added: 3, Deleted: 1}, {Path: "a2", Added: 1}},
+		Untracked: []audit.GitFileStat{{Path: "b", Added: 5}},
 	}
-	initial := []audit.GitFileStat{stat("preexisting.txt", 1)}
-	end := append([]audit.GitFileStat{}, initial...)
-	want := make([]string, 0, 9)
-	for i := range 9 {
-		path := fmt.Sprintf("new-%02d.txt", i)
-		end = append(end, stat(path, 1))
-		want = append(want, path)
+	end := &audit.GitCheckpoint{Available: true,
+		Worktree:  []audit.GitFileStat{{Path: "a", Added: 3, Deleted: 1}, {Path: "a2", Added: 2}, {Path: "c", Added: 1}},
+		Untracked: []audit.GitFileStat{{Path: "b", Added: 5}},
 	}
+	records := []metrics.StepRecord{{GitStart: start, GitEnd: end, GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 2, LinesAdded: 2}}}
 
-	got := aggregateGit([]metrics.StepRecord{{
-		GitStart:   &audit.GitCheckpoint{Available: true, HEAD: "same", Worktree: initial},
-		GitEnd:     &audit.GitCheckpoint{Available: true, HEAD: "same", Worktree: end},
-		GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 9},
-	}}, nil)
+	got := aggregateGit(records, nil)
 	if got.Attribution != "working_tree" {
 		t.Fatalf("attribution = %q, want working_tree", got.Attribution)
 	}
-	if diff := cmp.Diff(want, got.ChangedPaths); diff != "" {
-		t.Errorf("changed paths (-want +got):\n%s", diff)
+	if diff := cmp.Diff([]string{"a2", "c"}, got.ChangedPaths); diff != "" {
+		t.Errorf("changed paths mismatch (-want +got):\n%s", diff)
 	}
 	if got.FilesChanged == nil || len(got.ChangedPaths) != int(*got.FilesChanged) {
-		t.Errorf("changed paths count = %d, files changed = %v", len(got.ChangedPaths), got.FilesChanged)
+		t.Errorf("changed paths = %d, files changed = %v", len(got.ChangedPaths), got.FilesChanged)
 	}
 }
 
-func TestAggregateGitWorkingTreeChangedPathsIncludeOnlySecondStepDelta(t *testing.T) {
-	start := make([]audit.GitFileStat, 0, 10)
-	end := make([]audit.GitFileStat, 0, 11)
-	want := make([]string, 0, 5)
-	for i := range 10 {
-		path := fmt.Sprintf("dirty-%02d.txt", i)
-		start = append(start, audit.GitFileStat{Path: path, Added: 1})
-		added := int64(1)
-		if i < 4 {
-			added = 2
-			want = append(want, path)
-		}
-		end = append(end, audit.GitFileStat{Path: path, Added: added})
+func TestAggregateGitUnionsStepLocalDirtyPaths(t *testing.T) {
+	records := []metrics.StepRecord{
+		{
+			GitStart:   &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "existing", Added: 1}}},
+			GitEnd:     &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "existing", Added: 1}, {Path: "c", Added: 1}}},
+			GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1},
+		},
+		{
+			GitStart:   &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "existing", Added: 1}, {Path: "c", Added: 1}}},
+			GitEnd:     &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "existing", Added: 1}, {Path: "c", Added: 1}, {Path: "d", Added: 1}}},
+			GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1},
+		},
 	}
-	end = append(end, audit.GitFileStat{Path: "new.txt", Added: 1})
-	want = append(want, "new.txt")
 
-	got := aggregateGit([]metrics.StepRecord{{
-		GitStart:   &audit.GitCheckpoint{Available: true, HEAD: "same", Worktree: start},
-		GitEnd:     &audit.GitCheckpoint{Available: true, HEAD: "same", Worktree: end},
-		GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 5},
-	}}, nil)
+	got := aggregateGit(records, nil)
 	if got.Attribution != "working_tree" {
 		t.Fatalf("attribution = %q, want working_tree", got.Attribution)
 	}
-	if diff := cmp.Diff(want, got.ChangedPaths); diff != "" {
-		t.Errorf("changed paths (-want +got):\n%s", diff)
+	if diff := cmp.Diff([]string{"c", "d"}, got.ChangedPaths); diff != "" {
+		t.Errorf("changed paths mismatch (-want +got):\n%s", diff)
 	}
 	if got.FilesChanged == nil || len(got.ChangedPaths) != int(*got.FilesChanged) {
-		t.Errorf("changed paths count = %d, files changed = %v", len(got.ChangedPaths), got.FilesChanged)
+		t.Errorf("changed paths = %d, files changed = %v", len(got.ChangedPaths), got.FilesChanged)
 	}
 }
 
-func TestAggregateGitWorkingTreeChangedPathsIncludeChangedPreexistingPath(t *testing.T) {
-	got := aggregateGit([]metrics.StepRecord{{
-		GitStart:   &audit.GitCheckpoint{Available: true, HEAD: "same", Worktree: []audit.GitFileStat{{Path: "dirty.txt", Added: 1}}},
-		GitEnd:     &audit.GitCheckpoint{Available: true, HEAD: "same", Worktree: []audit.GitFileStat{{Path: "dirty.txt", Added: 2}}},
+func TestAggregateGitCountsRepeatedPathOnce(t *testing.T) {
+	records := []metrics.StepRecord{
+		{
+			GitStart:   &audit.GitCheckpoint{Available: true},
+			GitEnd:     &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "c", Added: 1}}},
+			GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1},
+		},
+		{
+			GitStart:   &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "c", Added: 1}}},
+			GitEnd:     &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "c", Added: 2}}},
+			GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1},
+		},
+	}
+
+	got := aggregateGit(records, nil)
+	if got.Attribution != "working_tree" {
+		t.Fatalf("attribution = %q, want working_tree", got.Attribution)
+	}
+	if diff := cmp.Diff([]string{"c"}, got.ChangedPaths); diff != "" {
+		t.Errorf("changed paths mismatch (-want +got):\n%s", diff)
+	}
+	if got.FilesChanged == nil || *got.FilesChanged != 1 {
+		t.Errorf("files changed = %v, want 1", got.FilesChanged)
+	}
+	if got.LinesAdded == nil || *got.LinesAdded != 2 {
+		t.Errorf("lines added = %v, want 2", got.LinesAdded)
+	}
+}
+
+func TestAggregateGitRetainsCountsWhenCheckpointPathsAreIncomplete(t *testing.T) {
+	complete := metrics.StepRecord{
+		GitStart:   &audit.GitCheckpoint{Available: true},
+		GitEnd:     &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "c", Added: 1}}},
+		GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1},
+	}
+	cases := []struct {
+		name   string
+		record metrics.StepRecord
+	}{
+		{name: "missing start", record: metrics.StepRecord{GitEnd: &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "c", Added: 2}}}, GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1}}},
+		{name: "missing end", record: metrics.StepRecord{GitStart: &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "c", Added: 1}}}, GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1}}},
+		{name: "missing path details", record: metrics.StepRecord{GitStart: &audit.GitCheckpoint{Available: true}, GitEnd: &audit.GitCheckpoint{Available: true}, GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 1}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := aggregateGit([]metrics.StepRecord{complete, tc.record}, nil)
+			if got.Attribution != "working_tree" {
+				t.Fatalf("attribution = %q, want working_tree", got.Attribution)
+			}
+			if got.FilesChanged == nil || *got.FilesChanged != 2 {
+				t.Errorf("files changed = %v, want 2", got.FilesChanged)
+			}
+			if got.LinesAdded == nil || *got.LinesAdded != 2 {
+				t.Errorf("lines added = %v, want 2", got.LinesAdded)
+			}
+		})
+	}
+}
+
+func TestAggregateGitIncludesSameCountContentChanges(t *testing.T) {
+	records := []metrics.StepRecord{{
+		GitStart:   &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "tracked.txt", Added: 1, Deleted: 1, Fingerprint: "first"}}},
+		GitEnd:     &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "tracked.txt", Added: 1, Deleted: 1, Fingerprint: "later"}}},
 		GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1},
-	}}, nil)
+	}}
+
+	got := aggregateGit(records, nil)
 	if got.Attribution != "working_tree" {
 		t.Fatalf("attribution = %q, want working_tree", got.Attribution)
 	}
-	if diff := cmp.Diff([]string{"dirty.txt"}, got.ChangedPaths); diff != "" {
-		t.Errorf("changed paths (-want +got):\n%s", diff)
+	if diff := cmp.Diff([]string{"tracked.txt"}, got.ChangedPaths); diff != "" {
+		t.Errorf("changed paths mismatch (-want +got):\n%s", diff)
+	}
+	if got.FilesChanged == nil || *got.FilesChanged != 1 {
+		t.Errorf("files changed = %v, want 1", got.FilesChanged)
 	}
 }
 
 func TestDirtyChangedPathsSkipsUnavailableCheckpoint(t *testing.T) {
-	records := []metrics.StepRecord{{
-		GitStart: &audit.GitCheckpoint{Available: true, Worktree: []audit.GitFileStat{{Path: "dirty.txt", Added: 1}}},
-		GitEnd:   &audit.GitCheckpoint{Reason: "Git capture failed"},
-	}}
+	dirty := []audit.GitFileStat{{Path: "dirty.txt", Added: 1}}
+	records := []metrics.StepRecord{
+		{
+			GitStart: &audit.GitCheckpoint{Available: true, Worktree: dirty},
+			GitEnd:   &audit.GitCheckpoint{Reason: "Git capture failed"},
+		},
+		{
+			GitStart: &audit.GitCheckpoint{Reason: "Git capture failed"},
+			GitEnd:   &audit.GitCheckpoint{Available: true, Worktree: dirty},
+		},
+	}
 
 	if diff := cmp.Diff([]string{}, dirtyChangedPaths(records)); diff != "" {
 		t.Errorf("changed paths (-want +got):\n%s", diff)
