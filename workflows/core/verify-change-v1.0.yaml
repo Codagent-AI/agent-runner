@@ -194,6 +194,11 @@ steps:
 
       - id: acceptance-validator
         workflow: run-validator-v1.0.yaml
+        # The result is recorded for callers and does not gate the loop: a red
+        # validator warns and the round continues. Each round overwrites the
+        # file, so it describes the head the next tester round tests.
+        params:
+          result_file: "{{session_dir}}/output/acceptance-validator-result.txt"
         # The validation step before the loop constrains skip_validator to true|false.
         skip_if: 'sh: test {{skip_validator}} = true'
 

@@ -109,6 +109,59 @@ func TestCoreVerifyChangeValidatorResultStopsBeforePR(t *testing.T) {
 	}
 }
 
+// A red validator after an acceptance fix must not block the loop, but its
+// result must be recorded where callers can find it.
+func TestCoreVerifyChangeAcceptanceValidatorRecordsResultWithoutGating(t *testing.T) {
+	const resultFile = "{{session_dir}}/output/acceptance-validator-result.txt"
+	w := readBuiltinWorkflowForTest(t, verifyChangeRef)
+
+	loop := findStep(w.Steps, "prepare-acceptance")
+	if loop == nil {
+		t.Fatal("prepare-acceptance step not found")
+	}
+	wantValidator := model.Step{
+		ID:       "acceptance-validator",
+		Workflow: "run-validator-v1.0.yaml",
+		Params:   map[string]string{"result_file": resultFile},
+		SkipIf:   "sh: test {{skip_validator}} = true",
+	}
+	validator := findStep(loop.Steps, "acceptance-validator")
+	if validator == nil {
+		t.Fatal("acceptance-validator step not found in prepare-acceptance")
+	}
+	if diff := cmp.Diff(wantValidator, *validator); diff != "" {
+		t.Errorf("acceptance-validator mismatch (-want +got):\n%s", diff)
+	}
+
+	wantRound := []string{
+		"reset-round-evidence",
+		"acceptance-test",
+		"acceptance-gate",
+		"end-final-round",
+		"acceptance-fix",
+		"acceptance-validator",
+		"acceptance-push",
+		"verify-acceptance-pr",
+	}
+	if diff := cmp.Diff(wantRound, stepIDs(loop.Steps)); diff != "" {
+		t.Errorf("prepare-acceptance steps mismatch (-want +got):\n%s", diff)
+	}
+	walkSteps(w.Steps, func(step *model.Step) {
+		if step.ID == "acceptance-validator" {
+			return
+		}
+		texts := []string{step.Command, step.Prompt, step.SkipIf, step.BreakIf}
+		for _, value := range step.ScriptInputs {
+			texts = append(texts, value)
+		}
+		for _, text := range texts {
+			if strings.Contains(text, "acceptance-validator-result.txt") {
+				t.Errorf("%s reads the acceptance validator result; it must not gate the workflow", step.ID)
+			}
+		}
+	})
+}
+
 func TestValidatorPRGatePushesRedBranchAndReportsFailure(t *testing.T) {
 	repo, head := gitRepo(t)
 	remote := filepath.Join(t.TempDir(), "remote.git")
