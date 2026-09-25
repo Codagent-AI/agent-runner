@@ -189,7 +189,7 @@ func ExecuteAgentStep(
 
 	args, spawnEnv, resolvedModel, argsErr := buildStepInvocation(step, ctx, profile, adapter, prompt, enrichment, sessionID, isResume, invocationContext)
 	if argsErr != nil {
-		emitAgentPreStartFailure(ctx, prefix, startTime, string(mode), step, argsErr.Error(), log)
+		emitAgentPreStartFailure(ctx, prefix, startTime, step, argsErr.Error(), log)
 		return OutcomeFailed, nil
 	}
 
@@ -1139,7 +1139,7 @@ func extractAgentUsage(adapter cli.Adapter, cliName string, invocationContext cl
 func defaultAgentUsage(cliName string, headless bool) model.UsageRecord {
 	reason := model.UnavailableUnsupportedAdapter
 	if !headless {
-		reason = model.UnavailablePTYContext
+		reason = model.UnavailableInteractiveContext
 	}
 	return model.UsageRecord{
 		Status: model.UsageUnavailable, Reason: reason, CLI: cliName, Source: "agent-runner",
@@ -1252,30 +1252,29 @@ func emitAgentFailure(ctx *model.ExecutionContext, prefix string, startTime time
 		"mode":             mode,
 		"session_strategy": string(step.Session),
 	})
-	emitAgentFailureEnd(ctx, prefix, startTime, step, mode, errMsg)
+	emitAgentFailureEnd(ctx, prefix, startTime, step, errMsg)
 }
 
 // emitAgentPreStartFailure records an invocation-construction failure without
 // claiming that the step started. Resolution and adapter construction happen
 // before emitAgentStart, so the terminal record is sufficient for diagnostics
 // and correctly reports that no agent process was invoked.
-func emitAgentPreStartFailure(ctx *model.ExecutionContext, prefix string, startTime time.Time, mode string, step *model.Step, errMsg string, log Logger) {
+func emitAgentPreStartFailure(ctx *model.ExecutionContext, prefix string, startTime time.Time, step *model.Step, errMsg string, log Logger) {
 	if log != nil {
 		log.Errorf("agent-runner: step %q: %s\n", step.ID, errMsg)
 	}
-	emitAgentFailureEnd(ctx, prefix, startTime, step, mode, errMsg)
+	emitAgentFailureEnd(ctx, prefix, startTime, step, errMsg)
 }
 
-func emitAgentFailureEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, step *model.Step, mode, errMsg string) {
+func emitAgentFailureEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, step *model.Step, errMsg string) {
 	cliName := step.CLI
 	if cliName == "" {
 		cliName = "claude"
 	}
-	headless := mode != string(model.ModeInteractive)
 	emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{
 		"error":                  errMsg,
 		"identity":               executionIdentity(ctx, step, "step", 0, false, cliName, ""),
-		"usage":                  defaultAgentUsage(cliName, headless),
+		"usage":                  model.UsageRecord{Status: model.UsageUnavailable, Reason: model.UnavailableNotInvoked, CLI: cliName, Source: "agent-runner"},
 		"estimated_api_cost_usd": (*float64)(nil),
 	}, step)
 }

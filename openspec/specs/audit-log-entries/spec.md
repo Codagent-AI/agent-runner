@@ -114,7 +114,7 @@ The usage record on `step_end` SHALL follow the `agent-usage-collection` capabil
 - **THEN** the `step_end` entry includes the token-usage record (categories, provenance, completeness) and `estimated_api_cost_usd`
 
 #### Scenario: Agent step end with unavailable usage
-- **WHEN** an agent step completes but usage could not be collected (PTY-backed context or parse failure)
+- **WHEN** an agent step completes but usage could not be collected (interactive context or parse failure)
 - **THEN** the `step_end` entry carries an explicit unavailable usage state and a null `estimated_api_cost_usd`; no zero counts are emitted
 
 #### Scenario: Resolved model populated from profile default

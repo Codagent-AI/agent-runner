@@ -30,6 +30,9 @@ const (
 	rubricVersion          = "value-rubric-v2"
 	defaultPackageBytes    = 256 * 1024
 	defaultLeafDetailBytes = 32 * 1024
+	// Claude receives the output schema inline as one argv string, and Linux
+	// rejects any single argument over 128 KiB. Batches stay well below that.
+	defaultSchemaBytes = 96 * 1024
 	// Discarding to the null device persists nothing, so denying it protects no
 	// evidence while breaking ordinary shell launchers that redirect there.
 	auditSandboxProfile = "(version 1)\n(allow default)\n(deny file-write* (require-not (subpath (param \"OUTPUT_DIR\"))))\n(allow file-write-data (literal \"/dev/null\"))\n"
@@ -66,6 +69,10 @@ type GitEvidence struct {
 	LinesDeleted *int64   `json:"lines_deleted"`
 	Reason       string   `json:"reason,omitempty"`
 	ChangedPaths []string `json:"changed_paths,omitempty"`
+	// DeferralPaths lists the working-tree ChangedPaths still dirty at the
+	// step's final checkpoint. Deferred-commit matching uses it so a path the
+	// step removed cannot claim a later commit. Never serialized.
+	DeferralPaths []string `json:"-"`
 }
 
 type CostEvidence struct {
@@ -458,6 +465,7 @@ func observationID(auditID, executionID, path string) string {
 func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGitCommit) GitEvidence {
 	result := GitEvidence{Attribution: "no_change", CommitSHAs: []string{}, DeferredSHAs: []string{}}
 	var files, added, deleted int64
+	pathsComplete := true
 	for index := range records {
 		record := &records[index]
 		if record.GitChanges == nil || !record.GitChanges.Available {
@@ -466,6 +474,9 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 		files += record.GitChanges.FilesChanged
 		added += record.GitChanges.LinesAdded
 		deleted += record.GitChanges.LinesDeleted
+		if record.GitStart == nil || record.GitEnd == nil || int64(len(audit.ChangedDirtyPaths(record.GitStart, record.GitEnd))) != record.GitChanges.FilesChanged {
+			pathsComplete = false
+		}
 		if record.GitEnd != nil && record.GitStart != nil && record.GitEnd.HEAD != record.GitStart.HEAD {
 			if commits == nil {
 				return GitEvidence{Attribution: "unavailable", CommitSHAs: []string{}, DeferredSHAs: []string{}, Reason: "Git commit metadata is unavailable"}
@@ -494,8 +505,11 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 	}
 	if files != 0 || added != 0 || deleted != 0 {
 		result.Attribution = "working_tree"
+		result.ChangedPaths, result.DeferralPaths = dirtyChangedPaths(records)
+		if pathsComplete {
+			files = int64(len(result.ChangedPaths))
+		}
 		result.FilesChanged, result.LinesAdded, result.LinesDeleted = &files, &added, &deleted
-		result.ChangedPaths = dirtyChangedPaths(records)
 	} else {
 		zero := int64(0)
 		result.FilesChanged, result.LinesAdded, result.LinesDeleted = &zero, &zero, &zero
@@ -503,25 +517,40 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 	return result
 }
 
-func dirtyChangedPaths(records []metrics.StepRecord) []string {
+// dirtyChangedPaths returns the start-to-end dirty-path delta across records,
+// plus the subset of those paths still dirty at the final end checkpoint.
+func dirtyChangedPaths(records []metrics.StepRecord) (changed, present []string) {
 	paths := map[string]struct{}{}
+	var final *audit.GitCheckpoint
 	for index := range records {
 		record := &records[index]
-		if record.GitEnd == nil {
+		if record.GitStart == nil || !record.GitStart.Available || record.GitEnd == nil || !record.GitEnd.Available {
 			continue
 		}
-		for _, stats := range [][]audit.GitFileStat{record.GitEnd.Index, record.GitEnd.Worktree, record.GitEnd.Untracked} {
+		final = record.GitEnd
+		for _, path := range audit.ChangedDirtyPaths(record.GitStart, record.GitEnd) {
+			paths[path] = struct{}{}
+		}
+	}
+	finalPaths := map[string]struct{}{}
+	if final != nil {
+		for _, stats := range [][]audit.GitFileStat{final.Index, final.Worktree, final.Untracked} {
 			for _, stat := range stats {
-				paths[stat.Path] = struct{}{}
+				finalPaths[stat.Path] = struct{}{}
 			}
 		}
 	}
-	result := make([]string, 0, len(paths))
+	changed = make([]string, 0, len(paths))
+	present = make([]string, 0, len(paths))
 	for path := range paths {
-		result = append(result, path)
+		changed = append(changed, path)
+		if _, ok := finalPaths[path]; ok {
+			present = append(present, path)
+		}
 	}
-	sort.Strings(result)
-	return result
+	sort.Strings(changed)
+	sort.Strings(present)
+	return changed, present
 }
 
 func readGitEvidence(path string) map[string]snapshottedGitCommit {
@@ -549,7 +578,7 @@ func applyDeferredCommitAttribution(leaves []LeafEvidence) {
 			if leaves[prior].Skeleton.Git.Attribution != "working_tree" || leaves[prior].Skeleton.Git.FilesChanged == nil || *leaves[prior].Skeleton.Git.FilesChanged == 0 {
 				continue
 			}
-			if !hasPathOverlap(leaves[prior].Skeleton.Git.ChangedPaths, leaves[index].Skeleton.Git.ChangedPaths) {
+			if !hasPathOverlap(leaves[prior].Skeleton.Git.DeferralPaths, leaves[index].Skeleton.Git.ChangedPaths) {
 				continue
 			}
 			leaves[prior].Skeleton.Git.Attribution = "deferred_commit"
@@ -692,7 +721,7 @@ func buildValuePackages(leaves []LeafEvidence) ([]ValuePackage, error) {
 		bounded := boundLeafDetail(leaf)
 		candidate := current
 		candidate.Leaves = append(candidate.Leaves, bounded)
-		if encodedJSONBytes(candidate) <= defaultPackageBytes {
+		if encodedJSONBytes(candidate) <= defaultPackageBytes && encodedJSONBytes(valueOutputSchema(candidate)) <= defaultSchemaBytes {
 			current = candidate
 			continue
 		}
@@ -1234,9 +1263,13 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 		return ModelValueBatch{}, err
 	}
 	defer removeStructuredFiles()
+	args, stdinPrompt := crosscheckPromptOnStdin(request.Auditor.CLI, args)
 	command, err := crosscheckCommand(args, workspace, filepath.Join(request.AuditSessionDir, "model-output"))
 	if err != nil {
 		return ModelValueBatch{}, err
+	}
+	if stdinPrompt != "" {
+		command.Stdin = strings.NewReader(stdinPrompt)
 	}
 	env, cleanup, err := cliEnvironment(adapter, request, input, workspace, filepath.Join(request.AuditSessionDir, "model-output"))
 	if err != nil {
@@ -1419,11 +1452,19 @@ func sandboxExecArgs(args []string, outputDir string) []string {
 // write access only for the already-validated audit-owned output tree. The
 // user namespace is deliberate: it lets a non-root Docker user mount this
 // boundary without granting the container privileged mode.
+//
+// The host /dev seen through the read-only root bind is unusable inside the
+// user namespace, and Claude Code's Bun runtime aborts at startup without
+// /dev/null. A private device filesystem supplies the standard nodes; it is
+// then remounted read-only so /dev and /dev/shm cannot hold model writes.
+// Mounts apply in argument order: the output bind follows --dev so an output
+// under /dev/shm is not hidden, and precedes the remount so it stays writable.
 func linuxSandboxArgs(args []string, workspace, outputDir string) []string {
 	argv := []string{
 		"--die-with-parent", "--new-session", "--unshare-user", "--uid", "0", "--gid", "0",
-		"--ro-bind", "/", "/", "--bind", outputDir, outputDir,
-		"--proc", "/proc", "--chdir", workspace, "--",
+		"--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev",
+		"--bind", outputDir, outputDir, "--remount-ro", "/dev",
+		"--chdir", workspace, "--",
 	}
 	return append(argv, args...)
 }
@@ -1487,6 +1528,19 @@ func cliEnvironment(adapter cli.Adapter, request *Request, input []byte, workdir
 		}
 		extra = append(extra, runtimeEnv...)
 	}
+	if request.Auditor.CLI == "claude" {
+		// The audit sandbox permits writes only below the output directory, and
+		// Claude's tools create their scratch directory under TMPDIR.
+		if err := os.MkdirAll(outputDir, 0o700); err != nil {
+			return nil, nil, err
+		}
+		temp, err := os.MkdirTemp(outputDir, ".claude-tmp-")
+		if err != nil {
+			return nil, nil, fmt.Errorf("prepare Claude audit temp directory: %w", err)
+		}
+		cleanup = func() { _ = os.RemoveAll(temp) }
+		extra = append(extra, "TMPDIR="+temp)
+	}
 	return append(os.Environ(), extra...), cleanup, nil
 }
 
@@ -1534,31 +1588,45 @@ func prepareAuditCodexRuntime(outputDir string) (environment []string, cleanup f
 	return []string{"CODEX_HOME=" + codexHome, "HOME=" + home, "TMPDIR=" + temp}, cleanup, nil
 }
 
+// claudeStructuredArgs requests one schema-bound JSON result from Claude.
+func claudeStructuredArgs(args []string, schema map[string]any) ([]string, error) {
+	// JSON mode returns the schema-bound structured_output in the final
+	// result envelope, without streaming the tool transcript into stdout.
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return nil, err
+	}
+	if len(args) == 0 {
+		return nil, fmt.Errorf("claude invocation has no prompt argument")
+	}
+	// The adapter terminates flags with "--" before the positional prompt.
+	// The schema flag must precede that separator, or Claude reads
+	// "--json-schema" as the prompt.
+	end := len(args) - 1
+	if end > 0 && args[end-1] == "--" {
+		end--
+	}
+	structured := []string{}
+	for i := 0; i < end; i++ {
+		switch args[i] {
+		case "--verbose":
+			// Verbose JSON can include the entire message history.
+			continue
+		case "--output-format":
+			structured = append(structured, "--output-format", "json")
+			i++
+		default:
+			structured = append(structured, args[i])
+		}
+	}
+	structured = append(structured, "--json-schema", string(data))
+	return append(structured, args[end:]...), nil
+}
+
 func withCrosscheckOutputSchema(cliName string, args []string, outputDir, label string, schema map[string]any) (structured []string, responsePath string, cleanup func(), err error) {
 	if cliName == "claude" {
-		// JSON mode returns the schema-bound structured_output in the final
-		// result envelope, without streaming the tool transcript into stdout.
-		data, err := json.Marshal(schema)
-		if err != nil {
-			return nil, "", nil, err
-		}
-		if len(args) == 0 {
-			return nil, "", nil, fmt.Errorf("claude invocation has no prompt argument")
-		}
-		for i := 0; i < len(args)-1; i++ {
-			switch args[i] {
-			case "--verbose":
-				// Verbose JSON can include the entire message history.
-				continue
-			case "--output-format":
-				structured = append(structured, "--output-format", "json")
-				i++
-			default:
-				structured = append(structured, args[i])
-			}
-		}
-		structured = append(structured, "--json-schema", string(data), args[len(args)-1])
-		return structured, "", func() {}, nil
+		structured, err = claudeStructuredArgs(args, schema)
+		return structured, "", func() {}, err
 	}
 	if cliName != "codex" {
 		return args, "", func() {}, nil
@@ -1611,6 +1679,31 @@ func withCrosscheckOutputSchema(cliName string, args []string, outputDir, label 
 	return structured, responsePath, cleanup, nil
 }
 
+// crosscheckPromptOnStdin moves the trailing positional prompt of a structured
+// crosscheck invocation onto stdin. Audit prompts embed whole evidence packages,
+// and Linux rejects any single argv string over 128 KiB with E2BIG before the
+// sandboxed model can start. CLIs without a known stdin form keep the argument.
+func crosscheckPromptOnStdin(cliName string, args []string) (argv []string, stdin string) {
+	if len(args) < 2 {
+		return args, ""
+	}
+	prompt := args[len(args)-1]
+	switch cliName {
+	case "claude":
+		// Print mode reads the prompt from stdin when no positional prompt is given.
+		end := len(args) - 1
+		if args[end-1] == "--" {
+			end--
+		}
+		return append([]string(nil), args[:end]...), prompt
+	case "codex":
+		// "codex exec -" reads the instructions from stdin.
+		return append(append([]string(nil), args[:len(args)-1]...), "-"), prompt
+	default:
+		return args, ""
+	}
+}
+
 func valueOutputSchema(pkg ValuePackage) map[string]any {
 	consultations := []string{}
 	seenConsultations := map[string]bool{}
@@ -1623,10 +1716,14 @@ func valueOutputSchema(pkg ValuePackage) map[string]any {
 			}
 		}
 	}
-	consultationItems := map[string]any{"type": "string"}
+	// Every observation shares one consultation vocabulary. Referencing it keeps
+	// the schema linear in the batch size; inlining the enum per observation
+	// grew a 44-leaf batch's schema to ~485 KB, beyond a single argv string.
+	consultation := map[string]any{"type": "string"}
 	if len(consultations) > 0 {
-		consultationItems["enum"] = consultations
+		consultation["enum"] = consultations
 	}
+	consultationItems := map[string]any{"$ref": "#/$defs/consultation"}
 	observationIDs := make([]string, 0, len(pkg.Leaves))
 	judgments := make(map[string]any, len(pkg.Leaves))
 	for leafIndex := range pkg.Leaves {
@@ -1641,6 +1738,7 @@ func valueOutputSchema(pkg ValuePackage) map[string]any {
 	}
 	return map[string]any{
 		"type": "object", "additionalProperties": false,
+		"$defs":    map[string]any{"consultation": consultation},
 		"required": []string{"batch_id", "observations"},
 		"properties": map[string]any{
 			"batch_id":     map[string]any{"type": "string", "enum": []string{pkg.BatchID}},

@@ -143,3 +143,51 @@ func TestLinuxAuditDockerRetainsSeccomp(t *testing.T) {
 		t.Fatal("supported audit container is not running with a seccomp filter")
 	}
 }
+
+// Claude Code's Bun runtime aborts before model work when the sandbox has no
+// usable /dev, so device nodes must work while /dev itself stays read-only.
+func TestLinuxAuditDeviceFilesystemUsableAndReadOnly(t *testing.T) {
+	requireLinuxAuditSandbox(t)
+	root := t.TempDir()
+	workspace, output := filepath.Join(root, "workspace"), filepath.Join(root, "output")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := `
+set -eu
+printf probe > /dev/null || { echo "/dev/null unusable"; exit 50; }
+head -c 4 /dev/urandom > /dev/null || { echo "/dev/urandom unusable"; exit 51; }
+if touch /dev/escape; then echo "/dev writable"; exit 52; fi
+if touch /dev/shm/escape; then echo "/dev/shm writable"; exit 53; fi
+`
+	command, err := sandboxedCrosscheckCommand([]string{"/bin/sh", "-c", script}, workspace, output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("device probe: %v\n%s", err, data)
+	}
+}
+
+// The private /dev must not hide an output directory that lives under the
+// host's /dev/shm, and that output must stay writable after /dev is remounted.
+func TestLinuxAuditOutputUnderDevShmStaysWritable(t *testing.T) {
+	requireLinuxAuditSandbox(t)
+	shm, err := os.MkdirTemp("/dev/shm", "audit-output-")
+	if err != nil {
+		t.Skipf("/dev/shm unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(shm) })
+	workspace, output := t.TempDir(), filepath.Join(shm, "output")
+	script := `printf allowed > "$1/result"`
+	command, err := sandboxedCrosscheckCommand([]string{"/bin/sh", "-c", script, "probe", output}, workspace, output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("output probe: %v\n%s", err, data)
+	}
+	if data, err := os.ReadFile(filepath.Join(output, "result")); err != nil || string(data) != "allowed" {
+		t.Fatalf("output under /dev/shm not written: %q, %v", data, err)
+	}
+}

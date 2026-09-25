@@ -295,6 +295,27 @@ func TestEmitSkippedStepIncludesNestingPrefixInMetricsIdentity(t *testing.T) {
 	}
 }
 
+func TestEmitSkippedAgentStepReportsNotInvokedUsage(t *testing.T) {
+	sink := &recordingAuditSink{}
+	rs := &runState{ctx: &model.ExecutionContext{AuditLogger: sink}}
+	step := model.Step{ID: "skipped", CLI: "claude", Mode: model.ModeAutonomous, Prompt: "do work", SkipIf: "previous_success"}
+
+	emitSkippedStep(rs, &step, 0)
+
+	if len(sink.events) != 2 || sink.events[1].Type != audit.EventStepEnd {
+		t.Fatalf("events = %+v, want step_start and step_end", sink.events)
+	}
+	gotUsage := sink.events[1].Data[metrics.DataUsage].(model.UsageRecord)
+	wantUsage := model.UsageRecord{Status: model.UsageUnavailable, Reason: "not-invoked", CLI: "claude", Source: "agent-runner"}
+	if diff := cmp.Diff(wantUsage, gotUsage); diff != "" {
+		t.Fatalf("skipped usage mismatch (-want +got):\n%s", diff)
+	}
+	identity := sink.events[1].Data[metrics.DataIdentity].(model.ExecutionIdentity)
+	if identity.AgentInvoked {
+		t.Fatalf("skipped step identity unexpectedly invoked agent: %+v", identity)
+	}
+}
+
 func TestRunWorkflowRoutesRunLifecycleAndTotalsThroughPipeline(t *testing.T) {
 	dir := t.TempDir()
 	w := model.Workflow{Name: "test", Steps: []model.Step{shellStep("s1", "echo hi")}}
@@ -1845,6 +1866,70 @@ func TestWriteStepStatePreservesSameIDSubWorkflowNesting(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, state.CurrentStep.Nested); diff != "" {
 		t.Fatalf("persisted child chain mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestWriteStepStatePersistsForEachLoopVariable(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		rootID string
+		marker string
+	}{
+		{name: "top-level loop", rootID: "implement-tasks", marker: `{"stepId":"implement-tasks","iteration":0,"loopVar":{"task_file":"tasks/02.md"},"child":{"stepId":"verify"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var marker model.NestedStepState
+			if err := json.Unmarshal([]byte(tc.marker), &marker); err != nil {
+				t.Fatal(err)
+			}
+			ctx := model.NewRootContext(&model.RootContextOptions{Params: map[string]string{}})
+			ctx.LastSubWorkflowChild = &marker
+			dir := t.TempDir()
+			writeStepState(&model.Step{ID: tc.rootID}, ctx, &model.Workflow{Name: "test"}, "hash", dir, nil, false)
+			state, err := stateio.ReadState(filepath.Join(dir, "state.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(state.CurrentStep.Nested)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(encoded, []byte(`"loopVar":{"task_file":"tasks/02.md"}`)) {
+				t.Fatalf("loop variable missing from state.json: %s", encoded)
+			}
+		})
+	}
+}
+
+func TestNestedForEachMidIterationFlushPersistsLoopVariable(t *testing.T) {
+	dir := t.TempDir()
+	root := model.NewRootContext(&model.RootContextOptions{Params: map[string]string{}})
+	w := &model.Workflow{Name: "test"}
+	var observed *model.NestedStepState
+	root.FlushState = func() {
+		writeStepState(&model.Step{ID: "implement"}, root, w, "hash", dir, nil, false)
+		state, err := stateio.ReadState(filepath.Join(dir, "state.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state.CurrentStep.Nested.Child != nil && state.CurrentStep.Nested.Child.LoopVar != nil {
+			observed = state.CurrentStep.Nested.Child
+		}
+	}
+	implement := model.NewSubWorkflowContext(root, &model.SubWorkflowContextOptions{StepID: "implement", SubWorkflowName: "implement-change"})
+	step := model.Step{
+		ID: "implement-tasks", Loop: &model.Loop{Over: "tasks/*.md", As: "task_file"},
+		Steps: []model.Step{
+			{ID: "generate", Command: "echo {{task_file}}"},
+			{ID: "verify", Command: "echo verify"},
+		},
+	}
+	_, err := exec.ExecuteLoopStep(&step, implement, &mockRunner{}, &mockGlob{matches: []string{"tasks/02.md"}}, &mockLog{}, exec.LoopExecuteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed == nil || observed.StepID != "implement-tasks" || observed.LoopVar["task_file"] != "tasks/02.md" || observed.Child == nil {
+		t.Fatalf("mid-iteration state.json loop marker = %#v", observed)
 	}
 }
 

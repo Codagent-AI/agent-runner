@@ -345,9 +345,8 @@ func codexTurnCompleted(output string) bool {
 	return false
 }
 
-// ExtractUsage returns the usage for the last completed turn. Codex defines
-// turn.completed usage as the tokens used during that turn, including all API
-// requests the turn made; it is not a cross-turn session counter.
+// ExtractUsage returns the last completed turn's session-cumulative usage
+// snapshot. The metrics collector attributes the difference to each step.
 func (a *CodexAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) {
 	var (
 		lastUsage json.RawMessage
@@ -391,7 +390,7 @@ func (a *CodexAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) {
 	}
 	usage := model.UsageRecord{
 		Status: model.UsageCollected, CLI: "codex", Provider: "openai", Model: modelName,
-		Tokens: tokens, Source: "codex:turn.completed", Completeness: completeness(complete),
+		RawCumulative: tokens, Source: "codex:turn.completed", Completeness: completeness(complete),
 	}
 	if complete {
 		input := tokens[model.TokenInput]
@@ -399,7 +398,7 @@ func (a *CodexAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) {
 		// input_tokens and output_tokens totals, respectively. Adding either
 		// detail again would double-count it.
 		output := tokens[model.TokenOutput]
-		usage.TokenTotals = &model.TokenTotals{Input: input, Output: output, Total: input + output}
+		usage.RawCumulativeTokenTotals = &model.TokenTotals{Input: input, Output: output, Total: input + output}
 	}
 	return UsageExtraction{Usage: usage}, nil
 }

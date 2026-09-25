@@ -36,7 +36,7 @@ case "$status" in
     printf 'CI fix gate: comments; fixes required\n'
     exit 1
     ;;
-  CI_PASSED)
+  CI_PASSED|CI_REVIEW_INCOMPLETE)
     printf 'CI fix gate: passed; no fix cycle this iteration\n'
     exit 0
     ;;
