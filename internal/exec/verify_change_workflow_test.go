@@ -26,6 +26,9 @@ type acceptanceRoundRunner struct {
 	readyInRound func(round int) bool
 	round        int
 	events       []string
+	// breakStatusOnce deletes the acceptance status before the first
+	// verify-acceptance-handoff check so its rerun repair must restore it.
+	breakStatusOnce bool
 }
 
 func (r *acceptanceRoundRunner) RunShell(cmd string, _ bool, _ string) (ProcessResult, error) {
@@ -36,6 +39,12 @@ func (r *acceptanceRoundRunner) RunShell(cmd string, _ bool, _ string) (ProcessR
 		r.events = append(r.events, "end-final-round")
 	case strings.Contains(cmd, "acceptance-handoff.md"):
 		r.events = append(r.events, "verify-acceptance-handoff")
+		if r.breakStatusOnce {
+			r.breakStatusOnce = false
+			if err := os.Remove(filepath.Join(r.evidenceDir, "acceptance-preparation-status.txt")); err != nil {
+				r.t.Fatalf("remove status: %v", err)
+			}
+		}
 	default:
 		r.events = append(r.events, "shell")
 	}
@@ -146,7 +155,7 @@ func TestBuiltinVerifyChangeLoadsStandalone(t *testing.T) {
 // runVerifyChangeAcceptance executes verify-change from prepare-acceptance to
 // the end with the given acceptance rounds and returns the observed events and
 // the final acceptance status.
-func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator string, readyInRound func(int) bool) (events []string, status, evidenceDir string) {
+func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator string, readyInRound func(int) bool, breakStatusOnce bool) (events []string, status, evidenceDir string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 
@@ -181,7 +190,9 @@ func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator string, ready
 		t.Fatal(err)
 	}
 
-	runner := &acceptanceRoundRunner{t: t, repo: repo, evidenceDir: evidenceDir, readyInRound: readyInRound}
+	runner := &acceptanceRoundRunner{
+		t: t, repo: repo, evidenceDir: evidenceDir, readyInRound: readyInRound, breakStatusOnce: breakStatusOnce,
+	}
 	ctx := model.NewRootContext(&model.RootContextOptions{
 		Params: map[string]string{
 			"change_name":                     "add-export",
@@ -196,15 +207,15 @@ func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator string, ready
 		NamedSessionDecls: map[string]string{"lead-agent": "lead", "acceptance-tester": "tester"},
 	})
 
-	for i := start; i < len(workflow.Steps); i++ {
-		step := &workflow.Steps[i]
-		outcome, err := DispatchStep(step, ctx, runner, &mockGlob{}, &mockLogger{})
-		if err != nil {
-			t.Fatalf("step %s: %v", step.ID, err)
-		}
-		if outcome != OutcomeSuccess {
-			t.Fatalf("step %s outcome = %q, want success; events so far %v", step.ID, outcome, runner.events)
-		}
+	// A group runs the tail with the same rewind handling as a workflow scope,
+	// so rerun repairs replay their target.
+	tail := model.Step{ID: "verify-tail", Steps: workflow.Steps[start:]}
+	outcome, err := DispatchStep(&tail, ctx, runner, &mockGlob{}, &mockLogger{})
+	if err != nil {
+		t.Fatalf("verify-change tail: %v", err)
+	}
+	if outcome != OutcomeSuccess {
+		t.Fatalf("verify-change tail outcome = %q, want success; events %v", outcome, runner.events)
 	}
 
 	body, err := os.ReadFile(filepath.Join(evidenceDir, "acceptance-preparation-status.txt"))
@@ -222,6 +233,7 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 		rounds        string
 		skipValidator string
 		readyInRound  func(int) bool
+		breakStatus   bool
 		wantEvents    []string
 		wantStatus    string
 	}{
@@ -274,6 +286,19 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			wantStatus: "ACCEPTANCE_FAILED",
 		},
 		{
+			name:          "a failed handoff check reruns the status step",
+			rounds:        "1",
+			skipValidator: "false",
+			readyInRound:  never,
+			breakStatus:   true,
+			wantEvents: []string{
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "end-final-round",
+				"acceptance-gate.sh", "verify-acceptance-handoff",
+				"acceptance-gate.sh", "verify-acceptance-handoff",
+			},
+			wantStatus: "ACCEPTANCE_FAILED",
+		},
+		{
 			name:          "a single round never fixes",
 			rounds:        "1",
 			skipValidator: "false",
@@ -287,7 +312,7 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			events, status, evidenceDir := runVerifyChangeAcceptance(t, tt.rounds, tt.skipValidator, tt.readyInRound)
+			events, status, evidenceDir := runVerifyChangeAcceptance(t, tt.rounds, tt.skipValidator, tt.readyInRound, tt.breakStatus)
 			if diff := cmp.Diff(tt.wantEvents, events); diff != "" {
 				t.Errorf("events mismatch (-want +got):\n%s", diff)
 			}

@@ -11,7 +11,7 @@
 # action=finalize writes acceptance-preparation-status.txt with
 # ACCEPTANCE_COMPLETE or ACCEPTANCE_FAILED. On failure it also writes a short
 # acceptance-handoff.md, keeping any tester-written handoff as
-# acceptance-handoff-tester.md.
+# acceptance-handoff-tester.md. Finalize is safe to rerun.
 set -eu
 
 payload=$(cat)
@@ -92,12 +92,18 @@ if [ -z "$reasons" ]; then
   exit 0
 fi
 
+# A rerun of finalize must not move its own earlier handoff over the tester's,
+# so only a handoff without the generated heading is kept as the tester's.
+generated_heading='# Acceptance did not converge within'
 if [ -s "$handoff_file" ]; then
-  mv "$handoff_file" "$tester_handoff_file"
+  case "$(head -n 1 "$handoff_file")" in
+    "$generated_heading"*) ;;
+    *) mv "$handoff_file" "$tester_handoff_file" ;;
+  esac
 fi
 
 {
-  printf '# Acceptance did not converge within %s rounds\n\n' "${rounds:-the allowed}"
+  printf '%s %s rounds\n\n' "$generated_heading" "${rounds:-the allowed}"
   printf 'Local HEAD: %s\n\n' "${head:-unknown}"
   printf 'Reasons:\n\n%s\n' "$reasons"
   printf 'Open findings: %s/acceptance-findings.md\n' "$evidence_dir"

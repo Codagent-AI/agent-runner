@@ -209,7 +209,14 @@ steps:
       action: finalize
       rounds: "{{acceptance_rounds}}"
 
+  # write-acceptance-status deterministically writes both files just before
+  # this check, so a failed check (or a resume that lands here) reruns that
+  # finalize step rather than letting an agent write or declare the outcome
+  # outside the convergence gate.
   - id: verify-acceptance-handoff
+    repair:
+      rerun: write-acceptance-status
+      max: 1
     command: |
       if [ ! -s "{{session_dir}}/output/acceptance-handoff.md" ]; then
         echo "acceptance handoff is missing or empty" >&2

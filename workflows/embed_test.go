@@ -2073,6 +2073,7 @@ func TestMigratedRepairSitesLoadWithExpectedShape(t *testing.T) {
 			{"builtin:core/verify-change-v1.0.yaml", "verify-assumptions-handoff"},
 			{"builtin:core/verify-change-v1.0.yaml", "verify-clean-for-pr"},
 			{"builtin:core/verify-change-v1.0.yaml", "acceptance-push"},
+			{"builtin:core/verify-change-v1.0.yaml", "verify-acceptance-pr"},
 			{"builtin:openspec/simple-change-v2.0.yaml", "validate-openspec"},
 			{"builtin:openspec/archive-change-v1.0.yaml", "archive-transition"},
 			{"builtin:openspec/archive-change-v1.0.yaml", "verify-archive-commit"},
@@ -2178,6 +2179,18 @@ func TestMigratedRepairSitesLoadWithExpectedShape(t *testing.T) {
 		}
 	})
 
+	t.Run("core/verify-change-v1.0.yaml verify-acceptance-handoff reruns write-acceptance-status", func(t *testing.T) {
+		workflow := loadRepairSiteWorkflow(t, "builtin:core/verify-change-v1.0.yaml")
+		step := findRepairSiteStep(workflow.Steps, "verify-acceptance-handoff")
+		if step == nil {
+			t.Fatal("verify-acceptance-handoff step not found")
+		}
+		if step.Repair == nil || step.Repair.Rerun != "write-acceptance-status" || step.Repair.Session != "" ||
+			step.Repair.Agent != "" || step.Repair.Prompt != "" || step.Repair.Max == nil || *step.Repair.Max != 1 {
+			t.Fatalf("verify-acceptance-handoff repair = %+v, want one rerun of write-acceptance-status", step.Repair)
+		}
+	})
+
 	t.Run("core/verify-change-v1.0.yaml verify-draft-pr reruns open-draft-pr", func(t *testing.T) {
 		workflow := loadRepairSiteWorkflow(t, "builtin:core/verify-change-v1.0.yaml")
 		step := findRepairSiteStep(workflow.Steps, "verify-draft-pr")
@@ -2256,7 +2269,6 @@ func TestMigratedRepairSitesLoadWithExpectedShape(t *testing.T) {
 		{"builtin:core/verify-change-v1.0.yaml", "validate-skip-validator"},
 		{"builtin:core/verify-change-v1.0.yaml", "write-acceptance-status"},
 		{"builtin:core/verify-change-v1.0.yaml", "run-validator"},
-		{"builtin:core/verify-change-v1.0.yaml", "verify-acceptance-handoff"},
 		{"builtin:core/plan-change-v1.0.yaml", "check-definition"},
 	}
 	for _, site := range plainFailureSites {

@@ -397,6 +397,21 @@ func TestCoreAcceptanceGateScript(t *testing.T) {
 		}
 	})
 
+	t.Run("finalize reruns keep the tester handoff", func(t *testing.T) {
+		repo, evidence := converged(t)
+		mustWriteFile(t, filepath.Join(evidence, "acceptance-round-status.txt"), "NOT_READY\n")
+		for attempt := 1; attempt <= 2; attempt++ {
+			if out, err := run(t, repo, evidence, "finalize"); err != nil {
+				t.Fatalf("finalize %d failed: %v\n%s", attempt, err, out)
+			}
+			assertFileContent(t, filepath.Join(evidence, "acceptance-preparation-status.txt"), "ACCEPTANCE_FAILED\n")
+			assertFileContent(t, filepath.Join(evidence, "acceptance-handoff-tester.md"), "tester handoff\n")
+		}
+		if handoff := readFile(t, filepath.Join(evidence, "acceptance-handoff.md")); !strings.Contains(handoff, "did not converge within 3 rounds") {
+			t.Fatalf("rerun handoff = %q, want the generated failure handoff", handoff)
+		}
+	})
+
 	t.Run("finalize writes a handoff when the tester wrote nothing", func(t *testing.T) {
 		repo, _ := gitRepo(t)
 		evidence := filepath.Join(t.TempDir(), "output")

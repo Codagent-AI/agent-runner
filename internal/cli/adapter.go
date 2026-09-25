@@ -475,7 +475,7 @@ func DropSpawnEnvVars(adapter Adapter) []string {
 // spawned invocation needs process-local environment variables — for example
 // a private, per-invocation configuration directory. The entries apply only
 // to the spawned CLI process, never to the runner's own environment. The
-// runner currently applies contributed entries to interactive-backend spawns;
+// runner applies contributed entries to both headless and interactive spawns;
 // adapters must return nil for contexts that need none.
 type SpawnEnvContributor interface {
 	SpawnEnv(input *BuildArgsInput) ([]string, error)
