@@ -1,4 +1,4 @@
-- [ ] Implement the change described by these files:
+- [x] Implement the change described by these files:
   - [proposal.md](proposal.md)
   - [specs/cli-adapter/spec.md](specs/cli-adapter/spec.md)
   - [design.md](design.md)

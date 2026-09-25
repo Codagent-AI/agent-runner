@@ -2353,6 +2353,75 @@ func TestSpawnEnvForInvocationDefaultsToNil(t *testing.T) {
 	}
 }
 
+func TestClaudeHeadlessSpawnEnvironment(t *testing.T) {
+	adapter := &ClaudeAdapter{}
+	for _, tt := range []struct {
+		name       string
+		timeout    string
+		background string
+		want       []string
+	}{
+		{name: "default timeout", want: []string{"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1", "BASH_DEFAULT_TIMEOUT_MS=600000"}},
+		{name: "inherited timeout", timeout: "900000", want: []string{"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1"}},
+		{name: "override background setting", background: "0", want: []string{"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1", "BASH_DEFAULT_TIMEOUT_MS=600000"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.timeout != "" {
+				t.Setenv("BASH_DEFAULT_TIMEOUT_MS", tt.timeout)
+			} else {
+				t.Setenv("BASH_DEFAULT_TIMEOUT_MS", "")
+				if err := os.Unsetenv("BASH_DEFAULT_TIMEOUT_MS"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", tt.background)
+			env, err := SpawnEnvForInvocation(adapter, &BuildArgsInput{Context: ContextAutonomousHeadless})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(tt.want, env); diff != "" {
+				t.Fatalf("headless env mismatch (-want +got):\n%s", diff)
+			}
+			if got := os.Getenv("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"); got != tt.background {
+				t.Fatalf("runner background setting changed to %q", got)
+			}
+			if got := os.Getenv("BASH_DEFAULT_TIMEOUT_MS"); got != tt.timeout {
+				t.Fatalf("runner timeout changed to %q", got)
+			}
+		})
+	}
+}
+
+func TestClaudeInteractiveSpawnEnvironment(t *testing.T) {
+	t.Setenv("BASH_DEFAULT_TIMEOUT_MS", "900000")
+	for _, context := range []InvocationContext{ContextInteractive, ContextAutonomousInteractive} {
+		env, err := SpawnEnvForInvocation(&ClaudeAdapter{}, &BuildArgsInput{Context: context})
+		if err != nil || env != nil {
+			t.Fatalf("%s env = %v, %v; want nil, nil", context, env, err)
+		}
+	}
+}
+
+func TestOtherAdaptersDoNotContributeClaudeHeadlessEnvironment(t *testing.T) {
+	for _, name := range []string{"codex", "cursor", "copilot", "opencode"} {
+		t.Run(name, func(t *testing.T) {
+			adapter, err := Get(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			env, err := SpawnEnvForInvocation(adapter, &BuildArgsInput{Context: ContextAutonomousHeadless})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range env {
+				if strings.HasPrefix(entry, "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=") || strings.HasPrefix(entry, "BASH_DEFAULT_TIMEOUT_MS=") {
+					t.Fatalf("%s contributed Claude setting %q", name, entry)
+				}
+			}
+		})
+	}
+}
+
 func TestRunnerIntegrationValidatesFixedAgentCallCommand(t *testing.T) {
 	valid := RunnerIntegration{AgentCall: &MCPServerCommand{
 		Executable: "/opt/agent-runner", Args: []string{"internal", "call-agent-mcp"},
