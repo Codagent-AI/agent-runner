@@ -220,6 +220,7 @@ func TestCoreVerifyChangeAcceptanceRoundsAreWorkflowSteps(t *testing.T) {
 		t.Fatal("prepare-acceptance must not hide real step failures behind continue_on_failure")
 	}
 	wantBody := []string{
+		"reset-round-evidence",
 		"acceptance-test",
 		"acceptance-gate",
 		"end-final-round",
@@ -231,7 +232,17 @@ func TestCoreVerifyChangeAcceptanceRoundsAreWorkflowSteps(t *testing.T) {
 		t.Fatalf("prepare-acceptance body mismatch (-want +got):\n%s", diff)
 	}
 
-	tester := loop.Steps[0]
+	reset := loop.Steps[0]
+	for _, file := range []string{"acceptance-round-status.txt", "acceptance-test.md", "acceptance-handoff.md"} {
+		if !strings.Contains(reset.Command, "{{session_dir}}/output/"+file) {
+			t.Errorf("reset-round-evidence does not clear %s: %q", file, reset.Command)
+		}
+	}
+	if strings.Contains(reset.Command, "acceptance-flow-evidence.md") || strings.Contains(reset.Command, "acceptance-findings.md") {
+		t.Errorf("reset-round-evidence must keep the tester baseline: %q", reset.Command)
+	}
+
+	tester := loop.Steps[1]
 	if tester.Session != "acceptance-tester" || tester.Mode != "autonomous" {
 		t.Fatalf("acceptance-test = session:%q mode:%q, want acceptance-tester/autonomous", tester.Session, tester.Mode)
 	}
@@ -256,20 +267,20 @@ func TestCoreVerifyChangeAcceptanceRoundsAreWorkflowSteps(t *testing.T) {
 		}
 	}
 
-	gate := loop.Steps[1]
+	gate := loop.Steps[2]
 	if gate.Script != "acceptance-gate.sh" || gate.ScriptInputs["action"] != "check" ||
 		gate.ScriptInputs["evidence_dir"] != "{{session_dir}}/output" ||
 		gate.BreakIf != "success" || !gate.ContinueOnFailure {
 		t.Fatalf("acceptance-gate = %+v, want a tolerated acceptance-gate.sh check that breaks on success", gate)
 	}
 
-	endFinal := loop.Steps[2]
+	endFinal := loop.Steps[3]
 	if endFinal.BreakIf != "success" || !strings.Contains(endFinal.SkipIf, "{{acceptance_round}}") ||
 		!strings.Contains(endFinal.SkipIf, "{{acceptance_rounds}}") {
 		t.Fatalf("end-final-round = %+v, want a final-round-only break", endFinal)
 	}
 
-	fix := loop.Steps[3]
+	fix := loop.Steps[4]
 	if fix.Session != "lead-agent" || fix.Mode != "autonomous" {
 		t.Fatalf("acceptance-fix = session:%q mode:%q, want lead-agent/autonomous", fix.Session, fix.Mode)
 	}
@@ -288,12 +299,12 @@ func TestCoreVerifyChangeAcceptanceRoundsAreWorkflowSteps(t *testing.T) {
 		}
 	}
 
-	validator := loop.Steps[4]
+	validator := loop.Steps[5]
 	if validator.Workflow != "run-validator-v1.0.yaml" || validator.SkipIf != "sh: test {{skip_validator}} = true" {
 		t.Fatalf("acceptance-validator = %+v, want the skip_validator-gated run-validator workflow", validator)
 	}
 
-	push := loop.Steps[5]
+	push := loop.Steps[6]
 	if push.Script != "acceptance-push.sh" || push.Repair == nil || push.Repair.Session != "lead-agent" {
 		t.Fatalf("acceptance-push = %+v, want acceptance-push.sh with lead-agent repair", push)
 	}

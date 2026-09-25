@@ -85,8 +85,12 @@ else
       add_reason "$name does not name the current revision $head"
     fi
   done
-  if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
-    add_reason "tracked files have uncommitted changes"
+  if tracked_changes=$(git status --porcelain --untracked-files=no); then
+    if [ -n "$tracked_changes" ]; then
+      add_reason "tracked files have uncommitted changes"
+    fi
+  else
+    add_reason "could not inspect tracked changes"
   fi
 fi
 

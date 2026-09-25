@@ -133,6 +133,12 @@ steps:
       max_param: acceptance_rounds
       as_index: acceptance_round
     steps:
+      # The gate must judge only evidence written in this round, so clear the
+      # previous round's result files; acceptance-flow-evidence.md and
+      # acceptance-findings.md remain as the tester's baseline.
+      - id: reset-round-evidence
+        command: rm -f "{{session_dir}}/output/acceptance-round-status.txt" "{{session_dir}}/output/acceptance-test.md" "{{session_dir}}/output/acceptance-handoff.md"
+
       - id: acceptance-test
         session: acceptance-tester
         mode: autonomous

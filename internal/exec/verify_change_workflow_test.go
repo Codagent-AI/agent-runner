@@ -30,6 +30,8 @@ type acceptanceRoundRunner struct {
 
 func (r *acceptanceRoundRunner) RunShell(cmd string, _ bool, _ string) (ProcessResult, error) {
 	switch {
+	case strings.HasPrefix(cmd, "rm -f"):
+		r.events = append(r.events, "reset-round-evidence")
 	case strings.Contains(cmd, "acceptance round limit reached"):
 		r.events = append(r.events, "end-final-round")
 	case strings.Contains(cmd, "acceptance-handoff.md"):
@@ -228,8 +230,11 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			rounds:        "3",
 			skipValidator: "false",
 			readyInRound:  func(round int) bool { return round == 1 },
-			wantEvents:    []string{"acceptance-test", "acceptance-gate.sh", "acceptance-gate.sh", "verify-acceptance-handoff"},
-			wantStatus:    "ACCEPTANCE_COMPLETE",
+			wantEvents: []string{
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh",
+				"acceptance-gate.sh", "verify-acceptance-handoff",
+			},
+			wantStatus: "ACCEPTANCE_COMPLETE",
 		},
 		{
 			name:          "second round converges after a validated and pushed fix",
@@ -237,8 +242,8 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			skipValidator: "false",
 			readyInRound:  func(round int) bool { return round == 2 },
 			wantEvents: []string{
-				"acceptance-test", "acceptance-gate.sh", "acceptance-fix", "run-validator.sh", "acceptance-push.sh",
-				"acceptance-test", "acceptance-gate.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "run-validator.sh", "acceptance-push.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh",
 				"acceptance-gate.sh", "verify-acceptance-handoff",
 			},
 			wantStatus: "ACCEPTANCE_COMPLETE",
@@ -249,9 +254,9 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			skipValidator: "false",
 			readyInRound:  never,
 			wantEvents: []string{
-				"acceptance-test", "acceptance-gate.sh", "acceptance-fix", "run-validator.sh", "acceptance-push.sh",
-				"acceptance-test", "acceptance-gate.sh", "acceptance-fix", "run-validator.sh", "acceptance-push.sh",
-				"acceptance-test", "acceptance-gate.sh", "end-final-round",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "run-validator.sh", "acceptance-push.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "run-validator.sh", "acceptance-push.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "end-final-round",
 				"acceptance-gate.sh", "verify-acceptance-handoff",
 			},
 			wantStatus: "ACCEPTANCE_FAILED",
@@ -262,8 +267,8 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			skipValidator: "true",
 			readyInRound:  never,
 			wantEvents: []string{
-				"acceptance-test", "acceptance-gate.sh", "acceptance-fix", "acceptance-push.sh",
-				"acceptance-test", "acceptance-gate.sh", "end-final-round",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "acceptance-push.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "end-final-round",
 				"acceptance-gate.sh", "verify-acceptance-handoff",
 			},
 			wantStatus: "ACCEPTANCE_FAILED",
@@ -274,7 +279,7 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			skipValidator: "false",
 			readyInRound:  never,
 			wantEvents: []string{
-				"acceptance-test", "acceptance-gate.sh", "end-final-round",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "end-final-round",
 				"acceptance-gate.sh", "verify-acceptance-handoff",
 			},
 			wantStatus: "ACCEPTANCE_FAILED",

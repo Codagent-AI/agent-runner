@@ -32,7 +32,8 @@ if [ -z "$branch" ]; then
   printf 'acceptance push: HEAD is detached; check out the change branch\n' >&2
   exit 1
 fi
-if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+tracked_changes=$(git status --porcelain --untracked-files=no)
+if [ -n "$tracked_changes" ]; then
   printf 'acceptance push: tracked changes are uncommitted; commit them before pushing\n' >&2
   git status --short --untracked-files=no >&2
   exit 1
