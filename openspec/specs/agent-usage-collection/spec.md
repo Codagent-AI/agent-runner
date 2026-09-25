@@ -65,11 +65,11 @@ Native normalization SHALL preserve category inclusion relationships and explici
 
 ### Requirement: Unavailable usage is explicit
 
-When usage cannot be collected for an agent step, Agent Runner SHALL record an explicit unavailable state with the reason. Missing usage SHALL never be represented as zero tokens. Situations that produce an unavailable record include: PTY-backed invocation contexts (interactive and autonomous-interactive), structured-output parse failures, missing usage events in otherwise valid output, and adapters that do not support extraction.
+When usage cannot be collected for an agent step, Agent Runner SHALL record an explicit unavailable state with the reason. Missing usage SHALL never be represented as zero tokens. Situations that produce an unavailable record include: interactive invocation contexts (interactive and autonomous-interactive, where the agent CLI owns the terminal), reported as `interactive-context`; structured-output parse failures, missing usage events in otherwise valid output, and adapters that do not support extraction.
 
-#### Scenario: PTY-backed agent step reports unavailable
-- **WHEN** an agent step runs in an interactive or autonomous-interactive context (no stdout captured)
-- **THEN** the step's usage record is an explicit unavailable state with a reason indicating the invocation context
+#### Scenario: Interactive agent step reports unavailable
+- **WHEN** an agent step runs in an interactive or autonomous-interactive context (the CLI owns the terminal, so no stdout is captured)
+- **THEN** the step's usage record is an explicit unavailable state with reason `interactive-context`
 
 #### Scenario: Parse failure reports unavailable
 - **WHEN** an autonomous-headless agent step completes but its stdout cannot be parsed as the expected structured format
@@ -119,9 +119,9 @@ Non-agent steps (shell, UI, and other step types that invoke no agent CLI) SHALL
 
 Agent Runner SHALL distinguish per-turn reports from cumulative session counters. A per-turn report SHALL be recorded directly for every invocation, including resumed sessions; it MUST NOT be subtracted from a prior turn. When an adapter explicitly identifies a report as cumulative, the existing baseline/delta safeguards apply and missing baselines or resets remain unavailable rather than fabricated.
 
-#### Scenario: Resumed Codex turn is recorded directly
+#### Scenario: Resumed Codex turn is attributed by delta
 - **WHEN** a resumed Codex invocation emits `turn.completed.usage`
-- **THEN** the complete reported snapshot is attributed to that invocation without comparing it to or subtracting the preceding turn
+- **THEN** only the difference from the prior recorded snapshot for that session is attributed to the invocation; without a baseline, usage is unavailable
 
 ### Requirement: Per-step attribution for cumulative usage sources
 
@@ -146,4 +146,3 @@ When a CLI reports cumulative session totals rather than per-invocation usage, t
 #### Scenario: Category appears mid-session
 - **WHEN** the current report contains a token category absent from the session's previously recorded total
 - **THEN** that category's attributed value equals the newly reported value (attributed from zero)
-

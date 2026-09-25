@@ -37,9 +37,11 @@ func TestClaudeUsageExtraction(t *testing.T) {
 				model.TokenCacheWrite: 11, model.TokenOutput: 2,
 			},
 			TokenTotals: &model.TokenTotals{Input: 115, Output: 2, Total: 117},
-			Source:      "claude:result-event", Completeness: model.CompletenessComplete,
+			// Claude's total_cost_usd is session-cumulative; the metrics
+			// collector attributes the per-invocation share.
+			RawCumulativeCostUSD: &wantCost,
+			Source:               "claude:result-event", Completeness: model.CompletenessComplete,
 		},
-		EstimatedCostUSD: &wantCost,
 	}
 	got, err := extractor.ExtractUsage(raw)
 	if err != nil {
@@ -145,12 +147,12 @@ func TestCodexUsageExtraction(t *testing.T) {
 	extractor := requireUsageExtractor(t, &CodexAdapter{})
 	want := UsageExtraction{Usage: model.UsageRecord{
 		Status: model.UsageCollected, CLI: "codex", Provider: "openai",
-		Tokens: model.TokenCounts{
+		RawCumulative: model.TokenCounts{
 			model.TokenInput: 2521, model.TokenCachedInput: 2432,
 			model.TokenOutput: 3, model.TokenReasoning: 19,
 		},
-		TokenTotals: &model.TokenTotals{Input: 2521, Output: 3, Total: 2524},
-		Source:      "codex:turn.completed", Completeness: model.CompletenessComplete,
+		RawCumulativeTokenTotals: &model.TokenTotals{Input: 2521, Output: 3, Total: 2524},
+		Source:                   "codex:turn.completed", Completeness: model.CompletenessComplete,
 	}}
 	got, err := extractor.ExtractUsage(readUsageFixture(t, "codex.jsonl"))
 	if err != nil {
@@ -159,10 +161,10 @@ func TestCodexUsageExtraction(t *testing.T) {
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Fatalf("ExtractUsage() mismatch (-want +got):\n%s", diff)
 	}
-	if got.Usage.RawCumulative != nil {
-		t.Fatalf("per-turn Codex usage must not be marked cumulative, got %#v", got.Usage.RawCumulative)
+	if got.Usage.Tokens != nil || got.Usage.TokenTotals != nil {
+		t.Fatalf("unattributed Codex usage must not contain step tokens or totals, got %+v", got.Usage)
 	}
-	assertUsageJSONField(t, &got.Usage, "token_totals", map[string]any{
+	assertUsageJSONField(t, &got.Usage, "raw_cumulative_token_totals", map[string]any{
 		"input": float64(2521), "output": float64(3), "total": float64(2524),
 	})
 }
@@ -383,7 +385,7 @@ func TestUsageExtractionEdgeSemantics(t *testing.T) {
 		if diff := cmp.Diff(wantTokens, got.Usage.Tokens); diff != "" {
 			t.Fatalf("tokens mismatch (-want +got):\n%s", diff)
 		}
-		if got.Usage.Completeness != model.CompletenessPartial || got.EstimatedCostUSD == nil || *got.EstimatedCostUSD != 0.2 {
+		if got.Usage.Completeness != model.CompletenessPartial || got.EstimatedCostUSD != nil || got.Usage.RawCumulativeCostUSD == nil || *got.Usage.RawCumulativeCostUSD != 0.2 {
 			t.Fatalf("extraction = %#v", got)
 		}
 	})

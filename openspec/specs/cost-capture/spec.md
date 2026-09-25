@@ -11,6 +11,14 @@ Agent Runner SHALL record a step's cost as `estimated_api_cost_usd` only when th
 - **WHEN** an autonomous-headless agent step completes and its CLI's structured output reports a USD-denominated cost
 - **THEN** the step's `estimated_api_cost_usd` equals the reported value
 
+#### Scenario: Session-cumulative cost is attributed by delta
+- **WHEN** a CLI's reported USD cost is cumulative for its session (as Claude's `total_cost_usd` is) and a step resumes or inherits that session
+- **THEN** the step's `estimated_api_cost_usd` is the reported value minus the prior reported value for the same session, with no price math
+
+#### Scenario: Session-cumulative cost without a trusted baseline is null
+- **WHEN** a step resumes a session whose prior cumulative cost was not observed, was cleared by an invocation that reported none, or exceeds the current value
+- **THEN** the step's `estimated_api_cost_usd` is null
+
 #### Scenario: CLI reports no cost
 - **WHEN** an autonomous-headless agent step completes and its CLI's output contains no cost field
 - **THEN** the step's `estimated_api_cost_usd` is null
@@ -24,7 +32,7 @@ Agent Runner SHALL record a step's cost as `estimated_api_cost_usd` only when th
 When a step has no CLI-reported USD cost — because the CLI reports none, the step's usage is unavailable, or the step is a non-agent step — the cost SHALL be represented as null (or an equivalent explicit absent state). A missing cost SHALL never be recorded as `0`.
 
 #### Scenario: Unavailable usage yields null cost
-- **WHEN** an agent step's usage record is unavailable (e.g. PTY-backed context or parse failure)
+- **WHEN** an agent step's usage record is unavailable (e.g. interactive context or parse failure)
 - **THEN** the step's `estimated_api_cost_usd` is null, not zero
 
 #### Scenario: Shell step has null cost

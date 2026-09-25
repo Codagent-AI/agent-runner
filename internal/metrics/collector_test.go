@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,8 +11,10 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
@@ -711,18 +714,61 @@ func TestCollectorKeepsResumedPerTurnUsageWithoutSessionDelta(t *testing.T) {
 	c := NewCollector(t.TempDir(), "run", "workflow", started)
 	c.Process(event(audit.EventRunStart, started, nil))
 	c.Process(stepEvent(started.Add(time.Second), model.ExecutionIdentity{
-		StepID: "first", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: "new", AgentInvoked: true,
-	}, model.UsageRecord{Status: model.UsageCollected, CLI: "codex", Tokens: model.TokenCounts{model.TokenInput: 100}, Source: "codex:turn.completed"}, nil, "completed", 1))
+		StepID: "first", StepType: "agent", Kind: "step", CLI: "claude", SessionID: "session", SessionStrategy: "new", AgentInvoked: true,
+	}, model.UsageRecord{Status: model.UsageCollected, CLI: "claude", Tokens: model.TokenCounts{model.TokenInput: 100}, Source: "claude:result-event"}, nil, "completed", 1))
 
 	gotEvent := c.Process(stepEvent(started.Add(2*time.Second), model.ExecutionIdentity{
-		StepID: "resumed", StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: "resume", SessionResumed: true, AgentInvoked: true,
-	}, model.UsageRecord{Status: model.UsageCollected, CLI: "codex", Tokens: model.TokenCounts{model.TokenInput: 3}, Source: "codex:turn.completed"}, nil, "completed", 1))
+		StepID: "resumed", StepType: "agent", Kind: "step", CLI: "claude", SessionID: "session", SessionStrategy: "resume", SessionResumed: true, AgentInvoked: true,
+	}, model.UsageRecord{Status: model.UsageCollected, CLI: "claude", Tokens: model.TokenCounts{model.TokenInput: 3}, Source: "claude:result-event"}, nil, "completed", 1))
 	got := gotEvent.Data[DataUsage].(model.UsageRecord)
 	if diff := cmp.Diff(model.TokenCounts{model.TokenInput: 3}, got.Tokens); diff != "" {
 		t.Fatalf("resumed per-turn usage mismatch (-want +got):\n%s", diff)
 	}
 	if got.Status != model.UsageCollected || got.Reason != "" {
 		t.Fatalf("resumed per-turn status = %q reason = %q", got.Status, got.Reason)
+	}
+}
+
+func TestCollectorAttributesResumedCodexSnapshotsFromAdapter(t *testing.T) {
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(t.TempDir(), "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+
+	tests := []struct {
+		id       string
+		strategy string
+		raw      model.TokenCounts
+		want     model.TokenCounts
+		totals   model.TokenTotals
+	}{
+		{"first", "new", model.TokenCounts{model.TokenInput: 3213078, model.TokenCachedInput: 3000000, model.TokenOutput: 16658, model.TokenReasoning: 1000}, model.TokenCounts{model.TokenInput: 3213078, model.TokenCachedInput: 3000000, model.TokenOutput: 16658, model.TokenReasoning: 1000}, model.TokenTotals{Input: 3213078, Output: 16658, Total: 3229736}},
+		{"second", "resume", model.TokenCounts{model.TokenInput: 6398673, model.TokenCachedInput: 6000000, model.TokenOutput: 20000, model.TokenReasoning: 1500}, model.TokenCounts{model.TokenInput: 3185595, model.TokenCachedInput: 3000000, model.TokenOutput: 3342, model.TokenReasoning: 500}, model.TokenTotals{Input: 3185595, Output: 3342, Total: 3188937}},
+		{"third", "resume", model.TokenCounts{model.TokenInput: 7387602, model.TokenCachedInput: 6900000, model.TokenOutput: 23973, model.TokenReasoning: 1800}, model.TokenCounts{model.TokenInput: 988929, model.TokenCachedInput: 900000, model.TokenOutput: 3973, model.TokenReasoning: 300}, model.TokenTotals{Input: 988929, Output: 3973, Total: 992902}},
+	}
+
+	for i, tt := range tests {
+		stdout := fmt.Sprintf("{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":%d,\"cached_input_tokens\":%d,\"output_tokens\":%d,\"reasoning_output_tokens\":%d}}\n",
+			tt.raw[model.TokenInput], tt.raw[model.TokenCachedInput], tt.raw[model.TokenOutput], tt.raw[model.TokenReasoning])
+		extracted, err := (&cli.CodexAdapter{}).ExtractUsage(stdout)
+		if err != nil {
+			t.Fatalf("ExtractUsage() error = %v", err)
+		}
+		gotEvent := c.Process(stepEvent(started.Add(time.Duration(i+1)*time.Second), model.ExecutionIdentity{
+			StepID: tt.id, StepType: "agent", Kind: "step", CLI: "codex", SessionID: "session", SessionStrategy: tt.strategy, SessionResumed: i > 0, AgentInvoked: true,
+		}, extracted.Usage, nil, "completed", 1))
+		got := gotEvent.Data[DataUsage].(model.UsageRecord)
+		if diff := cmp.Diff(tt.want, got.Tokens); diff != "" {
+			t.Errorf("%s tokens mismatch (-want +got):\n%s", tt.id, diff)
+		}
+		if diff := cmp.Diff(&tt.totals, got.TokenTotals); diff != "" {
+			t.Errorf("%s totals mismatch (-want +got):\n%s", tt.id, diff)
+		}
+		if diff := cmp.Diff(tt.raw, got.RawCumulative); diff != "" {
+			t.Errorf("%s raw snapshot mismatch (-want +got):\n%s", tt.id, diff)
+		}
+	}
+	if diff := cmp.Diff(&model.TokenTotals{Input: 7387602, Output: 23973, Total: 7411575}, c.Totals().TokenTotals); diff != "" {
+		t.Errorf("run totals mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -1358,4 +1404,89 @@ func mustTime(t *testing.T, value string) time.Time {
 		t.Fatal(err)
 	}
 	return got
+}
+
+func TestCollectorAttributesCumulativeClaudeCostPerStep(t *testing.T) {
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(t.TempDir(), "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+
+	tests := []struct {
+		id       string
+		strategy string
+		raw      float64
+		want     *float64
+	}{
+		{"first", "new", 0.25, floatPtr(0.25)},
+		{"second", "resume", 0.75, floatPtr(0.5)},
+		{"third", "resume", 1.0, floatPtr(0.25)},
+		{"reset", "resume", 0.1, nil},
+		{"after-reset", "resume", 0.4, floatPtr(0.3)},
+	}
+	for i, tt := range tests {
+		raw := tt.raw
+		gotEvent := c.Process(stepEvent(started.Add(time.Duration(i+1)*time.Second), model.ExecutionIdentity{
+			StepID: tt.id, StepType: "agent", Kind: "step", CLI: "claude", SessionID: "session", SessionStrategy: tt.strategy, SessionResumed: i > 0, AgentInvoked: true,
+		}, model.UsageRecord{Status: model.UsageCollected, CLI: "claude", Tokens: model.TokenCounts{model.TokenInput: 1}, RawCumulativeCostUSD: &raw, Source: "claude:result-event"}, nil, "completed", 1))
+		got, _ := gotEvent.Data[DataEstimatedAPICostUSD].(*float64)
+		if diff := cmp.Diff(tt.want, got, cmpopts.EquateApprox(0, 1e-9)); diff != "" {
+			t.Errorf("%s event cost mismatch (-want +got):\n%s", tt.id, diff)
+		}
+		record := c.artifact.Steps[i]
+		if diff := cmp.Diff(tt.want, record.EstimatedAPICostUSD, cmpopts.EquateApprox(0, 1e-9)); diff != "" {
+			t.Errorf("%s record cost mismatch (-want +got):\n%s", tt.id, diff)
+		}
+	}
+}
+
+func TestCollectorLeavesResumedClaudeCostUnknownWithoutBaseline(t *testing.T) {
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(t.TempDir(), "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+	raw := 0.5
+	claude := func(cost *float64) model.UsageRecord {
+		return model.UsageRecord{Status: model.UsageCollected, CLI: "claude", Tokens: model.TokenCounts{model.TokenInput: 1}, RawCumulativeCostUSD: cost, Source: "claude:result-event"}
+	}
+	identity := func(id, strategy string) model.ExecutionIdentity {
+		return model.ExecutionIdentity{StepID: id, StepType: "agent", Kind: "step", CLI: "claude", SessionID: "session", SessionStrategy: strategy, SessionResumed: strategy != "new", AgentInvoked: true}
+	}
+
+	// A resumed session with no recorded baseline cannot be attributed.
+	first := c.Process(stepEvent(started.Add(time.Second), identity("resumed", "resume"), claude(&raw), nil, "completed", 1))
+	if got, _ := first.Data[DataEstimatedAPICostUSD].(*float64); got != nil {
+		t.Fatalf("resumed without baseline cost = %v, want nil", *got)
+	}
+	// An interactive step on the session reports no cost, so the next resumed
+	// step's cumulative total includes unobserved usage.
+	c.Process(stepEvent(started.Add(2*time.Second), identity("interactive", "resume"), model.UsageRecord{Status: model.UsageUnavailable, Reason: model.UnavailableInteractiveContext, CLI: "claude", Source: "agent-runner"}, nil, "completed", 1))
+	later := 0.9
+	second := c.Process(stepEvent(started.Add(3*time.Second), identity("after-interactive", "resume"), claude(&later), nil, "completed", 1))
+	if got, _ := second.Data[DataEstimatedAPICostUSD].(*float64); got != nil {
+		t.Fatalf("resumed after unobserved step cost = %v, want nil", *got)
+	}
+	if totals := c.Totals(); totals.CostCoverage == model.CoverageComplete {
+		t.Fatalf("cost coverage = %q, want incomplete", totals.CostCoverage)
+	}
+}
+
+func TestCollectorRestoresClaudeCostBaselineOnResume(t *testing.T) {
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	dir := t.TempDir()
+	c := NewCollector(dir, "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, nil))
+	raw := 0.5
+	c.Process(stepEvent(started.Add(time.Second), model.ExecutionIdentity{
+		StepID: "first", StepType: "agent", Kind: "step", CLI: "claude", SessionID: "session", SessionStrategy: "new", AgentInvoked: true,
+	}, model.UsageRecord{Status: model.UsageCollected, CLI: "claude", RawCumulativeCostUSD: &raw, Source: "claude:result-event"}, nil, "completed", 1))
+
+	restored := NewCollector(dir, "run", "workflow", started)
+	restored.Process(event(audit.EventRunStart, started.Add(2*time.Second), map[string]any{"resumed": true}))
+	later := 0.8
+	gotEvent := restored.Process(stepEvent(started.Add(3*time.Second), model.ExecutionIdentity{
+		StepID: "second", StepType: "agent", Kind: "step", CLI: "claude", SessionID: "session", SessionStrategy: "resume", SessionResumed: true, AgentInvoked: true,
+	}, model.UsageRecord{Status: model.UsageCollected, CLI: "claude", RawCumulativeCostUSD: &later, Source: "claude:result-event"}, nil, "completed", 1))
+	got, _ := gotEvent.Data[DataEstimatedAPICostUSD].(*float64)
+	if diff := cmp.Diff(floatPtr(0.3), got, cmpopts.EquateApprox(0, 1e-9)); diff != "" {
+		t.Fatalf("restored cost mismatch (-want +got):\n%s", diff)
+	}
 }

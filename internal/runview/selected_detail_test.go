@@ -270,9 +270,9 @@ func TestDetailDocumentProgressIsOnlyForActiveHeadlessOrCall(t *testing.T) {
 }
 
 func TestDetailDocumentAgentMetricsPreserveUnavailableAndLegacySemantics(t *testing.T) {
-	unavailable := &StepNode{ID: "agent", Type: NodeHeadlessAgent, Status: StatusSuccess, Attempts: []AttemptMetrics{{Usage: &model.UsageRecord{Status: model.UsageUnavailable, Reason: model.UnavailablePTYContext}}}}
+	unavailable := &StepNode{ID: "agent", Type: NodeHeadlessAgent, Status: StatusSuccess, Attempts: []AttemptMetrics{{Usage: &model.UsageRecord{Status: model.UsageUnavailable, Reason: model.UnavailableInteractiveContext}}}}
 	plain := buildDetailDocument(unavailable, detailBuildOptions{width: 80}).renderCopy()
-	for _, want := range []string{"usage: ?", "pty-context", "cost: ?"} {
+	for _, want := range []string{"usage: ?", "interactive-context", "cost: ?"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("unavailable metrics missing %q:\n%s", want, plain)
 		}

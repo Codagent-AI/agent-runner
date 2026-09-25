@@ -442,11 +442,22 @@ for arg in "$@"; do
     capture_output_path="true"
   fi
 done
+# Audit prompts arrive on stdin: "codex exec -" and Claude print mode without
+# a positional prompt. The prompt reaches Python through a file, never argv,
+# so a prompt over the Linux argument limit still exercises stdin delivery.
+prompt_file=$(mktemp)
+trap 'rm -f "$prompt_file"' EXIT
+if [ "$prompt" = "-" ] || [ -n "${AUDIT_E2E_CLAUDE:-}" ]; then
+  cat > "$prompt_file"
+else
+  printf '%s' "$prompt" > "$prompt_file"
+fi
 sleep "${AUDIT_E2E_DELAY_SECONDS:-0}"
 printf 'call\n' >> "$AUDIT_E2E_MODEL_CALLS"
-"$AUDIT_E2E_PYTHON" - "$prompt" "$output_path" "$schema" <<'PY'
+"$AUDIT_E2E_PYTHON" - "$prompt_file" "$output_path" "$schema" <<'PY'
 import json, sys, os
-prompt = sys.argv[1]
+with open(sys.argv[1], encoding="utf-8") as stream:
+    prompt = stream.read()
 output_path = sys.argv[2]
 if prompt.startswith("You are judging workflow-step value"):
     package = json.loads(prompt.rsplit("\n\n", 1)[1])

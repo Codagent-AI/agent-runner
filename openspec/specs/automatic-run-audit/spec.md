@@ -159,6 +159,10 @@ The initial capability SHALL require no new TUI placement, navigation, or separa
 - **WHEN** a linked audit exists for a completed source run
 - **THEN** the existing source run view may remain focused on source completion without embedding the audit workflow's steps
 
+#### Scenario: Status reports whether rows were delivered
+- **WHEN** a user or tool runs `audit status` for a source run
+- **THEN** each linked audit reports an outcome of `delivered`, `pending-delivery`, `failed` with its reason, or `active`, where a completed audit with no local report is `failed`
+
 #### Scenario: Audit appears in ordinary run history
 - **WHEN** ordinary run discovery encounters a linked audit run
 - **THEN** it can list or view the run safely and its audit kind and source linkage remain inspectable

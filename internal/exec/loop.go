@@ -2,6 +2,7 @@ package exec
 
 import (
 	"fmt"
+	"maps"
 	"strconv"
 	"time"
 
@@ -83,7 +84,7 @@ func executeCountedLoop(
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), stepID)
 	startTime := time.Now()
 
-	resumeIter, resumeBody, resumed := consumeLoopResume(ctx, stepID)
+	resumeIter, resumeBody, _, resumed := consumeLoopResume(ctx, stepID)
 	if resumed && resumeIter >= maxIter && hasBreakCondition(steps) {
 		resumeIter = 0
 		resumeBody = nil
@@ -111,11 +112,11 @@ func executeCountedLoop(
 
 	for i := startIter; i < maxIter; i++ {
 		lastIter = i
-		recordLoopIterationProgress(ctx, stepID, i, false)
 		var loopVar map[string]string
 		if asIndex != "" {
 			loopVar = map[string]string{asIndex: strconv.Itoa(i)}
 		}
+		recordLoopIterationProgress(ctx, stepID, i, loopVar, false)
 		iterCtx := model.NewLoopIterationContext(ctx, model.LoopIterationOptions{
 			StepID:    stepID,
 			Iteration: i,
@@ -131,7 +132,6 @@ func executeCountedLoop(
 			emitLoopEnd(ctx, prefix, startTime, step, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, err
 		}
-		mergeIterationCaptures(ctx, iterCtx)
 		completed++
 
 		if result.aborted {
@@ -142,6 +142,7 @@ func executeCountedLoop(
 			emitLoopEnd(ctx, prefix, startTime, step, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, nil
 		}
+		mergeIterationCaptures(ctx, iterCtx)
 		flushAndKeepLoopIterationProgress(ctx, stepID, i+1, false)
 		if result.breakTriggered {
 			emitLoopEnd(ctx, prefix, startTime, step, completed, true, "success")
@@ -178,7 +179,7 @@ func executeForEachLoop(
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), stepID)
 	startTime := time.Now()
 
-	resumeIter, resumeBody, resumed := consumeLoopResume(ctx, stepID)
+	resumeIter, resumeBody, recordedLoopVar, resumed := consumeLoopResume(ctx, stepID)
 	if resumeIter > opts.ResumeFromIteration {
 		opts.ResumeFromIteration = resumeIter
 	}
@@ -216,14 +217,14 @@ func executeForEachLoop(
 		if asIndex != "" {
 			loopVar[asIndex] = strconv.Itoa(i)
 		}
-		recordLoopIterationProgress(ctx, stepID, i, false)
+		recordLoopIterationProgress(ctx, stepID, i, loopVar, false)
 		iterCtx := model.NewLoopIterationContext(ctx, model.LoopIterationOptions{
 			StepID:    stepID,
 			Iteration: i,
 			LoopVar:   loopVar,
 		})
 		if i == resumeIter && resumeBody != nil {
-			iterCtx.ResumeChildState = resumeBody
+			attachForEachResume(iterCtx, resumeBody, recordedLoopVar, loopVar, stepID, i, log)
 			resumeBody = nil
 		}
 
@@ -232,7 +233,6 @@ func executeForEachLoop(
 			emitLoopEnd(ctx, prefix, startTime, step, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, err
 		}
-		mergeIterationCaptures(ctx, iterCtx)
 		completed++
 
 		if result.aborted {
@@ -243,6 +243,7 @@ func executeForEachLoop(
 			emitLoopEnd(ctx, prefix, startTime, step, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, nil
 		}
+		mergeIterationCaptures(ctx, iterCtx)
 		flushAndKeepLoopIterationProgress(ctx, stepID, i+1, false)
 		if result.breakTriggered {
 			emitLoopEnd(ctx, prefix, startTime, step, completed, true, "success")
@@ -254,27 +255,35 @@ func executeForEachLoop(
 	return LoopResult{Outcome: OutcomeSuccess, LastIteration: lastIter}, nil
 }
 
+func attachForEachResume(iterCtx *model.ExecutionContext, resumeBody *model.NestedStepState, recordedLoopVar, loopVar map[string]string, stepID string, iteration int, log Logger) {
+	if len(recordedLoopVar) == 0 || maps.Equal(recordedLoopVar, loopVar) {
+		iterCtx.ResumeChildState = resumeBody
+		return
+	}
+	log.Errorf("agent-runner: for-each loop %q iteration %d changed from %v to %v; restarting iteration\n", stepID, iteration, recordedLoopVar, loopVar)
+}
+
 // recordLoopIterationProgress stores the loop step's current iteration index
 // on ctx.LastSubWorkflowChild using the loop step's own ID. The merge branch
 // in recordChildProgress (triggered when the stored StepID matches childStepID)
 // and the top-level branch in writeStepState both recognise this and promote
 // Iteration onto the correct entry in the state chain.
-func recordLoopIterationProgress(ctx *model.ExecutionContext, loopStepID string, iteration int, loopCompleted bool) {
-	entry := newLoopStepMarker(ctx, loopStepID, iteration, nil)
+func recordLoopIterationProgress(ctx *model.ExecutionContext, loopStepID string, iteration int, loopVar map[string]string, loopCompleted bool) {
+	entry := newLoopStepMarker(ctx, loopStepID, iteration, loopVar, nil)
 	entry.Completed = loopCompleted
 	ctx.LastSubWorkflowChild = entry
 }
 
 func flushAndKeepLoopIterationProgress(ctx *model.ExecutionContext, loopStepID string, iteration int, loopCompleted bool) {
-	recordLoopIterationProgress(ctx, loopStepID, iteration, loopCompleted)
+	recordLoopIterationProgress(ctx, loopStepID, iteration, nil, loopCompleted)
 	flushLoopState(ctx)
-	recordLoopIterationProgress(ctx, loopStepID, iteration, loopCompleted)
+	recordLoopIterationProgress(ctx, loopStepID, iteration, nil, loopCompleted)
 }
 
 // newLoopStepMarker builds a NestedStepState whose StepID is the loop step
 // and whose Iteration points to iteration. Session-scope fields are copied
 // from src (the loop-driving context). Child is attached as provided.
-func newLoopStepMarker(src *model.ExecutionContext, loopStepID string, iteration int, child *model.NestedStepState) *model.NestedStepState {
+func newLoopStepMarker(src *model.ExecutionContext, loopStepID string, iteration int, loopVar map[string]string, child *model.NestedStepState) *model.NestedStepState {
 	iter := iteration
 	return &model.NestedStepState{
 		StepID:            loopStepID,
@@ -283,10 +292,15 @@ func newLoopStepMarker(src *model.ExecutionContext, loopStepID string, iteration
 		CapturedVariables: copyMap(src.CapturedVariables),
 		LastSessionStepID: src.LastSessionStepID,
 		Iteration:         &iter,
+		LoopVar:           maps.Clone(loopVar),
 		Child:             child,
 	}
 }
 
+// mergeIterationCaptures publishes a finished iteration's captures to the
+// loop's scope. Callers skip it for failed or aborted iterations: their
+// captures stay in the persisted body state, which restores them when the
+// same iteration resumes and drops them when a changed item restarts it.
 func mergeIterationCaptures(parent, iterCtx *model.ExecutionContext) {
 	for k, v := range iterCtx.CapturedVariables {
 		parent.CapturedVariables[k] = v
@@ -314,6 +328,7 @@ func newIterationBodyEntry(iterCtx *model.ExecutionContext, bodyStepID string, b
 	}
 	if deeperChild != nil && deeperChild.StepID == bodyStepID {
 		entry.Iteration = deeperChild.Iteration
+		entry.LoopVar = deeperChild.LoopVar
 		entry.Child = deeperChild.Child
 	} else {
 		entry.Child = deeperChild
@@ -354,14 +369,15 @@ func flushLoopState(ctx *model.ExecutionContext) {
 // consumeLoopResume checks if the context carries resume state for this loop
 // step and, if so, extracts the iteration index plus any deeper body-step
 // resume chain, then clears the pointer.
-func consumeLoopResume(ctx *model.ExecutionContext, loopStepID string) (int, *model.NestedStepState, bool) {
+func consumeLoopResume(ctx *model.ExecutionContext, loopStepID string) (iteration int, body *model.NestedStepState, loopVar map[string]string, resumed bool) {
 	if ctx.ResumeChildState == nil || ctx.ResumeChildState.StepID != loopStepID || ctx.ResumeChildState.Iteration == nil {
-		return 0, nil, false
+		return 0, nil, nil, false
 	}
-	iter := *ctx.ResumeChildState.Iteration
-	body := ctx.ResumeChildState.Child
+	iteration = *ctx.ResumeChildState.Iteration
+	body = ctx.ResumeChildState.Child
+	loopVar = ctx.ResumeChildState.LoopVar
 	ctx.ResumeChildState = nil
-	return iter, body, true
+	return iteration, body, loopVar, true
 }
 
 func emitLoopEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, step *model.Step, completed int, breakTriggered bool, outcome string) {
@@ -669,7 +685,7 @@ func persistIterationFailState(iterCtx *model.ExecutionContext, loopStepID strin
 	deep := iterCtx.LastSubWorkflowChild
 	iterCtx.LastSubWorkflowChild = nil
 	bodyEntry := newIterationBodyEntry(iterCtx, bodyStepID, bodyCompleted, deep)
-	parent.LastSubWorkflowChild = newLoopStepMarker(parent, loopStepID, *iteration, bodyEntry)
+	parent.LastSubWorkflowChild = newLoopStepMarker(parent, loopStepID, *iteration, iterationLoopVar(iterCtx), bodyEntry)
 }
 
 // loopSegmentOf returns the loop step ID and iteration index from the
@@ -685,6 +701,13 @@ func loopSegmentOf(iterCtx *model.ExecutionContext) (loopStepID string, iteratio
 	}
 	iter := *seg.Iteration
 	return seg.StepID, &iter
+}
+
+func iterationLoopVar(iterCtx *model.ExecutionContext) map[string]string {
+	if len(iterCtx.NestingPath) == 0 {
+		return nil
+	}
+	return iterCtx.NestingPath[len(iterCtx.NestingPath)-1].LoopVar
 }
 
 // buildIterationFlushChain constructs, non-destructively, the full nested
@@ -709,7 +732,7 @@ func buildIterationFlushChain(
 	bodyEntry := newIterationBodyEntry(iterCtx, bodyStepID, bodyCompleted, iterCtx.LastSubWorkflowChild)
 
 	if loopStepID != "" && iteration != nil && iterCtx.ParentContext != nil {
-		chain = newLoopStepMarker(iterCtx.ParentContext, loopStepID, *iteration, bodyEntry)
+		chain = newLoopStepMarker(iterCtx.ParentContext, loopStepID, *iteration, iterationLoopVar(iterCtx), bodyEntry)
 	} else {
 		chain = bodyEntry
 	}
@@ -742,6 +765,7 @@ func buildIterationFlushChain(
 		if seg.Iteration != nil {
 			iter := *seg.Iteration
 			entry.Iteration = &iter
+			entry.LoopVar = maps.Clone(seg.LoopVar)
 		}
 		chain = entry
 		cur = parent

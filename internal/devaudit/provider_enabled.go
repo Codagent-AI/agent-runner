@@ -301,20 +301,20 @@ func HandleCommand(args []string, stdout, stderr io.Writer) (handled bool, exitC
 			_, _ = fmt.Fprintf(stderr, "agent-runner audit status: %v\n", err)
 			return true, 1
 		}
-		lifecycle, err := ReadLifecycle(filepath.Join(sourceSessionDir, lifecycleFileName))
+		status, err := ReadStatus(sourceSessionDir)
 		if err != nil {
 			_, _ = fmt.Fprintf(stderr, "agent-runner audit status: %v\n", err)
 			return true, 1
 		}
-		data, _ := json.MarshalIndent(lifecycle, "", "  ")
+		data, _ := json.MarshalIndent(status, "", "  ")
 		_, _ = fmt.Fprintln(stdout, string(data))
 		return true, 0
 	case "replay":
 		return true, handleReplayCommand(args[2:], stdout, stderr)
 	case "reconcile":
-		sourceRef, sessionID, ok := replayArgs(args[2:])
+		sourceRef, sessionID, projectRoot, ok := replayArgs(args[2:])
 		if !ok {
-			_, _ = fmt.Fprintln(stderr, "Usage: agent-runner audit reconcile <run-id> --session <execution-session-id>")
+			_, _ = fmt.Fprintln(stderr, "Usage: agent-runner audit reconcile <run-id> --session <execution-session-id> [--project <dir>]")
 			return true, 1
 		}
 		sourceSessionDir, err := resolveRecordedRun(sourceRef)
@@ -322,7 +322,7 @@ func HandleCommand(args []string, stdout, stderr io.Writer) (handled bool, exitC
 			_, _ = fmt.Fprintf(stderr, "agent-runner audit reconcile: %v\n", err)
 			return true, 1
 		}
-		id, err := Reconcile(sourceSessionDir, sessionID, launchDetached)
+		id, err := Reconcile(sourceSessionDir, sessionID, projectRoot, launchDetached)
 		if err != nil {
 			_, _ = fmt.Fprintf(stderr, "agent-runner audit reconcile: %v\n", err)
 			return true, 1
@@ -350,9 +350,9 @@ func handleReplayCommand(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "agent-runner audit replay: execution session is required; available: %s\n", strings.Join(sessions, ", "))
 		return 1
 	}
-	sourceRef, sessionID, ok := replayArgs(args)
+	sourceRef, sessionID, projectRoot, ok := replayArgs(args)
 	if !ok {
-		_, _ = fmt.Fprintln(stderr, "Usage: agent-runner audit replay <run-id> --session <execution-session-id>")
+		_, _ = fmt.Fprintln(stderr, "Usage: agent-runner audit replay <run-id> --session <execution-session-id> [--project <dir>]")
 		return 1
 	}
 	sourceSessionDir, err := resolveRecordedRun(sourceRef)
@@ -360,7 +360,7 @@ func handleReplayCommand(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "agent-runner audit replay: %v\n", err)
 		return 1
 	}
-	id, err := Replay(sourceSessionDir, sessionID, launchDetached)
+	id, err := Replay(sourceSessionDir, sessionID, projectRoot, launchDetached)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "agent-runner audit replay: %v\n", err)
 		return 1
@@ -411,18 +411,27 @@ func resolveRecordedRun(ref string) (string, error) {
 	return "", fmt.Errorf("recorded run %q not found", ref)
 }
 
-func replayArgs(args []string) (sourceSessionDir, executionSessionID string, ok bool) {
+// replayArgs parses "<run> --session <id> [--project <dir>]". The project
+// directory is needed only for runs started with --session-dir, whose session
+// directory is not under a recorded project's runs directory.
+func replayArgs(args []string) (sourceSessionDir, executionSessionID, projectRoot string, ok bool) {
+	positional := []string{}
 	for index := 0; index < len(args); index++ {
-		if args[index] == "--session" && index+1 < len(args) {
+		switch {
+		case args[index] == "--session" && index+1 < len(args):
 			executionSessionID = strings.TrimSpace(args[index+1])
-			args = append(append([]string{}, args[:index]...), args[index+2:]...)
-			break
+			index++
+		case args[index] == "--project" && index+1 < len(args):
+			projectRoot = strings.TrimSpace(args[index+1])
+			index++
+		default:
+			positional = append(positional, args[index])
 		}
 	}
-	if len(args) != 1 || executionSessionID == "" {
-		return "", "", false
+	if len(positional) != 1 || executionSessionID == "" {
+		return "", "", "", false
 	}
-	return args[0], executionSessionID, true
+	return positional[0], executionSessionID, projectRoot, true
 }
 
 func handleInternalAudit(args []string, stderr io.Writer) int {
@@ -452,7 +461,7 @@ func handleInternalAudit(args []string, stderr io.Writer) int {
 
 // Replay creates a new append-only audit identity for exactly one durable
 // execution session; it never starts or resumes the source workflow.
-func Replay(sourceSessionDir, executionSessionID string, launch func(Request) error) (string, error) {
+func Replay(sourceSessionDir, executionSessionID, projectRoot string, launch func(Request) error) (string, error) {
 	state, err := stateio.ReadState(filepath.Join(sourceSessionDir, "state.json"))
 	if err != nil {
 		return "", err
@@ -480,7 +489,7 @@ func Replay(sourceSessionDir, executionSessionID string, launch func(Request) er
 		return "", err
 	}
 	link := Link{AuditRunID: auditID, ExecutionSessionID: executionSessionID, Trigger: "replay", State: LaunchReserved, RequestedAt: time.Now().UTC().Format(time.RFC3339Nano)}
-	workingDir, err := recordedProjectRoot(sourceSessionDir)
+	workingDir, err := sourceProjectRoot(sourceSessionDir, projectRoot)
 	if err != nil {
 		return "", err
 	}
@@ -517,7 +526,7 @@ func Replay(sourceSessionDir, executionSessionID string, launch func(Request) er
 // Reconcile restarts only a durable automatic reservation that never reached a
 // launch state. It preserves the original audit identity and never reruns the
 // source workflow.
-func Reconcile(sourceSessionDir, executionSessionID string, launch func(Request) error) (string, error) {
+func Reconcile(sourceSessionDir, executionSessionID, projectRoot string, launch func(Request) error) (string, error) {
 	if runlock.Check(sourceSessionDir) == runlock.LockActive {
 		return "", fmt.Errorf("source workflow is still active")
 	}
@@ -566,7 +575,7 @@ func Reconcile(sourceSessionDir, executionSessionID string, launch func(Request)
 	if _, err := stateio.ReadState(filepath.Join(auditSessionDir(sourceSessionDir, link.AuditRunID), "state.json")); err != nil {
 		return "", fmt.Errorf("automatic audit %q state: %w", link.AuditRunID, err)
 	}
-	workingDir, err := recordedProjectRoot(sourceSessionDir)
+	workingDir, err := sourceProjectRoot(sourceSessionDir, projectRoot)
 	if err != nil {
 		return "", err
 	}
@@ -575,6 +584,23 @@ func Reconcile(sourceSessionDir, executionSessionID string, launch func(Request)
 		return "", err
 	}
 	return link.AuditRunID, nil
+}
+
+// sourceProjectRoot prefers an explicit project directory and otherwise uses
+// the project recorded for the source run's runs directory.
+func sourceProjectRoot(sourceSessionDir, projectRoot string) (string, error) {
+	if projectRoot == "" {
+		return recordedProjectRoot(sourceSessionDir)
+	}
+	absolute, err := filepath.Abs(projectRoot)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(absolute)
+	if err != nil || !info.IsDir() {
+		return "", fmt.Errorf("project directory %q is unavailable", projectRoot)
+	}
+	return filepath.Clean(absolute), nil
 }
 
 func recordedProjectRoot(sourceSessionDir string) (string, error) {

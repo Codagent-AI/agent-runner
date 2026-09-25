@@ -25,6 +25,18 @@ When the source run contains more than one execution session, the invocation SHA
 - **WHEN** the requested run or execution session cannot be resolved to durable evidence
 - **THEN** the explicit audit exits with a diagnostic and does not mutate the source run
 
+### Requirement: Replay accepts an explicit project for custom session directories
+
+A run started with `--session-dir` is not recorded under a project's runs directory, so its project root cannot be resolved from run history. Explicit replay and reconciliation SHALL accept `--project <dir>` naming the source project checkout; the audit SHALL resolve its auditor profile and export Git evidence from that directory. Without it, such a run SHALL be declined with a diagnostic rather than audited against another checkout. The linked audit run SHALL be created beside the source session directory.
+
+#### Scenario: Factory session is replayed with its clone
+- **WHEN** a run recorded in a custom session directory is replayed with `--project` naming its clone
+- **THEN** Agent Runner audits it with the lead agent of the source run's profile set in that clone
+
+#### Scenario: Custom session without a project
+- **WHEN** a run recorded in a custom session directory is replayed without `--project`
+- **THEN** the replay exits with a diagnostic that the recorded source project is unavailable
+
 ### Requirement: Replays produce distinct append-only observations
 
 Every explicit replay SHALL have a distinct audit-run identity and SHALL mark its value observations as replay-generated. Replaying an already audited execution SHALL append a new observation set rather than overwriting the earlier local report or dataset rows.

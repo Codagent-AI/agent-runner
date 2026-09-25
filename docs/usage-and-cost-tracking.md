@@ -41,13 +41,13 @@ The summary also shows canonical processed-token totals when an adapter can calc
 
 The cost value comes directly from the CLI and may differ from your provider's final bill. Agent Runner has no pricing catalog, does no token-times-rate math, and does not convert credits into dollars.
 
-For Claude Code, Agent Runner captures `total_cost_usd` whenever the final result event includes it. This does not depend on Agent Runner having an Anthropic API key. Your normal Claude Code authentication is enough to run the step. If Claude omits the field, Agent Runner leaves cost unavailable.
+For Claude Code, Agent Runner captures `total_cost_usd` whenever the final result event includes it. This does not depend on Agent Runner having an Anthropic API key. Your normal Claude Code authentication is enough to run the step. If Claude omits the field, Agent Runner leaves cost unavailable. Claude reports `total_cost_usd` cumulatively for the session, so a step that resumes or inherits a Claude session records the difference from the prior value for that session. When no prior value was observed in the run, or an intervening invocation on the session reported none, that step's cost is unavailable.
 
 ## When Collection Works
 
 Token and cost extraction requires captured structured output. It works for autonomous agent steps that use the headless backend.
 
-Interactive agent steps and autonomous steps using an interactive backend own a PTY, so Agent Runner cannot inspect their structured stdout. Their usage and cost are unavailable. An autonomous agent step with `capture:` uses the headless path because its output must be captured.
+Interactive agent steps and autonomous steps using an interactive backend hand the terminal to the agent CLI, so Agent Runner has no structured stdout to inspect. Their usage and cost are unavailable with reason `interactive-context`. An autonomous agent step with `capture:` uses the headless path because its output must be captured.
 
 Failed agent steps still count. If a CLI process consumes tokens, reports metrics, and then exits with an error, Agent Runner keeps those metrics in the step and run totals.
 
@@ -99,7 +99,7 @@ show only that invocation's work, while run totals cover every session. Active
 duration excludes time spent paused between invocations. This identity is not
 the agent CLI `session_id` used to resume a model conversation.
 
-Codex defines `turn.completed.usage` as the usage during that completed turn. Agent Runner therefore records that snapshot directly for new and resumed turns; it does not subtract the preceding turn. Cache and reasoning values remain detail categories within the canonical input/output totals and are not added to those totals again.
+Codex `turn.completed.usage` is a cumulative session snapshot. Agent Runner records the full snapshot for a new session and attributes only the difference from the preceding snapshot to each resumed step. If a resumed session has no recorded baseline, that step's usage is unavailable. Cache and reasoning values remain detail categories within the canonical input/output totals and are not added to those totals again.
 
 ## The Metrics Artifact
 
@@ -153,4 +153,4 @@ steps:
 
 The `capture:` field forces this autonomous step onto the headless path. Run the workflow with your normally authenticated CLI, then open the completed run or inspect `run-metrics.json`. Claude or OpenCode must include a USD cost in its structured result for the Cost column to contain a number.
 
-If usage shows `?`, check whether the step used a PTY-backed mode, whether the CLI emitted its final usage event, and whether a resumed cumulative session had a trusted baseline. If cost alone shows `?`, the CLI probably did not report a USD cost for that invocation.
+If usage shows `?`, check whether the step used an interactive mode, whether the CLI emitted its final usage event, and whether a resumed cumulative session had a trusted baseline. If cost alone shows `?`, the CLI probably did not report a USD cost for that invocation.

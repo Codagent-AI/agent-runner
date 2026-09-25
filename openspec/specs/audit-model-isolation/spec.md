@@ -41,7 +41,7 @@ If the operating system, kernel facility, sandbox executable, permissions, or sa
 
 ### Requirement: Model runtime state remains inside the write allowance
 
-Agent Runner SHALL keep its disposable model runtime home, cache, and temporary files under the audit-owned model-output subtree. Existing Codex authentication may be read from its selected source but MUST remain unmodified. Cleanup SHALL remove disposable runtime state without modifying source authentication or evidence.
+Agent Runner SHALL keep its disposable model runtime home, cache, and temporary files under the audit-owned model-output subtree, including the temporary directory of a Claude auditor. Existing Codex authentication may be read from its selected source but MUST remain unmodified. Cleanup SHALL remove disposable runtime state without modifying source authentication or evidence.
 
 #### Scenario: Disposable Codex runtime is usable
 - **WHEN** a fake Codex executable runs through the real Linux or Darwin launcher
@@ -50,6 +50,14 @@ Agent Runner SHALL keep its disposable model runtime home, cache, and temporary 
 #### Scenario: Disposable runtime is cleaned
 - **WHEN** the model invocation finishes
 - **THEN** disposable runtime directories are removed and source authentication and trusted inputs retain their original contents
+
+### Requirement: Audit prompts do not travel as command-line arguments
+
+Audit prompts embed evidence packages larger than the 128 KiB Linux limit on one argument. Agent Runner SHALL deliver a Claude or Codex auditor's prompt on standard input, and SHALL place a Claude output schema before the flag terminator that precedes a positional prompt.
+
+#### Scenario: Large package on Linux
+- **WHEN** a value batch's prompt exceeds 128 KiB
+- **THEN** every argument passed to the sandboxed model is within the Linux limit and the prompt arrives on standard input
 
 ### Requirement: Isolation evidence exercises production launch behavior
 
