@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"encoding/json"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
@@ -29,6 +30,9 @@ type acceptanceRoundRunner struct {
 	// breakStatusOnce deletes the acceptance status before the first
 	// verify-acceptance-handoff check so its rerun repair must restore it.
 	breakStatusOnce bool
+	// validatorFails makes every validator run fail, so its repairs are
+	// exhausted and the validator workflow ends with a warning.
+	validatorFails bool
 }
 
 func (r *acceptanceRoundRunner) RunShell(cmd string, _ bool, _ string) (ProcessResult, error) {
@@ -57,7 +61,9 @@ func (r *acceptanceRoundRunner) RunScript(path string, stdin []byte, _ bool, _ s
 	switch name {
 	case "acceptance-gate.sh":
 		return r.run(osexec.Command("sh", path), stdin)
-	case "run-validator.sh", "acceptance-push.sh", "check-draft-pr.sh":
+	case "run-validator.sh":
+		return r.validate(stdin), nil
+	case "acceptance-push.sh", "check-draft-pr.sh":
 		return ProcessResult{Started: true, ExitCode: 0}, nil
 	default:
 		r.t.Fatalf("unexpected script %s", name)
@@ -74,10 +80,33 @@ func (r *acceptanceRoundRunner) RunAgent(options *AgentProcessOptions) (ProcessR
 	case strings.Contains(options.Prefix, "acceptance-fix"):
 		r.events = append(r.events, "acceptance-fix")
 		r.fix()
+	case r.validatorFails && strings.Contains(options.Prefix, "fix-violations"):
+		r.events = append(r.events, "fix-violations")
 	default:
 		r.t.Fatalf("unexpected agent step %s", options.Prefix)
 	}
 	return ProcessResult{Started: true, ExitCode: 0, Stdout: claudeUsageOutput("done", 0)}, nil
+}
+
+// validate records the validator result in the requested result file, as
+// run-validator.sh does, and fails when validatorFails is set.
+func (r *acceptanceRoundRunner) validate(stdin []byte) ProcessResult {
+	var inputs struct {
+		ResultFile string `json:"result_file"`
+	}
+	if err := json.Unmarshal(stdin, &inputs); err != nil {
+		r.t.Fatalf("run-validator inputs %q: %v", stdin, err)
+	}
+	result, exitCode := "PASS\n", 0
+	if r.validatorFails {
+		result, exitCode = "FAIL\ncheck: tests failed\n", 1
+	}
+	if inputs.ResultFile != "" {
+		if err := os.WriteFile(inputs.ResultFile, []byte(result), 0o600); err != nil {
+			r.t.Fatalf("write validator result: %v", err)
+		}
+	}
+	return ProcessResult{Started: true, ExitCode: exitCode}
 }
 
 func (r *acceptanceRoundRunner) run(cmd *osexec.Cmd, stdin []byte) (ProcessResult, error) {
@@ -155,7 +184,7 @@ func TestBuiltinVerifyChangeLoadsStandalone(t *testing.T) {
 // runVerifyChangeAcceptance executes verify-change from prepare-acceptance to
 // the end with the given acceptance rounds and returns the observed events and
 // the final acceptance status.
-func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator string, readyInRound func(int) bool, breakStatusOnce bool) (events []string, status, evidenceDir string) {
+func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator string, readyInRound func(int) bool, breakStatusOnce, validatorFails bool) (events []string, status, evidenceDir string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 
@@ -191,7 +220,8 @@ func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator string, ready
 	}
 
 	runner := &acceptanceRoundRunner{
-		t: t, repo: repo, evidenceDir: evidenceDir, readyInRound: readyInRound, breakStatusOnce: breakStatusOnce,
+		t: t, repo: repo, evidenceDir: evidenceDir, readyInRound: readyInRound,
+		breakStatusOnce: breakStatusOnce, validatorFails: validatorFails,
 	}
 	ctx := model.NewRootContext(&model.RootContextOptions{
 		Params: map[string]string{
@@ -234,8 +264,12 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 		skipValidator string
 		readyInRound  func(int) bool
 		breakStatus   bool
+		failValidator bool
 		wantEvents    []string
 		wantStatus    string
+		// wantValidatorResult is the first line of the acceptance-round
+		// validator result, or empty when no acceptance validator runs.
+		wantValidatorResult string
 	}{
 		{
 			name:          "first round converges without a fix",
@@ -258,7 +292,24 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh",
 				"acceptance-gate.sh", "verify-acceptance-handoff",
 			},
-			wantStatus: "ACCEPTANCE_COMPLETE",
+			wantStatus:          "ACCEPTANCE_COMPLETE",
+			wantValidatorResult: "PASS",
+		},
+		{
+			name:          "a red validator after a fix is recorded without blocking the rounds",
+			rounds:        "3",
+			skipValidator: "false",
+			readyInRound:  func(round int) bool { return round == 2 },
+			failValidator: true,
+			wantEvents: []string{
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix",
+				"run-validator.sh", "fix-violations", "run-validator.sh", "fix-violations", "run-validator.sh", "fix-violations", "run-validator.sh",
+				"acceptance-push.sh", "check-draft-pr.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh",
+				"acceptance-gate.sh", "verify-acceptance-handoff",
+			},
+			wantStatus:          "ACCEPTANCE_COMPLETE",
+			wantValidatorResult: "FAIL",
 		},
 		{
 			name:          "exhausted rounds leave no untested fix and fail",
@@ -271,7 +322,8 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "end-final-round",
 				"acceptance-gate.sh", "verify-acceptance-handoff",
 			},
-			wantStatus: "ACCEPTANCE_FAILED",
+			wantStatus:          "ACCEPTANCE_FAILED",
+			wantValidatorResult: "PASS",
 		},
 		{
 			name:          "skipped validator is not run between rounds",
@@ -312,7 +364,7 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			events, status, evidenceDir := runVerifyChangeAcceptance(t, tt.rounds, tt.skipValidator, tt.readyInRound, tt.breakStatus)
+			events, status, evidenceDir := runVerifyChangeAcceptance(t, tt.rounds, tt.skipValidator, tt.readyInRound, tt.breakStatus, tt.failValidator)
 			if diff := cmp.Diff(tt.wantEvents, events); diff != "" {
 				t.Errorf("events mismatch (-want +got):\n%s", diff)
 			}
@@ -325,6 +377,16 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			}
 			if tt.wantStatus == "ACCEPTANCE_FAILED" && !strings.Contains(string(handoff), filepath.Join(evidenceDir, "acceptance-findings.md")) {
 				t.Errorf("failure handoff does not point at the open findings:\n%s", handoff)
+			}
+			result, err := os.ReadFile(filepath.Join(evidenceDir, "acceptance-validator-result.txt"))
+			gotResult := ""
+			if err == nil {
+				gotResult, _, _ = strings.Cut(string(result), "\n")
+			} else if !os.IsNotExist(err) {
+				t.Fatalf("read acceptance validator result: %v", err)
+			}
+			if gotResult != tt.wantValidatorResult {
+				t.Errorf("acceptance validator result = %q, want %q", gotResult, tt.wantValidatorResult)
 			}
 		})
 	}
