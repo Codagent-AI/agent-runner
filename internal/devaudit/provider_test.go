@@ -140,6 +140,22 @@ func TestLinuxSandboxArgsProvidesReadOnlyDeviceFilesystem(t *testing.T) {
 	}
 }
 
+func TestLinuxSandboxArgsKeepsCallerIdentity(t *testing.T) {
+	args := linuxSandboxArgs([]string{"crosscheck"}, "/audit/workspace", "/audit/output")
+	userNamespace := false
+	for _, arg := range args {
+		if arg == "--uid" || arg == "--gid" {
+			t.Fatalf("Linux sandbox remaps the caller's identity with %s: %v", arg, args)
+		}
+		if arg == "--unshare-user" {
+			userNamespace = true
+		}
+	}
+	if !userNamespace {
+		t.Fatalf("Linux sandbox must keep its user namespace: %v", args)
+	}
+}
+
 func TestAuditOutputBoundaryRejectsSymlinkAndTrustedInputOverlap(t *testing.T) {
 	root := t.TempDir()
 	trusted := filepath.Join(root, "trusted")
