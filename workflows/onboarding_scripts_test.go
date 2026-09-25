@@ -63,6 +63,9 @@ if [ "$1" = internal ] && [ "$2" = json-value ] && [ "$3" = task_file ]; then
   printf '%s' '$(touch should-not-exist)'
   exit 0
 fi
+if [ "$1" = internal ] && [ "$2" = json-value ] && [ "$3" = result_file ]; then
+  exit 0
+fi
 exit 1
 `)
 	writeFakeBinary(t, binDir, "agent-validator", `#!/bin/sh

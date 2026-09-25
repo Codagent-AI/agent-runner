@@ -69,8 +69,16 @@ steps:
 
   - id: run-validator
     workflow: run-validator-v1.0.yaml
+    params:
+      result_file: "{{session_dir}}/output/verify-change-validator-result.txt"
     # skip_if parameters are shell-quoted by InterpolateShellSafeTyped. The
     # validation step above additionally constrains this value to true|false.
+    skip_if: 'sh: test {{skip_validator}} = true'
+
+  - id: verify-validator-result
+    script: validator-pr-gate.sh
+    script_inputs:
+      result_file: "{{session_dir}}/output/verify-change-validator-result.txt"
     skip_if: 'sh: test {{skip_validator}} = true'
 
   - id: verify-clean-for-pr
