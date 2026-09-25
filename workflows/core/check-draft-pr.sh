@@ -32,6 +32,10 @@ case "$interval" in
 esac
 
 branch=$(git branch --show-current)
+if [ -z "$branch" ]; then
+  printf 'HEAD is detached; check out the change branch before checking its pull request\n' >&2
+  exit 1
+fi
 local_head=$(git rev-parse HEAD)
 attempt=1
 while :; do

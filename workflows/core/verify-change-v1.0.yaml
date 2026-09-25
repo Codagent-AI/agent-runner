@@ -103,6 +103,10 @@ steps:
 
   - id: verify-draft-pr
     script: check-draft-pr.sh
+    # A brief GitHub lag retries here instead of rerunning open-draft-pr.
+    script_inputs:
+      attempts: "3"
+      interval_seconds: "3"
     capture: pr_url
     repair:
       rerun: open-draft-pr

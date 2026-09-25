@@ -232,6 +232,11 @@ func TestCoreVerifyChangeOpenDraftPRPushesDirectly(t *testing.T) {
 		"its head SHA equals local `HEAD`",
 		"REPAIR_BLOCKED",
 	)
+
+	verify := findStep(workflow.Steps, "verify-draft-pr")
+	if verify == nil || verify.Script != "check-draft-pr.sh" || verify.ScriptInputs["attempts"] != "3" || verify.Capture != "pr_url" {
+		t.Fatalf("verify-draft-pr = %+v, want check-draft-pr.sh with retries capturing pr_url", verify)
+	}
 }
 
 // gitRepo creates a repository with one commit and returns its directory and
@@ -548,6 +553,24 @@ func TestCoreCheckDraftPRScript(t *testing.T) {
 				t.Fatalf("gh calls = %s, want 2", calls)
 			}
 		})
+	}
+}
+
+func TestCoreCheckDraftPRScriptRejectsDetachedHead(t *testing.T) {
+	scriptPath := writeAssetScript(t, "core/check-draft-pr.sh")
+	repo, head := gitRepo(t)
+	runGit(t, repo, "checkout", "-q", "--detach", head)
+	binDir, countFile := fakeGH(t)
+	out, err := runScriptIn(t, scriptPath, repo, "",
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"FAKE_GH_COUNT="+countFile,
+		"FAKE_GH_JSON="+prListJSON(prJSON(head, true)),
+	)
+	if err == nil || !strings.Contains(out, "HEAD is detached") {
+		t.Fatalf("check = (%q, %v), want detached-HEAD failure", out, err)
+	}
+	if _, statErr := os.Stat(countFile); !os.IsNotExist(statErr) {
+		t.Fatalf("fake gh was called on a detached HEAD (count file stat err = %v)", statErr)
 	}
 }
 
