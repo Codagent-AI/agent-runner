@@ -484,91 +484,129 @@ func TestCoreImplementChangePreflightsValidatedPlanBeforeAgentWork(t *testing.T)
 	}
 }
 
-func TestCoreImplementChangeSkipValidatorControlsAllValidatorRuns(t *testing.T) {
-	body, err := ReadFile("builtin:core/implement-change-v1.0.yaml")
-	if err != nil {
-		t.Fatalf("ReadFile(core implement-change): %v", err)
-	}
+type skipValidatorStep struct {
+	ID           string              `yaml:"id"`
+	Script       string              `yaml:"script"`
+	ScriptInputs map[string]string   `yaml:"script_inputs"`
+	SkipIf       string              `yaml:"skip_if"`
+	Prompt       string              `yaml:"prompt"`
+	Workflow     string              `yaml:"workflow"`
+	Params       map[string]string   `yaml:"params"`
+	Steps        []skipValidatorStep `yaml:"steps"`
+}
 
+func loadSkipValidatorSteps(t *testing.T, ref string) (steps []skipValidatorStep, indexes map[string]int) {
+	t.Helper()
+	body, err := ReadFile(ref)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", ref, err)
+	}
 	var workflow struct {
-		Steps []struct {
-			ID           string            `yaml:"id"`
-			Script       string            `yaml:"script"`
-			ScriptInputs map[string]string `yaml:"script_inputs"`
-			SkipIf       string            `yaml:"skip_if"`
-			Prompt       string            `yaml:"prompt"`
-			Steps        []struct {
-				ID     string            `yaml:"id"`
-				Params map[string]string `yaml:"params"`
-			} `yaml:"steps"`
-		} `yaml:"steps"`
+		Steps []skipValidatorStep `yaml:"steps"`
 	}
 	if err := yaml.Unmarshal(body, &workflow); err != nil {
-		t.Fatalf("unmarshal core implement-change: %v", err)
+		t.Fatalf("unmarshal %s: %v", ref, err)
 	}
+	indexes = make(map[string]int)
+	for index := range workflow.Steps {
+		indexes[workflow.Steps[index].ID] = index
+	}
+	return workflow.Steps, indexes
+}
 
-	indexes := make(map[string]int)
-	for index, step := range workflow.Steps {
-		indexes[step.ID] = index
+func requireSkipValidatorValidation(t *testing.T, ref string, steps []skipValidatorStep, indexes map[string]int) {
+	t.Helper()
+	index, ok := indexes["validate-skip-validator"]
+	if !ok {
+		t.Fatalf("%s has no validate-skip-validator step", ref)
 	}
-	for _, id := range []string{
-		"validate-skip-validator",
-		"implement-tasks",
-		"run-validator",
-		"open-draft-pr",
-		"prepare-acceptance",
-		"verify-acceptance-handoff",
-	} {
+	validate := steps[index]
+	if validate.Script != "validate-boolean-param.sh" ||
+		validate.ScriptInputs["name"] != "skip_validator" ||
+		validate.ScriptInputs["value"] != "{{skip_validator}}" {
+		t.Fatalf("%s validate-skip-validator = %+v, want boolean validation for skip_validator", ref, validate)
+	}
+}
+
+func TestCoreImplementChangeSkipValidatorControlsAllValidatorRuns(t *testing.T) {
+	const ref = "builtin:core/implement-change-v1.0.yaml"
+	steps, indexes := loadSkipValidatorSteps(t, ref)
+	for _, id := range []string{"validate-skip-validator", "implement-tasks", "verify-change"} {
 		if _, ok := indexes[id]; !ok {
 			t.Fatalf("core implement-change has no %s step", id)
 		}
 	}
-
-	validate := workflow.Steps[indexes["validate-skip-validator"]]
-	if validate.Script != "validate-boolean-param.sh" ||
-		validate.ScriptInputs["name"] != "skip_validator" ||
-		validate.ScriptInputs["value"] != "{{skip_validator}}" {
-		t.Fatalf("validate-skip-validator = %+v, want boolean validation for skip_validator", validate)
-	}
+	requireSkipValidatorValidation(t, ref, steps, indexes)
 	if indexes["validate-skip-validator"] > indexes["implement-tasks"] {
 		t.Fatal("skip_validator must be validated before it is forwarded to task workflows")
 	}
 
-	implementTasks := workflow.Steps[indexes["implement-tasks"]]
+	implementTasks := steps[indexes["implement-tasks"]]
 	if len(implementTasks.Steps) != 1 || implementTasks.Steps[0].Params["skip_validator"] != "{{skip_validator}}" {
 		t.Fatalf("implement-tasks does not forward skip_validator: %+v", implementTasks.Steps)
 	}
+	verifyChange := steps[indexes["verify-change"]]
+	if verifyChange.Workflow != "verify-change-v1.0.yaml" || verifyChange.Params["skip_validator"] != "{{skip_validator}}" {
+		t.Fatalf("verify-change step = %+v, want the verify-change workflow with skip_validator forwarded", verifyChange)
+	}
+}
 
-	finalValidator := workflow.Steps[indexes["run-validator"]]
-	if finalValidator.SkipIf != "sh: test {{skip_validator}} = true" {
-		t.Fatalf("run-validator skip_if = %q, want skip_validator gate", finalValidator.SkipIf)
+func TestCoreVerifyChangeSkipValidatorControlsAllValidatorRuns(t *testing.T) {
+	const ref = "builtin:core/verify-change-v1.0.yaml"
+	steps, indexes := loadSkipValidatorSteps(t, ref)
+	for _, id := range []string{
+		"validate-skip-validator",
+		"run-validator",
+		"open-draft-pr",
+		"prepare-acceptance",
+		"write-acceptance-status",
+		"verify-acceptance-handoff",
+	} {
+		if _, ok := indexes[id]; !ok {
+			t.Fatalf("core verify-change has no %s step", id)
+		}
+	}
+	requireSkipValidatorValidation(t, ref, steps, indexes)
+	if indexes["validate-skip-validator"] != 1 {
+		t.Fatal("skip_validator must be validated before any other verify-change work")
+	}
+
+	finalValidator := steps[indexes["run-validator"]]
+	if finalValidator.Workflow != "run-validator-v1.0.yaml" || finalValidator.SkipIf != "sh: test {{skip_validator}} = true" {
+		t.Fatalf("run-validator = %+v, want the run-validator workflow behind the skip_validator gate", finalValidator)
 	}
 	if indexes["run-validator"] >= indexes["open-draft-pr"] ||
 		indexes["open-draft-pr"] >= indexes["prepare-acceptance"] ||
-		indexes["prepare-acceptance"] >= indexes["verify-acceptance-handoff"] {
+		indexes["prepare-acceptance"] >= indexes["write-acceptance-status"] ||
+		indexes["write-acceptance-status"] >= indexes["verify-acceptance-handoff"] {
 		t.Fatal("skipped final validation must not bypass draft-PR creation or acceptance preparation")
 	}
 
-	openDraftPR := workflow.Steps[indexes["open-draft-pr"]]
+	openDraftPR := steps[indexes["open-draft-pr"]]
 	for _, want := range []string{
 		"Agent Validator skipping was set to `{{skip_validator}}`",
 		"If `skip_validator` is `false`",
 		"If it is `true`",
+		"do not run Agent Validator here",
 	} {
 		if !strings.Contains(openDraftPR.Prompt, want) {
 			t.Errorf("open-draft-pr prompt missing conditional validation status %q", want)
 		}
 	}
 
-	prepareAcceptance := workflow.Steps[indexes["prepare-acceptance"]]
-	for _, want := range []string{
-		"Agent Validator skipping is set to `{{skip_validator}}`",
-		"If `skip_validator` is `false`, invoke the validator-run skill",
-		"If `skip_validator` is `true`, do not invoke Agent Validator",
-	} {
-		if !strings.Contains(prepareAcceptance.Prompt, want) {
-			t.Errorf("prepare-acceptance prompt missing conditional Validator instruction %q", want)
-		}
+	loopSteps := make(map[string]skipValidatorStep)
+	for _, step := range steps[indexes["prepare-acceptance"]].Steps {
+		loopSteps[step.ID] = step
+	}
+	acceptanceValidator, ok := loopSteps["acceptance-validator"]
+	if !ok {
+		t.Fatal("prepare-acceptance has no acceptance-validator step")
+	}
+	if acceptanceValidator.Workflow != "run-validator-v1.0.yaml" || acceptanceValidator.SkipIf != "sh: test {{skip_validator}} = true" {
+		t.Fatalf("acceptance-validator = %+v, want the run-validator workflow behind the skip_validator gate", acceptanceValidator)
+	}
+	if !strings.Contains(loopSteps["acceptance-fix"].Prompt, "Do not run Agent Validator") {
+		t.Error("acceptance-fix prompt must leave Agent Validator to the acceptance-validator step")
 	}
 }
 
@@ -1195,20 +1233,6 @@ func TestSharedAcceptanceCallsUseTesterAndPreserveControls(t *testing.T) {
 		required []string
 	}{
 		{
-			ref:    "builtin:core/implement-change-v1.0.yaml",
-			stepID: "prepare-acceptance",
-			required: []string{
-				"`session: acceptance-tester`",
-				"verification scope: `full` for the first pass",
-				"test plan was structurally validated before implementation",
-				"acceptance-assumptions.md",
-				"acceptance-impact-scope.md",
-				"acceptance-flow-evidence.md",
-				"Use at most three acceptance-tester calls",
-				"acceptance-handoff.md",
-			},
-		},
-		{
 			ref:    "builtin:core/accept-change-v1.0.yaml",
 			stepID: "run-reacceptance-testing",
 			required: []string{
@@ -1271,10 +1295,10 @@ func TestSharedAcceptanceCallsUseTesterAndPreserveControls(t *testing.T) {
 	}
 }
 
-func TestImplementChangeAcceptanceHandoffAllowsFailedTestingForHumanReview(t *testing.T) {
-	body, err := ReadFile("builtin:core/implement-change-v1.0.yaml")
+func TestVerifyChangeAcceptanceHandoffAllowsFailedTestingForHumanReview(t *testing.T) {
+	body, err := ReadFile("builtin:core/verify-change-v1.0.yaml")
 	if err != nil {
-		t.Fatalf("ReadFile(implement-change): %v", err)
+		t.Fatalf("ReadFile(verify-change): %v", err)
 	}
 	var workflow struct {
 		Steps []struct {
@@ -1283,7 +1307,7 @@ func TestImplementChangeAcceptanceHandoffAllowsFailedTestingForHumanReview(t *te
 		} `yaml:"steps"`
 	}
 	if err := yaml.Unmarshal(body, &workflow); err != nil {
-		t.Fatalf("unmarshal implement-change: %v", err)
+		t.Fatalf("unmarshal verify-change: %v", err)
 	}
 
 	var command string
@@ -1294,7 +1318,7 @@ func TestImplementChangeAcceptanceHandoffAllowsFailedTestingForHumanReview(t *te
 		}
 	}
 	if command == "" {
-		t.Fatal("implement-change has no verify-acceptance-handoff command")
+		t.Fatal("verify-change has no verify-acceptance-handoff command")
 	}
 
 	for _, tt := range []struct {
@@ -2095,8 +2119,9 @@ func TestMigratedRepairSitesLoadWithExpectedShape(t *testing.T) {
 			{"builtin:core/plan-change-v1.0.yaml", "commit-plan"},
 			{"builtin:core/implement-task-v1.0.yaml", "verify-task-commit"},
 			{"builtin:core/implement-change-v1.0.yaml", "verify-task-index"},
-			{"builtin:core/implement-change-v1.0.yaml", "verify-assumptions-handoff"},
-			{"builtin:core/implement-change-v1.0.yaml", "verify-clean-for-pr"},
+			{"builtin:core/verify-change-v1.0.yaml", "verify-assumptions-handoff"},
+			{"builtin:core/verify-change-v1.0.yaml", "verify-clean-for-pr"},
+			{"builtin:core/verify-change-v1.0.yaml", "acceptance-push"},
 			{"builtin:openspec/simple-change-v2.0.yaml", "validate-openspec"},
 			{"builtin:openspec/archive-change-v1.0.yaml", "archive-transition"},
 			{"builtin:openspec/archive-change-v1.0.yaml", "verify-archive-commit"},
@@ -2180,8 +2205,8 @@ func TestMigratedRepairSitesLoadWithExpectedShape(t *testing.T) {
 		}
 	})
 
-	t.Run("core/implement-change-v1.0.yaml verify-assumptions-handoff is inline repair on lead-agent", func(t *testing.T) {
-		workflow := loadRepairSiteWorkflow(t, "builtin:core/implement-change-v1.0.yaml")
+	t.Run("core/verify-change-v1.0.yaml verify-assumptions-handoff is inline repair on lead-agent", func(t *testing.T) {
+		workflow := loadRepairSiteWorkflow(t, "builtin:core/verify-change-v1.0.yaml")
 		step := findRepairSiteStep(workflow.Steps, "verify-assumptions-handoff")
 		if step == nil {
 			t.Fatal("verify-assumptions-handoff step not found")
@@ -2191,8 +2216,8 @@ func TestMigratedRepairSitesLoadWithExpectedShape(t *testing.T) {
 		}
 	})
 
-	t.Run("core/implement-change-v1.0.yaml verify-clean-for-pr is inline repair on lead-agent", func(t *testing.T) {
-		workflow := loadRepairSiteWorkflow(t, "builtin:core/implement-change-v1.0.yaml")
+	t.Run("core/verify-change-v1.0.yaml verify-clean-for-pr is inline repair on lead-agent", func(t *testing.T) {
+		workflow := loadRepairSiteWorkflow(t, "builtin:core/verify-change-v1.0.yaml")
 		step := findRepairSiteStep(workflow.Steps, "verify-clean-for-pr")
 		if step == nil {
 			t.Fatal("verify-clean-for-pr step not found")
@@ -2202,8 +2227,8 @@ func TestMigratedRepairSitesLoadWithExpectedShape(t *testing.T) {
 		}
 	})
 
-	t.Run("core/implement-change-v1.0.yaml verify-draft-pr reruns open-draft-pr", func(t *testing.T) {
-		workflow := loadRepairSiteWorkflow(t, "builtin:core/implement-change-v1.0.yaml")
+	t.Run("core/verify-change-v1.0.yaml verify-draft-pr reruns open-draft-pr", func(t *testing.T) {
+		workflow := loadRepairSiteWorkflow(t, "builtin:core/verify-change-v1.0.yaml")
 		step := findRepairSiteStep(workflow.Steps, "verify-draft-pr")
 		if step == nil {
 			t.Fatal("verify-draft-pr step not found")
@@ -2276,8 +2301,11 @@ func TestMigratedRepairSitesLoadWithExpectedShape(t *testing.T) {
 		{"builtin:core/implement-task-v1.0.yaml", "check-clean"},
 		{"builtin:core/implement-change-v1.0.yaml", "validate-change-name"},
 		{"builtin:core/implement-change-v1.0.yaml", "validate-skip-validator"},
-		{"builtin:core/implement-change-v1.0.yaml", "run-validator"},
-		{"builtin:core/implement-change-v1.0.yaml", "verify-acceptance-handoff"},
+		{"builtin:core/verify-change-v1.0.yaml", "validate-change-name"},
+		{"builtin:core/verify-change-v1.0.yaml", "validate-skip-validator"},
+		{"builtin:core/verify-change-v1.0.yaml", "write-acceptance-status"},
+		{"builtin:core/verify-change-v1.0.yaml", "run-validator"},
+		{"builtin:core/verify-change-v1.0.yaml", "verify-acceptance-handoff"},
 		{"builtin:core/plan-change-v1.0.yaml", "check-definition"},
 	}
 	for _, site := range plainFailureSites {
