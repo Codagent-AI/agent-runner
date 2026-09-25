@@ -3,8 +3,9 @@ set -eu
 
 validator=${AGENT_RUNNER_VALIDATOR_EXECUTABLE:-agent-validator}
 
-task_file=$("$AGENT_RUNNER_EXECUTABLE" internal json-value task_file)
-result_file=$("$AGENT_RUNNER_EXECUTABLE" internal json-value result_file)
+IFS= read -r payload || :
+task_file=$(printf '%s' "$payload" | "$AGENT_RUNNER_EXECUTABLE" internal json-value task_file)
+result_file=$(printf '%s' "$payload" | "$AGENT_RUNNER_EXECUTABLE" internal json-value result_file)
 
 set -- run --report
 if [ -n "$task_file" ]; then

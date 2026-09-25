@@ -154,6 +154,25 @@ func TestRunValidatorRecordsFinalResultForPRGate(t *testing.T) {
 	}
 }
 
+func TestRunValidatorReadsTaskAndResultFileFromSameInput(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := filepath.Join(dir, "result.txt")
+	writeFakeBinary(t, dir, "runner", "#!/bin/sh\njq -r --arg key \"$3\" '.[$key] // \"\"'\n")
+	writeFakeBinary(t, dir, "validator", "#!/bin/sh\nprintf '%s\\n' \"$@\" > validator-args\n")
+	input := `{"task_file":"task.md","result_file":"` + resultFile + `"}`
+	output, err := runScriptIn(t, coreRunValidatorScript(t), dir, input, "AGENT_RUNNER_EXECUTABLE="+filepath.Join(dir, "runner"), "AGENT_RUNNER_VALIDATOR_EXECUTABLE="+filepath.Join(dir, "validator"))
+	if err != nil {
+		t.Fatalf("run-validator = (%q, %v)", output, err)
+	}
+	if _, err := os.Stat(resultFile); err != nil {
+		t.Fatalf("result file missing: %v", err)
+	}
+	args, err := os.ReadFile(filepath.Join(dir, "validator-args"))
+	if err != nil || !strings.Contains(string(args), "task.md") {
+		t.Fatalf("validator args = (%q, %v)", args, err)
+	}
+}
+
 func TestCoreImplementChangeComposesVerifyChangeWithSharedSessions(t *testing.T) {
 	implement := readBuiltinWorkflowForTest(t, "builtin:core/implement-change-v1.0.yaml")
 	verify := readBuiltinWorkflowForTest(t, verifyChangeRef)
