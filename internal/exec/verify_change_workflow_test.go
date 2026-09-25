@@ -48,7 +48,7 @@ func (r *acceptanceRoundRunner) RunScript(path string, stdin []byte, _ bool, _ s
 	switch name {
 	case "acceptance-gate.sh":
 		return r.run(osexec.Command("sh", path), stdin)
-	case "run-validator.sh", "acceptance-push.sh":
+	case "run-validator.sh", "acceptance-push.sh", "check-draft-pr.sh":
 		return ProcessResult{Started: true, ExitCode: 0}, nil
 	default:
 		r.t.Fatalf("unexpected script %s", name)
@@ -242,7 +242,7 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			skipValidator: "false",
 			readyInRound:  func(round int) bool { return round == 2 },
 			wantEvents: []string{
-				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "run-validator.sh", "acceptance-push.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "run-validator.sh", "acceptance-push.sh", "check-draft-pr.sh",
 				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh",
 				"acceptance-gate.sh", "verify-acceptance-handoff",
 			},
@@ -254,8 +254,8 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			skipValidator: "false",
 			readyInRound:  never,
 			wantEvents: []string{
-				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "run-validator.sh", "acceptance-push.sh",
-				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "run-validator.sh", "acceptance-push.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "run-validator.sh", "acceptance-push.sh", "check-draft-pr.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "run-validator.sh", "acceptance-push.sh", "check-draft-pr.sh",
 				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "end-final-round",
 				"acceptance-gate.sh", "verify-acceptance-handoff",
 			},
@@ -267,7 +267,7 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			skipValidator: "true",
 			readyInRound:  never,
 			wantEvents: []string{
-				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "acceptance-push.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "acceptance-push.sh", "check-draft-pr.sh",
 				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "end-final-round",
 				"acceptance-gate.sh", "verify-acceptance-handoff",
 			},
@@ -298,8 +298,8 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read handoff: %v", err)
 			}
-			if tt.wantStatus == "ACCEPTANCE_FAILED" && !strings.Contains(string(handoff), "AT-1 defect found") {
-				t.Errorf("failure handoff does not list the open findings:\n%s", handoff)
+			if tt.wantStatus == "ACCEPTANCE_FAILED" && !strings.Contains(string(handoff), filepath.Join(evidenceDir, "acceptance-findings.md")) {
+				t.Errorf("failure handoff does not point at the open findings:\n%s", handoff)
 			}
 		})
 	}

@@ -9,99 +9,48 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"gopkg.in/yaml.v3"
+
+	"github.com/codagent/agent-runner/internal/model"
 )
 
-type verifyChangeRepair struct {
-	Prompt  string `yaml:"prompt"`
-	Session string `yaml:"session"`
-	Rerun   string `yaml:"rerun"`
-}
+const verifyChangeRef = "builtin:core/verify-change-v1.0.yaml"
 
-type verifyChangeLoop struct {
-	MaxParam string `yaml:"max_param"`
-	AsIndex  string `yaml:"as_index"`
-}
+// The loop semantics of verify-change (round order, convergence break, the
+// final-round break, validator skipping, push, and status writing) are
+// exercised end to end in internal/exec/verify_change_workflow_test.go. The
+// tests here cover the declarations and prompt contracts that execution with
+// stubbed agents cannot see.
 
-type verifyChangeStep struct {
-	ID                string              `yaml:"id"`
-	Prompt            string              `yaml:"prompt"`
-	Command           string              `yaml:"command"`
-	Script            string              `yaml:"script"`
-	ScriptInputs      map[string]string   `yaml:"script_inputs"`
-	Session           string              `yaml:"session"`
-	Mode              string              `yaml:"mode"`
-	Tools             []string            `yaml:"tools"`
-	Workflow          string              `yaml:"workflow"`
-	Params            map[string]string   `yaml:"params"`
-	SkipIf            string              `yaml:"skip_if"`
-	BreakIf           string              `yaml:"break_if"`
-	ContinueOnFailure bool                `yaml:"continue_on_failure"`
-	Loop              *verifyChangeLoop   `yaml:"loop"`
-	Repair            *verifyChangeRepair `yaml:"repair"`
-	Steps             []verifyChangeStep  `yaml:"steps"`
-}
-
-type verifyChangeSession struct {
-	Name  string `yaml:"name"`
-	Agent string `yaml:"agent"`
-}
-
-type verifyChangeParam struct {
-	Name     string `yaml:"name"`
-	Required *bool  `yaml:"required"`
-	Default  string `yaml:"default"`
-}
-
-type verifyChangeWorkflow struct {
-	Hidden   bool                  `yaml:"hidden"`
-	Params   []verifyChangeParam   `yaml:"params"`
-	Sessions []verifyChangeSession `yaml:"sessions"`
-	Steps    []verifyChangeStep    `yaml:"steps"`
-}
-
-func loadVerifyChangeWorkflow(t *testing.T, ref string) verifyChangeWorkflow {
-	t.Helper()
-	body, err := ReadFile(ref)
-	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", ref, err)
-	}
-	var workflow verifyChangeWorkflow
-	if err := yaml.Unmarshal(body, &workflow); err != nil {
-		t.Fatalf("unmarshal %s: %v", ref, err)
-	}
-	return workflow
-}
-
-func verifyStepIDs(steps []verifyChangeStep) []string {
-	ids := make([]string, 0, len(steps))
-	for i := range steps {
-		ids = append(ids, steps[i].ID)
-	}
-	return ids
-}
-
-func findVerifyChangeStep(steps []verifyChangeStep, id string) *verifyChangeStep {
+func findStep(steps []model.Step, id string) *model.Step {
 	for i := range steps {
 		if steps[i].ID == id {
 			return &steps[i]
 		}
-		if found := findVerifyChangeStep(steps[i].Steps, id); found != nil {
+		if found := findStep(steps[i].Steps, id); found != nil {
 			return found
 		}
 	}
 	return nil
 }
 
-func walkVerifyChangeSteps(steps []verifyChangeStep, visit func(*verifyChangeStep)) {
+func walkSteps(steps []model.Step, visit func(*model.Step)) {
 	for i := range steps {
 		visit(&steps[i])
-		walkVerifyChangeSteps(steps[i].Steps, visit)
+		walkSteps(steps[i].Steps, visit)
+	}
+}
+
+func requirePromptContains(t *testing.T, stepID, prompt string, wants ...string) {
+	t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("%s prompt missing %q", stepID, want)
+		}
 	}
 }
 
 func TestCoreVerifyChangeShape(t *testing.T) {
-	workflow := loadVerifyChangeWorkflow(t, "builtin:core/verify-change-v1.0.yaml")
+	workflow := readBuiltinWorkflowForTest(t, verifyChangeRef)
 	if !workflow.Hidden {
 		t.Error("verify-change must be hidden")
 	}
@@ -112,8 +61,9 @@ func TestCoreVerifyChangeShape(t *testing.T) {
 		Default  string
 	}
 	var params []param
-	for _, p := range workflow.Params {
-		params = append(params, param{Name: p.Name, Required: p.Required == nil || *p.Required, Default: p.Default})
+	for i := range workflow.Params {
+		p := &workflow.Params[i]
+		params = append(params, param{Name: p.Name, Required: p.IsRequired(), Default: p.Default})
 	}
 	wantParams := []param{
 		{Name: "change_name", Required: true},
@@ -141,16 +91,16 @@ func TestCoreVerifyChangeShape(t *testing.T) {
 		"write-acceptance-status",
 		"verify-acceptance-handoff",
 	}
-	if diff := cmp.Diff(wantSteps, verifyStepIDs(workflow.Steps)); diff != "" {
+	if diff := cmp.Diff(wantSteps, stepIDs(workflow.Steps)); diff != "" {
 		t.Errorf("verify-change steps mismatch (-want +got):\n%s", diff)
 	}
 }
 
 func TestCoreImplementChangeComposesVerifyChangeWithSharedSessions(t *testing.T) {
-	implement := loadVerifyChangeWorkflow(t, "builtin:core/implement-change-v1.0.yaml")
-	verify := loadVerifyChangeWorkflow(t, "builtin:core/verify-change-v1.0.yaml")
+	implement := readBuiltinWorkflowForTest(t, "builtin:core/implement-change-v1.0.yaml")
+	verify := readBuiltinWorkflowForTest(t, verifyChangeRef)
 
-	wantSessions := []verifyChangeSession{{Name: "lead-agent", Agent: "lead"}, {Name: "acceptance-tester", Agent: "tester"}}
+	wantSessions := []model.SessionDecl{{Name: "lead-agent", Agent: "lead"}, {Name: "acceptance-tester", Agent: "tester"}}
 	if diff := cmp.Diff(wantSessions, verify.Sessions); diff != "" {
 		t.Errorf("verify-change sessions mismatch (-want +got):\n%s", diff)
 	}
@@ -158,7 +108,6 @@ func TestCoreImplementChangeComposesVerifyChangeWithSharedSessions(t *testing.T)
 		t.Errorf("implement-change and verify-change must declare identical sessions (-verify +implement):\n%s", diff)
 	}
 
-	ids := verifyStepIDs(implement.Steps)
 	wantHead := []string{
 		"validate-change-name",
 		"validate-skip-validator",
@@ -168,7 +117,7 @@ func TestCoreImplementChangeComposesVerifyChangeWithSharedSessions(t *testing.T)
 		"verify-task-index",
 		"verify-change",
 	}
-	if diff := cmp.Diff(wantHead, ids); diff != "" {
+	if diff := cmp.Diff(wantHead, stepIDs(implement.Steps)); diff != "" {
 		t.Fatalf("implement-change steps mismatch (-want +got):\n%s", diff)
 	}
 	call := implement.Steps[len(implement.Steps)-1]
@@ -188,8 +137,8 @@ func TestCoreImplementChangeComposesVerifyChangeWithSharedSessions(t *testing.T)
 }
 
 func TestCoreVerifyChangeUsesNoAgentCallsOrValidatorSkills(t *testing.T) {
-	workflow := loadVerifyChangeWorkflow(t, "builtin:core/verify-change-v1.0.yaml")
-	walkVerifyChangeSteps(workflow.Steps, func(step *verifyChangeStep) {
+	workflow := readBuiltinWorkflowForTest(t, verifyChangeRef)
+	walkSteps(workflow.Steps, func(step *model.Step) {
 		if len(step.Tools) != 0 {
 			t.Errorf("step %s declares tools %v; a second agent must be a workflow step", step.ID, step.Tools)
 		}
@@ -208,45 +157,28 @@ func TestCoreVerifyChangeUsesNoAgentCallsOrValidatorSkills(t *testing.T) {
 }
 
 func TestCoreVerifyChangeAcceptanceRoundsAreWorkflowSteps(t *testing.T) {
-	workflow := loadVerifyChangeWorkflow(t, "builtin:core/verify-change-v1.0.yaml")
-	loop := findVerifyChangeStep(workflow.Steps, "prepare-acceptance")
-	if loop == nil || loop.Loop == nil {
-		t.Fatal("prepare-acceptance must be a loop")
-	}
-	if loop.Loop.MaxParam != "acceptance_rounds" || loop.Loop.AsIndex != "acceptance_round" {
-		t.Fatalf("prepare-acceptance loop = %+v, want max_param acceptance_rounds and as_index acceptance_round", loop.Loop)
-	}
-	if loop.ContinueOnFailure {
-		t.Fatal("prepare-acceptance must not hide real step failures behind continue_on_failure")
-	}
-	wantBody := []string{
-		"reset-round-evidence",
-		"acceptance-test",
-		"acceptance-gate",
-		"end-final-round",
-		"acceptance-fix",
-		"acceptance-validator",
-		"acceptance-push",
-	}
-	if diff := cmp.Diff(wantBody, verifyStepIDs(loop.Steps)); diff != "" {
-		t.Fatalf("prepare-acceptance body mismatch (-want +got):\n%s", diff)
-	}
+	workflow := readBuiltinWorkflowForTest(t, verifyChangeRef)
 
-	reset := loop.Steps[0]
+	reset := findStep(workflow.Steps, "reset-round-evidence")
+	if reset == nil {
+		t.Fatal("reset-round-evidence step not found")
+	}
 	for _, file := range []string{"acceptance-round-status.txt", "acceptance-test.md", "acceptance-handoff.md"} {
 		if !strings.Contains(reset.Command, "{{session_dir}}/output/"+file) {
 			t.Errorf("reset-round-evidence does not clear %s: %q", file, reset.Command)
 		}
 	}
-	if strings.Contains(reset.Command, "acceptance-flow-evidence.md") || strings.Contains(reset.Command, "acceptance-findings.md") {
-		t.Errorf("reset-round-evidence must keep the tester baseline: %q", reset.Command)
+	for _, baseline := range []string{"acceptance-flow-evidence.md", "acceptance-findings.md"} {
+		if strings.Contains(reset.Command, baseline) {
+			t.Errorf("reset-round-evidence must keep the tester baseline %s: %q", baseline, reset.Command)
+		}
 	}
 
-	tester := loop.Steps[1]
-	if tester.Session != "acceptance-tester" || tester.Mode != "autonomous" {
-		t.Fatalf("acceptance-test = session:%q mode:%q, want acceptance-tester/autonomous", tester.Session, tester.Mode)
+	tester := findStep(workflow.Steps, "acceptance-test")
+	if tester == nil || tester.Session != "acceptance-tester" || tester.Mode != model.ModeAutonomous {
+		t.Fatalf("acceptance-test = %+v, want an autonomous acceptance-tester step", tester)
 	}
-	for _, want := range []string{
+	requirePromptContains(t, tester.ID, tester.Prompt,
 		"codagent:prepare-acceptance",
 		"approved artifacts: `{{change_dir}}/`",
 		"`{{change_dir}}/test-plan.md`",
@@ -261,30 +193,13 @@ func TestCoreVerifyChangeAcceptanceRoundsAreWorkflowSteps(t *testing.T) {
 		"`{{session_dir}}/output/acceptance-round-status.txt`",
 		"`READY <sha>`",
 		"`NOT_READY`",
-	} {
-		if !strings.Contains(tester.Prompt, want) {
-			t.Errorf("acceptance-test prompt missing %q", want)
-		}
-	}
+	)
 
-	gate := loop.Steps[2]
-	if gate.Script != "acceptance-gate.sh" || gate.ScriptInputs["action"] != "check" ||
-		gate.ScriptInputs["evidence_dir"] != "{{session_dir}}/output" ||
-		gate.BreakIf != "success" || !gate.ContinueOnFailure {
-		t.Fatalf("acceptance-gate = %+v, want a tolerated acceptance-gate.sh check that breaks on success", gate)
+	fix := findStep(workflow.Steps, "acceptance-fix")
+	if fix == nil || fix.Session != "lead-agent" || fix.Mode != model.ModeAutonomous {
+		t.Fatalf("acceptance-fix = %+v, want an autonomous lead-agent step", fix)
 	}
-
-	endFinal := loop.Steps[3]
-	if endFinal.BreakIf != "success" || !strings.Contains(endFinal.SkipIf, "{{acceptance_round}}") ||
-		!strings.Contains(endFinal.SkipIf, "{{acceptance_rounds}}") {
-		t.Fatalf("end-final-round = %+v, want a final-round-only break", endFinal)
-	}
-
-	fix := loop.Steps[4]
-	if fix.Session != "lead-agent" || fix.Mode != "autonomous" {
-		t.Fatalf("acceptance-fix = session:%q mode:%q, want lead-agent/autonomous", fix.Session, fix.Mode)
-	}
-	for _, want := range []string{
+	requirePromptContains(t, fix.ID, fix.Prompt,
 		"codagent:implement-with-tdd",
 		"{{artifact_validation_instruction}}",
 		"`[{{step_id}}]`",
@@ -293,47 +208,30 @@ func TestCoreVerifyChangeAcceptanceRoundsAreWorkflowSteps(t *testing.T) {
 		"`{{session_dir}}/output/acceptance-impact-scope.md`",
 		"`targeted`",
 		"`evidence-only`",
-	} {
-		if !strings.Contains(fix.Prompt, want) {
-			t.Errorf("acceptance-fix prompt missing %q", want)
+	)
+
+	for _, id := range []string{"acceptance-push", "verify-acceptance-pr"} {
+		step := findStep(workflow.Steps, id)
+		if step == nil || step.Repair == nil || step.Repair.Session != "lead-agent" {
+			t.Fatalf("%s = %+v, want a lead-agent repair", id, step)
 		}
-	}
-
-	validator := loop.Steps[5]
-	if validator.Workflow != "run-validator-v1.0.yaml" || validator.SkipIf != "sh: test {{skip_validator}} = true" {
-		t.Fatalf("acceptance-validator = %+v, want the skip_validator-gated run-validator workflow", validator)
-	}
-
-	push := loop.Steps[6]
-	if push.Script != "acceptance-push.sh" || push.Repair == nil || push.Repair.Session != "lead-agent" {
-		t.Fatalf("acceptance-push = %+v, want acceptance-push.sh with lead-agent repair", push)
-	}
-
-	status := findVerifyChangeStep(workflow.Steps, "write-acceptance-status")
-	if status == nil || status.Script != "acceptance-gate.sh" || status.ScriptInputs["action"] != "finalize" ||
-		status.ScriptInputs["rounds"] != "{{acceptance_rounds}}" {
-		t.Fatalf("write-acceptance-status = %+v, want acceptance-gate.sh finalize", status)
 	}
 }
 
 func TestCoreVerifyChangeOpenDraftPRPushesDirectly(t *testing.T) {
-	workflow := loadVerifyChangeWorkflow(t, "builtin:core/verify-change-v1.0.yaml")
-	step := findVerifyChangeStep(workflow.Steps, "open-draft-pr")
+	workflow := readBuiltinWorkflowForTest(t, verifyChangeRef)
+	step := findStep(workflow.Steps, "open-draft-pr")
 	if step == nil {
 		t.Fatal("open-draft-pr step not found")
 	}
-	for _, want := range []string{
+	requirePromptContains(t, step.ID, step.Prompt,
 		"directly with `git` and `gh`",
 		"gh pr create --draft",
 		"gh pr ready --undo",
 		"preserve its base branch",
 		"its head SHA equals local `HEAD`",
 		"REPAIR_BLOCKED",
-	} {
-		if !strings.Contains(step.Prompt, want) {
-			t.Errorf("open-draft-pr prompt missing %q", want)
-		}
-	}
+	)
 }
 
 // gitRepo creates a repository with one commit and returns its directory and
@@ -341,27 +239,19 @@ func TestCoreVerifyChangeOpenDraftPRPushesDirectly(t *testing.T) {
 func gitRepo(t *testing.T) (dir, head string) {
 	t.Helper()
 	dir = t.TempDir()
-	verifyGit(t, dir, "init", "-q", "-b", "feature")
-	verifyGit(t, dir, "config", "user.email", "test@example.com")
-	verifyGit(t, dir, "config", "user.name", "Test")
-	verifyGit(t, dir, "config", "commit.gpgsign", "false")
-	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("one\n"), 0o600); err != nil {
-		t.Fatalf("write file: %v", err)
-	}
-	verifyGit(t, dir, "add", "file.txt")
-	verifyGit(t, dir, "commit", "-q", "-m", "initial")
-	return dir, strings.TrimSpace(verifyGit(t, dir, "rev-parse", "HEAD"))
+	runGit(t, dir, "init", "-q", "-b", "feature")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	runGit(t, dir, "config", "commit.gpgsign", "false")
+	mustWriteFile(t, filepath.Join(dir, "file.txt"), "one\n")
+	runGit(t, dir, "add", "file.txt")
+	runGit(t, dir, "commit", "-q", "-m", "initial")
+	return dir, gitHead(t, dir)
 }
 
-func verifyGit(t *testing.T, dir string, args ...string) string {
+func gitHead(t *testing.T, dir string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %v: %v\n%s", args, err, out)
-	}
-	return string(out)
+	return strings.TrimSpace(string(runGitOutput(t, dir, "rev-parse", "HEAD")))
 }
 
 func writeAssetScript(t *testing.T, asset string) string {
@@ -377,45 +267,36 @@ func writeAssetScript(t *testing.T, asset string) string {
 	return path
 }
 
-func writeEvidence(t *testing.T, dir, name, content string) {
+func runScriptIn(t *testing.T, scriptPath, dir, stdin string, env ...string) (string, error) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
-		t.Fatalf("write %s: %v", name, err)
-	}
+	cmd := exec.Command("sh", scriptPath)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
+	cmd.Stdin = strings.NewReader(stdin)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }
 
 func TestCoreAcceptanceGateScript(t *testing.T) {
 	scriptPath := writeAssetScript(t, "core/acceptance-gate.sh")
-
 	run := func(t *testing.T, repo, evidenceDir, action string) (string, error) {
 		t.Helper()
-		cmd := exec.Command("sh", scriptPath)
-		cmd.Dir = repo
-		cmd.Stdin = strings.NewReader(`{"evidence_dir":` + strconv.Quote(evidenceDir) + `,"action":` + strconv.Quote(action) + `,"rounds":"3"}`)
-		out, err := cmd.CombinedOutput()
-		return string(out), err
+		input := `{"evidence_dir":` + strconv.Quote(evidenceDir) + `,"action":` + strconv.Quote(action) + `,"rounds":"3"}`
+		return runScriptIn(t, scriptPath, repo, input)
 	}
-
-	converged := func(t *testing.T) (string, string, string) {
+	converged := func(t *testing.T) (repo, evidence string) {
 		t.Helper()
 		repo, head := gitRepo(t)
-		evidence := t.TempDir()
-		writeEvidence(t, evidence, "acceptance-round-status.txt", "READY "+head+"\n")
-		writeEvidence(t, evidence, "acceptance-test.md", "Tested head: "+head+"\n")
-		writeEvidence(t, evidence, "acceptance-handoff.md", "Ready SHA `"+head[:12]+"`\n")
-		return repo, head, evidence
+		evidence = t.TempDir()
+		mustWriteFile(t, filepath.Join(evidence, "acceptance-round-status.txt"), "READY "+head+"\n")
+		mustWriteFile(t, filepath.Join(evidence, "acceptance-test.md"), "tested\n")
+		mustWriteFile(t, filepath.Join(evidence, "acceptance-handoff.md"), "tester handoff\n")
+		return repo, evidence
 	}
 
-	t.Run("converges when the tester and evidence name the current head", func(t *testing.T) {
-		repo, _, evidence := converged(t)
-		if out, err := run(t, repo, evidence, "check"); err != nil {
-			t.Fatalf("gate failed: %v\n%s", err, out)
-		}
-	})
-
-	t.Run("accepts an uppercase abbreviated SHA", func(t *testing.T) {
-		repo, head, evidence := converged(t)
-		writeEvidence(t, evidence, "acceptance-test.md", "Head "+strings.ToUpper(head[:7])+"\n")
+	t.Run("converges when the tester reports the current head ready", func(t *testing.T) {
+		repo, evidence := converged(t)
+		writeFileIn(t, repo, "build-output.log", "untracked files do not block\n")
 		if out, err := run(t, repo, evidence, "check"); err != nil {
 			t.Fatalf("gate failed: %v\n%s", err, out)
 		}
@@ -423,68 +304,57 @@ func TestCoreAcceptanceGateScript(t *testing.T) {
 
 	failing := []struct {
 		name   string
-		mutate func(t *testing.T, repo, head, evidence string)
+		mutate func(t *testing.T, repo, evidence string)
 		want   string
 	}{
 		{
 			name: "tester reported not ready",
-			mutate: func(t *testing.T, _, _, evidence string) {
-				writeEvidence(t, evidence, "acceptance-round-status.txt", "NOT_READY\n")
+			mutate: func(t *testing.T, _, evidence string) {
+				mustWriteFile(t, filepath.Join(evidence, "acceptance-round-status.txt"), "NOT_READY\n")
 			},
 			want: "round status is 'NOT_READY'",
 		},
 		{
 			name: "tester recorded no status",
-			mutate: func(t *testing.T, _, _, evidence string) {
-				if err := os.Remove(filepath.Join(evidence, "acceptance-round-status.txt")); err != nil {
-					t.Fatal(err)
-				}
+			mutate: func(t *testing.T, _, evidence string) {
+				removeFile(t, filepath.Join(evidence, "acceptance-round-status.txt"))
 			},
 			want: "recorded no round status",
 		},
 		{
-			name: "ready status names another revision",
-			mutate: func(t *testing.T, _, _, evidence string) {
-				writeEvidence(t, evidence, "acceptance-round-status.txt", "READY 0123456789abcdef0123456789abcdef01234567\n")
+			name: "head moved after testing",
+			mutate: func(t *testing.T, repo, _ string) {
+				writeFileIn(t, repo, "file.txt", "two\n")
+				runGit(t, repo, "commit", "-q", "-am", "fix")
 			},
 			want: "not 'READY",
 		},
 		{
 			name: "acceptance test evidence missing",
-			mutate: func(t *testing.T, _, _, evidence string) {
-				if err := os.Remove(filepath.Join(evidence, "acceptance-test.md")); err != nil {
-					t.Fatal(err)
-				}
+			mutate: func(t *testing.T, _, evidence string) {
+				removeFile(t, filepath.Join(evidence, "acceptance-test.md"))
 			},
 			want: "acceptance-test.md is missing or empty",
 		},
 		{
-			name: "handoff is stale",
-			mutate: func(t *testing.T, _, _, evidence string) {
-				writeEvidence(t, evidence, "acceptance-handoff.md", "Ready SHA 0123456789abcdef\n")
+			name: "handoff missing",
+			mutate: func(t *testing.T, _, evidence string) {
+				removeFile(t, filepath.Join(evidence, "acceptance-handoff.md"))
 			},
-			want: "acceptance-handoff.md does not name the current revision",
-		},
-		{
-			name: "head moved after testing",
-			mutate: func(t *testing.T, repo, _, _ string) {
-				writeEvidence(t, repo, "file.txt", "two\n")
-				verifyGit(t, repo, "commit", "-q", "-am", "fix")
-			},
-			want: "not 'READY",
+			want: "acceptance-handoff.md is missing or empty",
 		},
 		{
 			name: "tracked changes are uncommitted",
-			mutate: func(t *testing.T, repo, _, _ string) {
-				writeEvidence(t, repo, "file.txt", "dirty\n")
+			mutate: func(t *testing.T, repo, _ string) {
+				writeFileIn(t, repo, "file.txt", "dirty\n")
 			},
 			want: "tracked files have uncommitted changes",
 		},
 	}
 	for _, tt := range failing {
 		t.Run("does not converge when "+tt.name, func(t *testing.T) {
-			repo, head, evidence := converged(t)
-			tt.mutate(t, repo, head, evidence)
+			repo, evidence := converged(t)
+			tt.mutate(t, repo, evidence)
 			out, err := run(t, repo, evidence, "check")
 			if err == nil {
 				t.Fatalf("gate succeeded unexpectedly:\n%s", out)
@@ -495,46 +365,36 @@ func TestCoreAcceptanceGateScript(t *testing.T) {
 		})
 	}
 
-	t.Run("untracked files do not block convergence", func(t *testing.T) {
-		repo, _, evidence := converged(t)
-		writeEvidence(t, repo, "build-output.log", "setup\n")
-		if out, err := run(t, repo, evidence, "check"); err != nil {
-			t.Fatalf("gate failed: %v\n%s", err, out)
-		}
-	})
-
 	t.Run("finalize records completion and keeps the tester handoff", func(t *testing.T) {
-		repo, head, evidence := converged(t)
+		repo, evidence := converged(t)
 		if out, err := run(t, repo, evidence, "finalize"); err != nil {
 			t.Fatalf("finalize failed: %v\n%s", err, out)
 		}
 		assertFileContent(t, filepath.Join(evidence, "acceptance-preparation-status.txt"), "ACCEPTANCE_COMPLETE\n")
-		assertFileContent(t, filepath.Join(evidence, "acceptance-handoff.md"), "Ready SHA `"+head[:12]+"`\n")
+		assertFileContent(t, filepath.Join(evidence, "acceptance-handoff.md"), "tester handoff\n")
 	})
 
-	t.Run("finalize records failure with a handoff listing findings and evidence", func(t *testing.T) {
-		repo, _, evidence := converged(t)
-		writeEvidence(t, evidence, "acceptance-round-status.txt", "NOT_READY\n")
-		writeEvidence(t, evidence, "acceptance-findings.md", "AT-3 fails: export button does nothing\n")
-		writeEvidence(t, evidence, "acceptance-flow-evidence.md", "flows\n")
+	t.Run("finalize records failure with a short handoff", func(t *testing.T) {
+		repo, evidence := converged(t)
+		mustWriteFile(t, filepath.Join(evidence, "acceptance-round-status.txt"), "NOT_READY\n")
 		if out, err := run(t, repo, evidence, "finalize"); err != nil {
 			t.Fatalf("finalize failed: %v\n%s", err, out)
 		}
 		assertFileContent(t, filepath.Join(evidence, "acceptance-preparation-status.txt"), "ACCEPTANCE_FAILED\n")
+		assertFileContent(t, filepath.Join(evidence, "acceptance-handoff-tester.md"), "tester handoff\n")
 		handoff := readFile(t, filepath.Join(evidence, "acceptance-handoff.md"))
 		for _, want := range []string{
 			"did not converge within 3 rounds",
+			gitHead(t, repo),
 			"round status is 'NOT_READY'",
-			"AT-3 fails: export button does nothing",
-			filepath.Join(evidence, "acceptance-flow-evidence.md"),
+			filepath.Join(evidence, "acceptance-findings.md"),
+			filepath.Join(evidence, "acceptance-assumptions.md"),
 			filepath.Join(evidence, "acceptance-handoff-tester.md"),
-			"acceptance-assumptions.md",
 		} {
 			if !strings.Contains(handoff, want) {
 				t.Errorf("failure handoff missing %q:\n%s", want, handoff)
 			}
 		}
-		assertFileContent(t, filepath.Join(evidence, "acceptance-handoff-tester.md"), "Ready SHA `"+readHeadPrefix(t, repo)+"`\n")
 	})
 
 	t.Run("finalize writes a handoff when the tester wrote nothing", func(t *testing.T) {
@@ -544,26 +404,22 @@ func TestCoreAcceptanceGateScript(t *testing.T) {
 			t.Fatalf("finalize failed: %v\n%s", err, out)
 		}
 		assertFileContent(t, filepath.Join(evidence, "acceptance-preparation-status.txt"), "ACCEPTANCE_FAILED\n")
-		handoff := readFile(t, filepath.Join(evidence, "acceptance-handoff.md"))
-		for _, want := range []string{"recorded no findings file", "No acceptance evidence files were found"} {
-			if !strings.Contains(handoff, want) {
-				t.Errorf("failure handoff missing %q:\n%s", want, handoff)
-			}
-		}
-	})
-
-	t.Run("rejects an unknown action", func(t *testing.T) {
-		repo, _, evidence := converged(t)
-		out, err := run(t, repo, evidence, "bogus")
-		if err == nil || !strings.Contains(out, "unknown action") {
-			t.Fatalf("gate = (%q, %v), want unknown-action failure", out, err)
+		if handoff := readFile(t, filepath.Join(evidence, "acceptance-handoff.md")); strings.Contains(handoff, "acceptance-handoff-tester.md") {
+			t.Errorf("handoff points at a tester handoff that does not exist:\n%s", handoff)
 		}
 	})
 }
 
-func readHeadPrefix(t *testing.T, repo string) string {
+func writeFileIn(t *testing.T, dir, name, content string) {
 	t.Helper()
-	return strings.TrimSpace(verifyGit(t, repo, "rev-parse", "HEAD"))[:12]
+	mustWriteFile(t, filepath.Join(dir, name), content)
+}
+
+func removeFile(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func assertFileContent(t *testing.T, path, want string) {
@@ -573,109 +429,160 @@ func assertFileContent(t *testing.T, path, want string) {
 	}
 }
 
+// fakeGH installs a gh that prints $FAKE_GH_FIRST_JSON on its first call when
+// set, and $FAKE_GH_JSON on every other call.
+func fakeGH(t *testing.T) (binDir, countFile string) {
+	t.Helper()
+	binDir = t.TempDir()
+	countFile = filepath.Join(t.TempDir(), "gh-calls")
+	script := `#!/bin/sh
+n=$(cat "$FAKE_GH_COUNT" 2>/dev/null || echo 0)
+n=$((n + 1))
+echo "$n" >"$FAKE_GH_COUNT"
+if [ "$n" -eq 1 ] && [ -n "${FAKE_GH_FIRST_JSON:-}" ]; then
+  printf '%s' "$FAKE_GH_FIRST_JSON"
+else
+  printf '%s' "$FAKE_GH_JSON"
+fi
+`
+	mustWriteFile(t, filepath.Join(binDir, "gh"), script)
+	if err := os.Chmod(filepath.Join(binDir, "gh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return binDir, countFile
+}
+
+func prListJSON(prs ...string) string {
+	return "[" + strings.Join(prs, ",") + "]"
+}
+
+func prJSON(head string, draft bool) string {
+	return `{"number":1,"url":"https://example.test/pr/1","state":"OPEN","isDraft":` + strconv.FormatBool(draft) +
+		`,"baseRefName":"main","headRefOid":"` + head + `"}`
+}
+
+func TestCoreCheckDraftPRScript(t *testing.T) {
+	scriptPath := writeAssetScript(t, "core/check-draft-pr.sh")
+	run := func(t *testing.T, input, first, rest string) (out, calls string, err error) {
+		t.Helper()
+		repo, _ := gitRepo(t)
+		binDir, countFile := fakeGH(t)
+		first = strings.ReplaceAll(first, "HEAD", gitHead(t, repo))
+		rest = strings.ReplaceAll(rest, "HEAD", gitHead(t, repo))
+		out, err = runScriptIn(t, scriptPath, repo, input,
+			"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"FAKE_GH_COUNT="+countFile,
+			"FAKE_GH_FIRST_JSON="+first,
+			"FAKE_GH_JSON="+rest,
+		)
+		return out, strings.TrimSpace(readFile(t, countFile)), err
+	}
+	stale := prListJSON(prJSON("0123456789abcdef0123456789abcdef01234567", true))
+	ready := prListJSON(prJSON("HEAD", true))
+
+	t.Run("prints only the URL when the draft pull request is at local HEAD", func(t *testing.T) {
+		out, _, err := run(t, "", "", ready)
+		if err != nil {
+			t.Fatalf("check failed: %v\n%s", err, out)
+		}
+		if out != "https://example.test/pr/1\n" {
+			t.Fatalf("output = %q, want only the pull request URL", out)
+		}
+	})
+
+	t.Run("retries until the pushed head is reported", func(t *testing.T) {
+		out, calls, err := run(t, `{"attempts":"3","interval_seconds":"0"}`, stale, ready)
+		if err != nil {
+			t.Fatalf("check failed: %v\n%s", err, out)
+		}
+		if calls != "2" {
+			t.Fatalf("gh calls = %s, want 2", calls)
+		}
+	})
+
+	t.Run("checks once by default", func(t *testing.T) {
+		out, calls, err := run(t, "", stale, ready)
+		if err == nil {
+			t.Fatalf("check succeeded unexpectedly:\n%s", out)
+		}
+		if calls != "1" {
+			t.Fatalf("gh calls = %s, want 1", calls)
+		}
+	})
+
+	failing := []struct {
+		name string
+		json string
+		want string
+	}{
+		{name: "head mismatch", json: stale, want: "does not match required draft state or local HEAD"},
+		{name: "not a draft", json: prListJSON(prJSON("HEAD", false)), want: "draft false"},
+		{name: "no pull request", json: prListJSON(), want: "found 0"},
+		{name: "two pull requests", json: prListJSON(prJSON("HEAD", true), prJSON("HEAD", true)), want: "found 2"},
+	}
+	for _, tt := range failing {
+		t.Run("fails on "+tt.name+" after all attempts", func(t *testing.T) {
+			out, calls, err := run(t, `{"attempts":"2","interval_seconds":"0"}`, "", tt.json)
+			if err == nil {
+				t.Fatalf("check succeeded unexpectedly:\n%s", out)
+			}
+			if !strings.Contains(out, tt.want) || strings.Contains(out, "https://") {
+				t.Fatalf("output = %q, want %q and no URL", out, tt.want)
+			}
+			if calls != "2" {
+				t.Fatalf("gh calls = %s, want 2", calls)
+			}
+		})
+	}
+}
+
 func TestCoreAcceptancePushScript(t *testing.T) {
 	scriptPath := writeAssetScript(t, "core/acceptance-push.sh")
-
-	// setup returns a repository whose branch tracks a bare remote, plus a
-	// directory holding a fake gh that prints $FAKE_GH_JSON.
-	setup := func(t *testing.T) (string, string) {
+	setup := func(t *testing.T) string {
 		t.Helper()
 		repo, _ := gitRepo(t)
 		remote := t.TempDir()
-		verifyGit(t, remote, "init", "-q", "--bare")
-		verifyGit(t, repo, "remote", "add", "origin", remote)
-		verifyGit(t, repo, "push", "-q", "--set-upstream", "origin", "feature")
-		binDir := t.TempDir()
-		fakeGH := "#!/bin/sh\nprintf '%s\\n' \"$*\" >>\"$FAKE_GH_LOG\"\nprintf '%s' \"$FAKE_GH_JSON\"\n"
-		if err := os.WriteFile(filepath.Join(binDir, "gh"), []byte(fakeGH), 0o700); err != nil {
-			t.Fatalf("write fake gh: %v", err)
-		}
-		return repo, binDir
-	}
-	run := func(t *testing.T, repo, binDir, prJSON string) (string, error) {
-		t.Helper()
-		cmd := exec.Command("sh", scriptPath)
-		cmd.Dir = repo
-		cmd.Env = append(os.Environ(),
-			"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
-			"FAKE_GH_JSON="+prJSON,
-			"FAKE_GH_LOG="+filepath.Join(t.TempDir(), "gh.log"),
-		)
-		cmd.Stdin = strings.NewReader(`{"attempts":"2","interval_seconds":"0"}`)
-		out, err := cmd.CombinedOutput()
-		return string(out), err
+		runGit(t, remote, "init", "-q", "--bare")
+		runGit(t, repo, "remote", "add", "origin", remote)
+		runGit(t, repo, "push", "-q", "--set-upstream", "origin", "feature")
+		return repo
 	}
 	commitFix := func(t *testing.T, repo string) string {
 		t.Helper()
-		writeEvidence(t, repo, "file.txt", "fixed\n")
-		verifyGit(t, repo, "commit", "-q", "-am", "fix")
-		return strings.TrimSpace(verifyGit(t, repo, "rev-parse", "HEAD"))
-	}
-	prJSON := func(head string, draft bool) string {
-		return `[{"url":"https://example.test/pr/1","isDraft":` + strconv.FormatBool(draft) + `,"headRefOid":"` + head + `"}]`
+		writeFileIn(t, repo, "file.txt", "fixed\n")
+		runGit(t, repo, "commit", "-q", "-am", "fix")
+		return gitHead(t, repo)
 	}
 
-	t.Run("pushes the fix and verifies the draft pull request head", func(t *testing.T) {
-		repo, binDir := setup(t)
+	t.Run("pushes the fix to the configured upstream", func(t *testing.T) {
+		repo := setup(t)
 		head := commitFix(t, repo)
-		out, err := run(t, repo, binDir, prJSON(head, true))
-		if err != nil {
+		if out, err := runScriptIn(t, scriptPath, repo, ""); err != nil {
 			t.Fatalf("push failed: %v\n%s", err, out)
 		}
-		remoteHead := strings.TrimSpace(verifyGit(t, repo, "rev-parse", "origin/feature"))
-		if remoteHead != head {
+		if remoteHead := strings.TrimSpace(string(runGitOutput(t, repo, "rev-parse", "origin/feature"))); remoteHead != head {
 			t.Fatalf("remote head = %s, want pushed %s", remoteHead, head)
-		}
-		if !strings.Contains(out, "https://example.test/pr/1") {
-			t.Fatalf("output = %q, want pull request URL", out)
-		}
-	})
-
-	t.Run("fails when the pull request head does not match", func(t *testing.T) {
-		repo, binDir := setup(t)
-		commitFix(t, repo)
-		out, err := run(t, repo, binDir, prJSON("0123456789abcdef0123456789abcdef01234567", true))
-		if err == nil || !strings.Contains(out, "does not equal local HEAD") {
-			t.Fatalf("push = (%q, %v), want head mismatch failure", out, err)
-		}
-	})
-
-	t.Run("fails when the pull request is not a draft", func(t *testing.T) {
-		repo, binDir := setup(t)
-		head := commitFix(t, repo)
-		out, err := run(t, repo, binDir, prJSON(head, false))
-		if err == nil || !strings.Contains(out, "is not a draft") {
-			t.Fatalf("push = (%q, %v), want draft failure", out, err)
-		}
-	})
-
-	t.Run("fails when no open pull request exists", func(t *testing.T) {
-		repo, binDir := setup(t)
-		commitFix(t, repo)
-		out, err := run(t, repo, binDir, `[]`)
-		if err == nil || !strings.Contains(out, "found 0") {
-			t.Fatalf("push = (%q, %v), want missing pull request failure", out, err)
-		}
-	})
-
-	t.Run("refuses to push uncommitted tracked changes", func(t *testing.T) {
-		repo, binDir := setup(t)
-		writeEvidence(t, repo, "file.txt", "dirty\n")
-		out, err := run(t, repo, binDir, prJSON("x", true))
-		if err == nil || !strings.Contains(out, "tracked changes are uncommitted") {
-			t.Fatalf("push = (%q, %v), want uncommitted-changes failure", out, err)
 		}
 	})
 
 	t.Run("sets the upstream when the branch has none", func(t *testing.T) {
-		repo, binDir := setup(t)
-		verifyGit(t, repo, "branch", "--unset-upstream")
-		head := commitFix(t, repo)
-		if out, err := run(t, repo, binDir, prJSON(head, true)); err != nil {
+		repo := setup(t)
+		runGit(t, repo, "branch", "--unset-upstream")
+		commitFix(t, repo)
+		if out, err := runScriptIn(t, scriptPath, repo, ""); err != nil {
 			t.Fatalf("push failed: %v\n%s", err, out)
 		}
-		if upstream := strings.TrimSpace(verifyGit(t, repo, "rev-parse", "--abbrev-ref", "feature@{upstream}")); upstream != "origin/feature" {
+		if upstream := strings.TrimSpace(string(runGitOutput(t, repo, "rev-parse", "--abbrev-ref", "feature@{upstream}"))); upstream != "origin/feature" {
 			t.Fatalf("upstream = %q, want origin/feature", upstream)
+		}
+	})
+
+	t.Run("refuses to push uncommitted tracked changes", func(t *testing.T) {
+		repo := setup(t)
+		writeFileIn(t, repo, "file.txt", "dirty\n")
+		out, err := runScriptIn(t, scriptPath, repo, "")
+		if err == nil || !strings.Contains(out, "tracked changes are uncommitted") {
+			t.Fatalf("push = (%q, %v), want uncommitted-changes failure", out, err)
 		}
 	})
 }

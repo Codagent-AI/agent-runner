@@ -14,6 +14,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"gopkg.in/yaml.v3"
+
+	"github.com/codagent/agent-runner/internal/model"
 )
 
 func TestOnboardingWorkflowsResolveAndAssetsList(t *testing.T) {
@@ -484,37 +486,15 @@ func TestCoreImplementChangePreflightsValidatedPlanBeforeAgentWork(t *testing.T)
 	}
 }
 
-type skipValidatorStep struct {
-	ID           string              `yaml:"id"`
-	Script       string              `yaml:"script"`
-	ScriptInputs map[string]string   `yaml:"script_inputs"`
-	SkipIf       string              `yaml:"skip_if"`
-	Prompt       string              `yaml:"prompt"`
-	Workflow     string              `yaml:"workflow"`
-	Params       map[string]string   `yaml:"params"`
-	Steps        []skipValidatorStep `yaml:"steps"`
+func stepIndexes(steps []model.Step) map[string]int {
+	indexes := make(map[string]int)
+	for i := range steps {
+		indexes[steps[i].ID] = i
+	}
+	return indexes
 }
 
-func loadSkipValidatorSteps(t *testing.T, ref string) (steps []skipValidatorStep, indexes map[string]int) {
-	t.Helper()
-	body, err := ReadFile(ref)
-	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", ref, err)
-	}
-	var workflow struct {
-		Steps []skipValidatorStep `yaml:"steps"`
-	}
-	if err := yaml.Unmarshal(body, &workflow); err != nil {
-		t.Fatalf("unmarshal %s: %v", ref, err)
-	}
-	indexes = make(map[string]int)
-	for index := range workflow.Steps {
-		indexes[workflow.Steps[index].ID] = index
-	}
-	return workflow.Steps, indexes
-}
-
-func requireSkipValidatorValidation(t *testing.T, ref string, steps []skipValidatorStep, indexes map[string]int) {
+func requireSkipValidatorValidation(t *testing.T, ref string, steps []model.Step, indexes map[string]int) {
 	t.Helper()
 	index, ok := indexes["validate-skip-validator"]
 	if !ok {
@@ -530,7 +510,8 @@ func requireSkipValidatorValidation(t *testing.T, ref string, steps []skipValida
 
 func TestCoreImplementChangeSkipValidatorControlsAllValidatorRuns(t *testing.T) {
 	const ref = "builtin:core/implement-change-v1.0.yaml"
-	steps, indexes := loadSkipValidatorSteps(t, ref)
+	steps := readBuiltinWorkflowForTest(t, ref).Steps
+	indexes := stepIndexes(steps)
 	for _, id := range []string{"validate-skip-validator", "implement-tasks", "verify-change"} {
 		if _, ok := indexes[id]; !ok {
 			t.Fatalf("core implement-change has no %s step", id)
@@ -551,21 +532,12 @@ func TestCoreImplementChangeSkipValidatorControlsAllValidatorRuns(t *testing.T) 
 	}
 }
 
+// The acceptance-round validator gate is exercised by executing the loop in
+// internal/exec/verify_change_workflow_test.go.
 func TestCoreVerifyChangeSkipValidatorControlsAllValidatorRuns(t *testing.T) {
 	const ref = "builtin:core/verify-change-v1.0.yaml"
-	steps, indexes := loadSkipValidatorSteps(t, ref)
-	for _, id := range []string{
-		"validate-skip-validator",
-		"run-validator",
-		"open-draft-pr",
-		"prepare-acceptance",
-		"write-acceptance-status",
-		"verify-acceptance-handoff",
-	} {
-		if _, ok := indexes[id]; !ok {
-			t.Fatalf("core verify-change has no %s step", id)
-		}
-	}
+	steps := readBuiltinWorkflowForTest(t, ref).Steps
+	indexes := stepIndexes(steps)
 	requireSkipValidatorValidation(t, ref, steps, indexes)
 	if indexes["validate-skip-validator"] != 1 {
 		t.Fatal("skip_validator must be validated before any other verify-change work")
@@ -574,12 +546,6 @@ func TestCoreVerifyChangeSkipValidatorControlsAllValidatorRuns(t *testing.T) {
 	finalValidator := steps[indexes["run-validator"]]
 	if finalValidator.Workflow != "run-validator-v1.0.yaml" || finalValidator.SkipIf != "sh: test {{skip_validator}} = true" {
 		t.Fatalf("run-validator = %+v, want the run-validator workflow behind the skip_validator gate", finalValidator)
-	}
-	if indexes["run-validator"] >= indexes["open-draft-pr"] ||
-		indexes["open-draft-pr"] >= indexes["prepare-acceptance"] ||
-		indexes["prepare-acceptance"] >= indexes["write-acceptance-status"] ||
-		indexes["write-acceptance-status"] >= indexes["verify-acceptance-handoff"] {
-		t.Fatal("skipped final validation must not bypass draft-PR creation or acceptance preparation")
 	}
 
 	openDraftPR := steps[indexes["open-draft-pr"]]
@@ -592,21 +558,6 @@ func TestCoreVerifyChangeSkipValidatorControlsAllValidatorRuns(t *testing.T) {
 		if !strings.Contains(openDraftPR.Prompt, want) {
 			t.Errorf("open-draft-pr prompt missing conditional validation status %q", want)
 		}
-	}
-
-	loopSteps := make(map[string]skipValidatorStep)
-	for _, step := range steps[indexes["prepare-acceptance"]].Steps {
-		loopSteps[step.ID] = step
-	}
-	acceptanceValidator, ok := loopSteps["acceptance-validator"]
-	if !ok {
-		t.Fatal("prepare-acceptance has no acceptance-validator step")
-	}
-	if acceptanceValidator.Workflow != "run-validator-v1.0.yaml" || acceptanceValidator.SkipIf != "sh: test {{skip_validator}} = true" {
-		t.Fatalf("acceptance-validator = %+v, want the run-validator workflow behind the skip_validator gate", acceptanceValidator)
-	}
-	if !strings.Contains(loopSteps["acceptance-fix"].Prompt, "Do not run Agent Validator") {
-		t.Error("acceptance-fix prompt must leave Agent Validator to the acceptance-validator step")
 	}
 }
 

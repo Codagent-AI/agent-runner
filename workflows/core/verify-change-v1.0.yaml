@@ -102,30 +102,13 @@ steps:
       If pushing or opening the pull request is blocked by a missing credential, an insufficient permission or token scope, or a decision only a human can make, do not retry indefinitely. Explain exactly what is blocked and what a human must do, then end your response with the line `REPAIR_BLOCKED`.
 
   - id: verify-draft-pr
+    script: check-draft-pr.sh
     capture: pr_url
     repair:
       rerun: open-draft-pr
-    command: |
-      branch=$(git branch --show-current)
-      local_head=$(git rev-parse HEAD)
-      pr_json=$(gh pr list --head "$branch" --state open --json number,url,state,isDraft,baseRefName,headRefOid --limit 2)
-      count=$(printf '%s' "$pr_json" | jq 'length')
-      if [ "$count" -ne 1 ]; then
-        echo "expected exactly one open pull request for branch '$branch', found $count" >&2
-        exit 1
-      fi
-      state=$(printf '%s' "$pr_json" | jq -r '.[0].state')
-      is_draft=$(printf '%s' "$pr_json" | jq -r '.[0].isDraft')
-      base=$(printf '%s' "$pr_json" | jq -r '.[0].baseRefName')
-      pr_head=$(printf '%s' "$pr_json" | jq -r '.[0].headRefOid')
-      if [ "$state" != "OPEN" ] || [ "$is_draft" != "true" ] || [ -z "$base" ] || [ "$local_head" != "$pr_head" ]; then
-        echo "open pull request does not match required draft state or local HEAD" >&2
-        exit 1
-      fi
-      printf '%s\n' "$(printf '%s' "$pr_json" | jq -r '.[0].url')"
 
   # Each round runs the independent tester, then the convergence gate. A round
-  # that does not converge is followed by a fix, validation, and push, and the
+  # that does not converge is followed by a fix, validation, push, and PR check; the
   # next round retests. The final round ends at end-final-round instead, so no
   # fix is ever left untested. Real step failures still fail the workflow.
   - id: prepare-acceptance
@@ -207,7 +190,17 @@ steps:
         repair:
           session: lead-agent
           prompt: |
-            Pushing the acceptance fixes for {{change_label}} "{{change_name}}" or aligning the draft pull request with local `HEAD` failed. Diagnose the failure from the check output. Commit any tracked change related to the acceptance fixes following the project's commit message conventions, push the current branch without force-pushing, and make sure its single open pull request is a draft whose head SHA equals local `HEAD`. Do not change product contents to make the push succeed. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, such as a missing credential, an insufficient permission or token scope, or diverged remote history, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
+            Pushing the acceptance fixes for {{change_label}} "{{change_name}}" failed. Diagnose the failure from the check output. Commit any tracked change related to the acceptance fixes following the project's commit message conventions, then push the current branch without force-pushing. Do not change product contents to make the push succeed. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, such as a missing credential, an insufficient permission or token scope, or diverged remote history, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
+
+      - id: verify-acceptance-pr
+        script: check-draft-pr.sh
+        script_inputs:
+          attempts: "10"
+          interval_seconds: "3"
+        repair:
+          session: lead-agent
+          prompt: |
+            After pushing the acceptance fixes for {{change_label}} "{{change_name}}", the current branch does not have exactly one open draft pull request whose head SHA equals local `HEAD`. Align it without force-pushing or changing product contents: push any unpushed commit, and convert the pull request back to draft with `gh pr ready --undo` if it is not a draft. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
 
   - id: write-acceptance-status
     script: acceptance-gate.sh
