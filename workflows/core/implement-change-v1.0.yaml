@@ -212,3 +212,14 @@ steps:
           exit 1
           ;;
       esac
+    repair:
+      session: lead-agent
+      max: 1
+      prompt: |
+        The acceptance-preparation step ended before its required outputs existed: `{{session_dir}}/output/acceptance-handoff.md` is missing or empty, or `{{session_dir}}/output/acceptance-preparation-status.txt` does not hold `ACCEPTANCE_COMPLETE` or `ACCEPTANCE_FAILED`.
+
+        Resume the acceptance preparation where it stopped, following the original step's instructions: finish any in-progress fix, run the required checks and validation in the foreground and wait for them, then commit, push, and verify local `HEAD` equals the draft PR head. You cannot call the acceptance tester in this repair.
+
+        Then write both files so they honestly reflect the result. Write `ACCEPTANCE_COMPLETE` only if every required or activated `AT-*` already has passing evidence for the current HEAD. If any tracked change since the last tester pass still needs targeted re-testing, write `ACCEPTANCE_FAILED` and state in `acceptance-handoff.md` which `AT-*` obligations still need re-testing and why.
+
+        Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.

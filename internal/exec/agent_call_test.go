@@ -330,6 +330,37 @@ func TestAgentCallHandlerRunsFreshProfileAutonomousHeadless(t *testing.T) {
 	}
 }
 
+func TestAgentCallHandlerPassesClaudeHeadlessEnvironmentToChild(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "0")
+	t.Setenv("BASH_DEFAULT_TIMEOUT_MS", "900000")
+	workdir := t.TempDir()
+	runner := &callTestRunner{started: make(chan AgentProcessOptions, 1), result: ProcessResult{Started: true, Stdout: "done"}}
+	options := testAgentCallOptions(workdir, runner, &cli.ClaudeAdapter{})
+	options.Context.ProfileStore.(*config.Config).ActiveAgents["implementor"].CLI = "claude"
+	options.Adapter = cli.Get
+	handler := NewAgentCallHandler(options)
+	response := startAndAwaitAgentCall(t, handler, control.AgentCallRequest{
+		RequestID: "claude-child", Payload: json.RawMessage(`{"prompt":"child task","agent":"implementor"}`),
+	})
+	if response.Error != nil {
+		t.Fatalf("Claude child response = %#v", response)
+	}
+	spawn := <-runner.started
+	if !strings.Contains(strings.Join(spawn.Env, "\n"), "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1") {
+		t.Fatalf("Claude child spawn env = %v, want background tasks disabled", spawn.Env)
+	}
+	effective := BuildAgentEnvironment(os.Environ(), spawn.DropEnv, spawn.Env)
+	if !strings.Contains(strings.Join(effective, "\n"), "BASH_DEFAULT_TIMEOUT_MS=900000") {
+		t.Fatalf("Claude child effective env = %v, want inherited timeout", effective)
+	}
+	if strings.Contains(strings.Join(effective, "\n"), "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=0") {
+		t.Fatalf("Claude child effective env = %v, inherited background setting was not overridden", effective)
+	}
+	if got := os.Getenv("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"); got != "0" {
+		t.Fatalf("runner background setting changed to %q", got)
+	}
+}
+
 func TestAgentCallHandlerAccumulatesCollectedCallResponsesInOrder(t *testing.T) {
 	workdir := t.TempDir()
 	adapter := &callTestAdapter{discovered: "fresh-session"}
