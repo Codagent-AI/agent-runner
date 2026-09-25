@@ -84,6 +84,7 @@ func TestCoreVerifyChangeShape(t *testing.T) {
 		"verify-assumptions-handoff",
 		"simplify",
 		"run-validator",
+		"verify-validator-result",
 		"verify-clean-for-pr",
 		"open-draft-pr",
 		"verify-draft-pr",
@@ -93,6 +94,63 @@ func TestCoreVerifyChangeShape(t *testing.T) {
 	}
 	if diff := cmp.Diff(wantSteps, stepIDs(workflow.Steps)); diff != "" {
 		t.Errorf("verify-change steps mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCoreVerifyChangeValidatorResultStopsBeforePR(t *testing.T) {
+	w := readBuiltinWorkflowForTest(t, verifyChangeRef)
+	validator := findStep(w.Steps, "run-validator")
+	if validator == nil || validator.Params["result_file"] != "{{session_dir}}/output/verify-change-validator-result.txt" {
+		t.Fatalf("validator result file is not forwarded: %+v", validator)
+	}
+	gate := findStep(w.Steps, "verify-validator-result")
+	if gate == nil || gate.Script != "validator-pr-gate.sh" || gate.SkipIf != "sh: test {{skip_validator}} = true" {
+		t.Fatalf("validator PR gate = %+v", gate)
+	}
+}
+
+func TestValidatorPRGatePushesRedBranchAndReportsFailure(t *testing.T) {
+	repo, head := gitRepo(t)
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, repo, "init", "--bare", "-q", remote)
+	runGit(t, repo, "remote", "add", "origin", remote)
+	resultFile := filepath.Join(t.TempDir(), "result.txt")
+	if err := os.WriteFile(resultFile, []byte("FAIL\ncheck: tests failed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := writeAssetScript(t, "core/validator-pr-gate.sh")
+	output, err := runScriptIn(t, script, repo, `{"result_file":"`+resultFile+`"}`)
+	if err == nil || !strings.Contains(output, "check: tests failed") {
+		t.Fatalf("red gate = (%q, %v), want failed checks", output, err)
+	}
+	got := strings.TrimSpace(string(runGitOutput(t, repo, "--git-dir", remote, "rev-parse", "refs/heads/feature")))
+	if got != head {
+		t.Fatalf("pushed head = %s, want %s", got, head)
+	}
+}
+
+func TestRunValidatorRecordsFinalResultForPRGate(t *testing.T) {
+	for _, tc := range []struct {
+		name, validator, want string
+		wantFailure           bool
+	}{
+		{name: "passing", validator: "echo checks passed", want: "PASS\n"},
+		{name: "failing", validator: "echo 'check: tests failed'; exit 1", want: "FAIL\ncheck: tests failed\n", wantFailure: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			resultFile := filepath.Join(dir, "result.txt")
+			writeFakeBinary(t, dir, "runner", "#!/bin/sh\ncase \"$3\" in\n  task_file) echo '';;\n  result_file) echo \"$RESULT_FILE\";;\nesac\n")
+			writeFakeBinary(t, dir, "validator", "#!/bin/sh\n"+tc.validator+"\n")
+			output, err := runScriptIn(t, coreRunValidatorScript(t), dir, "", "AGENT_RUNNER_EXECUTABLE="+filepath.Join(dir, "runner"), "AGENT_RUNNER_VALIDATOR_EXECUTABLE="+filepath.Join(dir, "validator"), "RESULT_FILE="+resultFile)
+			if (err != nil) != tc.wantFailure {
+				t.Fatalf("validator result = (%q, %v), want failure %t", output, err, tc.wantFailure)
+			}
+			got, readErr := os.ReadFile(resultFile)
+			if readErr != nil || string(got) != tc.want {
+				t.Fatalf("result file = (%q, %v), want %q", got, readErr, tc.want)
+			}
+		})
 	}
 }
 
