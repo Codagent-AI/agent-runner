@@ -726,13 +726,15 @@ func buildAdapterInput(
 	switch {
 	case invocationContext.IsHeadless():
 		input.Prompt = fullPrompt
-	case adapter.SupportsSystemPrompt():
+	// Since Claude Code 2.1.267, --system-prompt-snapshot defaults to on and
+	// records the system prompt only on the first request. Resumed sessions
+	// need current step instructions in the user message. Turning the snapshot
+	// off breaks prompt caching, and older Claude versions reject the flag.
+	case adapter.SupportsSystemPrompt() && !isResume:
 		input.SystemPrompt = fullPrompt
 		switch {
 		case ctx.WorkflowResumed:
 			input.Prompt = fmt.Sprintf("Resume the %s step.", step.ID)
-		case isResume:
-			input.Prompt = fmt.Sprintf("Let's continue to the %s step", step.ID)
 		case isIntakePlanStep(step, ctx):
 			// Intake is a conversation the user drives from its first turn, so
 			// it opens with a greeting rather than a step announcement.

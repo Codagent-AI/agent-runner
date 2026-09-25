@@ -1363,12 +1363,12 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatal("expected direct interactive runner to be called")
 		}
 		args := interactiveCalls[0]
-		if !containsArg(args, "--append-system-prompt") {
-			t.Fatal("expected --append-system-prompt for interactive claude resume step")
+		if containsArg(args, "--append-system-prompt") {
+			t.Fatal("unexpected --append-system-prompt for interactive claude resume step")
 		}
 		lastArg := args[len(args)-1]
-		if !strings.Contains(lastArg, "Let's continue to the s step") {
-			t.Fatalf("expected resume prompt in positional arg, got %q", lastArg)
+		if !strings.Contains(lastArg, "review code") {
+			t.Fatalf("expected current step instructions in positional arg, got %q", lastArg)
 		}
 		assertControlCompletionInstruction(t, lastArg)
 	})
@@ -1400,12 +1400,12 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatal("expected direct interactive runner to be called")
 		}
 		args := interactiveCalls[0]
-		if !containsArg(args, "--append-system-prompt") {
-			t.Fatal("expected --append-system-prompt for autonomous interactive claude resume step")
+		if containsArg(args, "--append-system-prompt") {
+			t.Fatal("unexpected --append-system-prompt for autonomous interactive claude resume step")
 		}
 		lastArg := args[len(args)-1]
-		if !strings.Contains(lastArg, "Let's continue to the s step") {
-			t.Fatalf("expected resume prompt in positional arg, got %q", lastArg)
+		if !strings.Contains(lastArg, "review code") {
+			t.Fatalf("expected current step instructions in positional arg, got %q", lastArg)
 		}
 		assertControlCompletionInstruction(t, lastArg)
 	})
@@ -1955,19 +1955,16 @@ func TestExecuteAgentStep(t *testing.T) {
 		ctx.LastSessionStepID = "specs"
 		ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
 		args := capturedArgs[0]
-		for i, a := range args {
-			if a == "--append-system-prompt" && i+1 < len(args) {
-				sysPrompt := args[i+1]
-				if strings.Contains(sysPrompt, "Plan a change") {
-					t.Fatalf("expected no workflow description in resumed step prefix, got %q", sysPrompt)
-				}
-				if !strings.Contains(sysPrompt, "specs") {
-					t.Fatalf("expected step ID in resumed prefix, got %q", sysPrompt)
-				}
-				return
-			}
+		if containsArg(args, "--append-system-prompt") {
+			t.Fatalf("unexpected --append-system-prompt on resume: %v", args)
 		}
-		t.Fatalf("expected --append-system-prompt, got %v", args)
+		prompt := args[len(args)-1]
+		if strings.Contains(prompt, "Plan a change") {
+			t.Fatalf("expected no workflow description in resumed step prefix, got %q", prompt)
+		}
+		if !strings.Contains(prompt, "specs") || !strings.Contains(prompt, "write specs") {
+			t.Fatalf("expected step ID and instructions in resumed prompt, got %q", prompt)
+		}
 	})
 
 	t.Run("copilot step in interactive mode spawns CLI", func(t *testing.T) {
@@ -2183,6 +2180,52 @@ func TestBuildStepInvocationHeadlessDoesNotRequireCompletionExecutable(t *testin
 	}
 	if strings.Contains(adapter.input.Prompt, "step complete") {
 		t.Fatalf("headless prompt unexpectedly contains completion instruction: %q", adapter.input.Prompt)
+	}
+}
+
+func TestBuildAdapterInputClaudeResumedStepDeliversCurrentInstructions(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		session         model.SessionStrategy
+		workflowResumed bool
+	}{
+		{name: "session reuse", session: model.SessionResume},
+		{name: "workflow resume", session: model.SessionResume, workflowResumed: true},
+		{name: "named shared session", session: "lead-agent"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			step := &model.Step{ID: "step2", Session: tc.session}
+			ctx := &model.ExecutionContext{WorkflowResumed: tc.workflowResumed}
+			input := buildAdapterInput(step, ctx, &config.ResolvedAgent{}, &cli.ClaudeAdapter{},
+				"STEP2-SENTINEL", "engine instructions", "session-abc", true, cli.ContextInteractive, "/bin/agent-runner")
+			if input.SystemPrompt != "" {
+				t.Fatalf("SystemPrompt = %q, want empty on resume", input.SystemPrompt)
+			}
+			if !strings.Contains(input.Prompt, "STEP2-SENTINEL") || !strings.Contains(input.Prompt, "step complete") {
+				t.Fatalf("resumed user prompt lacks current instructions or completion command: %q", input.Prompt)
+			}
+			if !strings.Contains(input.Prompt, "engine instructions") {
+				t.Fatalf("resumed user prompt lacks enrichment: %q", input.Prompt)
+			}
+		})
+	}
+}
+
+func TestBuildStepInvocationClaudeResumeUsesUserPrompt(t *testing.T) {
+	step := &model.Step{ID: "step2", Session: model.SessionResume}
+	args, _, _, err := buildStepInvocation(step, &model.ExecutionContext{}, &config.ResolvedAgent{},
+		&cli.ClaudeAdapter{}, "STEP2-SENTINEL", "", "session-abc", true, cli.ContextInteractive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := argValue(args, "--resume"); !ok || got != "session-abc" {
+		t.Fatalf("resume args = %v, want --resume session-abc", args)
+	}
+	if containsArg(args, "--append-system-prompt") {
+		t.Fatalf("resumed Claude args contain --append-system-prompt: %v", args)
+	}
+	if prompt := args[len(args)-1]; !strings.Contains(prompt, "STEP2-SENTINEL") || !strings.Contains(prompt, "step complete") {
+		t.Fatalf("resumed positional prompt = %q, want step instructions and completion command", prompt)
 	}
 }
 
