@@ -11,7 +11,7 @@ func TestPullRequestWorkflowsCaptureURL(t *testing.T) {
 		ref    string
 		stepID string
 	}{
-		{ref: "builtin:core/implement-change-v1.0.yaml", stepID: "verify-draft-pr"},
+		{ref: "builtin:core/verify-change-v1.0.yaml", stepID: "verify-draft-pr"},
 		{ref: "builtin:core/finalize-pr-v1.0.yaml", stepID: "record-pull-request"},
 	}
 	for _, tt := range tests {

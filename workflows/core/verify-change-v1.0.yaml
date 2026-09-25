@@ -1,0 +1,237 @@
+name: verify-change
+description: "Review implementation assumptions, validate, open a draft pull request, and run bounded acceptance-test rounds for an implemented change."
+hidden: true
+
+params:
+  - name: change_name
+    required: true
+  - name: change_dir
+    required: true
+  - name: change_label
+    required: true
+  - name: artifact_validation_instruction
+    required: true
+  - name: skip_validator
+    required: false
+    default: "false"
+  - name: acceptance_rounds
+    required: false
+    default: "3"
+
+sessions:
+  - name: lead-agent
+    agent: lead
+  - name: acceptance-tester
+    agent: tester
+
+steps:
+  - id: validate-change-name
+    script: validate-change-name.sh
+    script_inputs:
+      change_name: "{{change_name}}"
+
+  - id: validate-skip-validator
+    script: validate-boolean-param.sh
+    script_inputs:
+      name: skip_validator
+      value: "{{skip_validator}}"
+
+  - id: review-assumptions
+    session: lead-agent
+    mode: autonomous
+    prompt: |
+      The implementation iterations for {{change_label}} "{{change_name}}" have completed. Audit the risky and notable assumptions plus context gaps in their session reports.
+
+      Session-report output for this run is persisted as one file per iteration at:
+
+          {{session_dir}}/output/*session-report*.out
+
+      The iteration index is embedded in each filename. Cross-reference each report with the matching task file in the `step_start` or `iteration_start` metadata in `{{session_dir}}/audit.log`; the audit log contains metadata, not report text.
+
+      Build a complete finding ledger. Fix and commit high-confidence implementation issues directly, following the project's commit message conventions and prepending `[{{step_id}}]`. For ambiguous findings or context gaps, do not ask the user during this autonomous phase and do not silently resolve product, scope, or design ambiguity.
+
+      Always write `{{session_dir}}/output/acceptance-assumptions.md`. List every unresolved finding or context gap concisely, with its source task or session report, why it is undecided, the decision needed from the user, and the likely impact of each option. If none remain, write an explicit `No unresolved assumptions or context gaps.` statement. This file is the canonical handoff for the first phase of human acceptance.
+
+  - id: verify-assumptions-handoff
+    command: test -s "{{session_dir}}/output/acceptance-assumptions.md"
+    repair:
+      session: lead-agent
+      prompt: |
+        `{{session_dir}}/output/acceptance-assumptions.md` is missing or empty. Write it now: list every unresolved finding or context gap concisely, with its source task or session report, why it is undecided, the decision needed from the user, and the likely impact of each option. If none remain, write an explicit `No unresolved assumptions or context gaps.` statement. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
+
+  - id: simplify
+    session: lead-agent
+    mode: autonomous
+    prompt: |
+      If the /simplify skill is available, run it focusing on code reuse and readability. If it is not available, review all changes for duplicated logic that should be extracted into shared helpers and readability problems such as deep nesting, unclear naming, or overly complex conditionals.
+
+      Fix and commit clear-cut issues, following the project's commit message conventions and prepending [{{step_id}}]. Do not expand the accepted scope.
+
+  - id: run-validator
+    workflow: run-validator-v1.0.yaml
+    # skip_if parameters are shell-quoted by InterpolateShellSafeTyped. The
+    # validation step above additionally constrains this value to true|false.
+    skip_if: 'sh: test {{skip_validator}} = true'
+
+  - id: verify-clean-for-pr
+    command: |
+      if [ -n "$(git status --porcelain)" ]; then
+        echo "working tree changes remain after validation; commit or remove them before opening the draft pull request" >&2
+        exit 1
+      fi
+    repair:
+      session: lead-agent
+      prompt: |
+        There are uncommitted changes leftover after implementing and validating {{change_label}} "{{change_name}}". Run git status and git diff to review them. Only stage and commit files that are related to this change and appropriate to check into git — ignore unrelated changes, generated artifacts, or files that should be gitignored. Follow the project's commit message conventions. Summarize which files you committed and which you left out, and why. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
+
+  - id: open-draft-pr
+    session: lead-agent
+    mode: autonomous
+    prompt: |
+      No tracked changes may remain uncommitted. Agent Validator skipping was set to `{{skip_validator}}`. If `skip_validator` is `false`, final validation is complete. If it is `true`, final validation was intentionally skipped. Validation belongs to this workflow's own steps: do not run Agent Validator here, directly or through any skill.
+
+      Push the current branch and create or update its pull request directly with `git` and `gh`. Do not create a new implementation or artifact commit here; if tracked changes remain, stop and report them instead of opening the pull request.
+      - Push the current branch to its remote, setting the upstream when none is configured (for example `git push --set-upstream origin <branch>`). Never force-push.
+      - Find the open pull request for the current head branch with `gh pr list --head <branch> --state open`.
+      - When one exists, preserve its base branch; if it is not a draft, convert it back to draft with `gh pr ready --undo`.
+      - When none exists, create it with `gh pr create --draft`, using the repository's configured default base branch (`gh repo view --json defaultBranchRef`). Give it a concise title following the project's conventions and a body that summarizes {{change_label}} "{{change_name}}" from `{{change_dir}}/` and the branch's commits, and says that the pull request is a draft awaiting human acceptance.
+      - Do not mark the pull request ready for review in this step.
+
+      Verify the final state by querying the open pull request for the current head branch. Do not signal completion unless it is open, its base branch is non-empty, it is a draft, and its head SHA equals local `HEAD`. Report the pull request URL and actual base branch.
+
+      If pushing or opening the pull request is blocked by a missing credential, an insufficient permission or token scope, or a decision only a human can make, do not retry indefinitely. Explain exactly what is blocked and what a human must do, then end your response with the line `REPAIR_BLOCKED`.
+
+  - id: verify-draft-pr
+    script: check-draft-pr.sh
+    # A brief GitHub lag retries here instead of rerunning open-draft-pr.
+    script_inputs:
+      attempts: "3"
+      interval_seconds: "3"
+    capture: pr_url
+    repair:
+      rerun: open-draft-pr
+
+  # Each round runs the independent tester, then the convergence gate. A round
+  # that does not converge is followed by a fix, validation, push, and PR check; the
+  # next round retests. The final round ends at end-final-round instead, so no
+  # fix is ever left untested. Real step failures still fail the workflow.
+  - id: prepare-acceptance
+    loop:
+      max_param: acceptance_rounds
+      as_index: acceptance_round
+    steps:
+      # The gate must judge only evidence written in this round, so clear the
+      # previous round's result files; acceptance-flow-evidence.md and
+      # acceptance-findings.md remain as the tester's baseline.
+      - id: reset-round-evidence
+        command: rm -f "{{session_dir}}/output/acceptance-round-status.txt" "{{session_dir}}/output/acceptance-test.md" "{{session_dir}}/output/acceptance-handoff.md"
+
+      - id: acceptance-test
+        session: acceptance-tester
+        mode: autonomous
+        prompt: |
+          You are the independent acceptance tester for {{change_label}} "{{change_name}}". This is acceptance round index {{acceptance_round}} (zero-based) of at most {{acceptance_rounds}}. Use codagent:prepare-acceptance with these inputs:
+          - approved artifacts: `{{change_dir}}/`;
+          - authoritative test plan: `{{change_dir}}/test-plan.md`;
+          - implementation evidence: `{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`;
+          - evidence directory: `{{session_dir}}/output/`;
+          - assumptions ledger: `{{session_dir}}/output/acceptance-assumptions.md`;
+          - verification scope: `full` in round index 0. In every later round, use the scope the lead recorded in `{{session_dir}}/output/acceptance-impact-scope.md`, with `{{session_dir}}/output/acceptance-flow-evidence.md` as the prior full-pass baseline.
+
+          The authoritative test plan was structurally validated before implementation. Execute its applicable `AT-*` inventory under the required skill.
+
+          The first pass must exercise every required `AT-*` and every conditional `AT-*` whose activation condition holds. A flow may use a substitute only when that obligation explicitly permits it. Missing applicable-flow evidence is an impediment, not a limitation, and cannot count as ready for acceptance.
+
+          In a later round, follow the recorded scope exactly. For a `targeted` scope, reproduce each prior finding against the fix, exercise only the affected and directly dependent flows it names, retain the prior full-pass evidence for unaffected flows, and do not begin a new broad review; report a newly introduced defect only when observed within that targeted scope. For an `evidence-only` scope, which the lead records when no tracked product contents changed and only PR alignment, pushing, CI availability, tooling, or another external condition was corrected, do not exercise product flows again: wait for current-head CI and produce the final evidence from `acceptance-flow-evidence.md`. A Validator run that makes no tracked change does not invalidate the existing flow evidence. If the scope file is missing, cannot be reconciled with the approved flow inventory, or omits an obvious dependency, report that scope gap as an impediment instead of guessing.
+
+          Do not fix defects, modify tracked files, commit, push, or change the pull request; the workflow fixes, validates, and pushes in separate steps. Append product, scope, or design ambiguity to the assumptions ledger instead of deciding it.
+
+          Record every clear defect or impediment in `{{session_dir}}/output/acceptance-findings.md` as the skill requires. When the skill produces complete acceptance evidence for the current revision, verify that every required or activated conditional `AT-*` has passing evidence, referenced evidence exists, and any `HT-*` is reserved for the user.
+
+          Finally, overwrite `{{session_dir}}/output/acceptance-round-status.txt` with exactly one line. Write `READY <sha>`, where `<sha>` is the full 40-character output of `git rev-parse HEAD`, only when the skill's readiness verification passed: `acceptance-test.md` and `acceptance-handoff.md` in the evidence directory name that revision, current-head CI passed or is explicitly absent, and no clear defect or impediment remains. Otherwise write `NOT_READY`. The workflow checks this line together with the evidence files to decide whether acceptance testing has converged.
+
+      - id: acceptance-gate
+        script: acceptance-gate.sh
+        script_inputs:
+          evidence_dir: "{{session_dir}}/output"
+          action: check
+        continue_on_failure: true
+        break_if: success
+
+      - id: end-final-round
+        command: echo "acceptance round limit reached; the remaining findings go to the acceptance handoff"
+        # acceptance_round is a zero-based index set by the loop, so this runs
+        # only in the final round and ends the loop before any untested fix.
+        skip_if: 'sh: test "$(({{acceptance_round}} + 1))" -lt "{{acceptance_rounds}}"'
+        break_if: success
+
+      - id: acceptance-fix
+        session: lead-agent
+        mode: autonomous
+        prompt: |
+          The independent acceptance tester did not report {{change_label}} "{{change_name}}" ready for acceptance in round index {{acceptance_round}} (zero-based). Read its report and the durable evidence under `{{session_dir}}/output/`, especially `acceptance-findings.md`, `acceptance-flow-evidence.md`, and `acceptance-round-status.txt`.
+
+          Resolve every high-confidence in-scope finding you can, including implementation, CI, PR-state, tooling, setup, and environmental problems. Preserve approved behavior, scope, design, and testing strategy; append ambiguity to `{{session_dir}}/output/acceptance-assumptions.md` instead of deciding it silently.
+
+          Before fixing an implementation defect found by acceptance testing, you MUST invoke codagent:implement-with-tdd and follow its red-green-refactor process. Add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
+
+          If a tracked file changes, run the narrowest relevant automated checks. {{artifact_validation_instruction}} Do not run Agent Validator, directly or through any skill, and do not push: the workflow runs validation and pushes in the steps after this one. Commit all related changes following the project's commit message conventions with the `[{{step_id}}]` prefix, and leave no tracked change uncommitted.
+
+          Then overwrite `{{session_dir}}/output/acceptance-impact-scope.md` for the next tester round. Name the scope kind first:
+          - `targeted` when tracked product contents changed: name the affected `AT-*` obligations and any directly dependent flows, plus a concise rationale bounding why other surfaces or subsystems are unaffected, and attest that this scope covers every tracked change since the prior full-pass baseline;
+          - `evidence-only` when no tracked product contents changed and only PR alignment, pushing, CI availability, tooling, or another external condition was corrected: identify the prior flow evidence and attest that the current tracked contents match its coverage revision.
+          Use `full` only when the change is broad, cross-cutting, or its impact cannot be bounded confidently. Name each prior finding the tester must reproduce against the fix.
+
+          If a finding needs a decision only a human can make, record it in the assumptions ledger and in the impact-scope rationale, and fix what you safely can.
+
+      - id: acceptance-validator
+        workflow: run-validator-v1.0.yaml
+        # The validation step before the loop constrains skip_validator to true|false.
+        skip_if: 'sh: test {{skip_validator}} = true'
+
+      - id: acceptance-push
+        script: acceptance-push.sh
+        repair:
+          session: lead-agent
+          prompt: |
+            Pushing the acceptance fixes for {{change_label}} "{{change_name}}" failed. Diagnose the failure from the check output. Commit any tracked change related to the acceptance fixes following the project's commit message conventions, then push the current branch without force-pushing. Do not change product contents to make the push succeed. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, such as a missing credential, an insufficient permission or token scope, or diverged remote history, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
+
+      - id: verify-acceptance-pr
+        script: check-draft-pr.sh
+        script_inputs:
+          attempts: "10"
+          interval_seconds: "3"
+        repair:
+          session: lead-agent
+          prompt: |
+            After pushing the acceptance fixes for {{change_label}} "{{change_name}}", the current branch does not have exactly one open draft pull request whose head SHA equals local `HEAD`. Align it without force-pushing or changing product contents: push any unpushed commit, and convert the pull request back to draft with `gh pr ready --undo` if it is not a draft. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
+
+  - id: write-acceptance-status
+    script: acceptance-gate.sh
+    script_inputs:
+      evidence_dir: "{{session_dir}}/output"
+      action: finalize
+      rounds: "{{acceptance_rounds}}"
+
+  # write-acceptance-status deterministically writes both files just before
+  # this check, so a failed check (or a resume that lands here) reruns that
+  # finalize step rather than letting an agent write or declare the outcome
+  # outside the convergence gate.
+  - id: verify-acceptance-handoff
+    repair:
+      rerun: write-acceptance-status
+      max: 1
+    command: |
+      if [ ! -s "{{session_dir}}/output/acceptance-handoff.md" ]; then
+        echo "acceptance handoff is missing or empty" >&2
+        exit 1
+      fi
+      status=$(sed '/^[[:space:]]*$/d' "{{session_dir}}/output/acceptance-preparation-status.txt" | tail -n 1)
+      case "$status" in
+        ACCEPTANCE_COMPLETE|ACCEPTANCE_FAILED)
+          ;;
+        *)
+          echo "invalid acceptance preparation status: $status" >&2
+          exit 1
+          ;;
+      esac
