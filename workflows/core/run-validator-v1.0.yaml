@@ -42,6 +42,9 @@ steps:
             agent-validator update-review skip <#> "why"
           Read the full log file if the summary lacks context.
 
+          If a task-compliance review violation says the task's work is missing here, but the task file directs that work to a different repository and it was delivered there, do not re-implement it in this repository and do not add commits for it. Skip it instead:
+            agent-validator update-review skip <#> "delivered in <repository>; see task file"
+
           If the output below lacks detail (e.g. just "Status: error"), first inspect captured STDERR (if present). If detail is still insufficient and validator_logs/.debug.log exists, read it for full error context before attempting fixes.
 
           When you are done fixing, commit your changes following the project's commit message conventions and prepend [{{step_id}}]. Then summarize to the user what you fixed, what you skipped, and why.

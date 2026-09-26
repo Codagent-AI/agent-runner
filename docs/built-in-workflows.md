@@ -37,7 +37,7 @@ inspection, not fresh execution.
 | `core:define-change` | Run the shared proposal, specification, design, test-plan, and approach-review phases. |
 | `core:finalize-pr` | Push PR, wait for CI, fix failures, and repeat until green, with a maximum of three fix cycles. |
 | `core:implement-change` | Run the shared task implementation, validation, draft-PR, and acceptance-preparation phases. |
-| `core:implement-task` | Implement a single task with an agent step followed by a validator retry loop. |
+| `core:implement-task` | Implement a single task with an agent step followed by a validator retry loop. The task must leave a commit in the run repository, or, when its work was delivered as pushed commits in another local repository, pass through an external delivery record that the gate verifies against that repository's git objects. |
 | `core:plan-change` | Run the shared definition validation, task planning, and task-review phases. |
 | `core:review-proposal` | Run adversarial proposal review, lead response, and up to three discussion rounds. |
 | `core:review-tasks` | Independently review and autonomously correct a structured task plan. |
