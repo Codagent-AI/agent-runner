@@ -1,1 +1,1 @@
-- [ ] [Accept verified external task delivery in verify-task-commit](tasks/01-external-task-delivery.md)
+- [x] [Accept verified external task delivery in verify-task-commit](tasks/01-external-task-delivery.md)
