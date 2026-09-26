@@ -163,7 +163,7 @@ The per-task validator repair (`fix-violations` in `core/run-validator`) SHALL b
 
 ### Requirement: Downstream steps acknowledge external delivery
 
-`core/implement-change`'s task-index step SHALL NOT tell the lead agent that every task produced a local implementation commit. It SHALL allow for tasks accepted through external delivery. `core/verify-change`'s draft pull request step SHALL be instructed to read any external delivery records in the run's session directory and to list each record's repository, commits, and reported pull request in the draft pull request body, marked as delivered in another repository. When there are no records, the pull request body SHALL NOT include that section.
+`core/implement-change`'s task-index step SHALL NOT tell the lead agent that every task produced a local implementation commit. It SHALL allow for tasks accepted through external delivery. When `verify-task-commit` accepts a record, it SHALL mark it accepted next to the record (`<record>.accepted`, holding the accepting output), and a fresh task start SHALL remove any stale marker along with a stale record. `core/verify-change`'s draft pull request step SHALL be instructed to read only the accepted external deliveries in the run's session directory, never records the gate rejected, and to list each record's repository, commits, and reported pull request in the draft pull request body, marked as delivered in another repository. When there are no records, the pull request body SHALL NOT include that section.
 
 #### Scenario: Draft pull request lists external deliveries
 - **WHEN** a change run accepted one task through external delivery, and `open-draft-pr` runs in the same run
@@ -179,6 +179,7 @@ When `verify-task-commit` accepts external delivery, its output SHALL:
 - state that the task was delivered outside the run repository;
 - name the resolved external repository path, each verified commit ID, and a remote-tracking ref that contains the commits;
 - show agent-reported fields it did not verify, such as the pull request URL and branch name, labeled as reported and unverified;
+- state that pushed state was judged from the external clone's local remote-tracking refs, without contacting the remote;
 - state that this run's validator and task-compliance review did not cover the external work.
 
 This output SHALL appear as the step's output in the audit log and run views. The record SHALL remain in the session directory after the run completes.

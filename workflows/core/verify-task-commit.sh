@@ -213,7 +213,7 @@ def reason(record):
 try:
     with open(os.environ["RECORD_PATH"], "rb") as handle:
         record = json.loads(handle.read().decode("utf-8"))
-except (ValueError, UnicodeDecodeError):
+except (ValueError, UnicodeDecodeError, RecursionError):
     print("invalid")
     print("record is not valid JSON")
     raise SystemExit(0)
@@ -320,14 +320,21 @@ for id in $commits; do
 "
 done
 
-echo "task delivered outside this repository"
-printf 'repository: %s\n' "$root"
-printf '%s' "$report"
-if [ -n "$branch" ]; then
-  printf 'branch (reported, unverified): %s\n' "$branch"
-fi
-if [ -n "$pull_request" ]; then
-  printf 'pull request (reported, unverified): %s\n' "$pull_request"
-fi
-echo "note: this run's validator and task-compliance review did not cover the external work"
-printf 'record: %s\n' "$record_path"
+accepted=$(
+  echo "task delivered outside this repository"
+  printf 'repository: %s\n' "$root"
+  printf '%s' "$report"
+  if [ -n "$branch" ]; then
+    printf 'branch (reported, unverified): %s\n' "$branch"
+  fi
+  if [ -n "$pull_request" ]; then
+    printf 'pull request (reported, unverified): %s\n' "$pull_request"
+  fi
+  echo "note: pushed state was judged from this clone's local remote-tracking refs; the remote was not contacted"
+  echo "note: this run's validator and task-compliance review did not cover the external work"
+  printf 'record: %s\n' "$record_path"
+)
+
+# Downstream steps list only accepted records, never ones the gate rejected.
+printf '%s\n' "$accepted" >"${record_path%.json}.accepted"
+printf '%s\n' "$accepted"

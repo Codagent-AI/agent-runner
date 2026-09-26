@@ -87,7 +87,7 @@ record_dir="$session_dir/output/task-delivery"
 record_path="$record_dir/${task_key}-${started_at}-${head12}.json"
 
 mkdir -p "$record_dir"
-rm -f -- "$record_path"
+rm -f -- "$record_path" "${record_path%.json}.accepted"
 
 if command -v jq >/dev/null 2>&1; then
   jq -cn --arg record_path "$record_path" --arg started_at "$started_at" \

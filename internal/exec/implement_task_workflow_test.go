@@ -126,7 +126,7 @@ func TestImplementTaskExternalDeliveryWiring(t *testing.T) {
 		workflow := loadBuiltinWorkflow(t, verifyChangeRef)
 		step, _ := requireStep(t, &workflow, "open-draft-pr")
 		requireContains(t, "open-draft-pr prompt", step.Prompt,
-			"{{session_dir}}/output/task-delivery/",
+			"{{session_dir}}/output/task-delivery/*.accepted",
 			"Delivered in other repositories",
 		)
 	})
@@ -389,6 +389,9 @@ func TestImplementTaskAcceptsRepairRecordedExternalDelivery(t *testing.T) {
 		}
 		if _, err := os.Stat(runner.repairRecordPath); err != nil {
 			t.Errorf("record not retained: %v", err)
+		}
+		if _, err := os.Stat(strings.TrimSuffix(runner.repairRecordPath, ".json") + ".accepted"); err != nil {
+			t.Errorf("accepted marker not written: %v", err)
 		}
 	})
 

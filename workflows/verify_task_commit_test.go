@@ -244,11 +244,19 @@ func (f *deliveryFixture) verify(t *testing.T, input string) (stdout, stderr str
 	return out.String(), errOut.String(), exitCode
 }
 
+// acceptedPath is where the gate marks a record it accepted.
+func (f *deliveryFixture) acceptedPath() string {
+	return strings.TrimSuffix(f.recordPath, ".json") + ".accepted"
+}
+
 func (f *deliveryFixture) wantReject(t *testing.T, want string) string {
 	t.Helper()
 	stdout, stderr, code := f.verify(t, f.input())
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if _, err := os.Stat(f.acceptedPath()); !os.IsNotExist(err) {
+		t.Fatalf("rejected record was marked accepted (stat err %v)", err)
 	}
 	if !strings.Contains(stderr, want) {
 		t.Fatalf("stderr = %q, want it to contain %q", stderr, want)
@@ -336,11 +344,19 @@ func TestVerifyTaskCommitExternalDelivery(t *testing.T) {
 					"commit: " + second + " (contained in refs/remotes/origin/feature)",
 					"branch (reported, unverified): feature",
 					"pull request (reported, unverified): https://example.com/pr/1",
+					"note: pushed state was judged from this clone's local remote-tracking refs; the remote was not contacted",
 					"note: this run's validator and task-compliance review did not cover the external work",
 					"record: " + f.recordPath,
 				}, "\n") + "\n"
 				if diff := cmp.Diff(want, stdout); diff != "" {
 					t.Fatalf("stdout mismatch (-want +got):\n%s", diff)
+				}
+				accepted, err := os.ReadFile(f.acceptedPath())
+				if err != nil {
+					t.Fatalf("accepted marker not written: %v", err)
+				}
+				if diff := cmp.Diff(want, string(accepted)); diff != "" {
+					t.Fatalf("accepted marker mismatch (-want +got):\n%s", diff)
 				}
 			})
 
@@ -525,6 +541,7 @@ func TestVerifyTaskCommitExternalDelivery(t *testing.T) {
 					{"control character in branch", marshal(map[string]any{"repository": f.ext, "commits": []string{hexID}, "branch": "a\nb"})},
 					{"control character in pull request", marshal(map[string]any{"repository": f.ext, "commits": []string{hexID}, "pull_request": "a\tb"})},
 					{"control character in repository", marshal(map[string]any{"repository": f.ext + "\n/x", "commits": []string{hexID}})},
+					{"deeply nested record", strings.Repeat("[", 30000) + strings.Repeat("]", 30000)},
 					{"oversized record", marshal(map[string]any{"repository": f.ext, "commits": []string{hexID}, "pad": strings.Repeat("x", 64*1024)})},
 				}
 				for _, tc := range cases {

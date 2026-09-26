@@ -106,6 +106,7 @@ func TestPrepareTaskDeliveryScript(t *testing.T) {
 				now := time.Now().Unix()
 				for _, ts := range []int64{now, now + 1} {
 					mustWriteFile(t, filepath.Join(dir, fmt.Sprintf("task-%d-0123456789ab.json", ts)), "{}")
+					mustWriteFile(t, filepath.Join(dir, fmt.Sprintf("task-%d-0123456789ab.accepted", ts)), "stale")
 				}
 				other := filepath.Join(dir, "other-1-0123456789ab.json")
 				mustWriteFile(t, other, "{}")
@@ -121,6 +122,10 @@ func TestPrepareTaskDeliveryScript(t *testing.T) {
 				}
 				if _, err := os.Stat(got["record_path"]); !os.IsNotExist(err) {
 					t.Fatalf("stale record at %s not removed: %v", got["record_path"], err)
+				}
+				accepted := strings.TrimSuffix(got["record_path"], ".json") + ".accepted"
+				if _, err := os.Stat(accepted); !os.IsNotExist(err) {
+					t.Fatalf("stale accepted marker at %s not removed: %v", accepted, err)
 				}
 				if _, err := os.Stat(other); err != nil {
 					t.Fatalf("unrelated record removed: %v", err)

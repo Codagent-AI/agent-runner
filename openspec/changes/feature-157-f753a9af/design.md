@@ -117,11 +117,12 @@ Flow:
    ...
    branch (reported, unverified): <branch>            # when present
    pull request (reported, unverified): <url>          # when present
+   note: pushed state was judged from this clone's local remote-tracking refs; the remote was not contacted
    note: this run's validator and task-compliance review did not cover the external work
    record: <record_path>
    ```
 
-   Exit 0.
+   The same text is written to `<record_path without .json>.accepted`, so `open-draft-pr` lists only accepted deliveries and never a record the gate rejected. `prepare-task-delivery` removes a stale marker along with a stale record. Exit 0.
 
 The only commands the gate runs are `rev-parse`, `for-each-ref`, `cat-file`, `merge-base`, and `hash-object` (reading `/dev/null`, without `-w`). None of these refreshes the index, runs hooks, or runs diff or textconv drivers. `GIT_OPTIONAL_LOCKS=0` and `core.fsmonitor=false` protect against the rare internal index refresh. No command writes refs, the index, or the worktree.
 
