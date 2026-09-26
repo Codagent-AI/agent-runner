@@ -3,7 +3,6 @@ package exec
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -218,16 +217,14 @@ func materializeAsset(sessionDir, namespace, relAsset string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// The script may call helpers beside it, which a run whose top-level workflow is in
+	// another namespace has not materialized yet.
+	if err := builtinworkflows.MaterializeNamespace(sessionDir, namespace); err != nil {
+		return "", err
+	}
 	target := filepath.Join(sessionDir, "bundled", namespace, filepath.FromSlash(relAsset))
-	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-		return "", fmt.Errorf("create bundled asset directory: %w", err)
-	}
-	mode := os.FileMode(0o600)
-	if strings.HasSuffix(relAsset, ".sh") {
-		mode = 0o700
-	}
-	if err := os.WriteFile(target, data, mode); err != nil {
-		return "", fmt.Errorf("write bundled asset %s: %w", target, err)
+	if err := builtinworkflows.WriteBundledAsset(target, relAsset, data); err != nil {
+		return "", err
 	}
 	return target, nil
 }

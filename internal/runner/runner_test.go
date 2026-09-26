@@ -803,6 +803,32 @@ func TestMaterializeBundledAssetsCreatesMarkerForNamespaceWithoutAssets(t *testi
 	}
 }
 
+// A session held by another live runner must not have its bundled assets rewritten
+// under the scripts that runner is executing: the lock comes before materialization.
+func TestPrepareRunDoesNotMaterializeAssetsInSessionHeldByAnotherRunner(t *testing.T) {
+	sessionDir := t.TempDir()
+	// PID 1 is always alive; signalling it without privilege returns EPERM, which counts as alive.
+	if err := os.WriteFile(filepath.Join(sessionDir, "lock"), []byte("1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workflow := model.Workflow{Name: "debug", Steps: []model.Step{{ID: "ship", Command: "echo ship"}}}
+	workflow.ApplyDefaults()
+
+	_, err := PrepareRun(&workflow, nil, &Options{
+		WorkflowFile:  "builtin:core/debug-v1.0.yaml",
+		SessionDir:    sessionDir,
+		ProcessRunner: &mockRunner{},
+		GlobExpander:  &mockGlob{},
+		Log:           &mockLog{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "run already in progress") {
+		t.Fatalf("PrepareRun error = %v, want run already in progress", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(sessionDir, "bundled")); !os.IsNotExist(statErr) {
+		t.Fatalf("bundled assets written into a session another runner holds (stat err = %v)", statErr)
+	}
+}
+
 func TestMaterializeBundledAssetsPutsDebugPromptAtPromptPath(t *testing.T) {
 	sessionDir := t.TempDir()
 

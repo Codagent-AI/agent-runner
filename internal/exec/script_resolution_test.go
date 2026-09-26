@@ -90,3 +90,28 @@ func TestResolveScriptPath_DiskWorkflowUsesContainingDirectory(t *testing.T) {
 		t.Fatalf("script path = %q, want %q", got, want)
 	}
 }
+
+// A builtin script may call helpers beside it ("$script_dir/validate-change-name.sh").
+// When the run's top-level workflow is not in that namespace, as for a project workflow
+// that calls builtin:openspec/archive-change, only step resolution materializes the
+// namespace, so it must bring the helpers along.
+func TestResolveScriptPath_EmbeddedWorkflowMaterializesSiblingHelpers(t *testing.T) {
+	sessionDir := t.TempDir()
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		WorkflowFile: "builtin:openspec/archive-change-v1.0.yaml",
+		SessionDir:   sessionDir,
+	})
+
+	got, err := resolveScriptPath("archive-transition.sh", ctx)
+	if err != nil {
+		t.Fatalf("resolveScriptPath: %v", err)
+	}
+	helper := filepath.Join(filepath.Dir(got), "validate-change-name.sh")
+	info, err := os.Stat(helper)
+	if err != nil {
+		t.Fatalf("sibling helper not materialized: %v", err)
+	}
+	if info.Mode().Perm()&0o100 == 0 {
+		t.Fatalf("sibling helper mode = %v, want executable", info.Mode().Perm())
+	}
+}
