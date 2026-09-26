@@ -344,11 +344,6 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		return nil, fmt.Errorf("create session dir: %w", err)
 	}
 	cleanupSession := newRunSessionCleanup(sessionDir, opts)
-	if err := materializeBundledAssets(sessionDir, opts.WorkflowFile); err != nil {
-		cleanupSession(nil)
-		return nil, err
-	}
-
 	activePID, lockErr := runlock.Acquire(sessionDir)
 	switch {
 	case lockErr != nil:
@@ -358,6 +353,12 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		return nil, fmt.Errorf("acquire run lock in %s: %w", sessionDir, lockErr)
 	case activePID > 0:
 		return nil, fmt.Errorf("run already in progress (PID %d) in %s; wait for it to finish or kill the process before resuming", activePID, sessionDir)
+	}
+	// Only the lock holder writes bundled assets, so a second runner never rewrites a
+	// script while the holder executes it.
+	if err := materializeBundledAssets(sessionDir, opts.WorkflowFile); err != nil {
+		cleanupSession(nil)
+		return nil, err
 	}
 	if err := cleanupCrashedInteractiveAttempt(sessionDir, opts); err != nil {
 		cleanupSession(nil)
