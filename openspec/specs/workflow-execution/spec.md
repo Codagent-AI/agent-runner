@@ -7,6 +7,10 @@ Defines how the runner dispatches agent step execution to CLI adapters through d
 ### Requirement: Agent step execution dispatch
 The runner's agent step executor SHALL resolve the agent profile before delegating CLI invocation. For `session: new` steps, the profile is resolved from the step's `agent` field. For `session: resume` or `session: inherit` steps, the profile is inherited from the session-originating step. The step's optional `mode` override is applied on top of the resolved profile's `default_mode`. Per-step `model` and `cli` overrides, if present, take precedence over the profile's values. Interactive steps and autonomous steps routed to the interactive backend SHALL execute via direct terminal handoff. Autonomous-headless steps SHALL execute via direct process execution with piped output. Both paths use the adapter for argument construction.
 
+#### Scenario: Headless step rejects interactive completion
+- **WHEN** an agent in an autonomous-headless step requests `step complete`
+- **THEN** Agent Runner rejects the request and the step finishes when the agent process exits
+
 #### Scenario: New session step dispatched
 - **WHEN** the runner executes an agent step with `session: new` and `agent: interactive_base`
 - **THEN** the runner resolves the `interactive_base` profile, determines mode from the profile's `default_mode` (or the step's `mode` override), and dispatches via direct terminal handoff for interactive or direct headless exec for autonomous

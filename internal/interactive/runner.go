@@ -103,11 +103,12 @@ func (r *DirectRunner) Run(ctx context.Context) (result DirectResult, err error)
 	}
 
 	attempt := options.Control.ActivateAttempt(ctx, options.StepID, control.AttemptOptions{
-		AgentCallEligible: options.AgentCallEligible,
-		AgentCallHandler:  options.AgentCallHandler,
-		RouteEligible:     options.RouteEligible,
-		RouteStore:        options.RouteStore,
-		RouteValidation:   options.RouteValidation,
+		CompletionEligible: true,
+		AgentCallEligible:  options.AgentCallEligible,
+		AgentCallHandler:   options.AgentCallHandler,
+		RouteEligible:      options.RouteEligible,
+		RouteStore:         options.RouteStore,
+		RouteValidation:    options.RouteValidation,
 		Checkpoint: func() (cli.Checkpoint, error) {
 			if options.SessionID == "" && options.ResolveSessionID != nil {
 				options.SessionID = resolveFreshSessionID(ctx, options.ResolveSessionID)
@@ -330,8 +331,13 @@ func awaitDirectResult(ctx context.Context, options *DirectOptions, attempt *con
 
 func finishDirectCompletion(ctx context.Context, options *DirectOptions, attempt *control.Attempt, supervisor *Supervisor, completion *control.CompletionRequest) (DirectResult, error) {
 	if completion.AttemptID != attempt.ID {
-		_ = supervisor.Terminate(options.TerminationGrace)
-		return DirectResult{}, errors.New("direct interactive runner: received completion for a different attempt")
+		if options.Logger != nil {
+			options.Logger.Emit(audit.Event{Type: audit.EventWarning, Prefix: options.Prefix, Data: map[string]any{
+				"message": "discarded completion for a different attempt", "attempt_id": completion.AttemptID,
+				"active_attempt_id": attempt.ID, "request_id": completion.RequestID,
+			}})
+		}
+		return awaitDirectResult(ctx, options, attempt, supervisor)
 	}
 	committed, unsubscribe := options.Control.SubscribeCommittedTurn(attempt.ID)
 	defer unsubscribe()
