@@ -27,9 +27,14 @@ type taskDeliveryProcessRunner struct {
 	lastGate exec.ProcessResult
 }
 
+// RunShell trims output like the real process runners, so captures such as
+// task_start_head carry no trailing newline.
 func (r *taskDeliveryProcessRunner) RunShell(cmd string, _ bool, _ string) (exec.ProcessResult, error) {
 	r.events = append(r.events, "shell: "+strings.TrimSpace(strings.SplitN(cmd, "\n", 2)[0]))
-	return r.exec(osexec.Command("sh", "-c", cmd), nil)
+	result, err := r.exec(osexec.Command("sh", "-c", cmd), nil)
+	result.Stdout = strings.TrimSpace(result.Stdout)
+	result.Stderr = strings.TrimSpace(result.Stderr)
+	return result, err
 }
 
 func (r *taskDeliveryProcessRunner) RunScript(path string, stdin []byte, _ bool, _ string) (exec.ProcessResult, error) {

@@ -19,14 +19,10 @@ if command -v jq >/dev/null 2>&1; then
           error("started_at and record_path must be supplied together")
         elif has("started_at") and ((.started_at | type) != "string" or (.record_path | type) != "string") then
           error("started_at and record_path must be strings")
+        elif [.starting_head, .started_at, .record_path] | any(type == "string" and ctl) then
+          error("inputs must not contain control characters")
         else
-          # A captured HEAD keeps its trailing newline.
-          .starting_head |= sub("\n+$"; "") |
-          if [.starting_head, .started_at, .record_path] | any(type == "string" and ctl) then
-            error("inputs must not contain control characters")
-          else
-            .starting_head, (.started_at // ""), (.record_path // "")
-          end
+          .starting_head, (.started_at // ""), (.record_path // "")
         end
       '
   ); then
@@ -52,8 +48,6 @@ if not isinstance(parsed, dict):
 starting_head = parsed.get("starting_head")
 if not isinstance(starting_head, str):
     fail("starting_head must be a string")
-# A captured HEAD keeps its trailing newline.
-starting_head = starting_head.rstrip("\n")
 if ("started_at" in parsed) != ("record_path" in parsed):
     fail("started_at and record_path must be supplied together")
 started_at = parsed.get("started_at", "")
@@ -159,14 +153,14 @@ if command -v jq >/dev/null 2>&1; then
         elif any(.commits[]; type != "string" or (test("^[0-9a-f]{7,64}$") | not)) then "commit IDs must be 7-64 lowercase hex characters"
         elif any(.branch, .pull_request; . != null and type != "string") then "branch and pull_request must be strings"
         elif any(.branch, .pull_request; type == "string" and ctl) then "branch and pull_request must not contain control characters"
-        else empty
+        else null
         end;
       if length != 1 then
         "invalid", "record must contain a single JSON value"
       else
-        .[0] | [reason] as $r |
-        if ($r | length) > 0 then
-          "invalid", $r[0]
+        .[0] | reason as $r |
+        if $r then
+          "invalid", $r
         else
           "ok", .repository, (.branch // ""), (.pull_request // ""), .commits[]
         end
@@ -288,11 +282,8 @@ for id in $commits; do
     reject "commit $id: not reachable from any remote-tracking ref"
 
   tree=$(xgit rev-parse "$full^{tree}")
-  if parent_tree=$(xgit rev-parse --verify --quiet "$full^1^{tree}" 2>/dev/null); then
-    :
-  else
+  parent_tree=$(xgit rev-parse --verify --quiet "$full^1^{tree}" 2>/dev/null) ||
     parent_tree=$empty_tree
-  fi
   [ "$tree" != "$parent_tree" ] ||
     reject "commit $id: contains no tracked changes"
 

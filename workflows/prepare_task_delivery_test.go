@@ -13,35 +13,9 @@ import (
 	"time"
 )
 
-func runPrepareTaskDelivery(t *testing.T, env []string, input string) (stdout, stderr string, exitCode int) {
-	t.Helper()
-	script, err := ReadAsset("core/prepare-task-delivery.sh")
-	if err != nil {
-		t.Fatalf("ReadAsset(core/prepare-task-delivery.sh): %v", err)
-	}
-	scriptPath := filepath.Join(t.TempDir(), "prepare-task-delivery.sh")
-	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
-		t.Fatalf("write script: %v", err)
-	}
-	cmd := exec.Command("sh", scriptPath)
-	cmd.Stdin = strings.NewReader(input)
-	if env != nil {
-		cmd.Env = env
-	}
-	var out, errOut strings.Builder
-	cmd.Stdout = &out
-	cmd.Stderr = &errOut
-	err = cmd.Run()
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		exitCode = exitErr.ExitCode()
-	} else if err != nil {
-		t.Fatalf("run script: %v", err)
-	}
-	return out.String(), errOut.String(), exitCode
-}
-
 func TestPrepareTaskDeliveryScript(t *testing.T) {
 	head := strings.Repeat("0123456789ab", 3) + "0123"
+	script := writeAssetScript(t, "core/prepare-task-delivery.sh")
 
 	for _, parser := range []string{"jq", "python3"} {
 		t.Run(parser, func(t *testing.T) {
@@ -55,7 +29,7 @@ func TestPrepareTaskDeliveryScript(t *testing.T) {
 			t.Run("prints the record path and start time and prepares the directory", func(t *testing.T) {
 				sessionDir := filepath.Join(t.TempDir(), "session 'quoted' & spaced")
 				before := time.Now().Unix()
-				stdout, stderr, code := runPrepareTaskDelivery(t, env, fmt.Sprintf(
+				stdout, stderr, code := runScriptSplit(t, script, "", env, fmt.Sprintf(
 					`{"session_dir":%q,"task_file":"openspec/changes/x/tasks/01-add thing!.md","starting_head":%q}`, sessionDir, head))
 				after := time.Now().Unix()
 				if code != 0 {
@@ -84,17 +58,6 @@ func TestPrepareTaskDeliveryScript(t *testing.T) {
 				}
 			})
 
-			t.Run("accepts a captured starting head with a trailing newline", func(t *testing.T) {
-				stdout, stderr, code := runPrepareTaskDelivery(t, env, fmt.Sprintf(
-					`{"session_dir":%q,"task_file":"task.md","starting_head":%q}`, t.TempDir(), head+"\n"))
-				if code != 0 {
-					t.Fatalf("exit = %d\n%s", code, stderr)
-				}
-				if !strings.Contains(stdout, "-0123456789ab.json") {
-					t.Fatalf("stdout = %q, want head prefix in the record path", stdout)
-				}
-			})
-
 			t.Run("removes a record already at the path", func(t *testing.T) {
 				sessionDir := t.TempDir()
 				dir := filepath.Join(sessionDir, "output", "task-delivery")
@@ -111,7 +74,7 @@ func TestPrepareTaskDeliveryScript(t *testing.T) {
 				other := filepath.Join(dir, "other-1-0123456789ab.json")
 				mustWriteFile(t, other, "{}")
 
-				stdout, stderr, code := runPrepareTaskDelivery(t, env, fmt.Sprintf(
+				stdout, stderr, code := runScriptSplit(t, script, "", env, fmt.Sprintf(
 					`{"session_dir":%q,"task_file":"task.md","starting_head":%q}`, sessionDir, head))
 				if code != 0 {
 					t.Fatalf("exit = %d\n%s", code, stderr)
@@ -138,7 +101,7 @@ func TestPrepareTaskDeliveryScript(t *testing.T) {
 					"tasks/é task.md":        "___task",
 					"task":                   "task",
 				} {
-					stdout, stderr, code := runPrepareTaskDelivery(t, env, fmt.Sprintf(
+					stdout, stderr, code := runScriptSplit(t, script, "", env, fmt.Sprintf(
 						`{"session_dir":%q,"task_file":%q,"starting_head":%q}`, t.TempDir(), taskFile, head))
 					if code != 0 {
 						t.Fatalf("%s: exit = %d\n%s", taskFile, code, stderr)
@@ -165,9 +128,10 @@ func TestPrepareTaskDeliveryScript(t *testing.T) {
 					"empty task_file":       fmt.Sprintf(`{"session_dir":%q,"task_file":"","starting_head":%q}`, sessionDir, head),
 					"non-hex starting_head": fmt.Sprintf(`{"session_dir":%q,"task_file":"t.md","starting_head":"HEAD"}`, sessionDir),
 					"control character":     fmt.Sprintf(`{"session_dir":%q,"task_file":"t\n.md","starting_head":%q}`, sessionDir, head),
+					"newline after head":    fmt.Sprintf(`{"session_dir":%q,"task_file":"t.md","starting_head":%q}`, sessionDir, head+"\n"),
 				} {
 					t.Run(name, func(t *testing.T) {
-						stdout, stderr, code := runPrepareTaskDelivery(t, env, input)
+						stdout, stderr, code := runScriptSplit(t, script, "", env, input)
 						if code != 2 {
 							t.Fatalf("exit = %d, want 2\nstdout:%s\nstderr:%s", code, stdout, stderr)
 						}

@@ -97,7 +97,7 @@ func TestImplementTaskExternalDeliveryWiring(t *testing.T) {
 
 			"Do not push, create or move branches, commit, or otherwise modify the external repository",
 			"do not end with `REPAIR_BLOCKED`",
-			"REPAIR_BLOCKED",
+			"end your response with the line `REPAIR_BLOCKED`",
 			"Never declare success yourself",
 			"Do not create an empty or placeholder commit",
 		)
@@ -158,27 +158,30 @@ type taskDeliveryRunner struct {
 
 var recordPathPattern = regexp.MustCompile("`(/[^`]*/output/task-delivery/[^`]*\\.json)`")
 
+// RunShell trims output like the real process runners, so captures such as
+// task_start_head carry no trailing newline.
 func (r *taskDeliveryRunner) RunShell(cmd string, _ bool, _ string) (ProcessResult, error) {
-	return r.exec(osexec.Command("sh", "-c", cmd), nil)
+	result, err := r.exec(osexec.Command("sh", "-c", cmd), nil)
+	result.Stdout = strings.TrimSpace(result.Stdout)
+	result.Stderr = strings.TrimSpace(result.Stderr)
+	return result, err
 }
 
 func (r *taskDeliveryRunner) RunScript(path string, stdin []byte, _ bool, _ string) (ProcessResult, error) {
 	name := filepath.Base(path)
 	r.events = append(r.events, name)
-	switch name {
-	case "run-validator.sh":
+	if name == "run-validator.sh" {
 		if r.validatorFailures > 0 {
 			r.validatorFailures--
 			return ProcessResult{Started: true, ExitCode: 1, Stdout: "REVIEW task-compliance: 1. task not implemented\n"}, nil
 		}
 		return ProcessResult{Started: true, ExitCode: 0, Stdout: "PASS\n"}, nil
-	case "verify-task-commit.sh":
-		result, err := r.exec(osexec.Command("sh", path), stdin)
-		r.lastGate = result
-		return result, err
-	default:
-		return r.exec(osexec.Command("sh", path), stdin)
 	}
+	result, err := r.exec(osexec.Command("sh", path), stdin)
+	if name == "verify-task-commit.sh" {
+		r.lastGate = result
+	}
+	return result, err
 }
 
 func (r *taskDeliveryRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, error) {
@@ -234,21 +237,7 @@ func (r *taskDeliveryRunner) generate() {
 }
 
 func (r *taskDeliveryRunner) exec(cmd *osexec.Cmd, stdin []byte) (ProcessResult, error) {
-	cmd.Dir = r.run
-	if stdin != nil {
-		cmd.Stdin = strings.NewReader(string(stdin))
-	}
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	exitCode := 0
-	if exitErr, ok := err.(*osexec.ExitError); ok {
-		exitCode = exitErr.ExitCode()
-	} else if err != nil {
-		return ProcessResult{}, err
-	}
-	return ProcessResult{Started: true, ExitCode: exitCode, Stdout: stdout.String(), Stderr: stderr.String()}, nil
+	return runProcess(cmd, r.run, stdin)
 }
 
 func gitOut(t *testing.T, dir string, args ...string) string {
@@ -265,6 +254,11 @@ func gitOut(t *testing.T, dir string, args ...string) string {
 func initGitRepo(t *testing.T, dir string) {
 	t.Helper()
 	gitIn(t, dir, "init", "-q", "-b", "main")
+	configGitIdentity(t, dir)
+}
+
+func configGitIdentity(t *testing.T, dir string) {
+	t.Helper()
 	gitIn(t, dir, "config", "user.email", "test@example.com")
 	gitIn(t, dir, "config", "user.name", "Test")
 	gitIn(t, dir, "config", "commit.gpgsign", "false")
@@ -308,9 +302,7 @@ func newTaskDeliveryFixture(t *testing.T) *taskDeliveryFixture {
 
 	f.ext = filepath.Join(t.TempDir(), "ext")
 	gitIn(t, filepath.Dir(f.ext), "clone", "-q", remote, f.ext)
-	gitIn(t, f.ext, "config", "user.email", "test@example.com")
-	gitIn(t, f.ext, "config", "user.name", "Test")
-	gitIn(t, f.ext, "config", "commit.gpgsign", "false")
+	configGitIdentity(t, f.ext)
 	return f
 }
 

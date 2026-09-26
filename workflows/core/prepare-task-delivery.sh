@@ -15,14 +15,10 @@ if command -v jq >/dev/null 2>&1; then
           error("input must be a JSON object")
         elif [.session_dir, .task_file, .starting_head] | any(type != "string") then
           error("session_dir, task_file, and starting_head must be strings")
+        elif [.session_dir, .task_file, .starting_head] | any(ctl) then
+          error("inputs must not contain control characters")
         else
-          # A captured HEAD keeps its trailing newline.
-          .starting_head |= sub("\n+$"; "") |
-          if [.session_dir, .task_file, .starting_head] | any(ctl) then
-            error("inputs must not contain control characters")
-          else
-            .session_dir, .task_file, .starting_head
-          end
+          .session_dir, .task_file, .starting_head
         end
       '
   ); then
@@ -48,8 +44,6 @@ if not isinstance(parsed, dict):
 values = [parsed.get(key) for key in ("session_dir", "task_file", "starting_head")]
 if not all(isinstance(value, str) for value in values):
     fail("session_dir, task_file, and starting_head must be strings")
-# A captured HEAD keeps its trailing newline.
-values[2] = values[2].rstrip("\n")
 if any(ord(ch) < 32 or ord(ch) == 127 for value in values for ch in value):
     fail("inputs must not contain control characters")
 for value in values:

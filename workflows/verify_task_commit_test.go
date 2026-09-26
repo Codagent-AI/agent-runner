@@ -116,12 +116,7 @@ func newDeliveryFixture(t *testing.T) *deliveryFixture {
 	t.Helper()
 	f := &deliveryFixture{startedAt: time.Now().Unix()}
 
-	f.run = t.TempDir()
-	initTestRepo(t, f.run)
-	mustWriteFile(t, filepath.Join(f.run, "file.txt"), "initial\n")
-	runGit(t, f.run, "add", "file.txt")
-	runGit(t, f.run, "commit", "-q", "-m", "initial")
-	f.startingHead = gitString(t, f.run, "rev-parse", "HEAD")
+	f.run, f.startingHead = gitRepo(t)
 
 	f.remote = filepath.Join(t.TempDir(), "remote.git")
 	runGit(t, filepath.Dir(f.remote), "init", "-q", "--bare", "-b", "main", f.remote)
@@ -135,9 +130,7 @@ func newDeliveryFixture(t *testing.T) *deliveryFixture {
 
 	f.ext = filepath.Join(t.TempDir(), "ext")
 	runGit(t, filepath.Dir(f.ext), "clone", "-q", f.remote, f.ext)
-	runGit(t, f.ext, "config", "user.name", "Agent Runner Test")
-	runGit(t, f.ext, "config", "user.email", "agent-runner@example.com")
-	runGit(t, f.ext, "config", "commit.gpgsign", "false")
+	configTestIdentity(t, f.ext)
 	f.extRoot = gitString(t, f.ext, "rev-parse", "--show-toplevel")
 	if got := gitString(t, f.ext, "symbolic-ref", "refs/remotes/origin/HEAD"); got != "refs/remotes/origin/main" {
 		t.Fatalf("origin/HEAD = %q, want refs/remotes/origin/main", got)
@@ -149,21 +142,18 @@ func newDeliveryFixture(t *testing.T) *deliveryFixture {
 	if err := os.MkdirAll(filepath.Dir(f.recordPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-
-	script, err := ReadAsset("core/verify-task-commit.sh")
-	if err != nil {
-		t.Fatalf("ReadAsset(core/verify-task-commit.sh): %v", err)
-	}
-	f.script = filepath.Join(t.TempDir(), "verify-task-commit.sh")
-	if err := os.WriteFile(f.script, script, 0o700); err != nil {
-		t.Fatalf("write script: %v", err)
-	}
+	f.script = writeAssetScript(t, "core/verify-task-commit.sh")
 	return f
 }
 
 func initTestRepo(t *testing.T, dir string) {
 	t.Helper()
 	runGit(t, dir, "init", "-q", "-b", "main")
+	configTestIdentity(t, dir)
+}
+
+func configTestIdentity(t *testing.T, dir string) {
+	t.Helper()
 	runGit(t, dir, "config", "user.name", "Agent Runner Test")
 	runGit(t, dir, "config", "user.email", "agent-runner@example.com")
 	runGit(t, dir, "config", "commit.gpgsign", "false")
@@ -171,13 +161,7 @@ func initTestRepo(t *testing.T, dir string) {
 
 func gitString(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("git %s failed: %v", strings.Join(args, " "), err)
-	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(string(runGitOutput(t, dir, args...)))
 }
 
 func gitWithEnv(t *testing.T, dir string, env []string, args ...string) {
@@ -198,7 +182,7 @@ func (f *deliveryFixture) commitExt(t *testing.T, name, content string, offset i
 	runGit(t, f.ext, "add", name)
 	date := strconv.FormatInt(f.startedAt+offset, 10) + " +0000"
 	gitWithEnv(t, f.ext, []string{"GIT_COMMITTER_DATE=" + date, "GIT_AUTHOR_DATE=" + date}, "commit", "-q", "-m", "deliver "+name)
-	return gitString(t, f.ext, "rev-parse", "HEAD")
+	return gitHead(t, f.ext)
 }
 
 func (f *deliveryFixture) push(t *testing.T, branch string) {
@@ -226,12 +210,17 @@ func (f *deliveryFixture) input() string {
 
 func (f *deliveryFixture) verify(t *testing.T, input string) (stdout, stderr string, exitCode int) {
 	t.Helper()
-	cmd := exec.Command("sh", f.script)
-	cmd.Dir = f.run
+	return runScriptSplit(t, f.script, f.run, f.env, input)
+}
+
+// runScriptSplit runs a script in dir with separate stdout and stderr. A nil
+// env inherits the test's environment.
+func runScriptSplit(t *testing.T, script, dir string, env []string, input string) (stdout, stderr string, exitCode int) {
+	t.Helper()
+	cmd := exec.Command("sh", script)
+	cmd.Dir = dir
+	cmd.Env = env
 	cmd.Stdin = strings.NewReader(input)
-	if f.env != nil {
-		cmd.Env = f.env
-	}
 	var out, errOut strings.Builder
 	cmd.Stdout = &out
 	cmd.Stderr = &errOut
@@ -310,20 +299,21 @@ func withoutJQ(t *testing.T) []string {
 func TestVerifyTaskCommitExternalDelivery(t *testing.T) {
 	for _, parser := range []string{"jq", "python3"} {
 		t.Run(parser, func(t *testing.T) {
-			if parser == "jq" {
-				if _, err := exec.LookPath("jq"); err != nil {
-					t.Skip("jq not installed")
-				}
+			t.Parallel()
+			var env []string
+			if parser == "python3" {
+				env = withoutJQ(t)
+			} else if _, err := exec.LookPath("jq"); err != nil {
+				t.Skip("jq not installed")
 			}
 			fixture := func(t *testing.T) *deliveryFixture {
 				f := newDeliveryFixture(t)
-				if parser == "python3" {
-					f.env = withoutJQ(t)
-				}
+				f.env = env
 				return f
 			}
 
 			t.Run("accepts pushed commits and reports them", func(t *testing.T) {
+				t.Parallel()
 				f := fixture(t)
 				first := f.commitExt(t, "a.txt", "a\n", 10)
 				second := f.commitExt(t, "b.txt", "b\n", 20)
@@ -361,6 +351,7 @@ func TestVerifyTaskCommitExternalDelivery(t *testing.T) {
 			})
 
 			t.Run("omits unreported optional fields", func(t *testing.T) {
+				t.Parallel()
 				f := fixture(t)
 				c := f.commitExt(t, "a.txt", "a\n", 10)
 				f.push(t, "feature")
@@ -373,12 +364,14 @@ func TestVerifyTaskCommitExternalDelivery(t *testing.T) {
 			})
 
 			t.Run("rejects a fabricated commit", func(t *testing.T) {
+				t.Parallel()
 				f := fixture(t)
 				f.writeRecord(t, map[string]any{"repository": f.ext, "commits": []string{"deadbeefdeadbeef"}})
 				f.wantReject(t, "commit deadbeefdeadbeef: not found")
 			})
 
 			t.Run("rejects an unpushed commit", func(t *testing.T) {
+				t.Parallel()
 				f := fixture(t)
 				c := f.commitExt(t, "a.txt", "a\n", 10)
 				f.writeRecord(t, map[string]any{"repository": f.ext, "commits": []string{c}})
@@ -386,15 +379,17 @@ func TestVerifyTaskCommitExternalDelivery(t *testing.T) {
 			})
 
 			t.Run("rejects an empty commit", func(t *testing.T) {
+				t.Parallel()
 				f := fixture(t)
 				runGit(t, f.ext, "commit", "-q", "--allow-empty", "-m", "empty")
-				c := gitString(t, f.ext, "rev-parse", "HEAD")
+				c := gitHead(t, f.ext)
 				f.push(t, "feature")
 				f.writeRecord(t, map[string]any{"repository": f.ext, "commits": []string{c}})
 				f.wantReject(t, "commit "+c+": contains no tracked changes")
 			})
 
 			t.Run("accepts a root commit with files", func(t *testing.T) {
+				t.Parallel()
 				f := fixture(t)
 				runGit(t, f.ext, "checkout", "-q", "--orphan", "fresh")
 				runGit(t, f.ext, "rm", "-q", "-rf", ".")
@@ -405,17 +400,19 @@ func TestVerifyTaskCommitExternalDelivery(t *testing.T) {
 			})
 
 			t.Run("rejects a root commit without files", func(t *testing.T) {
+				t.Parallel()
 				f := fixture(t)
 				runGit(t, f.ext, "checkout", "-q", "--orphan", "fresh")
 				runGit(t, f.ext, "rm", "-q", "-rf", ".")
 				runGit(t, f.ext, "commit", "-q", "--allow-empty", "-m", "empty root")
-				c := gitString(t, f.ext, "rev-parse", "HEAD")
+				c := gitHead(t, f.ext)
 				f.push(t, "fresh")
 				f.writeRecord(t, map[string]any{"repository": f.ext, "commits": []string{c}})
 				f.wantReject(t, "commit "+c+": contains no tracked changes")
 			})
 
 			t.Run("rejects a commit that predates the task", func(t *testing.T) {
+				t.Parallel()
 				f := fixture(t)
 				c := f.commitExt(t, "a.txt", "a\n", -301)
 				f.push(t, "feature")
@@ -424,6 +421,7 @@ func TestVerifyTaskCommitExternalDelivery(t *testing.T) {
 			})
 
 			t.Run("accepts a commit within the skew tolerance", func(t *testing.T) {
+				t.Parallel()
 				f := fixture(t)
 				c := f.commitExt(t, "a.txt", "a\n", -300)
 				f.push(t, "feature")
@@ -432,6 +430,7 @@ func TestVerifyTaskCommitExternalDelivery(t *testing.T) {
 			})
 
 			t.Run("rejects a commit already on the default branch", func(t *testing.T) {
+				t.Parallel()
 				f := fixture(t)
 				runGit(t, f.ext, "checkout", "-q", "main")
 				c := f.commitExt(t, "a.txt", "a\n", 10)
@@ -441,6 +440,7 @@ func TestVerifyTaskCommitExternalDelivery(t *testing.T) {
 			})
 
 			t.Run("skips the merged check without a recorded default branch", func(t *testing.T) {
+				t.Parallel()
 				f := fixture(t)
 				runGit(t, f.ext, "checkout", "-q", "main")
 				c := f.commitExt(t, "a.txt", "a\n", 10)
@@ -454,6 +454,7 @@ func TestVerifyTaskCommitExternalDelivery(t *testing.T) {
 			})
 
 			t.Run("one bad commit fails the record", func(t *testing.T) {
+				t.Parallel()
 				f := fixture(t)
 				good := f.commitExt(t, "a.txt", "a\n", 10)
 				f.push(t, "feature")
@@ -466,18 +467,20 @@ func TestVerifyTaskCommitExternalDelivery(t *testing.T) {
 			})
 
 			t.Run("rejects a worktree of the run repository", func(t *testing.T) {
+				t.Parallel()
 				f := fixture(t)
 				wt := filepath.Join(t.TempDir(), "wt")
 				runGit(t, f.run, "worktree", "add", "-q", "-b", "side", wt)
 				mustWriteFile(t, filepath.Join(wt, "side.txt"), "side\n")
 				runGit(t, wt, "add", "side.txt")
 				runGit(t, wt, "commit", "-q", "-m", "side")
-				c := gitString(t, wt, "rev-parse", "HEAD")
+				c := gitHead(t, wt)
 				f.writeRecord(t, map[string]any{"repository": wt, "commits": []string{c}})
 				f.wantReject(t, "named repository is the run repository")
 			})
 
 			t.Run("rejects a subdirectory of the run repository", func(t *testing.T) {
+				t.Parallel()
 				f := fixture(t)
 				sub := filepath.Join(f.run, "sub")
 				if err := os.MkdirAll(sub, 0o755); err != nil {
@@ -488,24 +491,28 @@ func TestVerifyTaskCommitExternalDelivery(t *testing.T) {
 			})
 
 			t.Run("rejects a bare repository", func(t *testing.T) {
+				t.Parallel()
 				f := fixture(t)
 				f.writeRecord(t, map[string]any{"repository": f.remote, "commits": []string{f.startingHead}})
 				f.wantReject(t, "not a usable repository worktree")
 			})
 
 			t.Run("rejects a non-repository directory", func(t *testing.T) {
+				t.Parallel()
 				f := fixture(t)
 				f.writeRecord(t, map[string]any{"repository": t.TempDir(), "commits": []string{f.startingHead}})
 				f.wantReject(t, "not a usable repository worktree")
 			})
 
 			t.Run("rejects a missing directory", func(t *testing.T) {
+				t.Parallel()
 				f := fixture(t)
 				f.writeRecord(t, map[string]any{"repository": filepath.Join(t.TempDir(), "missing"), "commits": []string{f.startingHead}})
 				f.wantReject(t, "not a usable repository worktree")
 			})
 
 			t.Run("rejects malformed records", func(t *testing.T) {
+				t.Parallel()
 				f := fixture(t)
 				hexID := strings.Repeat("a", 40)
 				tooMany := make([]string, 101)
@@ -614,20 +621,6 @@ func TestVerifyTaskCommitRecordLocation(t *testing.T) {
 		f.wantReject(t, "no tracked implementation changes")
 	})
 
-	t.Run("a captured starting head keeps its trailing newline", func(t *testing.T) {
-		f := newDeliveryFixture(t)
-		c := f.commitExt(t, "a.txt", "a\n", 10)
-		f.push(t, "feature")
-		f.writeRecord(t, map[string]any{"repository": f.ext, "commits": []string{c}})
-		for _, env := range [][]string{nil, withoutJQ(t)} {
-			f.env = env
-			stdout, stderr, code := f.verify(t, fmt.Sprintf(`{"starting_head":%q,"started_at":"%d","record_path":%q}`, f.startingHead+"\n", f.startedAt, f.recordPath))
-			if code != 0 || !strings.Contains(stdout, "task delivered outside this repository") {
-				t.Fatalf("exit = %d, want external delivery\n%s%s", code, stdout, stderr)
-			}
-		}
-	})
-
 	t.Run("invalid inputs exit 2", func(t *testing.T) {
 		f := newDeliveryFixture(t)
 		for name, input := range map[string]string{
@@ -636,6 +629,7 @@ func TestVerifyTaskCommitRecordLocation(t *testing.T) {
 			"non-numeric started_at":         fmt.Sprintf(`{"starting_head":%q,"started_at":"soon","record_path":%q}`, f.startingHead, f.recordPath),
 			"relative record_path":           fmt.Sprintf(`{"starting_head":%q,"started_at":"1","record_path":"record.json"}`, f.startingHead),
 			"control character in head":      fmt.Sprintf(`{"starting_head":%q,"started_at":"1","record_path":%q}`, f.startingHead+"\nabc", f.recordPath),
+			"newline after head":             fmt.Sprintf(`{"starting_head":%q,"started_at":"1","record_path":%q}`, f.startingHead+"\n", f.recordPath),
 		} {
 			t.Run(name, func(t *testing.T) {
 				stdout, stderr, code := f.verify(t, input)
