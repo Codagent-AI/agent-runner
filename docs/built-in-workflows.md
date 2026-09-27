@@ -42,6 +42,7 @@ inspection, not fresh execution.
 | `core:review-proposal` | Run adversarial proposal review, lead response, and up to three discussion rounds. |
 | `core:review-tasks` | Independently review and autonomously correct a structured task plan. |
 | `core:run-validator` | Run Agent Validator with a counted retry loop and fix-on-failure step. |
+| `core:verify-change` | Review implementation assumptions, validate, open a draft PR, and run bounded acceptance-test, fix, and revalidation rounds. |
 
 Some `core:*` workflows are hidden from normal browsing because they are intended to be invoked by higher-level workflows. The shared change-lifecycle workflows accept an artifact directory and validation instructions; the OpenSpec and spec-driven namespaces provide those backend-specific values.
 

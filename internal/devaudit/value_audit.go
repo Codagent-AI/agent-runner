@@ -1450,8 +1450,9 @@ func sandboxExecArgs(args []string, outputDir string) []string {
 
 // linuxSandboxArgs makes the ordinary filesystem read-only, then restores
 // write access only for the already-validated audit-owned output tree. The
-// user namespace is deliberate: it lets a non-root Docker user mount this
-// boundary without granting the container privileged mode.
+// user namespace keeps the caller's uid and lets a non-root Docker user mount
+// this boundary without granting the container privileged mode. Mapping the
+// caller to root would make Claude Code refuse --dangerously-skip-permissions.
 //
 // The host /dev seen through the read-only root bind is unusable inside the
 // user namespace, and Claude Code's Bun runtime aborts at startup without
@@ -1461,7 +1462,7 @@ func sandboxExecArgs(args []string, outputDir string) []string {
 // under /dev/shm is not hidden, and precedes the remount so it stays writable.
 func linuxSandboxArgs(args []string, workspace, outputDir string) []string {
 	argv := []string{
-		"--die-with-parent", "--new-session", "--unshare-user", "--uid", "0", "--gid", "0",
+		"--die-with-parent", "--new-session", "--unshare-user",
 		"--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev",
 		"--bind", outputDir, outputDir, "--remount-ro", "/dev",
 		"--chdir", workspace, "--",
@@ -1529,6 +1530,9 @@ func cliEnvironment(adapter cli.Adapter, request *Request, input []byte, workdir
 		extra = append(extra, runtimeEnv...)
 	}
 	if request.Auditor.CLI == "claude" {
+		// The crosscheck runs inside the OS-enforced audit sandbox. This marker
+		// lets Claude accept --dangerously-skip-permissions when the caller is root.
+		extra = append(extra, "IS_SANDBOX=1")
 		// The audit sandbox permits writes only below the output directory, and
 		// Claude's tools create their scratch directory under TMPDIR.
 		if err := os.MkdirAll(outputDir, 0o700); err != nil {

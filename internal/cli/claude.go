@@ -165,6 +165,20 @@ func (a *ClaudeAdapter) DropSpawnEnvVars() []string {
 	return claudeEnclosingSessionEnvVars
 }
 
+// SpawnEnv keeps background work in the lifetime of a headless Claude turn.
+// The default Bash timeout accommodates long foreground checks; an inherited
+// timeout remains the user's choice.
+func (a *ClaudeAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
+	if input == nil || !input.InvocationContext().IsHeadless() {
+		return nil, nil
+	}
+	env := []string{"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1"}
+	if _, defined := os.LookupEnv("BASH_DEFAULT_TIMEOUT_MS"); !defined {
+		env = append(env, "BASH_DEFAULT_TIMEOUT_MS=600000")
+	}
+	return env, nil
+}
+
 // DiscoverSessionID returns the pre-generated session ID.
 // The Claude adapter uses a deterministic approach: the runner generates a UUID
 // upfront and passes it via --session-id; the adapter returns this same UUID.

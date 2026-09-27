@@ -50,8 +50,10 @@ func TestProvisionedAgentCallPreservesExplicitClientDeadline(t *testing.T) {
 
 func assertExplicitClientDeadline(t *testing.T) {
 	t.Helper()
+	serverStarted := make(chan struct{})
 	serverCanceled := make(chan struct{})
 	server := agentcall.NewServer(agentcall.BridgeOptions{Send: func(ctx context.Context, _ string, _ string, _ json.RawMessage) (agentcall.Response, error) {
+		close(serverStarted)
 		<-ctx.Done()
 		close(serverCanceled)
 		return agentcall.Response{}, ctx.Err()
@@ -72,11 +74,21 @@ func assertExplicitClientDeadline(t *testing.T) {
 		_ = serverSession.Close()
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	_, err = clientSession.CallTool(ctx, &mcp.CallToolParams{
-		Name: agentcall.ToolName, Arguments: map[string]any{"prompt": "wait", "agent": "implementor"},
-	})
+	result := make(chan error, 1)
+	go func() {
+		_, callErr := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name: agentcall.ToolName, Arguments: map[string]any{"prompt": "wait", "agent": "implementor"},
+		})
+		result <- callErr
+	}()
+	select {
+	case <-serverStarted:
+	case <-ctx.Done():
+		t.Fatal("client deadline expired before the bridge sender started")
+	}
+	err = <-result
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("CallTool error = %v, want explicit client deadline", err)
 	}

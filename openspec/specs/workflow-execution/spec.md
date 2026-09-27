@@ -31,24 +31,25 @@ The runner's agent step executor SHALL resolve the agent profile before delegati
 
 When a workflow is resumed via `--resume`, the **first agent step** that executes SHALL receive resume-specific messaging. All subsequent agent steps in that run SHALL receive normal (non-resume) messaging. Non-agent steps (shell, group, loop, sub-workflow containers) do not consume or emit resume messaging — only agent-step execution consults `WorkflowResumed`. The resume messaging is distinct from `session: resume` session reuse — a step that reuses a CLI session during normal (non-resumed) workflow execution is NOT a workflow resume.
 
-For adapters that support system prompts, the runner constructs both a user-visible prompt (`input.Prompt`) and a system-level step prefix (`buildStepPrefix`). The messaging rules below apply to agent steps only:
+For interactive steps on adapters that support system prompts, the runner uses a short positional prompt only when starting a fresh CLI session. On a resumed CLI session, `input.Prompt` contains the full current step instructions, with `buildStepPrefix` before the step text and the completion instruction at the end; `input.SystemPrompt` is empty. Enrichment or a profile system prompt causes the positional prompt to be wrapped in `<system>` tags. The messaging rules below apply to agent steps only:
 
-| Condition | `input.Prompt` | `buildStepPrefix` |
+| Condition | `input.Prompt` | `buildStepPrefix` delivery |
 |---|---|---|
-| Workflow resumed (first agent step only) | `"Resume the {step} step."` | `"Resuming step: {step}. If you already started on this step, resume from where you left off."` |
-| Session reuse (`session: resume`), normal flow | `"Let's continue to the {step} step"` | Normal workflow description prefix |
-| New session (`session: new`) | `"Let's start the {step} step"` | Normal workflow description prefix |
+| Workflow resumed, first agent step, existing CLI session | Full step prompt containing `Resuming step: "{step}". If you already started on this step, resume from where you left off.` | Positional user prompt |
+| Workflow resumed, first agent step, fresh CLI session | `"Resume the {step} step."` | System prompt, with resume messaging |
+| Session reuse (`session: resume`), normal flow | Full step prompt containing `Continuing to step "{step}".` before the step text | Positional user prompt |
+| New CLI session, normal flow | `"Let's start the {step} step"` | System prompt, with workflow description when available |
 
 The `WorkflowResumed` flag SHALL be set on `ExecutionContext` when `opts.From` is non-empty (indicating a `--resume` invocation). The flag is consumed by agent-step execution (see `internal/exec/agent.go`) and cleared after the first agent step uses it, so only that first agent step receives resume messaging. Non-agent steps executed before the first agent step SHALL NOT consume the flag.
 
 #### Scenario: Workflow resumed — first agent step gets resume messaging
 - **WHEN** a workflow is resumed via `--resume` and the first agent step executes
-- **THEN** the user prompt is `"Resume the {step} step."` and the system prefix includes "If you already started on this step, resume from where you left off."
+- **THEN** the step prefix includes "If you already started on this step, resume from where you left off."; it appears before the step text in the full positional prompt when reusing a CLI session, or goes in the system prompt with `"Resume the {step} step."` as the positional prompt when starting a fresh CLI session
 
 #### Scenario: Workflow resumed — second agent step gets normal messaging
 - **WHEN** a workflow is resumed via `--resume` and the second agent step executes (after the first resumed agent step completes)
-- **THEN** the user prompt is `"Let's continue to the {step} step"` (if `session: resume`) or `"Let's start the {step} step"` (if `session: new`) with no resume prefix
+- **THEN** there is no resume prefix; a reused CLI session gets the full step prompt with `Continuing to step "{step}".` before the step text in the user message, while a fresh CLI session gets `"Let's start the {step} step"` as its short user prompt
 
 #### Scenario: Session reuse without workflow resume
 - **WHEN** a step has `session: resume` during a normal (non-resumed) workflow run
-- **THEN** the user prompt is `"Let's continue to the {step} step"` and the system prefix uses the normal workflow description, not resume messaging
+- **THEN** the user prompt contains the full step instructions with `Continuing to step "{step}".` before the step text, with no workflow resume messaging and no adapter system prompt

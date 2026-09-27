@@ -299,3 +299,35 @@ func TestClaudeCrosscheckTempDirectoryIsInsideWritableOutput(t *testing.T) {
 		t.Fatalf("Claude TMPDIR survived cleanup: %v", err)
 	}
 }
+
+func TestClaudeCrosscheckEnvironmentMarksSandbox(t *testing.T) {
+	for _, cliName := range []string{"claude", "codex"} {
+		t.Run(cliName, func(t *testing.T) {
+			t.Setenv("IS_SANDBOX", "0")
+			request, _ := crosscheckFixture(t)
+			request.Auditor.CLI = cliName
+			adapter, err := cli.Get(cliName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			env, cleanup, err := cliEnvironment(adapter, request, nil, t.TempDir(), filepath.Join(request.AuditSessionDir, "model-output"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cleanup()
+			entries := []string{}
+			for _, entry := range env {
+				if strings.HasPrefix(entry, "IS_SANDBOX=") {
+					entries = append(entries, entry)
+				}
+			}
+			if cliName == "claude" {
+				if got := entries[len(entries)-1]; got != "IS_SANDBOX=1" {
+					t.Fatalf("last Claude sandbox marker = %q, want IS_SANDBOX=1", got)
+				}
+			} else if len(entries) != 1 || entries[0] != "IS_SANDBOX=0" {
+				t.Fatalf("Codex sandbox markers = %v, want only inherited value", entries)
+			}
+		})
+	}
+}

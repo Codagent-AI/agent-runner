@@ -22,7 +22,7 @@ The reserved name SHALL behave as an ordinary captured variable in every other r
 - **THEN** the run's audit stream contains a `pull_request_recorded` event whose URL is `https://github.com/Codagent-AI/agent-runner/pull/62`
 
 #### Scenario: Capture inside a sub-workflow records against the run
-- **WHEN** a step inside a sub-workflow captures `pr_url`, as `core/implement-change-v1.0.yaml` does when composed by `openspec/change-v2.0.yaml`
+- **WHEN** a step inside a sub-workflow captures `pr_url`, as `core/verify-change-v1.0.yaml` does when composed through `core/implement-change-v1.0.yaml` by `openspec/change-v2.0.yaml`
 - **THEN** the event is emitted for the run and the run view shows the segment at the top-level breadcrumb, even though the captured value never reaches the root execution context
 
 #### Scenario: Capture inside a loop iteration records against the run
@@ -117,7 +117,7 @@ Width measurement for chrome layout SHALL count only the visible label, not the 
 
 The built-in workflows that open or update a pull request SHALL record its URL through the reserved `pr_url` capture, so runs of every shipped change lineage show the link.
 
-`core/implement-change-v1.0.yaml` SHALL record the URL from its existing draft-PR verification step, which already retrieves it. Adding recording to that step SHALL NOT weaken its existing validation: it SHALL continue to fail the run unless exactly one open, draft pull request exists for the current branch whose head matches local `HEAD`. Recording occurs only once those checks have passed.
+`core/verify-change-v1.0.yaml`, which `core/implement-change-v1.0.yaml` composes, SHALL record the URL from its existing draft-PR verification step, which already retrieves it. Adding recording to that step SHALL NOT weaken its existing validation: it SHALL continue to fail the run unless exactly one open, draft pull request exists for the current branch whose head matches local `HEAD`. Recording occurs only once those checks have passed.
 
 `core/finalize-pr-v1.0.yaml` SHALL record the URL after its push step, since that workflow can open the pull request when run standalone. That step SHALL be best-effort: when `gh` is unavailable, unauthenticated, or finds no open pull request for the current branch, it SHALL record nothing and SHALL NOT fail the run.
 
@@ -136,7 +136,7 @@ A workflow that opens no pull request SHALL record nothing and SHALL display no 
 - **THEN** the step does not fail the run, nothing is recorded, and the breadcrumb shows no segment
 
 #### Scenario: Draft-PR verification still fails on a missing pull request
-- **WHEN** `verify-draft-pr` in `core/implement-change-v1.0.yaml` finds no open draft pull request matching local `HEAD`
+- **WHEN** `verify-draft-pr` in `core/verify-change-v1.0.yaml` finds no open draft pull request matching local `HEAD`
 - **THEN** the step fails the run exactly as it does today, and adding URL recording has not made it tolerant
 
 #### Scenario: Workflow without a pull request shows nothing

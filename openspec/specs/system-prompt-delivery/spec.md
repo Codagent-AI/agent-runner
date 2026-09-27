@@ -7,11 +7,15 @@ Define how agent prompts and engine enrichment are routed through native and fal
 
 ### Requirement: System prompt routing
 
-For interactive mode with enrichment, the runner SHALL deliver only the enrichment as a system prompt, keeping the step prompt as a positional argument. When the adapter supports native system prompts, the runner SHALL pass enrichment via the adapter's system prompt mechanism and the step prompt as the positional argument. When the adapter does not support native system prompts, the runner SHALL wrap enrichment in `<system>` XML tags, prepend it to the step prompt, and pass the combined text as the positional argument. Headless mode SHALL continue concatenating prompt and enrichment into the positional argument with no wrapping (current behavior).
+For interactive mode with enrichment, a fresh session on an adapter with native system-prompt support SHALL receive the full step prompt and enrichment through the adapter's system-prompt mechanism, with a short positional prompt. On every resumed session, including adapters with native system-prompt support, the runner SHALL pass the full current step prompt and completion instruction in the positional user message and leave the adapter system prompt empty. When enrichment or a profile system prompt is present on a resumed session or an adapter without native system-prompt support, the runner SHALL wrap the full prompt in `<system>` XML tags. Headless mode SHALL continue concatenating prompt and enrichment into the positional argument without wrapping.
 
-#### Scenario: Adapter supports system prompt (interactive with enrichment)
-- **WHEN** executing an interactive step with enrichment and the adapter declares system prompt support
-- **THEN** the runner passes enrichment via the adapter's system prompt mechanism and the step prompt as the positional argument
+#### Scenario: Fresh session with native system-prompt support
+- **WHEN** executing an interactive step in a fresh session and the adapter declares system-prompt support
+- **THEN** the runner passes the full step instructions through the adapter's system-prompt mechanism and uses a short positional prompt
+
+#### Scenario: Resumed session with native system-prompt support
+- **WHEN** executing an interactive step in an existing session, including a named session or resumed workflow
+- **THEN** the runner leaves the adapter system prompt empty and passes the full current step instructions and completion command in the positional user message
 
 #### Scenario: Adapter does not support system prompt (interactive with enrichment)
 - **WHEN** executing an interactive step with enrichment and the adapter does not support system prompts
@@ -21,9 +25,9 @@ For interactive mode with enrichment, the runner SHALL deliver only the enrichme
 - **WHEN** executing a headless step regardless of adapter support
 - **THEN** prompt and enrichment are concatenated and passed as the positional argument without wrapping (current behavior)
 
-#### Scenario: No enrichment (interactive)
-- **WHEN** no engine enrichment is returned for an interactive step
-- **THEN** the step prompt is passed as the positional argument with no system prompt routing
+#### Scenario: No enrichment on an adapter without native system-prompt support
+- **WHEN** no engine enrichment or profile system prompt is present for an interactive step on an adapter without native system-prompt support
+- **THEN** the full step prompt is passed as the positional argument without XML wrapping
 
 #### Scenario: No step prompt
 - **WHEN** a step has no prompt
