@@ -3,6 +3,7 @@ package exec
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -214,6 +215,30 @@ func resolveScriptPath(script string, ctx *model.ExecutionContext) (string, erro
 }
 
 func materializeAsset(sessionDir, namespace, relAsset string) (string, error) {
+	target, err := writeBundledAsset(sessionDir, namespace, relAsset)
+	if err != nil {
+		return "", err
+	}
+	// Bundled scripts call sibling scripts through "$script_dir/<name>.sh", but a
+	// step names only its entry script, so bring the directory's scripts along.
+	dir := path.Dir(relAsset)
+	entries, err := fs.ReadDir(builtinworkflows.FS, path.Join(namespace, dir))
+	if err != nil {
+		return "", fmt.Errorf("list bundled scripts beside %s: %w", relAsset, err)
+	}
+	for _, entry := range entries {
+		sibling := path.Join(dir, entry.Name())
+		if entry.IsDir() || path.Ext(sibling) != ".sh" || sibling == relAsset {
+			continue
+		}
+		if _, err := writeBundledAsset(sessionDir, namespace, sibling); err != nil {
+			return "", err
+		}
+	}
+	return target, nil
+}
+
+func writeBundledAsset(sessionDir, namespace, relAsset string) (string, error) {
 	data, err := builtinworkflows.ReadAsset(path.Join(namespace, relAsset))
 	if err != nil {
 		return "", err

@@ -1,12 +1,16 @@
 package exec
 
 import (
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/model"
+	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
 func chdirTo(t *testing.T, dir string) {
@@ -88,5 +92,68 @@ func TestResolveScriptPath_DiskWorkflowUsesContainingDirectory(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("script path = %q, want %q", got, want)
+	}
+}
+
+func TestResolveScriptPath_EmbeddedScriptBringsItsSiblingScripts(t *testing.T) {
+	sessionDir := t.TempDir()
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		WorkflowFile: "builtin:openspec/archive-change-v1.0.yaml",
+		SessionDir:   sessionDir,
+	})
+
+	got, err := resolveScriptPath("archive-transition.sh", ctx)
+	if err != nil {
+		t.Fatalf("resolveScriptPath: %v", err)
+	}
+	sibling := filepath.Join(filepath.Dir(got), "validate-change-name.sh")
+	info, err := os.Stat(sibling)
+	if err != nil {
+		t.Fatalf("archive-transition.sh calls validate-change-name.sh, which was not materialized: %v", err)
+	}
+	if info.Mode().Perm()&0o100 == 0 {
+		t.Fatalf("sibling script mode = %v, want executable", info.Mode())
+	}
+}
+
+// Every "$script_dir/<name>" call in an embedded script must resolve once that
+// script alone is materialized, because steps reference only the entry script.
+func TestResolveScriptPath_EveryEmbeddedSiblingCallResolves(t *testing.T) {
+	call := regexp.MustCompile(`"\$script_dir/([^"]+)"`)
+	err := fs.WalkDir(builtinworkflows.FS, ".", func(assetPath string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() || path.Ext(assetPath) != ".sh" {
+			return walkErr
+		}
+		namespace, rel, ok := strings.Cut(assetPath, "/")
+		if !ok {
+			return nil
+		}
+		data, err := fs.ReadFile(builtinworkflows.FS, assetPath)
+		if err != nil {
+			return err
+		}
+		calls := call.FindAllStringSubmatch(string(data), -1)
+		if len(calls) == 0 {
+			return nil
+		}
+		sessionDir := t.TempDir()
+		ctx := model.NewRootContext(&model.RootContextOptions{
+			WorkflowFile: "builtin:" + namespace + "/workflow-v1.0.yaml",
+			SessionDir:   sessionDir,
+		})
+		got, err := resolveScriptPath(rel, ctx)
+		if err != nil {
+			t.Errorf("resolveScriptPath(%s): %v", assetPath, err)
+			return nil
+		}
+		for _, c := range calls {
+			if _, err := os.Stat(filepath.Join(filepath.Dir(got), filepath.FromSlash(c[1]))); err != nil {
+				t.Errorf("%s calls %s, which is missing after materialization: %v", assetPath, c[1], err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
