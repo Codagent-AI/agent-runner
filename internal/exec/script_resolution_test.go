@@ -117,6 +117,27 @@ func TestResolveScriptPath_EmbeddedScriptBringsItsSiblingScripts(t *testing.T) {
 	}
 }
 
+// A script step materializes its whole namespace, including assets that are not
+// scripts, which stay non-executable.
+func TestResolveScriptPath_EmbeddedScriptBringsItsNamespaceAssets(t *testing.T) {
+	sessionDir := t.TempDir()
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		WorkflowFile: "builtin:spec-driven/change-v1.0.yaml",
+		SessionDir:   sessionDir,
+	})
+
+	if _, err := resolveScriptPath("create-change.sh", ctx); err != nil {
+		t.Fatalf("resolveScriptPath: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(sessionDir, "bundled", "spec-driven", "definition-validation-checklist.md"))
+	if err != nil {
+		t.Fatalf("namespace asset not materialized: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("namespace asset mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
 // Every "$script_dir/<name>" call in an embedded script must resolve once that
 // script alone is materialized, because steps reference only the entry script.
 func TestResolveScriptPath_EveryEmbeddedSiblingCallResolves(t *testing.T) {

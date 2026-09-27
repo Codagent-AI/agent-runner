@@ -1,12 +1,8 @@
 package exec
 
 import (
-	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
-	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -216,71 +212,14 @@ func resolveScriptPath(script string, ctx *model.ExecutionContext) (string, erro
 	return resolved, nil
 }
 
+// materializeAsset returns the session path of a builtin script. The script may
+// call helpers beside it, which a run whose top-level workflow is in another
+// namespace has not materialized yet, so the whole namespace is brought along.
 func materializeAsset(sessionDir, namespace, relAsset string) (string, error) {
-	target, err := writeBundledAsset(sessionDir, namespace, relAsset)
-	if err != nil {
+	if err := builtinworkflows.MaterializeNamespace(sessionDir, namespace); err != nil {
 		return "", err
 	}
-	// Bundled scripts call sibling scripts through "$script_dir/<name>.sh", but a
-	// step names only its entry script, so bring the directory's scripts along.
-	dir := path.Dir(relAsset)
-	entries, err := fs.ReadDir(builtinworkflows.FS, path.Join(namespace, dir))
-	if err != nil {
-		return "", fmt.Errorf("list bundled scripts beside %s: %w", relAsset, err)
-	}
-	for _, entry := range entries {
-		sibling := path.Join(dir, entry.Name())
-		if entry.IsDir() || path.Ext(sibling) != ".sh" || sibling == relAsset {
-			continue
-		}
-		if _, err := writeBundledAsset(sessionDir, namespace, sibling); err != nil {
-			return "", err
-		}
-	}
-	return target, nil
-}
-
-func writeBundledAsset(sessionDir, namespace, relAsset string) (string, error) {
-	data, err := builtinworkflows.ReadAsset(path.Join(namespace, relAsset))
-	if err != nil {
-		return "", err
-	}
-	target := filepath.Join(sessionDir, "bundled", namespace, filepath.FromSlash(relAsset))
-	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-		return "", fmt.Errorf("create bundled asset directory: %w", err)
-	}
-	mode := os.FileMode(0o600)
-	if strings.HasSuffix(relAsset, ".sh") {
-		mode = 0o700
-	}
-	if bundledAssetCurrent(target, data, mode) {
-		return target, nil
-	}
-	// A running bash reads its script as it goes, so never truncate one in
-	// place: write a temporary file beside it and rename it over the target.
-	tmp, err := os.CreateTemp(filepath.Dir(target), "."+filepath.Base(target)+".*")
-	if err != nil {
-		return "", fmt.Errorf("write bundled asset %s: %w", target, err)
-	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-	_, writeErr := tmp.Write(data)
-	closeErr := tmp.Close()
-	if err := errors.Join(writeErr, closeErr, os.Chmod(tmp.Name(), mode)); err != nil {
-		return "", fmt.Errorf("write bundled asset %s: %w", target, err)
-	}
-	if err := os.Rename(tmp.Name(), target); err != nil {
-		return "", fmt.Errorf("write bundled asset %s: %w", target, err)
-	}
-	return target, nil
-}
-
-func bundledAssetCurrent(target string, data []byte, mode os.FileMode) bool {
-	info, err := os.Lstat(target)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != mode {
-		return false
-	}
-	existing, err := os.ReadFile(target) // #nosec G304 -- target is the session's bundled copy of a vetted embedded asset path.
-	return err == nil && bytes.Equal(existing, data)
+	return builtinworkflows.WriteAsset(sessionDir, namespace, relAsset)
 }
 
 func buildScriptInput(step *model.Step, ctx *model.ExecutionContext) ([]byte, error) {

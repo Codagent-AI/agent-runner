@@ -19,6 +19,7 @@ import (
 	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/stateio"
+	builtinworkflows "github.com/codagent/agent-runner/workflows"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -790,16 +791,72 @@ func TestRunWorkflowUntilStopsWhenNamedTopLevelStepIsSkipped(t *testing.T) {
 	}
 }
 
-func TestMaterializeBundledAssetsCreatesMarkerForNamespaceWithoutAssets(t *testing.T) {
+// A resumed session may hold assets from an older binary: materialization
+// replaces stale ones and leaves current ones as they are.
+func TestMaterializeBundledAssetsRefreshesStaleAssets(t *testing.T) {
 	sessionDir := t.TempDir()
-
-	if err := materializeBundledAssets(sessionDir, "builtin:openspec/change-v1.0.yaml"); err != nil {
+	workflowFile := "builtin:openspec/change-v1.0.yaml"
+	if err := materializeBundledAssets(sessionDir, workflowFile); err != nil {
 		t.Fatalf("materialize bundled assets: %v", err)
 	}
+	root := filepath.Join(sessionDir, "bundled", "openspec")
+	stale := filepath.Join(root, "create-change.sh")
+	current := filepath.Join(root, "validate-change-name.sh")
+	if err := os.WriteFile(stale, []byte("stale"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(current)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	marker := filepath.Join(sessionDir, "bundled", "openspec", ".complete")
-	if _, err := os.Stat(marker); err != nil {
-		t.Fatalf("stat marker: %v", err)
+	if err := materializeBundledAssets(sessionDir, workflowFile); err != nil {
+		t.Fatalf("materialize bundled assets again: %v", err)
+	}
+
+	want, err := builtinworkflows.ReadAsset("openspec/create-change.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("stale asset was not replaced")
+	}
+	after, err := os.Stat(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatalf("current asset was rewritten")
+	}
+}
+
+// A session held by another live runner must not have its bundled assets rewritten
+// under the scripts that runner is executing: the lock comes before materialization.
+func TestPrepareRunDoesNotMaterializeAssetsInSessionHeldByAnotherRunner(t *testing.T) {
+	sessionDir := t.TempDir()
+	// PID 1 is always alive; signalling it without privilege returns EPERM, which counts as alive.
+	if err := os.WriteFile(filepath.Join(sessionDir, "lock"), []byte("1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workflow := model.Workflow{Name: "debug", Steps: []model.Step{{ID: "ship", Command: "echo ship"}}}
+	workflow.ApplyDefaults()
+
+	_, err := PrepareRun(&workflow, nil, &Options{
+		WorkflowFile:  "builtin:core/debug-v1.0.yaml",
+		SessionDir:    sessionDir,
+		ProcessRunner: &mockRunner{},
+		GlobExpander:  &mockGlob{},
+		Log:           &mockLog{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "run already in progress") {
+		t.Fatalf("PrepareRun error = %v, want run already in progress", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(sessionDir, "bundled")); !os.IsNotExist(statErr) {
+		t.Fatalf("bundled assets written into a session another runner holds (stat err = %v)", statErr)
 	}
 }
 
