@@ -330,7 +330,7 @@ func TestCoreVerifyChangeAcceptanceRoundsAreWorkflowSteps(t *testing.T) {
 		t.Fatalf("acceptance-fix = %+v, want an autonomous lead-agent step", fix)
 	}
 	requirePromptContains(t, fix.ID, fix.Prompt,
-		"codagent:implement-with-tdd",
+		"When fixing an implementation defect found by acceptance testing, add unit regression coverage",
 		"{{artifact_validation_instruction}}",
 		"`[{{step_id}}]`",
 		"Do not run Agent Validator",

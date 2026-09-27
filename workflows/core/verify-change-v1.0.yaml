@@ -181,7 +181,7 @@ steps:
 
           Resolve every high-confidence in-scope finding you can, including implementation, CI, PR-state, tooling, setup, and environmental problems. Preserve approved behavior, scope, design, and testing strategy; append ambiguity to `{{session_dir}}/output/acceptance-assumptions.md` instead of deciding it silently.
 
-          Before fixing an implementation defect found by acceptance testing, you MUST invoke codagent:implement-with-tdd and follow its red-green-refactor process. Add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
+          When fixing an implementation defect found by acceptance testing, add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
 
           If a tracked file changes, run the narrowest relevant automated checks. {{artifact_validation_instruction}} Do not run Agent Validator, directly or through any skill, and do not push: the workflow runs validation and pushes in the steps after this one. Commit all related changes following the project's commit message conventions with the `[{{step_id}}]` prefix, and leave no tracked change uncommitted.
 
