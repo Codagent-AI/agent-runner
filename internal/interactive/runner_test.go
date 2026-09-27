@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/control"
 	"github.com/codagent/agent-runner/internal/discovery"
@@ -174,6 +175,107 @@ func TestDirectRunnerCompletesThroughControlChannelAndRestores(t *testing.T) {
 	}
 	if before != 1 || after != 1 {
 		t.Fatalf("lease calls = before %d after %d, want 1 each", before, after)
+	}
+}
+
+func TestDirectRunnerIgnoresQueuedCompletionFromPreviousAttempt(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+	previous := server.ActivateWithCheckpoint("previous", nil)
+	env := previous.EnvironmentMap()
+	if _, err := control.SendControlEventFromEnvironment(context.Background(), control.MessageCompleteStep, func(key string) string { return env[key] }); err != nil {
+		t.Fatalf("queue previous completion: %v", err)
+	}
+	t.Setenv("AGENT_RUNNER_DIRECT_HELPER", "1")
+	runner := NewDirectRunner(&DirectOptions{
+		Args:              []string{os.Args[0], "-test.run=^TestDirectRunnerHelperProcess$"},
+		StepID:            "current",
+		SessionID:         "session-1",
+		CLI:               "fake",
+		Control:           server,
+		Probe:             immediateDurabilityProbe{},
+		TerminationGrace:  250 * time.Millisecond,
+		DurabilityTimeout: time.Second,
+	})
+	result, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Completed || result.DurabilityFailed {
+		t.Fatalf("Run result = %#v, want completion from current attempt", result)
+	}
+}
+
+func TestDirectRunnerIgnoresLateCompletionFromPreviousAttempt(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+	logger := &recordingEventLogger{}
+	checkpointStarted := make(chan struct{})
+	releaseCheckpoint := make(chan struct{})
+	previous := server.ActivateWithCheckpoint("previous", func() (cli.Checkpoint, error) {
+		close(checkpointStarted)
+		<-releaseCheckpoint
+		return cli.Checkpoint{}, nil
+	})
+	env := previous.EnvironmentMap()
+	previousDone := make(chan error, 1)
+	go func() {
+		_, err := control.SendControlEventFromEnvironment(context.Background(), control.MessageCompleteStep, func(key string) string { return env[key] })
+		previousDone <- err
+	}()
+	select {
+	case <-checkpointStarted:
+	case <-time.After(time.Second):
+		t.Fatal("previous completion did not reach checkpoint")
+	}
+	started := make(chan struct{})
+	runner := NewDirectRunner(&DirectOptions{
+		Args:      []string{"sh", "-c", "sleep 0.3"},
+		StepID:    "current",
+		SessionID: "session-1",
+		CLI:       "fake",
+		Control:   server,
+		Probe:     immediateDurabilityProbe{},
+		Logger:    logger,
+		Persist: func(metadata *ProcessMetadata) {
+			if metadata != nil {
+				close(started)
+			}
+		},
+	})
+	resultDone := make(chan struct {
+		result DirectResult
+		err    error
+	}, 1)
+	go func() {
+		result, err := runner.Run(context.Background())
+		resultDone <- struct {
+			result DirectResult
+			err    error
+		}{result, err}
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		close(releaseCheckpoint)
+		t.Fatal("current child did not start")
+	}
+	close(releaseCheckpoint)
+	if err := <-previousDone; err != nil {
+		t.Fatalf("previous completion: %v", err)
+	}
+	got := <-resultDone
+	if got.err != nil || !got.result.Started || got.result.Completed || got.result.ExitCode != 0 {
+		t.Fatalf("Run result = %#v, error = %v; want natural child exit", got.result, got.err)
+	}
+	var discarded bool
+	for _, event := range logger.snapshot() {
+		if event.Type == audit.EventWarning && event.Data["attempt_id"] == previous.ID && event.Data["message"] == "discarded completion for a different attempt" {
+			discarded = true
+		}
+	}
+	if !discarded {
+		t.Fatal("previous completion was not observed and discarded")
 	}
 }
 
