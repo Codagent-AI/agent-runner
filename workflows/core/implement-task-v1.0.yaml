@@ -38,6 +38,17 @@ steps:
     command: git rev-parse --verify HEAD
     capture: task_start_head
 
+  # Names this execution's external delivery record and removes any stale one.
+  # It runs only on a fresh task start; resume keeps the capture and the record.
+  - id: prepare-task-delivery
+    script: prepare-task-delivery.sh
+    script_inputs:
+      session_dir: "{{session_dir}}"
+      task_file: "{{task_file}}"
+      starting_head: "{{task_start_head}}"
+    capture: task_delivery
+    capture_format: json
+
   - id: generate-code
     agent: implementor
     session: new
@@ -66,6 +77,8 @@ steps:
     script: verify-task-commit.sh
     script_inputs:
       starting_head: "{{task_start_head}}"
+      started_at: "{{task_delivery.started_at}}"
+      record_path: "{{task_delivery.record_path}}"
     repair:
       session: resume
       max: 1
@@ -74,7 +87,15 @@ steps:
 
         If the task's deliverable belongs in this repository and is present in the worktree, commit only an explicit list of task-related paths (`git commit -- <paths>`), leaving every unrelated staged or unstaged file exactly as it is, following project conventions with the `[verify-task-commit]` prefix. Do not create an empty or placeholder commit.
 
-        If the work was legitimately delivered elsewhere, the task conflicts with this repository, or task-related changes cannot be isolated safely from unrelated ones, make no commit; report only facts you have verified (repository, branch, commit, whether pushed), writing `unknown` for anything unverified, explain why, and end your response with the line `REPAIR_BLOCKED`.
+        If the task's work was legitimately delivered as commits in a local checkout of a different repository, and you have verified with read-only git commands that those commits are pushed (contained in a remote-tracking branch there), record the delivery instead of committing here. Write this JSON file, and nothing else, to `{{task_delivery.record_path}}`:
+
+        ```json
+        {"repository": "<absolute path of that checkout>", "commits": ["<full commit ID>", "..."], "branch": "<branch name>", "pull_request": "<pull request URL>"}
+        ```
+
+        `branch` and `pull_request` are optional; list every commit that delivers the task. Make no commit in this repository, and do not end with `REPAIR_BLOCKED` in that case. Do not push, create or move branches, commit, or otherwise modify the external repository: only inspect it and write the record.
+
+        Make no commit, explain why, and end your response with the line `REPAIR_BLOCKED` when the work was delivered elsewhere but its commits are not pushed, when there is no local checkout of the repository that holds it, when the task conflicts with this repository, or when task-related changes cannot be isolated safely from unrelated ones. Report only facts you have verified (repository, branch, commit, whether pushed), writing `unknown` for anything unverified.
 
         Never declare success yourself; the check that runs after you decides.
 

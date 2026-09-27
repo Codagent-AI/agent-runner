@@ -110,7 +110,12 @@ func (r *acceptanceRoundRunner) validate(stdin []byte) ProcessResult {
 }
 
 func (r *acceptanceRoundRunner) run(cmd *osexec.Cmd, stdin []byte) (ProcessResult, error) {
-	cmd.Dir = r.repo
+	return runProcess(cmd, r.repo, stdin)
+}
+
+// runProcess runs cmd in dir and reports its untrimmed output and exit code.
+func runProcess(cmd *osexec.Cmd, dir string, stdin []byte) (ProcessResult, error) {
+	cmd.Dir = dir
 	if stdin != nil {
 		cmd.Stdin = strings.NewReader(string(stdin))
 	}
