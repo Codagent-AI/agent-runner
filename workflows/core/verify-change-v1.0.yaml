@@ -102,7 +102,7 @@ steps:
       - Push the current branch to its remote, setting the upstream when none is configured (for example `git push --set-upstream origin <branch>`). Never force-push.
       - Find the open pull request for the current head branch with `gh pr list --head <branch> --state open`.
       - When one exists, preserve its base branch; if it is not a draft, convert it back to draft with `gh pr ready --undo`.
-      - When none exists, create it with `gh pr create --draft`, using the repository's configured default base branch (`gh repo view --json defaultBranchRef`). Give it a concise title following the project's conventions and a body that summarizes {{change_label}} "{{change_name}}" from `{{change_dir}}/` and the branch's commits, and says that the pull request is a draft awaiting human acceptance.
+      - When none exists, create it with `gh pr create --draft`, using the repository's configured default base branch (`gh repo view --json defaultBranchRef`). Give it a concise title following the project's conventions and a body that summarizes {{change_label}} "{{change_name}}" from `{{change_dir}}/` and the branch's commits, and says that the pull request is a draft awaiting human acceptance. If `{{session_dir}}/output/task-delivery/*.accepted` files exist (one per external delivery the task gate verified; ignore any `*.json` record without one), add a "Delivered in other repositories" section to the body with one entry per accepted delivery listing its repository, commits, and pull request (if reported), and note that this change's validation did not cover that work; omit the section when there are none.
       - Do not mark the pull request ready for review in this step.
 
       Verify the final state by querying the open pull request for the current head branch. Do not signal completion unless it is open, its base branch is non-empty, it is a draft, and its head SHA equals local `HEAD`. Report the pull request URL and actual base branch.
@@ -129,10 +129,11 @@ steps:
       as_index: acceptance_round
     steps:
       # The gate must judge only evidence written in this round, so clear the
-      # previous round's result files; acceptance-flow-evidence.md and
-      # acceptance-findings.md remain as the tester's baseline.
+      # previous round's status and handoff; exploration-log.md,
+      # acceptance-tested-revision.txt, and acceptance-findings.md remain as the
+      # tester's history and diff base.
       - id: reset-round-evidence
-        command: rm -f "{{session_dir}}/output/acceptance-round-status.txt" "{{session_dir}}/output/acceptance-test.md" "{{session_dir}}/output/acceptance-handoff.md"
+        command: rm -f "{{session_dir}}/output/acceptance-round-status.txt" "{{session_dir}}/output/acceptance-handoff.md"
 
       - id: acceptance-test
         session: acceptance-tester
@@ -140,23 +141,23 @@ steps:
         prompt: |
           You are the independent acceptance tester for {{change_label}} "{{change_name}}". This is acceptance round index {{acceptance_round}} (zero-based) of at most {{acceptance_rounds}}. Use codagent:prepare-acceptance with these inputs:
           - approved artifacts: `{{change_dir}}/`;
-          - authoritative test plan: `{{change_dir}}/test-plan.md`;
+          - testing envelope and any `HT-*` obligations: `{{change_dir}}/test-plan.md`;
           - implementation evidence: `{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`;
           - evidence directory: `{{session_dir}}/output/`;
           - assumptions ledger: `{{session_dir}}/output/acceptance-assumptions.md`;
-          - verification scope: `full` in round index 0. In every later round, use the scope the lead recorded in `{{session_dir}}/output/acceptance-impact-scope.md`, with `{{session_dir}}/output/acceptance-flow-evidence.md` as the prior full-pass baseline.
+          - prior tested revision: `{{session_dir}}/output/acceptance-tested-revision.txt`.
 
-          The authoritative test plan was structurally validated before implementation. Execute its applicable `AT-*` inventory under the required skill.
+          Acceptance is exploratory. You decide what to exercise; nobody hands you a list of cases to run. Read the implementation and diff to decide where to look, never to decide what correct means.
 
-          The first pass must exercise every required `AT-*` and every conditional `AT-*` whose activation condition holds. A flow may use a substitute only when that obligation explicitly permits it. Missing applicable-flow evidence is an impediment, not a limitation, and cannot count as ready for acceptance.
+          Round index 0 is the change's first acceptance pass. Apply the skill's coverage floor: exercise every user-visible requirement or scenario that the approved specs add or modify at least once, then explore beyond that floor where risk is highest. Seam sizing and the step ceiling bound only the exploration beyond the floor, never the floor itself. Record the floor items and your exploration budget and rationale before testing, list any floor item you could not exercise as a limitation with its reason, and name what else you deliberately did not exercise.
 
-          In a later round, follow the recorded scope exactly. For a `targeted` scope, reproduce each prior finding against the fix, exercise only the affected and directly dependent flows it names, retain the prior full-pass evidence for unaffected flows, and do not begin a new broad review; report a newly introduced defect only when observed within that targeted scope. For an `evidence-only` scope, which the lead records when no tracked product contents changed and only PR alignment, pushing, CI availability, tooling, or another external condition was corrected, do not exercise product flows again: wait for current-head CI and produce the final evidence from `acceptance-flow-evidence.md`. A Validator run that makes no tracked change does not invalidate the existing flow evidence. If the scope file is missing, cannot be reconciled with the approved flow inventory, or omits an obvious dependency, report that scope gap as an impediment instead of guessing.
+          Every later round follows a fix, and a fix is itself a change. Reproduce each prior finding against the fix, then diff the worktree against the SHA in `acceptance-tested-revision.txt`, size that diff the same way, and explore it; the coverage floor does not apply again. If that file is missing or names an unresolvable SHA, report an impediment and explore the change as a whole. Do not re-run your previous pass or derive scope from what you tested before, and treat your prior exploration log as history rather than as coverage. A diff with no tracked product change sizes to zero steps: proceed directly to current-head CI and the handoff.
 
           Do not fix defects, modify tracked files, commit, push, or change the pull request; the workflow fixes, validates, and pushes in separate steps. Append product, scope, or design ambiguity to the assumptions ledger instead of deciding it.
 
-          Record every clear defect or impediment in `{{session_dir}}/output/acceptance-findings.md` as the skill requires. When the skill produces complete acceptance evidence for the current revision, verify that every required or activated conditional `AT-*` has passing evidence, referenced evidence exists, and any `HT-*` is reserved for the user.
+          Record every clear defect or impediment in `{{session_dir}}/output/acceptance-findings.md` as the skill requires, and any `HT-*` as instructions reserved for the user.
 
-          Finally, overwrite `{{session_dir}}/output/acceptance-round-status.txt` with exactly one line. Write `READY <sha>`, where `<sha>` is the full 40-character output of `git rev-parse HEAD`, only when the skill's readiness verification passed: `acceptance-test.md` and `acceptance-handoff.md` in the evidence directory name that revision, current-head CI passed or is explicitly absent, and no clear defect or impediment remains. Otherwise write `NOT_READY`. The workflow checks this line together with the evidence files to decide whether acceptance testing has converged.
+          Finally, overwrite `{{session_dir}}/output/acceptance-round-status.txt` with exactly one line. Write `READY <sha>`, where `<sha>` is the full 40-character output of `git rev-parse HEAD`, only when `exploration-log.md` records this pass, `acceptance-tested-revision.txt` and `acceptance-handoff.md` in the evidence directory name that revision, current-head CI passed or is explicitly absent, and no clear defect or impediment remains. Otherwise write `NOT_READY`. The workflow checks this line together with the evidence files to decide whether acceptance testing has converged.
 
       - id: acceptance-gate
         script: acceptance-gate.sh
@@ -177,20 +178,17 @@ steps:
         session: lead-agent
         mode: autonomous
         prompt: |
-          The independent acceptance tester did not report {{change_label}} "{{change_name}}" ready for acceptance in round index {{acceptance_round}} (zero-based). Read its report and the durable evidence under `{{session_dir}}/output/`, especially `acceptance-findings.md`, `acceptance-flow-evidence.md`, and `acceptance-round-status.txt`.
+          The independent acceptance tester did not report {{change_label}} "{{change_name}}" ready for acceptance in round index {{acceptance_round}} (zero-based). Read its report, `{{session_dir}}/output/acceptance-findings.md`, and `{{session_dir}}/output/acceptance-round-status.txt`. Do not audit the tester's evidence files for completeness; the exploration log and handoff are written for the human acceptance session to read.
 
-          Resolve every high-confidence in-scope finding you can, including implementation, CI, PR-state, tooling, setup, and environmental problems. Preserve approved behavior, scope, design, and testing strategy; append ambiguity to `{{session_dir}}/output/acceptance-assumptions.md` instead of deciding it silently.
+          Triage each finding into a fix you make, an escalation, or an entry in `{{session_dir}}/output/acceptance-assumptions.md`. A finding where the tester reproduced behavior that contradicts the approved specs, or that an ordinary user would clearly consider broken, may not be dismissed as "not a defect": fix it, or record it in the assumptions ledger as a decision needed from the user, with your reasoning. Resolve every high-confidence finding you can, including implementation, CI, PR-state, tooling, setup, and environmental problems. Preserve approved behavior, scope, and design; append ambiguity to the ledger instead of deciding it silently.
 
-          Before fixing an implementation defect found by acceptance testing, you MUST invoke codagent:implement-with-tdd and follow its red-green-refactor process. Add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
+          When fixing an implementation defect found by acceptance testing, add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
 
           If a tracked file changes, run the narrowest relevant automated checks. {{artifact_validation_instruction}} Do not run Agent Validator, directly or through any skill, and do not push: the workflow runs validation and pushes in the steps after this one. Commit all related changes following the project's commit message conventions with the `[{{step_id}}]` prefix, and leave no tracked change uncommitted.
 
-          Then overwrite `{{session_dir}}/output/acceptance-impact-scope.md` for the next tester round. Name the scope kind first:
-          - `targeted` when tracked product contents changed: name the affected `AT-*` obligations and any directly dependent flows, plus a concise rationale bounding why other surfaces or subsystems are unaffected, and attest that this scope covers every tracked change since the prior full-pass baseline;
-          - `evidence-only` when no tracked product contents changed and only PR alignment, pushing, CI availability, tooling, or another external condition was corrected: identify the prior flow evidence and attest that the current tracked contents match its coverage revision.
-          Use `full` only when the change is broad, cross-cutting, or its impact cannot be bounded confidently. Name each prior finding the tester must reproduce against the fix.
+          Do not name a scope for the next round. The tester diffs against its recorded tested revision and sizes its next pass from what your fix moved.
 
-          If a finding needs a decision only a human can make, record it in the assumptions ledger and in the impact-scope rationale, and fix what you safely can.
+          If a finding needs a decision only a human can make, record it in the assumptions ledger and fix what you safely can.
 
       - id: acceptance-validator
         workflow: run-validator-v1.0.yaml

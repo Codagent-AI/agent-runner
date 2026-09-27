@@ -248,7 +248,7 @@ func TestGuidedWorkflowShape(t *testing.T) {
 	}
 	impl := stepByID(t, &wf, "implement")
 	assertAgentStep(t, impl, "", "impl-session", model.ModeAutonomous)
-	for _, want := range []string{"{{task_file}}", "codagent:implement-with-tdd", "git add", "including newly added files", "do not commit"} {
+	for _, want := range []string{"{{task_file}}", "Implement the task described in", "git add", "including newly added files", "do not commit"} {
 		if !strings.Contains(impl.Prompt, want) {
 			t.Fatalf("implement prompt missing %q:\n%s", want, impl.Prompt)
 		}

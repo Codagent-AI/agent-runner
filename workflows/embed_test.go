@@ -654,18 +654,14 @@ Use the lowest reliable layer.
 - Assertions: Widget is reported
 - Execution: End-to-end suite
 
-## Agent Acceptance Tests
+## Acceptance Testing Envelope
 
-### AT-001: Use a widget
-- Classification: Required
-- Covers: Widget behavior
-- Actor and surface: User through the CLI
-- Setup: Isolated workspace
-- Steps: Create and inspect a widget
-- Expected: The widget is visible
-- Evidence: Captured terminal output
-- Effects and cleanup: Remove the workspace
+- Environments and sandboxes: Isolated workspace
+- Credentials and secrets: None needed
+- Authorized effects: Local files only, removed afterward
+- Off limits: None
 - Permitted substitutes: None
+- Known risk areas: None
 
 ## Human-Only Testing
 
@@ -673,9 +669,9 @@ None.
 
 ## Coverage Map
 
-| Requirement or journey | INT | E2E | AT | HT |
-| --- | --- | --- | --- | --- |
-| Widget behavior | INT-001 | E2E-001 | AT-001 | — |
+| Requirement or journey | INT | E2E | HT |
+| --- | --- | --- | --- |
+| Widget behavior | INT-001 | E2E-001 | — |
 `,
 		"specs/widgets/spec.md": "## ADDED Requirements\n### Requirement: Widget\nThe system SHALL work.\n#### Scenario: Works\n- **WHEN** used\n- **THEN** it works\n",
 	} {
@@ -1188,8 +1184,10 @@ func TestSharedAcceptanceCallsUseTesterAndPreserveControls(t *testing.T) {
 			stepID: "run-reacceptance-testing",
 			required: []string{
 				"`session: acceptance-tester`",
-				"directly dependent flows agreed with the user",
-				"acceptance-flow-evidence.md",
+				"acceptance-tested-revision.txt",
+				"prior exploration log as history rather than as coverage",
+				"applying the skill's coverage floor as a first pass does",
+				"may not be dismissed as \"not a defect\"",
 				"Use at most three tester calls",
 				"REACCEPTANCE_COMPLETE",
 				"REACCEPTANCE_FAILED",

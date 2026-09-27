@@ -4,7 +4,9 @@
 # Convergence requires all of:
 #   - the tester's acceptance-round-status.txt ends with `READY <HEAD>`, where
 #     <HEAD> is the full SHA of local HEAD;
-#   - acceptance-test.md and acceptance-handoff.md exist and are non-empty;
+#   - acceptance-tested-revision.txt names <HEAD>, the revision the tester
+#     last explored;
+#   - exploration-log.md and acceptance-handoff.md exist and are non-empty;
 #   - no tracked file has uncommitted changes.
 #
 # action=check exits 0 on convergence and 1 otherwise, printing the reasons.
@@ -37,6 +39,7 @@ case "$action" in
 esac
 
 round_status_file="$evidence_dir/acceptance-round-status.txt"
+tested_revision_file="$evidence_dir/acceptance-tested-revision.txt"
 handoff_file="$evidence_dir/acceptance-handoff.md"
 tester_handoff_file="$evidence_dir/acceptance-handoff-tester.md"
 status_file="$evidence_dir/acceptance-preparation-status.txt"
@@ -61,7 +64,14 @@ else
   elif [ "$round_status" != "READY $head" ]; then
     add_reason "the tester's round status is '$round_status', not 'READY $head'"
   fi
-  for name in acceptance-test.md acceptance-handoff.md; do
+  tested_revision=""
+  if [ -f "$tested_revision_file" ]; then
+    tested_revision=$(sed '/^[[:space:]]*$/d' "$tested_revision_file" | tail -n 1 | sed 's/[[:space:]]*$//')
+  fi
+  if [ "$tested_revision" != "$head" ]; then
+    add_reason "acceptance-tested-revision.txt names '${tested_revision}', not '$head'"
+  fi
+  for name in exploration-log.md acceptance-handoff.md; do
     if [ ! -s "$evidence_dir/$name" ]; then
       add_reason "$name is missing or empty"
     fi
