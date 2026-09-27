@@ -83,11 +83,13 @@ steps:
       - implementation evidence: `{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`;
       - evidence directory: `{{session_dir}}/output/`;
       - assumptions ledger: `{{session_dir}}/output/acceptance-assumptions.md`;
-      - prior tested revision: `{{session_dir}}/output/acceptance-tested-revision.txt`, which the tester diffs against to size the exploration from what that diff moved. If that file is missing or names an unresolvable SHA, require the tester to report an impediment and explore the change as a whole.
+      - prior tested revision: `{{session_dir}}/output/acceptance-tested-revision.txt`, which the tester diffs against to size the exploration from what that diff moved. If that file is missing or names an unresolvable SHA, require the tester to report an impediment and explore the change as a whole, applying the skill's coverage floor as a first pass does.
 
       Follow codagent:call-agent's verification and autonomous result-accounting rules rather than performing the acceptance testing yourself. If the pass succeeds, summarize the result and continue to next step.
 
-      If it finds an actionable defect, fix it without expanding the approved scope. Add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
+      Triage each finding. A finding where the tester reproduced behavior that contradicts the approved specs, or that an ordinary user would clearly consider broken, may not be dismissed as "not a defect": fix it, or record it in `{{session_dir}}/output/acceptance-assumptions.md` as a decision needed from the user, with your reasoning.
+
+      Fix each actionable defect without expanding the approved scope. Add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
 
       Run relevant targeted automated checks. {{artifact_validation_instruction}} Invoke the validator-run skill, incorporate its fixes, commit changes that belong to the current project repository using the project's conventions and the `[{{step_id}}]` prefix, leave artifacts outside the repository uncommitted, and push while keeping the pull request in draft. Then resume `acceptance-tester` to reproduce the prior finding and verify the fix, then read the diff since its last pass and explore what that diff moved. It must not re-run its previous pass or derive scope from what it tested before, and it must treat its prior exploration log as history rather than as coverage.
 
@@ -117,7 +119,7 @@ steps:
 
           Do not blindly retry an unchanged impediment. Keep this interactive step open while the user resolves an external condition. If the user wants to defer recovery, tell them to stop Agent Runner so a later workflow resume returns to this step; do not acknowledge step completion while the status remains failed.
 
-          Once the blocker is resolved, use codagent:call-agent with `session: acceptance-tester` and require the child to use codagent:prepare-acceptance. If no prior tested revision is recorded, have it explore the change as a whole; otherwise it diffs against that revision and sizes the exploration from what the diff moved. Supply:
+          Once the blocker is resolved, use codagent:call-agent with `session: acceptance-tester` and require the child to use codagent:prepare-acceptance. If no prior tested revision is recorded, have it explore the change as a whole, applying the skill's coverage floor as a first pass does; otherwise it diffs against that revision and sizes the exploration from what the diff moved. Supply:
           - approved artifacts: `{{change_dir}}/`;
           - testing envelope and any `HT-*` obligations: `{{change_dir}}/test-plan.md`;
           - implementation evidence: `{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`;
@@ -125,7 +127,7 @@ steps:
           - assumptions ledger: `{{session_dir}}/output/acceptance-assumptions.md`;
           - prior tested revision: `{{session_dir}}/output/acceptance-tested-revision.txt`.
 
-          Follow codagent:call-agent's independent-verification and result-accounting rules. If testing finds an actionable product defect, fix it, add practical regression coverage, run relevant checks and the full Validator, commit with the `[recover-reacceptance-testing]` prefix, push the draft pull request, and resume the same tester against the resulting diff.
+          Follow codagent:call-agent's independent-verification and result-accounting rules. A finding where the tester reproduced behavior that contradicts the approved specs, or that an ordinary user would clearly consider broken, may not be dismissed as "not a defect": fix it, or present it to the user as a decision, with your reasoning. If testing finds an actionable product defect, fix it, add practical regression coverage, run relevant checks and the full Validator, commit with the `[recover-reacceptance-testing]` prefix, push the draft pull request, and resume the same tester against the resulting diff.
 
           Preserve `REACCEPTANCE_FAILED` and the honest handoff while any defect or impediment remains. Overwrite `{{session_dir}}/output/reacceptance-status.txt` with exactly `REACCEPTANCE_COMPLETE` only after the tester reports no remaining finding for the current revision. Request completion of this interactive step only after that file and the acceptance handoff agree.
 

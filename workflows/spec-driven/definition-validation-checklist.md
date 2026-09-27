@@ -13,7 +13,7 @@ Apply this checklist to the approved proposal, specifications, design, and test 
    - `INT-*`, `E2E-*`, and `HT-*` identifiers are unique within their categories;
    - every identifier referenced by the coverage map exists in its corresponding section;
    - the acceptance testing envelope records available environments, credentials, authorized effects and cleanup, what is off limits, and permitted substitutes;
-   - the envelope does not enumerate acceptance test cases, which the exploratory acceptance pass derives from the change itself;
+   - the envelope does not enumerate acceptance test cases, which the exploratory acceptance pass derives from the approved specs and the change itself;
    - human-only testing either says `None.` or defines each `HT-*` with why an agent cannot perform it.
 
 Mechanically fix unambiguous formatting, placement, or heading problems. If a resolution would require inventing behavior or changing approved semantics, leave it unresolved and report the exact semantic blocker.

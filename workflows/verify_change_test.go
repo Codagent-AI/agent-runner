@@ -320,6 +320,9 @@ func TestCoreVerifyChangeAcceptanceRoundsAreWorkflowSteps(t *testing.T) {
 		"nobody hands you a list of cases to run",
 		"never to decide what correct means",
 		"prior exploration log as history rather than as coverage",
+		"every user-visible requirement or scenario that the approved specs add or modify at least once",
+		"as a limitation with its reason",
+		"the coverage floor does not apply again",
 		"`{{session_dir}}/output/acceptance-round-status.txt`",
 		"`READY <sha>`",
 		"`NOT_READY`",
@@ -336,6 +339,8 @@ func TestCoreVerifyChangeAcceptanceRoundsAreWorkflowSteps(t *testing.T) {
 		"Do not run Agent Validator",
 		"do not push",
 		"Do not name a scope for the next round",
+		"may not be dismissed as \"not a defect\"",
+		"a decision needed from the user, with your reasoning",
 		"Do not audit the tester's evidence files for completeness",
 	)
 	for _, retired := range []string{"acceptance-impact-scope.md", "acceptance-flow-evidence.md", "`targeted`", "`evidence-only`", "AT-", "implement-with-tdd"} {

@@ -1186,6 +1186,8 @@ func TestSharedAcceptanceCallsUseTesterAndPreserveControls(t *testing.T) {
 				"`session: acceptance-tester`",
 				"acceptance-tested-revision.txt",
 				"prior exploration log as history rather than as coverage",
+				"applying the skill's coverage floor as a first pass does",
+				"may not be dismissed as \"not a defect\"",
 				"Use at most three tester calls",
 				"REACCEPTANCE_COMPLETE",
 				"REACCEPTANCE_FAILED",
