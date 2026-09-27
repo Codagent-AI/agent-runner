@@ -6,6 +6,9 @@ params:
   - name: task_file
     required: false
     default: ""
+  - name: result_file
+    required: false
+    default: ""
 
 steps:
   - id: validator-retry
@@ -17,6 +20,7 @@ steps:
         script: run-validator.sh
         script_inputs:
           task_file: "{{task_file}}"
+          result_file: "{{result_file}}"
         capture: validator_output
         capture_stderr: true
         metrics_source: agent-validator
@@ -57,6 +61,7 @@ steps:
     script: run-validator.sh
     script_inputs:
       task_file: "{{task_file}}"
+      result_file: "{{result_file}}"
     capture: validator_output
     capture_stderr: true
     metrics_source: agent-validator

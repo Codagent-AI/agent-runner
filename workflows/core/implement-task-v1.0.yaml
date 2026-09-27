@@ -42,7 +42,7 @@ steps:
     agent: implementor
     session: new
     prompt: |
-      Implement the task described in {{task_file}}. You MUST use the codagent:implement-with-tdd skill. When you are done implementing, commit your changes following the project's commit message conventions and prepend [{{step_id}}]. Then summarize to the user what you changed.
+      Implement the task described in {{task_file}}. When you are done implementing, commit your changes following the project's commit message conventions and prepend [{{step_id}}]. Then summarize to the user what you changed.
 
   - id: run-validator
     workflow: run-validator-v1.0.yaml
