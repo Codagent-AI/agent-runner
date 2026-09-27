@@ -1,0 +1,1 @@
+- [ ] [Smoke-owned Docker image and artifact cleanup](tasks/01-smoke-resource-cleanup.md)
