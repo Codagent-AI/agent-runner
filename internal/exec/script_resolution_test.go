@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"bytes"
 	"io/fs"
 	"os"
 	"path"
@@ -155,5 +156,90 @@ func TestResolveScriptPath_EveryEmbeddedSiblingCallResolves(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A running bash reads its script lazily, so re-materializing must not rewrite
+// an unchanged script in place.
+func TestResolveScriptPath_RematerializingLeavesAnIdenticalScriptUntouched(t *testing.T) {
+	sessionDir := t.TempDir()
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		WorkflowFile: "builtin:openspec/archive-change-v1.0.yaml",
+		SessionDir:   sessionDir,
+	})
+	got, err := resolveScriptPath("archive-transition.sh", ctx)
+	if err != nil {
+		t.Fatalf("resolveScriptPath: %v", err)
+	}
+	sibling := filepath.Join(filepath.Dir(got), "validate-change-name.sh")
+	before, err := os.Stat(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := resolveScriptPath("archive-transition.sh", ctx); err != nil {
+		t.Fatalf("resolveScriptPath again: %v", err)
+	}
+
+	after, err := os.Stat(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) || !after.ModTime().Equal(before.ModTime()) {
+		t.Fatalf("identical script was rewritten: before %v %v, after %v %v", before.Sys(), before.ModTime(), after.Sys(), after.ModTime())
+	}
+}
+
+// A changed or wrongly-permissioned script is replaced by a new file, never
+// truncated and rewritten in place.
+func TestResolveScriptPath_RematerializingReplacesAStaleScript(t *testing.T) {
+	sessionDir := t.TempDir()
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		WorkflowFile: "builtin:openspec/archive-change-v1.0.yaml",
+		SessionDir:   sessionDir,
+	})
+	target := filepath.Join(sessionDir, "bundled", "openspec", "validate-change-name.sh")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := resolveScriptPath("archive-transition.sh", ctx); err != nil {
+		t.Fatalf("resolveScriptPath: %v", err)
+	}
+
+	want, err := builtinworkflows.ReadAsset("openspec/validate-change-name.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(data, want) {
+		t.Fatalf("stale script was not replaced")
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Fatalf("mode = %v, want 0700", info.Mode().Perm())
+	}
+	if os.SameFile(stale, info) {
+		t.Fatalf("stale script was rewritten in place instead of replaced")
+	}
+	leftovers, err := filepath.Glob(filepath.Join(filepath.Dir(target), ".*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leftovers) != 0 {
+		t.Fatalf("temporary files left behind: %v", leftovers)
 	}
 }

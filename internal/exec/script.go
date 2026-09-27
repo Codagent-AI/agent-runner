@@ -1,7 +1,9 @@
 package exec
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -251,10 +253,34 @@ func writeBundledAsset(sessionDir, namespace, relAsset string) (string, error) {
 	if strings.HasSuffix(relAsset, ".sh") {
 		mode = 0o700
 	}
-	if err := os.WriteFile(target, data, mode); err != nil {
+	if bundledAssetCurrent(target, data, mode) {
+		return target, nil
+	}
+	// A running bash reads its script as it goes, so never truncate one in
+	// place: write a temporary file beside it and rename it over the target.
+	tmp, err := os.CreateTemp(filepath.Dir(target), "."+filepath.Base(target)+".*")
+	if err != nil {
+		return "", fmt.Errorf("write bundled asset %s: %w", target, err)
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	_, writeErr := tmp.Write(data)
+	closeErr := tmp.Close()
+	if err := errors.Join(writeErr, closeErr, os.Chmod(tmp.Name(), mode)); err != nil {
+		return "", fmt.Errorf("write bundled asset %s: %w", target, err)
+	}
+	if err := os.Rename(tmp.Name(), target); err != nil {
 		return "", fmt.Errorf("write bundled asset %s: %w", target, err)
 	}
 	return target, nil
+}
+
+func bundledAssetCurrent(target string, data []byte, mode os.FileMode) bool {
+	info, err := os.Lstat(target)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != mode {
+		return false
+	}
+	existing, err := os.ReadFile(target) // #nosec G304 -- target is the session's bundled copy of a vetted embedded asset path.
+	return err == nil && bytes.Equal(existing, data)
 }
 
 func buildScriptInput(step *model.Step, ctx *model.ExecutionContext) ([]byte, error) {
