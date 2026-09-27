@@ -36,10 +36,15 @@ cleanup() {
   fi
   cleaned_up=1
 
-  if [[ "$owns_image" == 1 ]] && docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    local rm_output
-    if ! rm_output="$(docker image rm "$IMAGE" 2>&1)"; then
-      echo "smoke: could not remove image $IMAGE: $rm_output" >&2
+  if [[ "$owns_image" == 1 ]]; then
+    local inspect_output rm_output
+    if inspect_output="$(docker image inspect "$IMAGE" 2>&1 >/dev/null)"; then
+      if ! rm_output="$(docker image rm "$IMAGE" 2>&1)"; then
+        echo "smoke: could not remove image $IMAGE: $rm_output" >&2
+      fi
+    elif [[ "$inspect_output" != *"No such image"* ]]; then
+      # Only a never-built image stays silent; anything else may leave it behind.
+      echo "smoke: could not inspect image $IMAGE: $inspect_output" >&2
     fi
   fi
 
@@ -74,7 +79,15 @@ on_signal() {
       sleep 0.2
       waited=$((waited + 1))
     done
-    wait "$child" 2>/dev/null || true
+    if kill -0 "$child" 2>/dev/null; then
+      pkill -KILL -P "$child" 2>/dev/null
+      kill -KILL "$child" 2>/dev/null
+      sleep 0.2
+    fi
+    # Reap only a child that has exited, so a stuck one cannot hang shutdown.
+    if ! kill -0 "$child" 2>/dev/null; then
+      wait "$child" 2>/dev/null || true
+    fi
   fi
   # A container created while shutting down would otherwise pin the image.
   docker rm -f "$container" >/dev/null 2>&1

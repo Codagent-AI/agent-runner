@@ -49,6 +49,10 @@ case "${1:-}" in
   image)
     case "${2:-}" in
       inspect)
+        if [[ "${FAKE_DOCKER_INSPECT_DAEMON_ERROR:-0}" == 1 ]]; then
+          echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock" >&2
+          exit 1
+        fi
         if [[ "${FAKE_DOCKER_IMAGE_PRESENT:-1}" == 1 ]]; then
           echo "[]"
           exit 0
@@ -528,6 +532,20 @@ func TestDevAuditSmokeCleanupFailuresAreReportedWithoutChangingStatus(t *testing
 		tag, container := assertRunOwnedNaming(t, res.calls)
 		assertOwnedDockerMutations(t, res.calls, tag, container, "")
 		if want := "smoke: could not remove image " + tag; !strings.Contains(res.stderr, want) {
+			t.Fatalf("stderr missing %q:\n%s", want, res.stderr)
+		}
+	})
+
+	t.Run("image inspect fails for a reason other than absence", func(t *testing.T) {
+		f := newSmokeFixture(t)
+		f.env["FAKE_DOCKER_INSPECT_DAEMON_ERROR"] = "1"
+		res := f.run()
+		if res.exitCode != 0 {
+			t.Fatalf("exit code = %d, want 0\nstderr:\n%s", res.exitCode, res.stderr)
+		}
+		tag, container := assertRunOwnedNaming(t, res.calls)
+		assertOwnedDockerMutations(t, res.calls, tag, container, "")
+		if want := "smoke: could not inspect image " + tag + ": Cannot connect"; !strings.Contains(res.stderr, want) {
 			t.Fatalf("stderr missing %q:\n%s", want, res.stderr)
 		}
 	})
