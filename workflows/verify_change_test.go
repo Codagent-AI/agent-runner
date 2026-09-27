@@ -293,12 +293,12 @@ func TestCoreVerifyChangeAcceptanceRoundsAreWorkflowSteps(t *testing.T) {
 	if reset == nil {
 		t.Fatal("reset-round-evidence step not found")
 	}
-	for _, file := range []string{"acceptance-round-status.txt", "acceptance-test.md", "acceptance-handoff.md"} {
+	for _, file := range []string{"acceptance-round-status.txt", "acceptance-handoff.md"} {
 		if !strings.Contains(reset.Command, "{{session_dir}}/output/"+file) {
 			t.Errorf("reset-round-evidence does not clear %s: %q", file, reset.Command)
 		}
 	}
-	for _, baseline := range []string{"acceptance-flow-evidence.md", "acceptance-findings.md"} {
+	for _, baseline := range []string{"exploration-log.md", "acceptance-tested-revision.txt", "acceptance-findings.md"} {
 		if strings.Contains(reset.Command, baseline) {
 			t.Errorf("reset-round-evidence must keep the tester baseline %s: %q", baseline, reset.Command)
 		}
@@ -315,11 +315,14 @@ func TestCoreVerifyChangeAcceptanceRoundsAreWorkflowSteps(t *testing.T) {
 		"`{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`",
 		"evidence directory: `{{session_dir}}/output/`",
 		"`{{session_dir}}/output/acceptance-assumptions.md`",
-		"`full` in round index 0",
-		"acceptance-impact-scope.md",
-		"acceptance-flow-evidence.md",
-		"`evidence-only`",
-		"test plan was structurally validated before implementation",
+		"`{{session_dir}}/output/acceptance-tested-revision.txt`",
+		"Acceptance is exploratory",
+		"nobody hands you a list of cases to run",
+		"never to decide what correct means",
+		"prior exploration log as history rather than as coverage",
+		"every user-visible requirement or scenario that the approved specs add or modify at least once",
+		"as a limitation with its reason",
+		"the coverage floor does not apply again",
 		"`{{session_dir}}/output/acceptance-round-status.txt`",
 		"`READY <sha>`",
 		"`NOT_READY`",
@@ -335,10 +338,16 @@ func TestCoreVerifyChangeAcceptanceRoundsAreWorkflowSteps(t *testing.T) {
 		"`[{{step_id}}]`",
 		"Do not run Agent Validator",
 		"do not push",
-		"`{{session_dir}}/output/acceptance-impact-scope.md`",
-		"`targeted`",
-		"`evidence-only`",
+		"Do not name a scope for the next round",
+		"may not be dismissed as \"not a defect\"",
+		"a decision needed from the user, with your reasoning",
+		"Do not audit the tester's evidence files for completeness",
 	)
+	for _, retired := range []string{"acceptance-impact-scope.md", "acceptance-flow-evidence.md", "`targeted`", "`evidence-only`", "AT-", "implement-with-tdd"} {
+		if strings.Contains(fix.Prompt, retired) || strings.Contains(tester.Prompt, retired) {
+			t.Errorf("acceptance prompts mention retired machinery %q", retired)
+		}
+	}
 
 	for _, id := range []string{"acceptance-push", "verify-acceptance-pr"} {
 		step := findStep(workflow.Steps, id)
@@ -424,7 +433,8 @@ func TestCoreAcceptanceGateScript(t *testing.T) {
 		repo, head := gitRepo(t)
 		evidence = t.TempDir()
 		mustWriteFile(t, filepath.Join(evidence, "acceptance-round-status.txt"), "READY "+head+"\n")
-		mustWriteFile(t, filepath.Join(evidence, "acceptance-test.md"), "tested\n")
+		mustWriteFile(t, filepath.Join(evidence, "acceptance-tested-revision.txt"), head+"\n")
+		mustWriteFile(t, filepath.Join(evidence, "exploration-log.md"), "explored\n")
 		mustWriteFile(t, filepath.Join(evidence, "acceptance-handoff.md"), "tester handoff\n")
 		return repo, evidence
 	}
@@ -465,11 +475,25 @@ func TestCoreAcceptanceGateScript(t *testing.T) {
 			want: "not 'READY",
 		},
 		{
-			name: "acceptance test evidence missing",
+			name: "exploration log missing",
 			mutate: func(t *testing.T, _, evidence string) {
-				removeFile(t, filepath.Join(evidence, "acceptance-test.md"))
+				removeFile(t, filepath.Join(evidence, "exploration-log.md"))
 			},
-			want: "acceptance-test.md is missing or empty",
+			want: "exploration-log.md is missing or empty",
+		},
+		{
+			name: "tester did not record the tested revision",
+			mutate: func(t *testing.T, _, evidence string) {
+				removeFile(t, filepath.Join(evidence, "acceptance-tested-revision.txt"))
+			},
+			want: "acceptance-tested-revision.txt names ''",
+		},
+		{
+			name: "tested revision is an earlier pass",
+			mutate: func(t *testing.T, _, evidence string) {
+				mustWriteFile(t, filepath.Join(evidence, "acceptance-tested-revision.txt"), "0123456789012345678901234567890123456789\n")
+			},
+			want: "acceptance-tested-revision.txt names '0123456789012345678901234567890123456789'",
 		},
 		{
 			name: "handoff missing",

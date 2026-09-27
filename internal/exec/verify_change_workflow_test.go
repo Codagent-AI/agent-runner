@@ -143,14 +143,14 @@ func (r *acceptanceRoundRunner) write(name, content string) {
 
 func (r *acceptanceRoundRunner) test() {
 	head := r.head()
-	r.write("acceptance-flow-evidence.md", "flows at "+head+"\n")
+	r.write("exploration-log.md", "explored "+head+"\n")
+	r.write("acceptance-tested-revision.txt", head+"\n")
 	if r.readyInRound(r.round) {
-		r.write("acceptance-test.md", "tested "+head+"\n")
 		r.write("acceptance-handoff.md", "ready "+head+"\n")
 		r.write("acceptance-round-status.txt", "READY "+head+"\n")
 		return
 	}
-	r.write("acceptance-findings.md", "AT-1 defect found at "+head+"\n")
+	r.write("acceptance-findings.md", "defect found at "+head+"\n")
 	r.write("acceptance-round-status.txt", "NOT_READY\n")
 }
 
@@ -159,7 +159,6 @@ func (r *acceptanceRoundRunner) fix() {
 		r.t.Fatalf("write fix: %v", err)
 	}
 	gitIn(r.t, r.repo, "commit", "-q", "-am", "fix")
-	r.write("acceptance-impact-scope.md", "targeted: AT-1\n")
 }
 
 func gitIn(t *testing.T, dir string, args ...string) {
