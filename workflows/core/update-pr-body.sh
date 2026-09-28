@@ -35,15 +35,16 @@ if ! jq -Rsrj 'if endswith("\n") then .[:-1] else . end' "$temp_dir/view" > "$te
   exit 1
 fi
 if ! jq -nrj --rawfile old "$temp_dir/old" --rawfile block "$block" --arg start "$start" --arg end "$end" '
-  ($block | index($start)) as $bs |
-  ($block | index($end)) as $be |
-  if $bs == null or $be == null or $bs >= $be then
+  ($block | split($start)) as $blockStarts |
+  ($block | split($end)) as $blockEnds |
+  if ($blockStarts | length) < 2 or ($blockEnds | length) < 2 or ($blockStarts[0] | contains($end)) then
     error("generated block must contain ordered body markers")
   else
-    ($old | index($start)) as $os |
-    ($old | index($end)) as $oe |
-    if $os != null and $oe != null and $os < $oe then
-      $old[:$os] + ($block | rtrimstr("\n")) + $old[($oe + ($end | length)):]
+    ($old | split($start)) as $oldStarts |
+    ($old | split($end)) as $oldEnds |
+    if ($oldStarts | length) > 1 and ($oldEnds | length) > 1 and ($oldStarts[0] | contains($end) | not) then
+      $oldStarts[0] + ($block | rtrimstr("\n")) +
+      ($oldStarts[1:] | join($start) | split($end) | .[1:] | join($end))
     elif $old == "" then
       $block
     else

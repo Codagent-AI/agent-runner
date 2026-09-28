@@ -368,7 +368,7 @@ func TestCoreVerifyChangeOpenDraftPRPushesDirectly(t *testing.T) {
 		"gh pr create --draft",
 		"gh api --method PATCH",
 		"prepend",
-		"update-pr-body.sh",
+		"{{session_dir}}/bundled/core/update-pr-body.sh",
 		"--body-file",
 		"<!-- agent-runner:generated-body:start -->",
 		"<!-- agent-runner:generated-body:end -->",
@@ -396,6 +396,7 @@ func TestCoreUpdatePRBodyScript(t *testing.T) {
 		name, oldBody, wantBody, failStep string
 	}{
 		{"marked body", "Intro\n" + start + "\nStale delivery\n" + end + "\nRefs #174\n<!-- agent-factory:claim:abc -->\n", "Intro\n" + block + "Refs #174\n<!-- agent-factory:claim:abc -->\n", ""},
+		{"unicode around marked body", "🤖 Intro — note\n" + start + "\nStale delivery\n" + end + "\nRefs #174\n<!-- agent-factory:claim:abc -->\n", "🤖 Intro — note\n" + block + "Refs #174\n<!-- agent-factory:claim:abc -->\n", ""},
 		{"unmarked body", "Refs #174\n<!-- agent-factory:claim:abc -->\n", block + "\nRefs #174\n<!-- agent-factory:claim:abc -->\n", ""},
 		{"start marker only", start + "\nRefs #174\n", block + "\n" + start + "\nRefs #174\n", ""},
 		{"end marker only", end + "\nRefs #174\n", block + "\n" + end + "\nRefs #174\n", ""},
