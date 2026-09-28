@@ -25,6 +25,8 @@ Usage records SHALL represent token counts in distinct categories — input, cac
 
 The canonical v1 vocabulary SHALL include `input_total`, `input_uncached`, `cache_read`, `cache_write`, `output`, `reasoning`, `provider_total`, and `normalized_total`. Each mapped value SHALL retain available/partial/unavailable state, known value or null, reason, observed/derived origin, exact/approximate precision, source, derivation, and inclusion relationships where established. Adapters SHALL map only source-supported semantics; absence of a cache category MUST NOT become observed zero. A partial value SHALL retain its known subtotal rather than being discarded or presented as complete. Preserve allowlisted native usage evidence independently of canonical mapping.
 
+For non-legacy Codex usage with both counts reported and `cached_input_tokens` no greater than `input_tokens`, `input_uncached` SHALL be derived exactly as `input_tokens` minus `cached_input_tokens`.
+
 #### Scenario: Categories preserved as reported
 - **WHEN** a CLI reports input, cached-input, output, and reasoning-output counts
 - **THEN** the usage record stores each category separately with its reported value

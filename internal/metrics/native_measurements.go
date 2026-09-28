@@ -45,6 +45,31 @@ func nativeValue(count int64, derived bool) measurements.Value {
 	}
 	return value
 }
+func nativeDerivedValue(count int64, derivation string) measurements.Value {
+	value := nativeValue(count, true)
+	if value.Availability == "available" {
+		value.Derivation = pointer(derivation)
+	}
+	return value
+}
+func nativeUncachedInput(u *model.UsageRecord, legacy bool) measurements.Value {
+	if legacy {
+		return missingValue("not_reported")
+	}
+	switch u.CLI {
+	case "claude", "opencode":
+		if input, ok := u.Tokens[model.TokenInput]; ok {
+			return nativeValue(input, false)
+		}
+	case "codex":
+		input, hasInput := u.Tokens[model.TokenInput]
+		cached, hasCached := u.Tokens[model.TokenCachedInput]
+		if hasInput && hasCached && input >= 0 && cached >= 0 && cached <= input {
+			return nativeDerivedValue(input-cached, "codex_input_total_minus_cache_read")
+		}
+	}
+	return missingValue("not_reported")
+}
 func nativeMeasurement(runID string, step *StepRecord, legacy bool) NativeMeasurement {
 	n := NativeMeasurement{Version: 1, Key: step.RecordID, Attribution: Attribution{RunID: runID, ExecutionSessionID: step.ExecutionSessionID, StepID: step.ID, Prefix: step.Prefix, ParentAttemptID: step.ParentAttemptID}, Producer: "agent-runner", Provenance: "native", Observed: []measurements.ObservedIdentity{}, Tokens: map[string]measurements.Value{}, Costs: []measurements.Cost{}, Limitations: []string{}}
 	for _, name := range CanonicalFields {
@@ -88,13 +113,10 @@ func nativeMeasurement(runID string, step *StepRecord, legacy bool) NativeMeasur
 				n.Tokens[name] = v
 			}
 		}
-		// Only adapters with documented exclusive input semantics provide uncached
-		// input here. Existing adapter totals retain cumulative baseline protection.
-		if !legacy && (u.CLI == "claude" || u.CLI == "opencode") {
-			if count, ok := u.Tokens[model.TokenInput]; ok {
-				n.Tokens["input_uncached"] = nativeValue(count, false)
-			}
-		}
+		// Claude and OpenCode report exclusive input. Codex input_tokens includes
+		// cached_input_tokens, so its uncached input is their difference.
+		// Existing adapter totals retain cumulative baseline protection.
+		n.Tokens["input_uncached"] = nativeUncachedInput(u, legacy)
 	}
 	if len(n.Observed) == 0 {
 		value := n.Tokens["normalized_total"]
