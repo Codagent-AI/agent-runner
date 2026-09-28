@@ -5,7 +5,7 @@ cli:
     codex:
       model: gpt-6-sol
       allow_tool_use: false
-      thinking_budget: medium
+      thinking_budget: low
 
 entry_points:
   # Default: run standard checks plus reviews for code quality, security & errors
