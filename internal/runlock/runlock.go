@@ -119,15 +119,6 @@ func Acquire(sessionDir string) (activePID int, err error) {
 			}
 			continue
 		}
-		if status, pid, inspectErr := checkPID(sessionDir); inspectErr != nil {
-			unlock(f)
-			_ = f.Close()
-			return 0, inspectErr
-		} else if status == LockActive {
-			unlock(f)
-			_ = f.Close()
-			return pid, nil
-		}
 		sweepStaleTempFiles(sessionDir)
 		if old, loaded := held.LoadOrStore(filepath.Clean(sessionDir), f); loaded {
 			unlock(f)

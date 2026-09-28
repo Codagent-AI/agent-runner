@@ -394,22 +394,55 @@ func deleteTree(runsDir, target string) error {
 	if filepath.Dir(target) != runsDir || !strings.HasPrefix(filepath.Base(target), ".pruning-") {
 		return errors.New("unsafe trash path")
 	}
-	err := filepath.WalkDir(target, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			return os.Chmod(path, 0o700)
-		}
-		return nil
-	})
+	root, err := os.OpenRoot(runsDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	trash, err := root.OpenRoot(filepath.Base(target))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	return os.RemoveAll(target)
+	err = makeTreeWritable(trash)
+	_ = trash.Close()
+	if err != nil {
+		return err
+	}
+	return root.RemoveAll(filepath.Base(target))
+}
+
+func makeTreeWritable(root *os.Root) error {
+	// Directories need owner write and execute permission for recursive removal.
+	if err := root.Chmod(".", 0o700); err != nil {
+		return err
+	}
+	dir, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	entries, err := dir.ReadDir(-1)
+	_ = dir.Close()
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		child, err := root.OpenRoot(entry.Name())
+		if err != nil {
+			return err
+		}
+		err = makeTreeWritable(child)
+		_ = child.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 var background struct {

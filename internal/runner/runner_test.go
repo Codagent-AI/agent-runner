@@ -18,10 +18,20 @@ import (
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/stateio"
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
 	"github.com/google/go-cmp/cmp"
 )
+
+func acquireTestRunLock(t *testing.T, sessionDir string) {
+	t.Helper()
+	pid, err := runlock.Acquire(sessionDir)
+	if err != nil || pid != 0 {
+		t.Fatalf("acquire test run lock: pid=%d, err=%v", pid, err)
+	}
+	t.Cleanup(func() { runlock.Delete(sessionDir) })
+}
 
 // TestWriteStepStateDoesNotClobberIntakeRoute is the regression guard for the
 // sidecar boundary: writeStepState rebuilds state.json from context, so route
@@ -838,10 +848,7 @@ func TestMaterializeBundledAssetsRefreshesStaleAssets(t *testing.T) {
 // under the scripts that runner is executing: the lock comes before materialization.
 func TestPrepareRunDoesNotMaterializeAssetsInSessionHeldByAnotherRunner(t *testing.T) {
 	sessionDir := t.TempDir()
-	// PID 1 is always alive; signalling it without privilege returns EPERM, which counts as alive.
-	if err := os.WriteFile(filepath.Join(sessionDir, "lock"), []byte("1\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	acquireTestRunLock(t, sessionDir)
 	workflow := model.Workflow{Name: "debug", Steps: []model.Step{{ID: "ship", Command: "echo ship"}}}
 	workflow.ApplyDefaults()
 
@@ -1607,12 +1614,8 @@ func TestRunWorkflow(t *testing.T) {
 
 	t.Run("refuses to run when session dir has an active lock", func(t *testing.T) {
 		sessionDir := t.TempDir()
-		// Simulate an already-running runner by writing a lock file whose PID
-		// is this test process (guaranteed alive for the test duration).
 		lockFile := filepath.Join(sessionDir, "lock")
-		if err := os.WriteFile(lockFile, fmt.Appendf(nil, "%d\n", os.Getpid()), 0o600); err != nil {
-			t.Fatalf("failed to seed lock: %v", err)
-		}
+		acquireTestRunLock(t, sessionDir)
 
 		runner := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}}}
 		w := model.Workflow{

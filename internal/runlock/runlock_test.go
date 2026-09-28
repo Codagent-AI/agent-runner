@@ -170,9 +170,9 @@ func TestAcquire(t *testing.T) {
 		}
 	})
 
-	t.Run("refuses when active lock held by another live PID", func(t *testing.T) {
+	t.Run("replaces stale PID even when it belongs to a live process", func(t *testing.T) {
 		dir := t.TempDir()
-		content := fmt.Sprintf("%d\n", os.Getpid())
+		content := fmt.Sprintf("%d\n", os.Getppid())
 		if err := os.WriteFile(filepath.Join(dir, "lock"), []byte(content), 0o600); err != nil {
 			t.Fatalf("seed lock: %v", err)
 		}
@@ -181,8 +181,15 @@ func TestAcquire(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if activePID != os.Getpid() {
-			t.Fatalf("expected activePID %d, got %d", os.Getpid(), activePID)
+		if activePID != 0 {
+			t.Fatalf("expected acquired lock, got activePID %d", activePID)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, "lock"))
+		if err != nil {
+			t.Fatalf("read lock: %v", err)
+		}
+		if string(data) != fmt.Sprintf("%d\n", os.Getpid()) {
+			t.Fatalf("expected current PID in lock, got %q", data)
 		}
 	})
 
