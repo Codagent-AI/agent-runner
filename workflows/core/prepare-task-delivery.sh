@@ -3,7 +3,7 @@ set -eu
 
 # Input: {"session_dir": "<abs path>", "task_file": "<path>", "starting_head": "<sha>"}.
 # Prints {"record_path": "...", "started_at": "..."} naming the external
-# delivery record for this task execution, and removes any stale record there.
+# delivery record uniquely reserved for this task execution.
 payload=$(cat)
 
 if command -v jq >/dev/null 2>&1; then
@@ -78,10 +78,10 @@ started_at=$(date -u +%s)
 task_key=$(basename "$task_file" .md | LC_ALL=C sed 's/[^A-Za-z0-9._-]/_/g')
 head12=$(printf '%.12s' "$starting_head")
 record_dir="$session_dir/output/task-delivery"
-record_path="$record_dir/${task_key}-${started_at}-${head12}.json"
 
 mkdir -p "$record_dir"
-rm -f -- "$record_path" "${record_path%.json}.accepted"
+reservation=$(mktemp "$record_dir/${task_key}-${started_at}-${head12}-XXXXXX")
+record_path="$reservation.json"
 
 if command -v jq >/dev/null 2>&1; then
   jq -cn --arg record_path "$record_path" --arg started_at "$started_at" \
