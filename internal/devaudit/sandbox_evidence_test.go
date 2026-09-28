@@ -23,13 +23,13 @@ func testAuditEvidenceSymlinkReadOnly(t *testing.T) {
 	if err := os.Symlink(snapshot, filepath.Join(workspace, "evidence")); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{filepath.Join(snapshot, "workflow.yaml"), filepath.Join(source, "runner.go")} {
+	for _, path := range []string{filepath.Join(snapshot, "source-workflow.yaml"), filepath.Join(source, "runner.go")} {
 		if err := os.WriteFile(path, []byte("evidence\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	script := `set -eu
-for file in evidence/workflow.yaml evidence/runner-source/runner.go; do
+for file in evidence/source-workflow.yaml evidence/runner-source/runner.go; do
   test "$(cat "$file")" = evidence
   if printf changed > "$file"; then exit 40; fi
 done
@@ -41,7 +41,7 @@ done
 	if data, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("evidence access: %v\n%s", err, data)
 	}
-	for _, path := range []string{filepath.Join(snapshot, "workflow.yaml"), filepath.Join(source, "runner.go")} {
+	for _, path := range []string{filepath.Join(snapshot, "source-workflow.yaml"), filepath.Join(source, "runner.go")} {
 		if data, err := os.ReadFile(path); err != nil || string(data) != "evidence\n" {
 			t.Fatalf("evidence changed: %s: %q, %v", path, data, err)
 		}

@@ -3,6 +3,7 @@
 package devaudit
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -51,7 +52,16 @@ func TestReplayExcludesEvidenceWithoutHistoricalSessionOwnership(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(source, "output"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := stateio.WriteState(&model.RunState{RunID: "source-run", WorkflowFile: "builtin:openspec/change-v1.0.yaml", WorkflowName: "change"}, source); err != nil {
+	workflowRef := filepath.Join(".agent-runner", "workflows", "source-v1.0.yaml")
+	workflowPath := filepath.Join(project, workflowRef)
+	if err := os.MkdirAll(filepath.Dir(workflowPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	workflowYAML := []byte("name: source\nsteps: []\n")
+	if err := os.WriteFile(workflowPath, workflowYAML, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := stateio.WriteState(&model.RunState{RunID: "source-run", WorkflowFile: workflowRef, WorkflowName: "source"}, source); err != nil {
 		t.Fatal(err)
 	}
 	artifact := metrics.Artifact{
@@ -98,6 +108,9 @@ func TestReplayExcludesEvidenceWithoutHistoricalSessionOwnership(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(request.SnapshotPath, "output", "later-session.out")); !os.IsNotExist(err) {
 		t.Fatalf("ambiguous later-session output remains in replay snapshot: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(request.SnapshotPath, "source-workflow.yaml")); err != nil || !bytes.Equal(got, workflowYAML) {
+		t.Fatalf("replay workflow snapshot = %q, %v", got, err)
 	}
 	projected, err := readMetrics(filepath.Join(request.SnapshotPath, metrics.FileName))
 	if err != nil {
@@ -176,6 +189,14 @@ func TestReplayRetentionRace(t *testing.T) {
 
 func TestReconcileReservedAutomaticAuditUsesOriginalIdentity(t *testing.T) {
 	home := t.TempDir()
+	t.Cleanup(func() {
+		_ = filepath.WalkDir(home, func(path string, entry os.DirEntry, err error) error {
+			if err == nil {
+				_ = os.Chmod(path, 0o700)
+			}
+			return nil
+		})
+	})
 	t.Setenv("HOME", home)
 	project := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(project, ".agent-runner"), 0o700); err != nil {
@@ -266,6 +287,9 @@ func TestE2E002CoordinatorReservesOneEligibleAuditPerExecutionSession(t *testing
 	link := state.Links[0]
 	if link.State != LaunchStarted || link.AuditRunID == "" || link.SnapshotPath == "" {
 		t.Fatalf("link = %#v, want started audit with ID and snapshot", link)
+	}
+	if data, err := os.ReadFile(filepath.Join(link.SnapshotPath, "source-workflow.yaml")); err != nil || !strings.Contains(string(data), "name: change") {
+		t.Fatalf("automatic workflow snapshot = %q, %v", data, err)
 	}
 }
 

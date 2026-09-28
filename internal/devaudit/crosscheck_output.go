@@ -65,14 +65,14 @@ type claudeAuditResult struct {
 	SessionID        string          `json:"session_id"`
 }
 
-func auditSessionID(adapter cli.Adapter, raw []byte, response, workspace string, spawnTime time.Time) string {
+func auditSessionID(adapter cli.Adapter, raw []byte, workspace string, spawnTime time.Time) string {
 	if _, ok := adapter.(*cli.ClaudeAdapter); ok {
 		var result claudeAuditResult
 		if json.Unmarshal(raw, &result) == nil && result.SessionID != "" {
 			return result.SessionID
 		}
 	}
-	id := adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: spawnTime, Headless: true, ProcessOutput: response, Workdir: workspace})
+	id := adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: spawnTime, Headless: true, ProcessOutput: string(raw), Workdir: workspace})
 	if id == "" {
 		return "unknown"
 	}

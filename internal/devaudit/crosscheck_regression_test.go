@@ -239,6 +239,48 @@ func TestCrosscheckDiscoversSessionCreatedDuringJudgeRun(t *testing.T) {
 			}
 		})
 	}
+	for _, stage := range []string{"value", "correctness"} {
+		t.Run("codex-"+stage, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			request, pkg := crosscheckFixture(t)
+			request.Auditor.CLI = "codex"
+			if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "request.json"), request); err != nil {
+				t.Fatal(err)
+			}
+			judgment := `{"candidates":[]}`
+			if stage == "value" {
+				judgment = `{"batch_id":"` + pkg.BatchID + `","observations":[]}`
+			}
+			original := crosscheckCommand
+			t.Cleanup(func() { crosscheckCommand = original })
+			crosscheckCommand = func(args []string, _, _ string) (*exec.Cmd, error) {
+				for i, arg := range args {
+					if arg == "--output-last-message" && i+1 < len(args) {
+						const script = `printf '%s' "$2" > "$1"; printf '%s\n' '{"type":"thread.started","thread_id":"judge-thread"}'`
+						return exec.Command("sh", "-c", script, "stub", args[i+1], judgment), nil
+					}
+				}
+				return nil, fmt.Errorf("Codex invocation missing final response path")
+			}
+			var provenance BatchProvenance
+			if stage == "value" {
+				result, err := invokeCrosscheckValueBatch(request, pkg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				provenance = result.Provenance
+			} else {
+				result, err := invokeCrosscheckCorrectness(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				provenance = result.Provenance
+			}
+			if diff := cmp.Diff("judge-thread", provenance.SessionID); diff != "" {
+				t.Errorf("session ID (-want +got):\n%s", diff)
+			}
+		})
+	}
 }
 
 func TestCrosscheckFailuresRetainRedactedProviderDiagnostics(t *testing.T) {

@@ -19,6 +19,7 @@ import (
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/config"
+	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runlock"
@@ -199,6 +200,9 @@ func (c Coordinator) launch(summary *runner.PostFinalizationSummary, lifecycle *
 		return c.persistFailure(summary, lifecycle, link.AuditRunID, err, now())
 	}
 	request := Request{AuditRunID: link.AuditRunID, AuditSessionDir: auditSessionDir(summary.SessionDir, link.AuditRunID), SourceSessionDir: summary.SessionDir, SourceRunID: summary.RunID, ExecutionSessionID: summary.ExecutionSessionID, Trigger: link.Trigger, SnapshotPath: link.SnapshotPath, ProfileSet: summary.ProfileSet, SourceWorkflow: summary.WorkflowFile, Project: projectForRepository(summary.WorkingDir), RunnerSource: snapshotRunnerSource(link.SnapshotPath), Auditor: auditor}
+	if err := snapshotWorkflowDefinition(summary.WorkflowFile, summary.WorkingDir, request.SnapshotPath); err != nil {
+		return c.persistFailure(summary, lifecycle, link.AuditRunID, err, now())
+	}
 	if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "request.json"), request); err != nil {
 		return c.persistFailure(summary, lifecycle, link.AuditRunID, err, now())
 	}
@@ -344,6 +348,27 @@ func snapshotEvidenceAt(sessionDir, dir string) (string, error) {
 		return "", err
 	}
 	return dir, nil
+}
+
+func snapshotWorkflowDefinition(workflowRef, projectRoot, snapshotDir string) error {
+	if workflowRef == "" {
+		return nil
+	}
+	path := workflowRef
+	if !strings.HasPrefix(path, "builtin:") && !filepath.IsAbs(path) {
+		path = filepath.Join(projectRoot, path)
+	}
+	data, err := loader.ReadWorkflowFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read source workflow: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(snapshotDir, "source-workflow.yaml"), data, 0o600); err != nil { // #nosec G306 -- sealed with the rest of the owner-only snapshot before model launch.
+		return fmt.Errorf("snapshot source workflow: %w", err)
+	}
+	return nil
 }
 
 // snapshotReplayEvidenceAt retains only metrics whose durable session
