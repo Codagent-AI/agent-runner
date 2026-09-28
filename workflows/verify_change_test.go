@@ -147,7 +147,7 @@ func TestLegacyImplementChangeSimplifyStopsForDecisions(t *testing.T) {
 				t.Errorf("decision gate must stop the workflow on unresolved findings: %q", gate.Command)
 			}
 			ids := stepIDs(workflow.Steps)
-			if strings.Index(strings.Join(ids, ","), "simplify,require-simplify-decisions-resolved,run-validator") < 0 {
+			if !strings.Contains(strings.Join(ids, ","), "simplify,require-simplify-decisions-resolved,run-validator") {
 				t.Errorf("decision gate must run immediately after simplify: %v", ids)
 			}
 		})
