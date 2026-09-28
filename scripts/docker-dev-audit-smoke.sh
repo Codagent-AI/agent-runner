@@ -18,6 +18,8 @@ owns_image=0
 owns_artifacts=0
 cleaned_up=0
 child=""
+launching=0
+pending_signal=""
 
 if [[ -z "${IMAGE:-}" ]]; then
   IMAGE="agent-runner-dev-audit-smoke:$run_id"
@@ -51,8 +53,9 @@ cleanup() {
   if [[ "$final_status" != 0 ]]; then
     echo "smoke: evidence retained in $ARTIFACT_DIR" >&2
   elif [[ "$owns_artifacts" == 1 ]]; then
-    # Files written under confinement may have restrictive modes.
-    chmod -R u+w -- "$ARTIFACT_DIR" 2>/dev/null
+    # Files written under confinement may have restrictive modes; restore
+    # directory search (X) too so rm can descend into read-only directories.
+    chmod -R u+rwX -- "$ARTIFACT_DIR" 2>/dev/null
     rm -rf -- "$ARTIFACT_DIR"
     if [[ -e "$ARTIFACT_DIR" ]]; then
       echo "smoke: could not remove artifact directory $ARTIFACT_DIR" >&2
@@ -64,6 +67,12 @@ cleanup() {
 }
 
 on_signal() {
+  if [[ -z "$child" && "$launching" == 1 ]]; then
+    # The runner is starting but its PID is not known yet; handle the signal
+    # once it is, so shutdown can stop the runner instead of orphaning it.
+    pending_signal="$1"
+    return
+  fi
   final_status="$1"
   set +e
   if [[ -n "$child" ]]; then
@@ -98,6 +107,7 @@ trap 'on_signal 143' TERM
 
 mkdir -p "$ARTIFACT_DIR"
 export AUDIT_SMOKE_TIMEOUT_SECONDS="$TIMEOUT_SECONDS"
+launching=1
 ARTIFACT_DIR="$ARTIFACT_DIR" "$RUNNER_ROOT/scripts/sandbox-run.sh" \
   --dev-audit \
   --dev-audit-smoke \
@@ -109,6 +119,9 @@ ARTIFACT_DIR="$ARTIFACT_DIR" "$RUNNER_ROOT/scripts/sandbox-run.sh" \
   --docker-run-arg "--name=$container" \
   -- "bash /agent-runner-source/scripts/docker-dev-audit-smoke-container.sh" &
 child=$!
+if [[ -n "$pending_signal" ]]; then
+  on_signal "$pending_signal"
+fi
 
 status=0
 wait "$child" || status=$?

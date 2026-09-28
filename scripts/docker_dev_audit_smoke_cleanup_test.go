@@ -39,7 +39,7 @@ case "${1:-}" in
       mkdir -p "$evidence/locked"
       echo "evidence" > "$evidence/evidence.txt"
       echo "restricted" > "$evidence/locked/file.txt"
-      chmod 0500 "$evidence/locked"
+      chmod 0400 "$evidence/locked"
     fi
     echo "$$" > "$FAKE_DOCKER_STATE/run.pid"
     if [[ "${FAKE_DOCKER_RUN_BLOCK:-0}" == 1 ]]; then
