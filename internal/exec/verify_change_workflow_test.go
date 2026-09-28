@@ -24,6 +24,7 @@ type acceptanceRoundRunner struct {
 	t            *testing.T
 	repo         string
 	evidenceDir  string
+	sessionDir   string
 	readyInRound func(round int) bool
 	round        int
 	events       []string
@@ -74,6 +75,13 @@ func (r *acceptanceRoundRunner) RunScript(path string, stdin []byte, _ bool, _ s
 func (r *acceptanceRoundRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, error) {
 	switch {
 	case strings.Contains(options.Prefix, "acceptance-test"):
+		scratchDir := filepath.Join(r.sessionDir, "scratch", "acceptance-test")
+		if info, err := os.Stat(scratchDir); err != nil || !info.IsDir() {
+			r.t.Fatalf("acceptance scratch directory %q missing when tester runs: %v", scratchDir, err)
+		}
+		if !strings.Contains(strings.Join(options.Args, "\n"), scratchDir) {
+			r.t.Errorf("acceptance prompt does not contain interpolated scratch directory %q", scratchDir)
+		}
 		r.round++
 		r.events = append(r.events, "acceptance-test")
 		r.test()
@@ -224,7 +232,7 @@ func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator string, ready
 	}
 
 	runner := &acceptanceRoundRunner{
-		t: t, repo: repo, evidenceDir: evidenceDir, readyInRound: readyInRound,
+		t: t, repo: repo, evidenceDir: evidenceDir, sessionDir: sessionDir, readyInRound: readyInRound,
 		breakStatusOnce: breakStatusOnce, validatorFails: validatorFails,
 	}
 	ctx := model.NewRootContext(&model.RootContextOptions{
