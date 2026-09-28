@@ -178,7 +178,7 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 		}
 		return CorrectnessCandidates{}, err
 	}
-	args, finalResponsePath, removeStructuredFiles, err := withCrosscheckOutputSchema(request.Auditor.CLI, args, filepath.Join(request.AuditSessionDir, "model-output"), "correctness", correctnessOutputSchema(allEvidenceReferences(&prepared.Index)))
+	args, finalResponsePath, removeStructuredFiles, err := withAuditEvidenceAndOutputSchema(request, args, "correctness", correctnessOutputSchema(allEvidenceReferences(&prepared.Index)))
 	if err != nil {
 		return CorrectnessCandidates{}, err
 	}
@@ -226,7 +226,7 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 	if decoder.Decode(&extra) != io.EOF {
 		return CorrectnessCandidates{}, fmt.Errorf("crosscheck result contains multiple JSON values")
 	}
-	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: "unknown"}
+	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: auditSessionID(adapter, data, response, workspace)}
 	return output, nil
 }
 

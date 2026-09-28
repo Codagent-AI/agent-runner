@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/codagent/agent-runner/internal/cli"
 )
@@ -60,6 +61,21 @@ type claudeAuditResult struct {
 	Result           string          `json:"result"`
 	Errors           []string        `json:"errors"`
 	StructuredOutput json.RawMessage `json:"structured_output"`
+	SessionID        string          `json:"session_id"`
+}
+
+func auditSessionID(adapter cli.Adapter, raw []byte, response, workspace string) string {
+	if _, ok := adapter.(*cli.ClaudeAdapter); ok {
+		var result claudeAuditResult
+		if json.Unmarshal(raw, &result) == nil && result.SessionID != "" {
+			return result.SessionID
+		}
+	}
+	id := adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: time.Now(), Headless: true, ProcessOutput: response, Workdir: workspace})
+	if id == "" {
+		return "unknown"
+	}
+	return id
 }
 
 func (r *claudeAuditResult) diagnostic() string {

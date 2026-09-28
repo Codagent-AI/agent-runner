@@ -14,7 +14,6 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/codagent/agent-runner/internal/audit"
@@ -1258,7 +1257,7 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 	if len(args) == 0 {
 		return ModelValueBatch{}, fmt.Errorf("crosscheck adapter produced no command")
 	}
-	args, finalResponsePath, removeStructuredFiles, err := withCrosscheckOutputSchema(request.Auditor.CLI, args, filepath.Join(request.AuditSessionDir, "model-output"), "value", valueOutputSchema(pkg))
+	args, finalResponsePath, removeStructuredFiles, err := withAuditEvidenceAndOutputSchema(request, args, "value", valueOutputSchema(pkg))
 	if err != nil {
 		return ModelValueBatch{}, err
 	}
@@ -1300,7 +1299,7 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 	if err != nil {
 		return ModelValueBatch{}, fmt.Errorf("decode crosscheck result: %w; response: %s", err, crosscheckDiagnostic(response))
 	}
-	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: time.Now(), Headless: true, ProcessOutput: response, Workdir: workspace})}
+	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: auditSessionID(adapter, result, response, workspace)}
 	if output.Provenance.SessionID == "" {
 		output.Provenance.SessionID = "unknown"
 	}
@@ -1625,6 +1624,55 @@ func claudeStructuredArgs(args []string, schema map[string]any) ([]string, error
 	}
 	structured = append(structured, "--json-schema", string(data))
 	return append(structured, args[end:]...), nil
+}
+
+func withAuditEvidenceAndOutputSchema(request *Request, args []string, label string, schema map[string]any) (structured []string, responsePath string, cleanup func(), err error) {
+	if request.Auditor.CLI != "claude" {
+		return withCrosscheckOutputSchema(request.Auditor.CLI, args, filepath.Join(request.AuditSessionDir, "model-output"), label, schema)
+	}
+	dirs, err := auditReadDirs(request)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	args = withAuditReadDirs(request.Auditor.CLI, args, dirs...)
+	return withCrosscheckOutputSchema(request.Auditor.CLI, args, filepath.Join(request.AuditSessionDir, "model-output"), label, schema)
+}
+
+func auditReadDirs(request *Request) ([]string, error) {
+	snapshot, err := filepath.EvalSymlinks(request.SnapshotPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve audit snapshot: %w", err)
+	}
+	dirs := []string{snapshot}
+	if source := request.RunnerSource.SnapshotPath; source != "" {
+		resolved, err := filepath.EvalSymlinks(source)
+		if err != nil {
+			return nil, fmt.Errorf("resolve runner source snapshot: %w", err)
+		}
+		relative, err := filepath.Rel(snapshot, resolved)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			dirs = append(dirs, resolved)
+		}
+	}
+	return dirs, nil
+}
+
+func withAuditReadDirs(cliName string, args []string, dirs ...string) []string {
+	if cliName != "claude" || len(dirs) == 0 {
+		return args
+	}
+	end := len(args)
+	for i, arg := range args {
+		if arg == "--" {
+			end = i
+			break
+		}
+	}
+	result := append([]string(nil), args[:end]...)
+	for _, dir := range dirs {
+		result = append(result, "--add-dir", dir)
+	}
+	return append(result, args[end:]...)
 }
 
 func withCrosscheckOutputSchema(cliName string, args []string, outputDir, label string, schema map[string]any) (structured []string, responsePath string, cleanup func(), err error) {
