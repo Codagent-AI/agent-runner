@@ -181,6 +181,11 @@ type auditGlobExpander struct{}
 func (auditGlobExpander) Expand(pattern string) ([]string, error) { return filepath.Glob(pattern) }
 
 func completeAudit(request *Request, warning string) error {
+	release, err := runlock.ClaimLinkage(request.SourceSessionDir)
+	if err != nil {
+		return err
+	}
+	defer release()
 	lifecyclePath := filepath.Join(request.SourceSessionDir, lifecycleFileName)
 	lifecycle, err := ReadLifecycle(lifecyclePath)
 	if err != nil {
@@ -224,6 +229,11 @@ func completeAuditState(request *Request, link *Link) error {
 // RecordReportingWarning is available to later delivery stages without
 // reopening or changing the source workflow outcome.
 func RecordReportingWarning(request *Request, warning string) error {
+	release, err := runlock.ClaimLinkage(request.SourceSessionDir)
+	if err != nil {
+		return err
+	}
+	defer release()
 	lifecycle, err := ReadLifecycle(filepath.Join(request.SourceSessionDir, lifecycleFileName))
 	if err != nil {
 		return err
@@ -462,6 +472,11 @@ func handleInternalAudit(args []string, stderr io.Writer) int {
 // Replay creates a new append-only audit identity for exactly one durable
 // execution session; it never starts or resumes the source workflow.
 func Replay(sourceSessionDir, executionSessionID, projectRoot string, launch func(Request) error) (string, error) {
+	release, err := runlock.ClaimLinkage(sourceSessionDir)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	state, err := stateio.ReadState(filepath.Join(sourceSessionDir, "state.json"))
 	if err != nil {
 		return "", err
@@ -527,6 +542,11 @@ func Replay(sourceSessionDir, executionSessionID, projectRoot string, launch fun
 // launch state. It preserves the original audit identity and never reruns the
 // source workflow.
 func Reconcile(sourceSessionDir, executionSessionID, projectRoot string, launch func(Request) error) (string, error) {
+	release, err := runlock.ClaimLinkage(sourceSessionDir)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	if runlock.Check(sourceSessionDir) == runlock.LockActive {
 		return "", fmt.Errorf("source workflow is still active")
 	}

@@ -72,7 +72,7 @@ func ListForDir(projectDir string) ([]RunInfo, error) {
 
 	var results []RunInfo
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
 		sessionID := entry.Name()
@@ -219,6 +219,9 @@ func parseStartTime(sessionID string) time.Time {
 	return time.Time{}
 }
 
+// StartTimeFromID extracts the timestamp encoded in a run ID.
+func StartTimeFromID(id string) time.Time { return parseStartTime(id) }
+
 // currentStepID extracts the leaf step ID from a RunState.
 func currentStepID(state *model.RunState) string {
 	if state.CurrentStep.Nested != nil {
@@ -254,6 +257,9 @@ func lastUpdateTime(sessionDir string, fallback time.Time) time.Time {
 	}
 	return latest
 }
+
+// LastActivity returns the newest run metadata timestamp.
+func LastActivity(dir string, fallback time.Time) time.Time { return lastUpdateTime(dir, fallback) }
 
 func fileExists(path string) bool {
 	_, err := os.Stat(path)

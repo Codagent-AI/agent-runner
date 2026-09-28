@@ -1,10 +1,13 @@
 package runlock
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -287,6 +290,111 @@ func TestAcquire(t *testing.T) {
 			t.Fatalf("expected recent tmp file preserved, got err=%v", err)
 		}
 	})
+}
+
+func TestStaleLockAcrossProcesses(t *testing.T) {
+	if os.Getenv("RUNLOCK_STALE_HELPER") == "1" {
+		gate := os.Getenv("RUNLOCK_GATE")
+		for {
+			if _, err := os.Stat(gate); err == nil {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		pid, err := Acquire(os.Getenv("RUNLOCK_DIR"))
+		if err != nil {
+			fmt.Println("error", err)
+			return
+		}
+		if pid > 0 {
+			fmt.Println("busy", pid)
+			return
+		}
+		fmt.Println("acquired")
+		time.Sleep(300 * time.Millisecond)
+		Delete(os.Getenv("RUNLOCK_DIR"))
+		return
+	}
+	dir := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	if err := os.WriteFile(filepath.Join(dir, "lock"), []byte("999999999\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gate := filepath.Join(t.TempDir(), "go")
+	var outputs [2]bytes.Buffer
+	var commands []*exec.Cmd
+	for i := 0; i < 2; i++ {
+		cmd := exec.Command(os.Args[0], "-test.run=TestStaleLockAcrossProcesses$")
+		cmd.Env = append(os.Environ(), "RUNLOCK_STALE_HELPER=1", "RUNLOCK_DIR="+dir, "RUNLOCK_GATE="+gate)
+		cmd.Stdout = &outputs[i]
+		cmd.Stderr = &outputs[i]
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		commands = append(commands, cmd)
+	}
+	if err := os.WriteFile(gate, []byte("go"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for i, cmd := range commands {
+		if err := cmd.Wait(); err != nil {
+			t.Fatalf("helper %d: %v %s", i, err, outputs[i].String())
+		}
+	}
+	winners := 0
+	losers := 0
+	for _, out := range outputs {
+		if strings.Contains(out.String(), "acquired") {
+			winners++
+		}
+		if strings.Contains(out.String(), "busy") {
+			losers++
+		}
+	}
+	if winners != 1 || losers != 1 {
+		t.Fatalf("winners=%d losers=%d outputs=%q, %q", winners, losers, outputs[0].String(), outputs[1].String())
+	}
+}
+
+func TestCrashedHolderReleasesLock(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SIGKILL fixture is POSIX-only")
+	}
+	if os.Getenv("RUNLOCK_CRASH_HELPER") == "1" {
+		pid, err := Acquire(os.Getenv("RUNLOCK_DIR"))
+		if err != nil || pid != 0 {
+			fmt.Println("error", pid, err)
+			return
+		}
+		fmt.Println("acquired")
+		time.Sleep(10 * time.Second)
+		return
+	}
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=TestCrashedHolderReleasesLock$")
+	cmd.Env = append(os.Environ(), "RUNLOCK_CRASH_HELPER=1", "RUNLOCK_DIR="+dir)
+	pipe, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	line, err := bufio.NewReader(pipe).ReadString('\n')
+	if err != nil || !strings.Contains(line, "acquired") {
+		_ = cmd.Process.Kill()
+		t.Fatalf("helper did not acquire: %q %v", line, err)
+	}
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = cmd.Wait()
+	pid, err := Acquire(dir)
+	if err != nil || pid != 0 {
+		t.Fatalf("lock after crash: %d %v", pid, err)
+	}
+	Delete(dir)
 }
 
 func TestProveHeldRequiresCurrentProcessLock(t *testing.T) {
