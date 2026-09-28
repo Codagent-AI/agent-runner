@@ -18,6 +18,7 @@ func TestSelectedSessionOutcome(t *testing.T) {
 		name           string
 		hasSession     bool
 		sessionOutcome string
+		sessionStatus  string
 		steps          []metrics.StepRecord
 		want           string
 	}{
@@ -27,6 +28,9 @@ func TestSelectedSessionOutcome(t *testing.T) {
 		{name: "legacy nested failure followed by success", steps: []metrics.StepRecord{step("group", "failed"), step("", "success")}, want: "success"},
 		{name: "legacy final top-level failure", steps: []metrics.StepRecord{step("", "success"), step("", "failed")}, want: "failed"},
 		{name: "interrupted before any step", hasSession: true, want: "unknown"},
+		{name: "open session after successful step", hasSession: true, sessionStatus: metrics.SessionOpen, steps: []metrics.StepRecord{step("", "success")}, want: "unknown"},
+		{name: "interrupted session after successful step", hasSession: true, sessionStatus: metrics.SessionInterrupted, steps: []metrics.StepRecord{step("", "success")}, want: "unknown"},
+		{name: "closed legacy session after successful step", hasSession: true, sessionStatus: metrics.SessionClosed, steps: []metrics.StepRecord{step("", "success")}, want: "success"},
 		{name: "legacy nested failure with no top-level step", steps: []metrics.StepRecord{step("group", "failed")}, want: "failed"},
 		{name: "no records", want: "unknown"},
 	}
@@ -34,7 +38,7 @@ func TestSelectedSessionOutcome(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			artifact := &metrics.Artifact{Steps: tc.steps}
 			if tc.hasSession {
-				artifact.Sessions = []metrics.SessionRecord{{ExecutionSessionID: "selected", Outcome: tc.sessionOutcome}}
+				artifact.Sessions = []metrics.SessionRecord{{ExecutionSessionID: "selected", Outcome: tc.sessionOutcome, Status: tc.sessionStatus}}
 			}
 			if got := selectedSessionOutcome(artifact, "selected"); got != tc.want {
 				t.Fatalf("outcome = %q, want %q", got, tc.want)

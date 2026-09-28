@@ -440,6 +440,9 @@ func selectedSessionOutcome(artifact *metrics.Artifact, executionSessionID strin
 		if session.Outcome != "" {
 			return session.Outcome
 		}
+		if session.Status != metrics.SessionClosed {
+			return "unknown"
+		}
 	}
 	lastTopLevelOutcome := ""
 	nestedFailure := ""
