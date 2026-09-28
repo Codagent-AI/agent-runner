@@ -80,17 +80,59 @@ workflow. The fixture tag only registers a hidden workflow and retains the
 production sandbox and lifecycle code.
 
 It uses a temporary project and pins both `crosscheck` (source step) and `lead`
-(auditor) to a fake Codex CLI with no host credentials. It keeps artifacts in
-the selected artifact directory and waits for both the linked audit's terminal
-lifecycle and terminal run state after the source CLI has returned. It checks
-reciprocal source/session linkage, model outputs, validated observations, local
-report, and verified mounted provenance.
+(auditor) to a fake Codex CLI with no host credentials. It writes artifacts to
+its artifact directory (see the resource ownership rules below for when that
+directory is kept) and waits for both the linked audit's terminal lifecycle and
+terminal run state after the source CLI has returned. It checks reciprocal
+source/session linkage, model outputs, validated observations, local report,
+and verified mounted provenance.
 That distinction matters: source completion never waits for auditing in normal
 Runner operation. The smoke does not call external model, GitHub, or reporting
 services; missing reporting configuration is expected to remain a local audit
 warning. Set `ARTIFACT_DIR` to retain evidence in a chosen host directory and
 `AUDIT_SMOKE_TIMEOUT_SECONDS` to change the default 45-second audit wait. Timeout,
 invalid output, or missing terminal state fails the smoke and preserves evidence.
+
+The smoke releases the resources it owns, and only those:
+
+- **Image.** Without `IMAGE`, the smoke builds a run-unique
+  `agent-runner-dev-audit-smoke:<run-id>` tag and removes it with an unforced
+  `docker image rm` on exit, after success, failure, or a handled interrupt
+  (SIGINT or SIGTERM). On interrupt it first stops its own container,
+  `agent-runner-dev-audit-smoke-<run-id>`. It never builds, retags, or removes
+  `agent-runner-dev:local`, never removes another run's image or container, and
+  never prunes. A failed removal is reported on stderr and does not change the
+  exit status.
+- **Caller-owned image.** Set `IMAGE=<tag>` to build and run under your own tag.
+  The smoke keeps it, so later runs with the same tag start warm.
+- **Artifacts.** Without `ARTIFACT_DIR`, the smoke creates a temporary
+  `agent-runner-dev-audit-smoke.*` directory under `${TMPDIR:-/tmp}`. After
+  success it removes that directory and prints `smoke: removed artifact
+  directory <path>`. After failure, timeout, invalid results, or interrupt it
+  keeps the directory and prints `smoke: evidence retained in <path>`. Kept
+  evidence then belongs to the invoker; no later smoke run deletes it.
+  Unattended callers, such as the factory, should set `ARTIFACT_DIR` inside
+  their own per-attempt artifact directory so failure evidence is cleaned up
+  with the attempt instead of accumulating under `${TMPDIR:-/tmp}`.
+- **Caller-owned artifacts.** A directory supplied through `ARTIFACT_DIR` is
+  never deleted, whatever the outcome.
+- **Build cache.** The smoke leaves the Docker build cache alone. Untagging
+  removes the tag and stops pinning its layers; the host's own build-cache
+  pruning reclaims the bytes, so the first run after a prune is a full rebuild.
+
+A run killed with SIGKILL or a crash cannot clean up and may leave one
+`agent-runner-dev-audit-smoke:<run-id>` image behind. That image belongs to the
+smoke and is safe to remove by hand:
+
+```bash
+docker image ls agent-runner-dev-audit-smoke
+docker image rm agent-runner-dev-audit-smoke:<run-id>
+```
+
+On native Linux Docker, the smoke is supported only when the host user's uid
+matches the container's `pwuser` (1000). Otherwise the container cannot write
+the artifact mount. Docker Desktop maps bind-mount ownership and has no such
+requirement.
 
 Run the production Linux confinement regressions in the same Docker environment:
 
