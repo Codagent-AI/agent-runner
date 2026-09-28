@@ -87,19 +87,17 @@ func Write(sessionDir string) error {
 //     caller must NOT proceed and must surface the error.
 func Acquire(sessionDir string) (activePID int, err error) {
 	lockPath := filepath.Join(sessionDir, lockFileName)
+	key := filepath.Clean(sessionDir)
 	for attempt := 0; attempt < 100; attempt++ {
-		f, openErr := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600) // #nosec G304 -- run directory is selected by the caller.
-		if openErr != nil {
-			return 0, fmt.Errorf("open lock: %w", openErr)
+		f, outcome, err := lockStablePath(lockPath)
+		if err != nil {
+			return 0, err
 		}
-		locked, lockErr := tryLock(f)
-		if lockErr != nil {
-			_ = f.Close()
-			return 0, fmt.Errorf("lock: %w", lockErr)
-		}
-		if !locked {
+		switch outcome {
+		case lockReplaced:
+			continue
+		case lockBusy:
 			_, pid, readErr := checkPID(sessionDir)
-			_ = f.Close()
 			if readErr != nil {
 				return 0, fmt.Errorf("lock held by another process: %w", readErr)
 			}
@@ -109,42 +107,74 @@ func Acquire(sessionDir string) (activePID int, err error) {
 			}
 			return pid, nil
 		}
-		opened, statErr := f.Stat()
-		current, pathErr := os.Lstat(lockPath)
-		if statErr != nil || pathErr != nil || !os.SameFile(opened, current) {
-			unlock(f)
-			_ = f.Close()
-			if pathErr != nil && !errors.Is(pathErr, fs.ErrNotExist) {
-				return 0, pathErr
-			}
-			continue
-		}
 		sweepStaleTempFiles(sessionDir)
-		if old, loaded := held.LoadOrStore(filepath.Clean(sessionDir), f); loaded {
-			unlock(f)
-			_ = f.Close()
-			_ = old
+		if _, loaded := held.LoadOrStore(key, f); loaded {
+			release(f)
 			return os.Getpid(), nil
 		}
-		err = f.Truncate(0)
-		if err == nil {
-			_, err = f.Seek(0, 0)
-		}
-		if err == nil {
-			_, err = fmt.Fprintf(f, "%d\n", os.Getpid())
-		}
-		if err == nil {
-			err = f.Sync()
-		}
-		if err != nil {
-			held.Delete(filepath.Clean(sessionDir))
-			unlock(f)
-			_ = f.Close()
+		if err := writePID(f); err != nil {
+			held.Delete(key)
+			release(f)
 			return 0, err
 		}
 		return 0, nil
 	}
 	return 0, fmt.Errorf("lock changed during acquisition: %w", fs.ErrNotExist)
+}
+
+type lockOutcome int
+
+const (
+	lockAcquired lockOutcome = iota
+	lockBusy
+	lockReplaced
+)
+
+// lockStablePath opens path, takes a non-blocking exclusive OS lock, and
+// confirms the path still names the locked file. On lockAcquired the caller
+// owns the returned file and must release it.
+func lockStablePath(path string) (*os.File, lockOutcome, error) {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600) // #nosec G304 -- lock path is selected by the caller.
+	if err != nil {
+		return nil, 0, fmt.Errorf("open lock: %w", err)
+	}
+	locked, err := tryLock(f)
+	if err != nil {
+		_ = f.Close()
+		return nil, 0, fmt.Errorf("lock: %w", err)
+	}
+	if !locked {
+		_ = f.Close()
+		return nil, lockBusy, nil
+	}
+	opened, statErr := f.Stat()
+	current, pathErr := os.Lstat(path)
+	if statErr != nil || pathErr != nil || !os.SameFile(opened, current) {
+		release(f)
+		if pathErr != nil && !errors.Is(pathErr, fs.ErrNotExist) {
+			return nil, 0, pathErr
+		}
+		return nil, lockReplaced, nil
+	}
+	return f, lockAcquired, nil
+}
+
+func release(f *os.File) {
+	unlock(f)
+	_ = f.Close()
+}
+
+func writePID(f *os.File) error {
+	if err := f.Truncate(0); err != nil {
+		return err
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(f, "%d\n", os.Getpid()); err != nil {
+		return err
+	}
+	return f.Sync()
 }
 
 const tempLockMaxAge = 5 * time.Minute
@@ -176,8 +206,7 @@ func Delete(sessionDir string) {
 				_ = os.Remove(filepath.Join(sessionDir, lockFileName))
 			}
 		}
-		unlock(f)
-		_ = f.Close()
+		release(f)
 		return
 	}
 	status, pid, err := checkPID(sessionDir)

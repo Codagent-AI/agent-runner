@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -64,7 +65,7 @@ func Sweep(home string, now time.Time) Report {
 func sweep(home string, now time.Time, progress func(Report)) Report {
 	wallStarted := time.Now()
 	r := Report{progress: progress}
-	settings, known, err := loadPolicy(home)
+	settings, known, err := usersettings.LoadRunRetentionAt(filepath.Join(home, ".agent-runner", "settings.yaml"))
 	if !known {
 		r.warn("retention policy could not be read: %v", err)
 		return r
@@ -119,10 +120,7 @@ func sweep(home string, now time.Time, progress func(Report)) Report {
 		r.warn("read projects: %v", err)
 		return r
 	}
-	var candidates []struct {
-		dir  string
-		runs []Run
-	}
+	var candidates []projectRuns
 	for _, project := range projects {
 		projectDir := filepath.Join(root, project.Name())
 		if !realDirectory(projectDir) {
@@ -164,10 +162,7 @@ func sweep(home string, now time.Time, progress func(Report)) Report {
 			}
 			all = append(all, item)
 		}
-		candidates = append(candidates, struct {
-			dir  string
-			runs []Run
-		}{runsDir, all})
+		candidates = append(candidates, projectRuns{dir: runsDir, runs: all})
 	}
 	if s.ActivatedAt.IsZero() {
 		count := 0
@@ -190,6 +185,11 @@ func sweep(home string, now time.Time, progress func(Report)) Report {
 	return r
 }
 
+type projectRuns struct {
+	dir  string
+	runs []Run
+}
+
 func describeAge(kind string, age time.Duration) string {
 	if age == 0 {
 		return kind + " age limit disabled"
@@ -202,11 +202,6 @@ func describeCount(limit int) string {
 		return "finished run count limit disabled"
 	}
 	return fmt.Sprintf("at most %d finished runs per project", limit)
-}
-
-func loadPolicy(home string) (settings usersettings.RunRetention, known bool, err error) {
-	// os.UserHomeDir uses HOME on supported platforms; isolate it for the sweep.
-	return usersettings.LoadRunRetentionAt(filepath.Join(home, ".agent-runner", "settings.yaml"))
 }
 
 func readRetentionState(path string) (retentionState, error) {
@@ -274,56 +269,41 @@ func removeUnit(runsDir string, unit *Unit, p Policy, now time.Time, r *Report) 
 	if len(latest) != len(ids) {
 		return
 	}
-	for i := range latest {
-		for j := range unit.Members {
-			old := &unit.Members[j]
-			if old.ID == latest[i].ID && latest[i].LastActivity.After(old.LastActivity) {
-				// Creating a missing lock changes the run directory mtime. Preserve
-				// the earlier observation unless state or audit was updated.
-				newest := old.LastActivity
-				for _, name := range []string{"state.json", "audit.log"} {
-					if info, err := os.Stat(filepath.Join(latest[i].Dir, name)); err == nil && info.ModTime().After(newest) {
-						newest = info.ModTime()
-					}
-				}
-				latest[i].LastActivity = newest
-			}
-		}
+	observed := make(map[string]time.Time, len(unit.Members))
+	for i := range unit.Members {
+		observed[unit.Members[i].ID] = unit.Members[i].LastActivity
 	}
+	rechecked := make(map[string]Run, len(latest))
 	for i := range latest {
 		m := &latest[i]
-		if m.Class == Active || m.Class == LockUnknown || m.Class == Damaged {
+		if m.Class.protected() {
 			return
 		}
+		if old := observed[m.ID]; m.LastActivity.After(old) {
+			// Creating a missing lock changes the run directory mtime. Preserve
+			// the earlier observation unless state or audit was updated.
+			m.LastActivity = newestMetadata(m.Dir, old)
+		}
+		rechecked[m.ID] = *m
 	}
 	whole := scanRuns(runsDir, nil, ids)
 	for i := range whole {
-		for j := range latest {
-			if whole[i].ID == latest[j].ID {
-				whole[i] = latest[j]
-			}
+		if m, ok := rechecked[whole[i].ID]; ok {
+			whole[i] = m
 		}
 	}
-	current := Plan(whole, p, now)
-	eligible := false
-	for _, candidate := range current {
-		if sameMembers(candidate.Members, ids) {
-			eligible = true
-		}
-	}
-	if !eligible {
+	if !slices.ContainsFunc(Plan(whole, p, now), func(u Unit) bool { return sameMembers(u.Members, ids) }) {
 		return
 	}
 	// Detect a newly linked audit sibling before committing any rename.
-	others := scanRuns(runsDir, nil, ids)
-	for i := range others {
-		other := &others[i]
-		if unit.SourceID != "" && other.SourceRunID == unit.SourceID && !contains(ids, other.ID) {
+	for i := range whole {
+		other := &whole[i]
+		if unit.SourceID != "" && other.SourceRunID == unit.SourceID && !slices.Contains(ids, other.ID) {
 			return
 		}
 		if other.ID == unit.SourceID {
 			for _, link := range other.AuditRunIDs {
-				if realDirectory(filepath.Join(runsDir, link)) && !contains(ids, link) {
+				if realDirectory(filepath.Join(runsDir, link)) && !slices.Contains(ids, link) {
 					return
 				}
 			}
@@ -375,19 +355,21 @@ func scanRuns(runsDir string, only, ownIDs []string) []Run {
 		if !realDirectory(dir) {
 			continue
 		}
-		v, _ := Classify(dir, contains(ownIDs, id))
+		v, _ := Classify(dir, slices.Contains(ownIDs, id))
 		result = append(result, v)
 	}
 	return result
 }
 
-func contains(ids []string, id string) bool {
-	for _, v := range ids {
-		if v == id {
-			return true
+// newestMetadata returns the newest of since and the run's state and audit log mtimes.
+func newestMetadata(dir string, since time.Time) time.Time {
+	newest := since
+	for _, name := range []string{"state.json", "audit.log"} {
+		if info, err := os.Stat(filepath.Join(dir, name)); err == nil && info.ModTime().After(newest) {
+			newest = info.ModTime()
 		}
 	}
-	return false
+	return newest
 }
 
 func deleteTree(runsDir, target string) error {

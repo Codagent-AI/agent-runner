@@ -72,7 +72,7 @@ func ListForDir(projectDir string) ([]RunInfo, error) {
 
 	var results []RunInfo
 	for _, entry := range entries {
-		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+		if !entry.IsDir() || !ValidID(entry.Name()) {
 			continue
 		}
 		sessionID := entry.Name()
@@ -217,6 +217,12 @@ func parseStartTime(sessionID string) time.Time {
 	}
 
 	return time.Time{}
+}
+
+// ValidID reports whether id can name a run directory directly under runs/.
+// Dot-prefixed names are reserved for retention trash and never name a run.
+func ValidID(id string) bool {
+	return id != "" && !strings.HasPrefix(id, ".") && !strings.ContainsAny(id, "/\\") && !strings.Contains(id, "..")
 }
 
 // StartTimeFromID extracts the timestamp encoded in a run ID.

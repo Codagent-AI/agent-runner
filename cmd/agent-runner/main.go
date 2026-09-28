@@ -45,6 +45,7 @@ import (
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/runretention"
+	"github.com/codagent/agent-runner/internal/runs"
 	"github.com/codagent/agent-runner/internal/runview"
 	"github.com/codagent/agent-runner/internal/stateio"
 	"github.com/codagent/agent-runner/internal/themeprompt"
@@ -1627,7 +1628,7 @@ func execStartIntake() int {
 // resolveInspectSession resolves a run ID to its session and project
 // directories, using the same rules as --resume (cwd's project dir only).
 func resolveInspectSession(runID string) (sessionDir, projectDir string, err error) {
-	if strings.HasPrefix(runID, ".") || strings.ContainsAny(runID, "/\\") || runID == ".." || strings.Contains(runID, "..") {
+	if !runs.ValidID(runID) {
 		return "", "", fmt.Errorf("invalid run ID: %s", runID)
 	}
 
@@ -1885,7 +1886,7 @@ func resolveResumeStatePath(sessionID string) (string, error) {
 	encoded := audit.EncodePath(cwd)
 	runsDir := filepath.Join(home, ".agent-runner", "projects", encoded, "runs")
 
-	if strings.HasPrefix(sessionID, ".") || strings.ContainsAny(sessionID, "/\\") || sessionID == ".." || strings.Contains(sessionID, "..") {
+	if !runs.ValidID(sessionID) {
 		return "", fmt.Errorf("invalid session ID: %s", sessionID)
 	}
 	stateFile := filepath.Join(runsDir, sessionID, "state.json")

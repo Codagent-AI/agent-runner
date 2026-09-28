@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/codagent/agent-runner/internal/runlock"
@@ -23,6 +22,10 @@ const (
 	Resumable   Class = "resumable"
 	Stateless   Class = "stateless"
 )
+
+func (c Class) protected() bool {
+	return c == Active || c == LockUnknown || c == Damaged
+}
 
 type Run struct {
 	ID           string
@@ -47,7 +50,8 @@ func Classify(dir string, ownLock bool) (Run, error) {
 		r.Class = Active
 		return r, nil
 	}
-	stateInfo, statErr := os.Lstat(filepath.Join(dir, "state.json"))
+	statePath := filepath.Join(dir, "state.json")
+	stateInfo, statErr := os.Lstat(statePath)
 	if errors.Is(statErr, os.ErrNotExist) {
 		return r, nil
 	} else if statErr != nil {
@@ -58,12 +62,12 @@ func Classify(dir string, ownLock bool) (Run, error) {
 		r.Class = Damaged
 		return r, fmt.Errorf("state file is not a regular file in %s", dir)
 	}
-	state, err := stateio.ReadState(filepath.Join(dir, "state.json"))
+	state, err := stateio.ReadState(statePath)
 	if err != nil {
 		r.Class = Damaged
 		return r, err
 	}
-	if state.WorkflowFile == "" || (state.RunKind == "audit" && (state.Audit == nil || !validRunID(state.Audit.SourceRunID))) {
+	if state.WorkflowFile == "" || (state.RunKind == "audit" && (state.Audit == nil || !runs.ValidID(state.Audit.SourceRunID))) {
 		r.Class = Damaged
 		return r, fmt.Errorf("inconsistent state in %s", dir)
 	}
@@ -73,14 +77,14 @@ func Classify(dir string, ownLock bool) (Run, error) {
 		r.Class = Resumable
 	}
 	if state.Audit != nil {
-		if state.Audit.SourceRunID != "" && !validRunID(state.Audit.SourceRunID) {
+		if state.Audit.SourceRunID != "" && !runs.ValidID(state.Audit.SourceRunID) {
 			r.Class = Damaged
 			return r, fmt.Errorf("invalid audit source in %s", dir)
 		}
 		r.SourceRunID = state.Audit.SourceRunID
 		for i := range state.Audit.Links {
 			linkID := state.Audit.Links[i].AuditRunID
-			if !validRunID(linkID) {
+			if !runs.ValidID(linkID) {
 				r.Class = Damaged
 				return r, fmt.Errorf("invalid audit link in %s", dir)
 			}
@@ -88,8 +92,4 @@ func Classify(dir string, ownLock bool) (Run, error) {
 		}
 	}
 	return r, nil
-}
-
-func validRunID(id string) bool {
-	return id != "" && !strings.HasPrefix(id, ".") && id == filepath.Base(id) && !strings.ContainsAny(id, "/\\")
 }

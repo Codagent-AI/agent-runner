@@ -77,23 +77,17 @@ func Plan(all []Run, policy Policy, now time.Time) []Unit {
 					protected = true
 				}
 			}
-			switch r.Class {
-			case Active, LockUnknown, Damaged:
+			switch {
+			case r.Class.protected():
 				protected = true
-			case Finished:
-				if policy.MaxAge == 0 || !u.Activity.Before(now.Add(-policy.MaxAge)) {
-					allExpired = false
-				}
-			case Stateless:
+			case r.Class == Finished:
+				allExpired = allExpired && expired(u.Activity, policy.MaxAge, now)
+			case r.Class == Stateless:
 				allFinished = false
-				if policy.MaxAge == 0 || !u.Activity.Before(now.Add(-policy.MaxAge)) {
-					allExpired = false
-				}
-			case Resumable:
+				allExpired = allExpired && expired(u.Activity, policy.MaxAge, now)
+			case r.Class == Resumable:
 				allFinished = false
-				if policy.ResumableMaxAge == 0 || !u.Activity.Before(now.Add(-policy.ResumableMaxAge)) {
-					allExpired = false
-				}
+				allExpired = allExpired && expired(u.Activity, policy.ResumableMaxAge, now)
 			}
 		}
 		if protected {
@@ -151,4 +145,9 @@ func newestStart(u *Unit) time.Time {
 		}
 	}
 	return t
+}
+
+// expired reports whether activity is older than limit; a zero limit never expires.
+func expired(activity time.Time, limit time.Duration, now time.Time) bool {
+	return limit != 0 && activity.Before(now.Add(-limit))
 }
