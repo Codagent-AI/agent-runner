@@ -43,6 +43,11 @@ func LoadRunRetentionAt(path string) (RunRetention, bool, error) {
 	if err := yaml.Unmarshal(body, &doc); err != nil {
 		return RunRetention{}, false, err
 	}
+	// An empty or comment-only file cannot hold an opt-out and is equivalent to
+	// a missing file under the settings-file contract.
+	if len(doc.Content) == 0 {
+		return RunRetention{}, true, nil
+	}
 	if len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
 		return RunRetention{}, false, errors.New("settings root must be a mapping")
 	}
