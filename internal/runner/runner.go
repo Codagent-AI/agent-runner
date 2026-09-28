@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -345,11 +344,6 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		return nil, fmt.Errorf("create session dir: %w", err)
 	}
 	cleanupSession := newRunSessionCleanup(sessionDir, opts)
-	if err := materializeBundledAssets(sessionDir, opts.WorkflowFile); err != nil {
-		cleanupSession(nil)
-		return nil, err
-	}
-
 	activePID, lockErr := runlock.Acquire(sessionDir)
 	switch {
 	case lockErr != nil:
@@ -359,6 +353,12 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		return nil, fmt.Errorf("acquire run lock in %s: %w", sessionDir, lockErr)
 	case activePID > 0:
 		return nil, fmt.Errorf("run already in progress (PID %d) in %s; wait for it to finish or kill the process before resuming", activePID, sessionDir)
+	}
+	// Only the lock holder writes bundled assets, so a second runner never rewrites a
+	// script while the holder executes it.
+	if err := materializeBundledAssets(sessionDir, opts.WorkflowFile); err != nil {
+		cleanupSession(nil)
+		return nil, err
 	}
 	if err := cleanupCrashedInteractiveAttempt(sessionDir, opts); err != nil {
 		cleanupSession(nil)
@@ -1152,39 +1152,7 @@ func materializeBundledAssets(sessionDir, workflowFile string) error {
 	if !ok || namespace == "" {
 		return fmt.Errorf("builtin workflow has no namespace: %s", rel)
 	}
-	root := filepath.Join(sessionDir, "bundled", namespace)
-	marker := filepath.Join(root, ".complete")
-	if _, err := os.Stat(marker); err == nil {
-		return nil
-	}
-	assets, err := builtinworkflows.ListAssets(namespace)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		return fmt.Errorf("create bundled asset root: %w", err)
-	}
-	for _, asset := range assets {
-		data, err := builtinworkflows.ReadAsset(path.Join(namespace, asset))
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(root, filepath.FromSlash(asset))
-		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-			return fmt.Errorf("create bundled asset directory: %w", err)
-		}
-		mode := os.FileMode(0o600)
-		if strings.HasSuffix(asset, ".sh") {
-			mode = 0o700
-		}
-		if err := os.WriteFile(target, data, mode); err != nil {
-			return fmt.Errorf("write bundled asset %s: %w", target, err)
-		}
-	}
-	if err := os.WriteFile(marker, nil, 0o600); err != nil {
-		return fmt.Errorf("write bundled asset completion marker: %w", err)
-	}
-	return nil
+	return builtinworkflows.MaterializeNamespace(sessionDir, namespace)
 }
 
 type defaultLogger struct{}

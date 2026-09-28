@@ -39,6 +39,9 @@ def verify_results(source, audit_dir, link):
     require(not metadata.get("warning") and not link.get("warning"),
             "audit completed with an execution warning")
     request = read_object(audit_dir / "request.json")
+    require(request.get("auditor") == {"cli": "codex", "model": "smoke-model",
+                                        "reasoning_effort": "low"},
+            f"audit resolved a non-fixture auditor: {request.get('auditor')}")
     matching_identity(request, identity, "request")
     provenance = request.get("runner_source", {})
     require(provenance.get("launch_root") == "/agent-runner-source"

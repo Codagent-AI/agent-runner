@@ -92,6 +92,60 @@ func TestControlServerDeactivationCancelsAttemptContext(t *testing.T) {
 	}
 }
 
+func TestControlServerRejectsCompletionForAgentCallOnlyAttempt(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+	attempt := server.ActivateAttempt(context.Background(), "headless", AttemptOptions{AgentCallEligible: true})
+	request := &controlRequest{Type: MessageCompleteStep, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "complete"}
+
+	response := exchange(t, server.SocketPath(), request)
+	if response.OK || !strings.Contains(response.Error, "step complete is not available for the active step attempt; autonomous steps finish when the agent exits") {
+		t.Fatalf("completion response = %#v", response)
+	}
+	if retry := exchange(t, server.SocketPath(), request); retry.OK {
+		t.Fatalf("completion retry was accepted: %#v", retry)
+	}
+	select {
+	case completion := <-server.Completions():
+		t.Fatalf("rejected completion was delivered: %#v", completion)
+	default:
+	}
+}
+
+func TestControlServerCompletionEligibleAttemptAcceptsCompletion(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+	attempt := server.ActivateAttempt(context.Background(), "interactive", AttemptOptions{CompletionEligible: true})
+	response := exchange(t, server.SocketPath(), &controlRequest{Type: MessageCompleteStep, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "complete"})
+	if !response.OK {
+		t.Fatalf("completion response = %#v", response)
+	}
+	select {
+	case completion := <-server.Completions():
+		if completion.AttemptID != attempt.ID {
+			t.Fatalf("completion = %#v, want attempt %q", completion, attempt.ID)
+		}
+	default:
+		t.Fatal("accepted completion was not delivered")
+	}
+}
+
+func TestControlServerActivationDrainsPreviousCompletion(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+	first := server.ActivateWithCheckpoint("first", nil)
+	response := exchange(t, server.SocketPath(), &controlRequest{Type: MessageCompleteStep, RunID: first.RunID, StepID: first.StepID, Token: first.Token, RequestID: "complete-first"})
+	if !response.OK {
+		t.Fatalf("first completion response = %#v", response)
+	}
+	server.ActivateWithCheckpoint("second", nil)
+	select {
+	case completion := <-server.Completions():
+		t.Fatalf("previous completion survived activation: %#v", completion)
+	default:
+	}
+}
+
 func TestControlServerAdmitsAgentCallToActiveAttemptHandler(t *testing.T) {
 	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
 	defer server.Close()
@@ -126,8 +180,9 @@ func TestControlServerStagesRouteThenFreezesItBeforeCompletionAcknowledgement(t 
 	}
 	store := intakeroute.NewStore(runDir)
 	attempt := server.ActivateAttempt(context.Background(), "plan", AttemptOptions{
-		RouteEligible: true,
-		RouteStore:    store,
+		CompletionEligible: true,
+		RouteEligible:      true,
+		RouteStore:         store,
 		RouteValidation: &intakeroute.ValidateOptions{
 			RunDir: runDir, ParentRunID: "run", IntakeWorkflow: "core:intake",
 			RequestPath: filepath.Join(runDir, "route-request.json"),
@@ -415,7 +470,7 @@ func TestControlRequestRegistrySeparatesCompletionAndAgentCallIDs(t *testing.T) 
 	defer server.Close()
 	handler := &recordingCallHandler{requests: make(chan AgentCallRequest, 1)}
 	attempt := server.ActivateAttempt(context.Background(), "step", AttemptOptions{
-		AgentCallEligible: true, AgentCallHandler: handler,
+		CompletionEligible: true, AgentCallEligible: true, AgentCallHandler: handler,
 	})
 	if response := exchange(t, server.SocketPath(), &controlRequest{
 		Type: MessageCompleteStep, RunID: attempt.RunID, StepID: attempt.StepID,
@@ -1317,8 +1372,9 @@ func TestControlServerRejectsCompletionWhenFreezeFails(t *testing.T) {
 
 	store := &failingFreezeStore{inner: intakeroute.NewStore(runDir), freezeErr: errors.New("disk failure")}
 	attempt := server.ActivateAttempt(context.Background(), "plan", AttemptOptions{
-		RouteEligible: true,
-		RouteStore:    store,
+		CompletionEligible: true,
+		RouteEligible:      true,
+		RouteStore:         store,
 		RouteValidation: &intakeroute.ValidateOptions{
 			RunDir: runDir, ParentRunID: "run", IntakeWorkflow: "core:intake",
 			RequestPath: filepath.Join(runDir, "route-request.json"),

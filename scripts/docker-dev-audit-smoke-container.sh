@@ -10,16 +10,17 @@ protected="$project/protected-source.txt"
 mkdir -p "$project/.agent-runner" "$fake_bin"
 printf 'protected source\n' > "$protected"
 
+# The source step uses crosscheck; both audit model stages resolve lead.
 cat > "$project/.agent-runner/config.yaml" <<'YAML'
 profiles:
   default:
     agents:
-      lead:
+      crosscheck:
         default_mode: autonomous
         cli: codex
         model: smoke-model
         effort: low
-      crosscheck:
+      lead:
         default_mode: autonomous
         cli: codex
         model: smoke-model
@@ -49,9 +50,9 @@ case "$prompt" in
       echo "smoke: Linux audit sandbox permitted a protected write" >&2
       exit 44
     fi
-    result="$(python3 - "$prompt" <<'PY'
+    result="$(printf '%s' "$prompt" | python3 -c '
 import json, sys
-package = json.loads(sys.argv[1].rsplit("\n\n", 1)[1])
+package = json.loads(sys.stdin.read().rsplit("\n\n", 1)[1])
 print(json.dumps({
     "batch_id": package["batch_id"],
     "observations": [{
@@ -64,7 +65,7 @@ print(json.dumps({
         "evidence_coverage": "partial"
     } for leaf in package["leaves"]]
 }))
-PY
+'
 )"
     ;;
   "Investigate only reproducible Agent Runner defects"*) result='{"candidates":[]}' ;;

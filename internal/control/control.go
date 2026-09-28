@@ -163,9 +163,10 @@ type RouteStore interface {
 }
 
 type AttemptOptions struct {
-	Checkpoint        func() (cli.Checkpoint, error)
-	AgentCallEligible bool
-	AgentCallHandler  AgentCallHandler
+	Checkpoint         func() (cli.Checkpoint, error)
+	CompletionEligible bool
+	AgentCallEligible  bool
+	AgentCallHandler   AgentCallHandler
 	// RouteEligible is set only by the runner after establishing that this is
 	// the top-level built-in intake step. The request itself never grants it.
 	RouteEligible   bool
@@ -176,6 +177,7 @@ type AttemptOptions struct {
 type attemptState struct {
 	Attempt
 	completionAccepted bool
+	completionEligible bool
 	acceptedRequestID  string
 	checkpoint         func() (cli.Checkpoint, error)
 	agentCallEligible  bool
@@ -323,7 +325,7 @@ func (s *ControlServer) ActivateWithCheckpoint(stepID string, checkpoint func() 
 // Activate rotates the credential and binds an attempt lifetime plus the
 // durability checkpoint captured synchronously when completion is accepted.
 func (s *ControlServer) Activate(ctx context.Context, stepID string, checkpoint func() (cli.Checkpoint, error)) Attempt {
-	return s.ActivateAttempt(ctx, stepID, AttemptOptions{Checkpoint: checkpoint})
+	return s.ActivateAttempt(ctx, stepID, AttemptOptions{Checkpoint: checkpoint, CompletionEligible: true})
 }
 
 // ActivateAttempt rotates the credential and binds all Runner-owned controls
@@ -345,8 +347,17 @@ func (s *ControlServer) ActivateAttempt(ctx context.Context, stepID string, opti
 	previous := s.active
 	s.active = &attemptState{
 		Attempt: attempt, checkpoint: options.Checkpoint, cancel: cancel,
-		agentCallEligible: options.AgentCallEligible, agentCallHandler: options.AgentCallHandler,
+		completionEligible: options.CompletionEligible,
+		agentCallEligible:  options.AgentCallEligible, agentCallHandler: options.AgentCallHandler,
 		routeEligible: options.RouteEligible, routeStore: options.RouteStore, routeValidation: options.RouteValidation,
+	}
+drainCompletions:
+	for {
+		select {
+		case <-s.completions:
+		default:
+			break drainCompletions
+		}
 	}
 	s.mu.Unlock()
 	if previous != nil {
@@ -601,6 +612,11 @@ func (s *ControlServer) handleAgentCallOp(
 }
 
 func (s *ControlServer) handleCompletion(connection net.Conn, request *controlRequest, active *attemptState, cacheKey string) {
+	if !active.completionEligible {
+		s.mu.Unlock()
+		s.reject(connection, "step complete is not available for the active step attempt; autonomous steps finish when the agent exits", request)
+		return
+	}
 	if active.completionAccepted {
 		receipt := active.acceptedRequestID
 		s.mu.Unlock()

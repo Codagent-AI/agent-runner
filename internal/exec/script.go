@@ -3,7 +3,6 @@ package exec
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -213,23 +212,14 @@ func resolveScriptPath(script string, ctx *model.ExecutionContext) (string, erro
 	return resolved, nil
 }
 
+// materializeAsset returns the session path of a builtin script. The script may
+// call helpers beside it, which a run whose top-level workflow is in another
+// namespace has not materialized yet, so the whole namespace is brought along.
 func materializeAsset(sessionDir, namespace, relAsset string) (string, error) {
-	data, err := builtinworkflows.ReadAsset(path.Join(namespace, relAsset))
-	if err != nil {
+	if err := builtinworkflows.MaterializeNamespace(sessionDir, namespace); err != nil {
 		return "", err
 	}
-	target := filepath.Join(sessionDir, "bundled", namespace, filepath.FromSlash(relAsset))
-	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-		return "", fmt.Errorf("create bundled asset directory: %w", err)
-	}
-	mode := os.FileMode(0o600)
-	if strings.HasSuffix(relAsset, ".sh") {
-		mode = 0o700
-	}
-	if err := os.WriteFile(target, data, mode); err != nil {
-		return "", fmt.Errorf("write bundled asset %s: %w", target, err)
-	}
-	return target, nil
+	return builtinworkflows.WriteAsset(sessionDir, namespace, relAsset)
 }
 
 func buildScriptInput(step *model.Step, ctx *model.ExecutionContext) ([]byte, error) {

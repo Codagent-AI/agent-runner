@@ -293,12 +293,12 @@ func TestCoreVerifyChangeAcceptanceRoundsAreWorkflowSteps(t *testing.T) {
 	if reset == nil {
 		t.Fatal("reset-round-evidence step not found")
 	}
-	for _, file := range []string{"acceptance-round-status.txt", "acceptance-test.md", "acceptance-handoff.md"} {
+	for _, file := range []string{"acceptance-round-status.txt", "acceptance-handoff.md"} {
 		if !strings.Contains(reset.Command, "{{session_dir}}/output/"+file) {
 			t.Errorf("reset-round-evidence does not clear %s: %q", file, reset.Command)
 		}
 	}
-	for _, baseline := range []string{"acceptance-flow-evidence.md", "acceptance-findings.md"} {
+	for _, baseline := range []string{"exploration-log.md", "acceptance-tested-revision.txt", "acceptance-findings.md"} {
 		if strings.Contains(reset.Command, baseline) {
 			t.Errorf("reset-round-evidence must keep the tester baseline %s: %q", baseline, reset.Command)
 		}
@@ -315,11 +315,14 @@ func TestCoreVerifyChangeAcceptanceRoundsAreWorkflowSteps(t *testing.T) {
 		"`{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`",
 		"evidence directory: `{{session_dir}}/output/`",
 		"`{{session_dir}}/output/acceptance-assumptions.md`",
-		"`full` in round index 0",
-		"acceptance-impact-scope.md",
-		"acceptance-flow-evidence.md",
-		"`evidence-only`",
-		"test plan was structurally validated before implementation",
+		"`{{session_dir}}/output/acceptance-tested-revision.txt`",
+		"Acceptance is exploratory",
+		"nobody hands you a list of cases to run",
+		"never to decide what correct means",
+		"prior exploration log as history rather than as coverage",
+		"every user-visible requirement or scenario that the approved specs add or modify at least once",
+		"as a limitation with its reason",
+		"the coverage floor does not apply again",
 		"`{{session_dir}}/output/acceptance-round-status.txt`",
 		"`READY <sha>`",
 		"`NOT_READY`",
@@ -330,15 +333,21 @@ func TestCoreVerifyChangeAcceptanceRoundsAreWorkflowSteps(t *testing.T) {
 		t.Fatalf("acceptance-fix = %+v, want an autonomous lead-agent step", fix)
 	}
 	requirePromptContains(t, fix.ID, fix.Prompt,
-		"codagent:implement-with-tdd",
+		"When fixing an implementation defect found by acceptance testing, add unit regression coverage",
 		"{{artifact_validation_instruction}}",
 		"`[{{step_id}}]`",
 		"Do not run Agent Validator",
 		"do not push",
-		"`{{session_dir}}/output/acceptance-impact-scope.md`",
-		"`targeted`",
-		"`evidence-only`",
+		"Do not name a scope for the next round",
+		"may not be dismissed as \"not a defect\"",
+		"a decision needed from the user, with your reasoning",
+		"Do not audit the tester's evidence files for completeness",
 	)
+	for _, retired := range []string{"acceptance-impact-scope.md", "acceptance-flow-evidence.md", "`targeted`", "`evidence-only`", "AT-", "implement-with-tdd"} {
+		if strings.Contains(fix.Prompt, retired) || strings.Contains(tester.Prompt, retired) {
+			t.Errorf("acceptance prompts mention retired machinery %q", retired)
+		}
+	}
 
 	for _, id := range []string{"acceptance-push", "verify-acceptance-pr"} {
 		step := findStep(workflow.Steps, id)
@@ -357,15 +366,115 @@ func TestCoreVerifyChangeOpenDraftPRPushesDirectly(t *testing.T) {
 	requirePromptContains(t, step.ID, step.Prompt,
 		"directly with `git` and `gh`",
 		"gh pr create --draft",
+		"gh api --method PATCH",
+		"only the first ordered pair is replaced; later pairs are left unchanged",
+		"prepend",
+		"{{session_dir}}/bundled/core/update-pr-body.sh",
+		"--body-file",
+		"<!-- agent-runner:generated-body:start -->",
+		"<!-- agent-runner:generated-body:end -->",
+		"task-delivery/*.accepted",
 		"gh pr ready --undo",
 		"preserve its base branch",
 		"its head SHA equals local `HEAD`",
 		"REPAIR_BLOCKED",
 	)
+	if strings.Contains(step.Prompt, "gh pr edit <number>") {
+		t.Error("open-draft-pr must not invoke gh pr edit")
+	}
 
 	verify := findStep(workflow.Steps, "verify-draft-pr")
 	if verify == nil || verify.Script != "check-draft-pr.sh" || verify.ScriptInputs["attempts"] != "3" || verify.Capture != "pr_url" {
 		t.Fatalf("verify-draft-pr = %+v, want check-draft-pr.sh with retries capturing pr_url", verify)
+	}
+}
+
+func TestCoreUpdatePRBodyScript(t *testing.T) {
+	const start = "<!-- agent-runner:generated-body:start -->"
+	const end = "<!-- agent-runner:generated-body:end -->"
+	const block = start + "\nFresh delivery\n" + end + "\n"
+	for _, tc := range []struct {
+		name, oldBody, wantBody, failStep string
+	}{
+		{"marked body", "Intro\n" + start + "\nStale delivery\n" + end + "\nRefs #174\n<!-- agent-factory:claim:abc -->\n", "Intro\n" + block + "Refs #174\n<!-- agent-factory:claim:abc -->\n", ""},
+		{"unicode around marked body", "🤖 Intro — note\n" + start + "\nStale delivery\n" + end + "\nRefs #174\n<!-- agent-factory:claim:abc -->\n", "🤖 Intro — note\n" + block + "Refs #174\n<!-- agent-factory:claim:abc -->\n", ""},
+		{"unmarked body", "Refs #174\n<!-- agent-factory:claim:abc -->\n", block + "\nRefs #174\n<!-- agent-factory:claim:abc -->\n", ""},
+		{"start marker only", start + "\nRefs #174\n", block + "\n" + start + "\nRefs #174\n", ""},
+		{"end marker only", end + "\nRefs #174\n", block + "\n" + end + "\nRefs #174\n", ""},
+		{"reversed markers", end + "\nOld\n" + start + "\n", block + "\n" + end + "\nOld\n" + start + "\n", ""},
+		{"duplicated markers", start + "\nA\n" + end + "\nmid\n" + start + "\nB\n" + end + "\ntail\n", block + "mid\n" + start + "\nB\n" + end + "\ntail\n", ""},
+		{"empty body", "", block, ""},
+		{"view fails", "", "", "view"},
+		{"patch fails", "", "", "api"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := writeAssetScript(t, "core/update-pr-body.sh")
+			dir := t.TempDir()
+			binDir := filepath.Join(dir, "bin")
+			if err := os.Mkdir(binDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			oldFile := filepath.Join(dir, "old")
+			blockFile := filepath.Join(dir, "block")
+			argsFile := filepath.Join(dir, "args")
+			bodyFile := filepath.Join(dir, "patched")
+			mustWriteFile(t, oldFile, tc.oldBody)
+			mustWriteFile(t, blockFile, block)
+			writeFakeBinary(t, binDir, "gh", `#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_GH_ARGS"
+case "$1 $2" in
+  'pr view')
+    [ "${FAKE_GH_FAIL:-}" != view ] || exit 34
+    [ "$3" = 174 ] && [ "$4" = --json ] && [ "$5" = body ] && [ "$6" = -q ] && [ "$7" = .body ] || exit 36
+    cat "$FAKE_GH_OLD"
+    printf '\n' ;;
+  'api --method')
+    [ "${FAKE_GH_FAIL:-}" != api ] || exit 35
+    [ "$3" = PATCH ] && [ "$4" = 'repos/{owner}/{repo}/pulls/174' ] && [ "$5" = -F ] || exit 31
+    case "$6" in body=@*) cat "${6#body=@}" > "$FAKE_GH_PATCHED" ;; *) exit 32 ;; esac
+    printf '{"body":"large response"}\n' ;;
+  *) exit 33 ;;
+esac
+`)
+			run := func() ([]byte, error) {
+				cmd := exec.Command("sh", script, "174", blockFile)
+				cmd.Dir = dir
+				cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_GH_OLD="+oldFile, "FAKE_GH_ARGS="+argsFile, "FAKE_GH_PATCHED="+bodyFile, "FAKE_GH_FAIL="+tc.failStep)
+				return cmd.CombinedOutput()
+			}
+			out, err := run()
+			if tc.failStep != "" {
+				if err == nil || !strings.Contains(string(out), "could not") {
+					t.Fatalf("gh failure = (%v, %q), want clear error", err, out)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("update failed: %v\n%s", err, out)
+			}
+			if diff := cmp.Diff("updated pull request body for #174\n", string(out)); diff != "" {
+				t.Errorf("script output (-want +got):\n%s", diff)
+			}
+			firstBody := readFile(t, bodyFile)
+			if diff := cmp.Diff(tc.wantBody, firstBody); diff != "" {
+				t.Errorf("body (-want +got):\n%s", diff)
+			}
+			calls := readFile(t, argsFile)
+			if !strings.Contains(calls, "api --method PATCH repos/{owner}/{repo}/pulls/174 -F body=@") || strings.Contains(calls, "pr edit") {
+				t.Errorf("gh calls = %q", calls)
+			}
+			mustWriteFile(t, oldFile, firstBody)
+			if err := os.Remove(bodyFile); err != nil {
+				t.Fatal(err)
+			}
+			out, err = run()
+			if err != nil {
+				t.Fatalf("rerun failed: %v\n%s", err, out)
+			}
+			if diff := cmp.Diff(firstBody, readFile(t, bodyFile)); diff != "" {
+				t.Errorf("rerun body (-first +second):\n%s", diff)
+			}
+		})
 	}
 }
 
@@ -424,7 +533,8 @@ func TestCoreAcceptanceGateScript(t *testing.T) {
 		repo, head := gitRepo(t)
 		evidence = t.TempDir()
 		mustWriteFile(t, filepath.Join(evidence, "acceptance-round-status.txt"), "READY "+head+"\n")
-		mustWriteFile(t, filepath.Join(evidence, "acceptance-test.md"), "tested\n")
+		mustWriteFile(t, filepath.Join(evidence, "acceptance-tested-revision.txt"), head+"\n")
+		mustWriteFile(t, filepath.Join(evidence, "exploration-log.md"), "explored\n")
 		mustWriteFile(t, filepath.Join(evidence, "acceptance-handoff.md"), "tester handoff\n")
 		return repo, evidence
 	}
@@ -465,11 +575,25 @@ func TestCoreAcceptanceGateScript(t *testing.T) {
 			want: "not 'READY",
 		},
 		{
-			name: "acceptance test evidence missing",
+			name: "exploration log missing",
 			mutate: func(t *testing.T, _, evidence string) {
-				removeFile(t, filepath.Join(evidence, "acceptance-test.md"))
+				removeFile(t, filepath.Join(evidence, "exploration-log.md"))
 			},
-			want: "acceptance-test.md is missing or empty",
+			want: "exploration-log.md is missing or empty",
+		},
+		{
+			name: "tester did not record the tested revision",
+			mutate: func(t *testing.T, _, evidence string) {
+				removeFile(t, filepath.Join(evidence, "acceptance-tested-revision.txt"))
+			},
+			want: "acceptance-tested-revision.txt names ''",
+		},
+		{
+			name: "tested revision is an earlier pass",
+			mutate: func(t *testing.T, _, evidence string) {
+				mustWriteFile(t, filepath.Join(evidence, "acceptance-tested-revision.txt"), "0123456789012345678901234567890123456789\n")
+			},
+			want: "acceptance-tested-revision.txt names '0123456789012345678901234567890123456789'",
 		},
 		{
 			name: "handoff missing",
