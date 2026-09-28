@@ -446,6 +446,26 @@ func TestCollectorPersistsRunEndOutcomeAcrossRehydration(t *testing.T) {
 	assertSession("rehydrated")
 }
 
+func TestCollectorRunEndWithoutOpenSessionKeepsHistoricalOutcome(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(dir, "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, map[string]any{"execution_session_id": "execution-1"}))
+	c.Process(event(audit.EventRunEnd, started.Add(time.Second), map[string]any{"outcome": "failed"}))
+
+	NewCollector(dir, "run", "workflow", started.Add(time.Hour)).
+		Process(event(audit.EventRunEnd, started.Add(time.Hour), map[string]any{"outcome": "success", "completed_with_warnings": true}))
+
+	artifact := readArtifact(t, dir)
+	if len(artifact.Sessions) != 1 {
+		t.Fatalf("sessions = %d, want 1", len(artifact.Sessions))
+	}
+	got := artifact.Sessions[0]
+	if got.Outcome != "failed" || got.CompletedWithWarnings || got.Status != SessionClosed {
+		t.Fatalf("historical session = outcome %q warnings %v status %q, want failed/false/%s", got.Outcome, got.CompletedWithWarnings, got.Status, SessionClosed)
+	}
+}
+
 func TestCollectorRehydratesAgentCallsAcrossResumeAndReadsOlderSchemaV1(t *testing.T) {
 	dir := t.TempDir()
 	started := mustTime(t, "2026-07-17T10:00:00Z")

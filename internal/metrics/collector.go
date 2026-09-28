@@ -185,8 +185,8 @@ func (c *Collector) Process(event audit.Event) audit.Event {
 		c.refreshAggregatesLocked()
 		c.persist()
 	case audit.EventRunEnd:
-		if len(c.artifact.Sessions) > 0 {
-			session := &c.artifact.Sessions[len(c.artifact.Sessions)-1]
+		if n := len(c.artifact.Sessions); n > 0 && c.artifact.Sessions[n-1].Status == SessionOpen {
+			session := &c.artifact.Sessions[n-1]
 			session.Outcome = stringValue(event.Data["outcome"])
 			session.CompletedWithWarnings, _ = event.Data["completed_with_warnings"].(bool)
 		}
