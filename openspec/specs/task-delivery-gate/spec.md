@@ -166,11 +166,15 @@ The per-task validator repair (`fix-violations` in `core/run-validator`) SHALL b
 
 ### Requirement: Downstream steps acknowledge external delivery
 
-`core/implement-change`'s task-index step SHALL NOT tell the lead agent that every task produced a local implementation commit. It SHALL allow for tasks accepted through external delivery. When `verify-task-commit` accepts a record, it SHALL mark it accepted next to the record (`<record>.accepted`, holding the accepting output). Each fresh task start SHALL get a record path unique to that task execution, so it never reuses or removes another execution's record or marker. `core/verify-change`'s draft pull request step SHALL be instructed to read only the accepted external deliveries in the run's session directory, never records the gate rejected, and to list each record's repository, commits, and reported pull request in the draft pull request body, marked as delivered in another repository. When there are no records, the pull request body SHALL NOT include that section.
+`core/implement-change`'s task-index step SHALL NOT tell the lead agent that every task produced a local implementation commit. It SHALL allow for tasks accepted through external delivery. When `verify-task-commit` accepts a record, it SHALL mark it accepted next to the record (`<record>.accepted`, holding the accepting output). Each fresh task start SHALL get a record path unique to that task execution, so it never reuses or removes another execution's record or marker. `core/verify-change`'s draft pull request step SHALL be instructed to read only the accepted external deliveries in the run's session directory, never records the gate rejected, and to list each record's repository, commits, and reported pull request in the draft pull request body, marked as delivered in another repository. The step SHALL regenerate the marked generated body both when creating a pull request and when updating an existing one, keeping content outside the markers unchanged when both markers are present. When there are no accepted records, the pull request body SHALL NOT include that section.
 
 #### Scenario: Draft pull request lists external deliveries
 - **WHEN** a change run accepted one task through external delivery, and `open-draft-pr` runs in the same run
 - **THEN** the `open-draft-pr` prompt directs the agent to the run's external delivery records and to list them in the draft pull request body
+
+#### Scenario: Existing draft pull request drops stale delivery
+- **WHEN** `open-draft-pr` reruns on a branch with an existing pull request whose body lists a stale external delivery
+- **THEN** its prompt directs the agent to regenerate the marked body from the current accepted deliveries and rewrite it with `gh pr edit --body-file`, preserving content outside the markers
 
 #### Scenario: Task index wording allows external delivery
 - **WHEN** `complete-task-index` runs after a task was accepted through external delivery
@@ -198,4 +202,3 @@ This output SHALL appear as the step's output in the audit log and run views. Th
 #### Scenario: Record retained after the run
 - **WHEN** a run with an externally delivered task completes
 - **THEN** that task's external delivery record is still present in the run's session directory
-
