@@ -48,19 +48,17 @@ cleanup() {
     fi
   fi
 
-  if [[ "$final_status" == 0 ]]; then
-    if [[ "$owns_artifacts" == 1 ]]; then
-      # Files written under confinement may have restrictive modes.
-      chmod -R u+w -- "$ARTIFACT_DIR" 2>/dev/null
-      rm -rf -- "$ARTIFACT_DIR"
-      if [[ -e "$ARTIFACT_DIR" ]]; then
-        echo "smoke: could not remove artifact directory $ARTIFACT_DIR" >&2
-      else
-        echo "smoke: removed artifact directory $ARTIFACT_DIR" >&2
-      fi
-    fi
-  else
+  if [[ "$final_status" != 0 ]]; then
     echo "smoke: evidence retained in $ARTIFACT_DIR" >&2
+  elif [[ "$owns_artifacts" == 1 ]]; then
+    # Files written under confinement may have restrictive modes.
+    chmod -R u+w -- "$ARTIFACT_DIR" 2>/dev/null
+    rm -rf -- "$ARTIFACT_DIR"
+    if [[ -e "$ARTIFACT_DIR" ]]; then
+      echo "smoke: could not remove artifact directory $ARTIFACT_DIR" >&2
+    else
+      echo "smoke: removed artifact directory $ARTIFACT_DIR" >&2
+    fi
   fi
   exit "$final_status"
 }

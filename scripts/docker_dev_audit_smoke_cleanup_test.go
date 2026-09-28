@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -97,7 +98,7 @@ exec "$REAL_RM" "$@"
 
 var (
 	smokeTagPattern       = regexp.MustCompile(`^agent-runner-dev-audit-smoke:(\d{14}-\d+-\d+)$`)
-	smokeContainerPattern = regexp.MustCompile(`^--name=(agent-runner-dev-audit-smoke-(\d{14}-\d+-\d+))$`)
+	smokeContainerPattern = regexp.MustCompile(`^--name=(agent-runner-dev-audit-smoke-\d{14}-\d+-\d+)$`)
 )
 
 type smokeFixture struct {
@@ -112,7 +113,6 @@ type smokeFixture struct {
 type smokeResult struct {
 	exitCode int
 	stderr   string
-	stdout   string
 	calls    [][]string
 }
 
@@ -178,17 +178,24 @@ func (f *smokeFixture) command() *exec.Cmd {
 	return cmd
 }
 
-func (f *smokeFixture) run() smokeResult {
+func (f *smokeFixture) start() (*exec.Cmd, *bytes.Buffer) {
 	f.t.Helper()
 	cmd := f.command()
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
+	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	err := waitForCommandStart(cmd, 60*time.Second)
-	return f.result(err, stdout.String(), stderr.String())
+	if err := cmd.Start(); err != nil {
+		f.t.Fatal(err)
+	}
+	return cmd, &stderr
 }
 
-func (f *smokeFixture) result(err error, stdout, stderr string) smokeResult {
+func (f *smokeFixture) run() smokeResult {
+	f.t.Helper()
+	cmd, stderr := f.start()
+	return f.result(waitForCommand(cmd, 60*time.Second), stderr.String())
+}
+
+func (f *smokeFixture) result(err error, stderr string) smokeResult {
 	f.t.Helper()
 	code := 0
 	if err != nil {
@@ -198,7 +205,7 @@ func (f *smokeFixture) result(err error, stdout, stderr string) smokeResult {
 		}
 		code = exitErr.ExitCode()
 	}
-	return smokeResult{exitCode: code, stdout: stdout, stderr: stderr, calls: f.calls()}
+	return smokeResult{exitCode: code, stderr: stderr, calls: f.calls()}
 }
 
 func (f *smokeFixture) calls() [][]string {
@@ -229,13 +236,6 @@ func (f *smokeFixture) ownedArtifactDirs() []string {
 	return matches
 }
 
-func waitForCommandStart(cmd *exec.Cmd, timeout time.Duration) error {
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	return waitForCommand(cmd, timeout)
-}
-
 func writeExecutable(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
@@ -252,10 +252,14 @@ func makeTreeWritable(root string) {
 	})
 }
 
+func hasCallPrefix(call, prefix []string) bool {
+	return len(call) >= len(prefix) && slices.Equal(call[:len(prefix)], prefix)
+}
+
 func callsOf(calls [][]string, prefix ...string) [][]string {
 	var matched [][]string
 	for _, call := range calls {
-		if len(call) >= len(prefix) && strings.Join(call[:len(prefix)], "\x00") == strings.Join(prefix, "\x00") {
+		if hasCallPrefix(call, prefix) {
 			matched = append(matched, call)
 		}
 	}
@@ -264,7 +268,7 @@ func callsOf(calls [][]string, prefix ...string) [][]string {
 
 func callIndex(calls [][]string, prefix ...string) int {
 	for i, call := range calls {
-		if len(call) >= len(prefix) && strings.Join(call[:len(prefix)], "\x00") == strings.Join(prefix, "\x00") {
+		if hasCallPrefix(call, prefix) {
 			return i
 		}
 	}
@@ -286,7 +290,7 @@ func buildTag(t *testing.T, calls [][]string) string {
 	return ""
 }
 
-func runImageAndName(t *testing.T, calls [][]string, tag string) string {
+func runContainerName(t *testing.T, calls [][]string, tag string) string {
 	t.Helper()
 	runs := callsOf(calls, "run")
 	if len(runs) != 1 {
@@ -355,9 +359,9 @@ func assertRunOwnedNaming(t *testing.T, calls [][]string) (tag, container string
 	if m == nil {
 		t.Fatalf("build tag %q is not a run-unique agent-runner-dev-audit-smoke tag", tag)
 	}
-	container = runImageAndName(t, calls, tag)
+	container = runContainerName(t, calls, tag)
 	if want := "agent-runner-dev-audit-smoke-" + m[1]; container != want {
-		t.Fatalf("container name %q does not share run id with tag %q", container, tag)
+		t.Fatalf("container name = %q, want %q to share the run id of tag %q", container, want, tag)
 	}
 	return tag, container
 }
@@ -446,7 +450,7 @@ func TestDevAuditSmokeCleanupKeepsCallerImageAndArtifactDir(t *testing.T) {
 			if tag := buildTag(t, res.calls); tag != callerImage {
 				t.Fatalf("build tag = %q, want %q", tag, callerImage)
 			}
-			container := runImageAndName(t, res.calls, callerImage)
+			container := runContainerName(t, res.calls, callerImage)
 			assertOwnedDockerMutations(t, res.calls, "", container, callerImage)
 			if rms := callsOf(res.calls, "image", "rm"); len(rms) != 0 {
 				t.Fatalf("caller-owned image must not be removed: %v", rms)
@@ -471,13 +475,7 @@ func TestDevAuditSmokeCleanupSIGTERMStopsOwnContainerAndCleansUp(t *testing.T) {
 	}
 	f := newSmokeFixture(t)
 	f.env["FAKE_DOCKER_RUN_BLOCK"] = "1"
-	cmd := f.command()
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
+	cmd, stderr := f.start()
 	pidFile := filepath.Join(f.stateDir, "run.pid")
 	waitForPath(t, pidFile, 60*time.Second)
 	pidData, err := os.ReadFile(pidFile)
@@ -491,8 +489,7 @@ func TestDevAuditSmokeCleanupSIGTERMStopsOwnContainerAndCleansUp(t *testing.T) {
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
-	waitErr := waitForCommand(cmd, 45*time.Second)
-	res := f.result(waitErr, stdout.String(), stderr.String())
+	res := f.result(waitForCommand(cmd, 45*time.Second), stderr.String())
 	if res.exitCode != 143 {
 		t.Fatalf("exit code = %d, want 143\nstderr:\n%s", res.exitCode, res.stderr)
 	}
