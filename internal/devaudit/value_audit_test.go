@@ -16,21 +16,24 @@ func TestSelectedSessionOutcome(t *testing.T) {
 	}
 	cases := []struct {
 		name           string
+		hasSession     bool
 		sessionOutcome string
 		steps          []metrics.StepRecord
 		want           string
 	}{
-		{"warn-only failure with successful run", "success", []metrics.StepRecord{step("", "failed")}, "success"},
-		{"failed run", "failed", []metrics.StepRecord{step("", "success")}, "failed"},
-		{"aborted run", "aborted", []metrics.StepRecord{step("", "success")}, "aborted"},
-		{"legacy nested failure followed by success", "", []metrics.StepRecord{step("group", "failed"), step("", "success")}, "success"},
-		{"legacy final top-level failure", "", []metrics.StepRecord{step("", "success"), step("", "failed")}, "failed"},
-		{"no records", "", nil, "unknown"},
+		{name: "warn-only failure with successful run", hasSession: true, sessionOutcome: "success", steps: []metrics.StepRecord{step("", "failed")}, want: "success"},
+		{name: "failed run", hasSession: true, sessionOutcome: "failed", steps: []metrics.StepRecord{step("", "success")}, want: "failed"},
+		{name: "aborted run", hasSession: true, sessionOutcome: "aborted", steps: []metrics.StepRecord{step("", "success")}, want: "aborted"},
+		{name: "legacy nested failure followed by success", steps: []metrics.StepRecord{step("group", "failed"), step("", "success")}, want: "success"},
+		{name: "legacy final top-level failure", steps: []metrics.StepRecord{step("", "success"), step("", "failed")}, want: "failed"},
+		{name: "interrupted before any step", hasSession: true, want: "unknown"},
+		{name: "legacy nested failure with no top-level step", steps: []metrics.StepRecord{step("group", "failed")}, want: "failed"},
+		{name: "no records", want: "unknown"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			artifact := &metrics.Artifact{Steps: tc.steps}
-			if tc.sessionOutcome != "" {
+			if tc.hasSession {
 				artifact.Sessions = []metrics.SessionRecord{{ExecutionSessionID: "selected", Outcome: tc.sessionOutcome}}
 			}
 			if got := selectedSessionOutcome(artifact, "selected"); got != tc.want {

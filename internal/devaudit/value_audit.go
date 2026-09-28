@@ -437,12 +437,12 @@ func selectedSessionOutcome(artifact *metrics.Artifact, executionSessionID strin
 		if session.ExecutionSessionID != executionSessionID {
 			continue
 		}
-		seen = true
 		if session.Outcome != "" {
 			return session.Outcome
 		}
 	}
 	lastTopLevelOutcome := ""
+	nestedFailure := ""
 	for index := range artifact.Steps {
 		record := &artifact.Steps[index]
 		if record.ExecutionSessionID != executionSessionID {
@@ -451,11 +451,16 @@ func selectedSessionOutcome(artifact *metrics.Artifact, executionSessionID strin
 		seen = true
 		if record.Prefix == "" && record.Kind == "step" {
 			lastTopLevelOutcome = record.Outcome
+		} else if record.Prefix != "" && record.Kind == "step" && (record.Outcome == "failed" || record.Outcome == "aborted") {
+			nestedFailure = record.Outcome
 		}
 	}
 	if seen {
 		if lastTopLevelOutcome == "failed" || lastTopLevelOutcome == "aborted" {
 			return lastTopLevelOutcome
+		}
+		if lastTopLevelOutcome == "" && nestedFailure != "" {
+			return nestedFailure
 		}
 		return "success"
 	}
