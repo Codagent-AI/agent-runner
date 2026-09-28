@@ -38,7 +38,7 @@ steps:
     command: git rev-parse --verify HEAD
     capture: task_start_head
 
-  # Names this execution's external delivery record and removes any stale one.
+  # Reserves a record path unique to this task execution for its external delivery record.
   # It runs only on a fresh task start; resume keeps the capture and the record.
   - id: prepare-task-delivery
     script: prepare-task-delivery.sh
