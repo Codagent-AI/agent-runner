@@ -166,7 +166,7 @@ The per-task validator repair (`fix-violations` in `core/run-validator`) SHALL b
 
 ### Requirement: Downstream steps acknowledge external delivery
 
-`core/implement-change`'s task-index step SHALL NOT tell the lead agent that every task produced a local implementation commit. It SHALL allow for tasks accepted through external delivery. When `verify-task-commit` accepts a record, it SHALL mark it accepted next to the record (`<record>.accepted`, holding the accepting output), and a fresh task start SHALL remove any stale marker along with a stale record. `core/verify-change`'s draft pull request step SHALL be instructed to read only the accepted external deliveries in the run's session directory, never records the gate rejected, and to list each record's repository, commits, and reported pull request in the draft pull request body, marked as delivered in another repository. The step SHALL regenerate the marked generated body both when creating a pull request and when updating an existing one, keeping content outside the markers unchanged when both markers are present. When there are no accepted records, the pull request body SHALL NOT include that section.
+`core/implement-change`'s task-index step SHALL NOT tell the lead agent that every task produced a local implementation commit. It SHALL allow for tasks accepted through external delivery. When `verify-task-commit` accepts a record, it SHALL mark it accepted next to the record (`<record>.accepted`, holding the accepting output), and a fresh task start SHALL remove any stale marker along with a stale record. `core/verify-change`'s draft pull request step SHALL be instructed to read only the accepted external deliveries in the run's session directory, never records the gate rejected, and to list each record's repository, commits, and reported pull request in the draft pull request body, marked as delivered in another repository. The step SHALL regenerate the marked generated body both when creating a pull request and when updating an existing one. It SHALL update an existing body through the REST pulls PATCH endpoint, keeping content outside the markers unchanged when both markers are present. When the body lacks either marker, or the end marker comes before the start marker, it SHALL prepend the newly marked block and keep the previous body below it. When several ordered marker pairs are present, it SHALL replace only the first ordered pair and leave later pairs unchanged. When there are no accepted records, the pull request body SHALL NOT include that section.
 
 #### Scenario: Draft pull request lists external deliveries
 - **WHEN** a change run accepted one task through external delivery, and `open-draft-pr` runs in the same run
@@ -174,7 +174,23 @@ The per-task validator repair (`fix-violations` in `core/run-validator`) SHALL b
 
 #### Scenario: Existing draft pull request drops stale delivery
 - **WHEN** `open-draft-pr` reruns on a branch with an existing pull request whose body lists a stale external delivery
-- **THEN** its prompt directs the agent to regenerate the marked body from the current accepted deliveries and rewrite it with `gh pr edit --body-file`, preserving content outside the markers
+- **THEN** its prompt directs the agent to regenerate the marked body from the current accepted deliveries and rewrite it with `gh api --method PATCH ... -F body=@<file>`, preserving content outside the markers
+
+#### Scenario: Existing pull request body without markers is preserved
+- **WHEN** `open-draft-pr` updates an existing pull request whose body lacks the generated-body markers
+- **THEN** the marked block is inserted at the top and the previous body is kept below it
+
+#### Scenario: Existing pull request body with only one marker is preserved
+- **WHEN** the existing body contains only the start marker or only the end marker
+- **THEN** the new marked block is prepended and the previous body is kept verbatim below it
+
+#### Scenario: Reversed markers are treated as unmarked
+- **WHEN** the end marker comes before the start marker
+- **THEN** the new marked block is prepended and the previous body is kept below it
+
+#### Scenario: Only the first marker pair is replaced
+- **WHEN** the body contains two ordered marker pairs
+- **THEN** only the first pair is replaced and the second pair and all surrounding text are unchanged
 
 #### Scenario: Task index wording allows external delivery
 - **WHEN** `complete-task-index` runs after a task was accepted through external delivery
