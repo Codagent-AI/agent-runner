@@ -44,6 +44,8 @@ import (
 	"github.com/codagent/agent-runner/internal/prevalidate"
 	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/runner"
+	"github.com/codagent/agent-runner/internal/runretention"
+	"github.com/codagent/agent-runner/internal/runs"
 	"github.com/codagent/agent-runner/internal/runview"
 	"github.com/codagent/agent-runner/internal/stateio"
 	"github.com/codagent/agent-runner/internal/themeprompt"
@@ -425,7 +427,9 @@ func (l *realLogger) Printf(format string, args ...any) { fmt.Printf(format, arg
 func (l *realLogger) Errorf(format string, args ...any) { fmt.Fprintf(os.Stderr, format, args...) }
 
 func main() {
-	os.Exit(run())
+	code := run()
+	runretention.Finish(os.Stderr, 2*time.Second)
+	os.Exit(code)
 }
 
 func run() int {
@@ -1624,7 +1628,7 @@ func execStartIntake() int {
 // resolveInspectSession resolves a run ID to its session and project
 // directories, using the same rules as --resume (cwd's project dir only).
 func resolveInspectSession(runID string) (sessionDir, projectDir string, err error) {
-	if strings.ContainsAny(runID, "/\\") || runID == ".." || strings.Contains(runID, "..") {
+	if !runs.ValidID(runID) {
 		return "", "", fmt.Errorf("invalid run ID: %s", runID)
 	}
 
@@ -1882,7 +1886,7 @@ func resolveResumeStatePath(sessionID string) (string, error) {
 	encoded := audit.EncodePath(cwd)
 	runsDir := filepath.Join(home, ".agent-runner", "projects", encoded, "runs")
 
-	if strings.ContainsAny(sessionID, "/\\") || sessionID == ".." || strings.Contains(sessionID, "..") {
+	if !runs.ValidID(sessionID) {
 		return "", fmt.Errorf("invalid session ID: %s", sessionID)
 	}
 	stateFile := filepath.Join(runsDir, sessionID, "state.json")
@@ -2219,7 +2223,7 @@ func prepareFreshRun(req *freshRunRequest) (*runner.RunHandle, error) {
 	if log == nil {
 		log = &realLogger{}
 	}
-	return runner.PrepareRun(&workflow, params, &runner.Options{
+	handle, err := runner.PrepareRun(&workflow, params, &runner.Options{
 		ProfileOverride:       req.ProfileOverride,
 		ProfileStore:          profileStore,
 		WorkflowFile:          req.SourceRef,
@@ -2234,6 +2238,10 @@ func prepareFreshRun(req *freshRunRequest) (*runner.RunHandle, error) {
 		GlobExpander:          &realGlobExpander{},
 		Log:                   log,
 	})
+	if err == nil && req.SessionDir == "" {
+		runretention.StartBackground()
+	}
+	return handle, err
 }
 
 func isIntakeWorkflow(workflowFile string) bool {

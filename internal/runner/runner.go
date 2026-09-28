@@ -1,8 +1,11 @@
 package runner
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,6 +54,9 @@ type Options struct {
 	ProjectRoot       string
 	WorkingDir        string
 	SessionDir        string // Override session directory (for testing); computed automatically if empty.
+	Resume            bool
+	BeforeResumeLock  func() // test seam after initial state read, before the lock
+	ResumeSnapshot    []byte
 	Engine            engine.Engine
 	ProfileStore      *config.Config
 	ProfileOverride   config.ProfileOverride
@@ -304,6 +310,7 @@ type runState struct {
 	postFinalizationHook PostFinalizationHook
 }
 
+//nolint:gocognit,funlen // Setup validates, locks, and initializes one run in order.
 func initRunState(workflow *model.Workflow, params map[string]string, opts *Options) (*runState, error) {
 	if params == nil {
 		params = map[string]string{}
@@ -340,19 +347,52 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 		return nil, err
 	}
 
-	if err := os.MkdirAll(sessionDir, 0o750); err != nil {
-		return nil, fmt.Errorf("create session dir: %w", err)
+	if !opts.Resume {
+		if err := os.MkdirAll(sessionDir, 0o750); err != nil {
+			return nil, fmt.Errorf("create session dir: %w", err)
+		}
 	}
 	cleanupSession := newRunSessionCleanup(sessionDir, opts)
+	if opts.Resume && opts.BeforeResumeLock != nil {
+		opts.BeforeResumeLock()
+	}
 	activePID, lockErr := runlock.Acquire(sessionDir)
 	switch {
 	case lockErr != nil:
 		// Genuine I/O error inspecting or writing the lock — refuse rather
 		// than risk a second runner racing the same state file.
-		cleanupSession(nil)
+		if opts.Resume && errors.Is(lockErr, fs.ErrNotExist) {
+			return nil, fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
+		}
 		return nil, fmt.Errorf("acquire run lock in %s: %w", sessionDir, lockErr)
 	case activePID > 0:
 		return nil, fmt.Errorf("run already in progress (PID %d) in %s; wait for it to finish or kill the process before resuming", activePID, sessionDir)
+	}
+	if opts.Resume {
+		statePath := filepath.Join(sessionDir, "state.json")
+		if _, err := os.Stat(statePath); errors.Is(err, fs.ErrNotExist) {
+			cleanupSession(nil)
+			return nil, fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
+		}
+		state, err := stateio.ReadState(statePath)
+		if err != nil {
+			cleanupSession(nil)
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
+			}
+			return nil, err
+		}
+		if resumeAlreadyCompleted(statePath, &state) {
+			cleanupSession(nil)
+			return nil, ErrAlreadyCompleted
+		}
+		if len(opts.ResumeSnapshot) != 0 {
+			current, err := json.Marshal(state)
+			if err != nil || !bytes.Equal(current, opts.ResumeSnapshot) {
+				cleanupSession(nil)
+				return nil, ErrResumeStateChanged
+			}
+		}
 	}
 	// Only the lock holder writes bundled assets, so a second runner never rewrites a
 	// script while the holder executes it.

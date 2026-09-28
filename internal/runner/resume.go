@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -22,6 +23,10 @@ import (
 // Callers use errors.Is to distinguish it from other setup errors.
 var ErrAlreadyCompleted = errors.New("workflow already completed")
 
+var ErrSessionNotFound = errors.New("session not found")
+
+var ErrResumeStateChanged = errors.New("run state changed during resume; retry")
+
 // PrepareResume loads the workflow state from stateFilePath, resolves the
 // resume step, and calls PrepareRun to initialize the session. Returns a
 // RunHandle that callers can pass to ExecuteFromHandle.
@@ -33,6 +38,10 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 
 	if resumeAlreadyCompleted(stateFilePath, &state) {
 		return nil, ErrAlreadyCompleted
+	}
+	snapshot, err := json.Marshal(state)
+	if err != nil {
+		return nil, err
 	}
 
 	profileOverride := resumeProfileOverride(opts.ProfileOverride, state.ProfileSet)
@@ -75,6 +84,9 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		From:                   resumeState.fromStep,
 		WorkflowFile:           state.WorkflowFile,
 		SessionDir:             filepath.Dir(stateFilePath),
+		Resume:                 true,
+		BeforeResumeLock:       opts.BeforeResumeLock,
+		ResumeSnapshot:         snapshot,
 		IntakeHandoffContents:  state.IntakeHandoffContents,
 		IntakeHandoffDelivered: intakeHandoffDelivered,
 		IntakeParentRunID:      state.IntakeParentRunID,

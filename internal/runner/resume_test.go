@@ -3,16 +3,20 @@ package runner
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/exec"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/runlock"
+	"github.com/codagent/agent-runner/internal/runretention"
 	"github.com/codagent/agent-runner/internal/stateio"
 	"github.com/google/go-cmp/cmp"
 )
@@ -61,6 +65,144 @@ steps:
 	if got := handle.rs.workflow.Steps[0].Command; got != "echo v1" {
 		t.Fatalf("resumed command = %q, want exact recorded v1 command", got)
 	}
+}
+
+func TestResumeRetentionExclusion(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	workflowPath := filepath.Join(dir, "work-v1.0.yaml")
+	source := "name: work\nsteps:\n  - id: step\n    command: echo ok\n"
+	if err := os.WriteFile(workflowPath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	newRun := func() string {
+		t.Helper()
+		session := filepath.Join(dir, fmt.Sprintf("run-%d", time.Now().UnixNano()))
+		if err := os.Mkdir(session, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		state := model.RunState{WorkflowFile: workflowPath, WorkflowName: "work", CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{StepID: "step"}}}
+		if err := stateio.WriteState(&state, session); err != nil {
+			t.Fatal(err)
+		}
+		return session
+	}
+	t.Run("removed after read", func(t *testing.T) {
+		session := newRun()
+		_, err := PrepareResume(filepath.Join(session, "state.json"), &Options{BeforeResumeLock: func() {
+			if err := os.RemoveAll(session); err != nil {
+				t.Fatal(err)
+			}
+		}})
+		if !errors.Is(err, ErrSessionNotFound) {
+			t.Fatalf("got %v", err)
+		}
+		if _, err := os.Stat(session); !os.IsNotExist(err) {
+			t.Fatalf("session recreated: %v", err)
+		}
+	})
+	t.Run("completed after read", func(t *testing.T) {
+		session := newRun()
+		_, err := PrepareResume(filepath.Join(session, "state.json"), &Options{BeforeResumeLock: func() {
+			state, err := stateio.ReadState(filepath.Join(session, "state.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.Completed = true
+			if err := stateio.WriteState(&state, session); err != nil {
+				t.Fatal(err)
+			}
+		}})
+		if !errors.Is(err, ErrAlreadyCompleted) {
+			t.Fatalf("got %v", err)
+		}
+	})
+	t.Run("changed after read", func(t *testing.T) {
+		session := newRun()
+		_, err := PrepareResume(filepath.Join(session, "state.json"), &Options{BeforeResumeLock: func() {
+			state, err := stateio.ReadState(filepath.Join(session, "state.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.Params = map[string]string{"changed": "yes"}
+			if err := stateio.WriteState(&state, session); err != nil {
+				t.Fatal(err)
+			}
+		}})
+		if !errors.Is(err, ErrResumeStateChanged) {
+			t.Fatalf("got %v", err)
+		}
+	})
+}
+
+func TestResumeRetentionLockInterleavings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := t.TempDir()
+	workflow := filepath.Join(project, "work-v1.0.yaml")
+	if err := os.WriteFile(workflow, []byte("name: work\nsteps:\n  - id: step\n    command: echo ok\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runsDir := filepath.Join(home, ".agent-runner", "projects", "p", "runs")
+	if err := os.MkdirAll(runsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	newRun := func(id string) string {
+		t.Helper()
+		dir := filepath.Join(runsDir, id)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		state := model.RunState{RunID: id, WorkflowFile: workflow, WorkflowName: "work", CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{StepID: "step"}}}
+		if err := stateio.WriteState(&state, dir); err != nil {
+			t.Fatal(err)
+		}
+		stamp := time.Now().Add(-91 * 24 * time.Hour)
+		for _, p := range []string{filepath.Join(dir, "state.json"), dir} {
+			if err := os.Chtimes(p, stamp, stamp); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
+	}
+	now := time.Now()
+	statePath := filepath.Join(home, ".agent-runner", "retention", "state.json")
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	activate := func() {
+		if err := stateio.WriteJSONAtomic(statePath, map[string]time.Time{"activated_at": now.Add(-8 * 24 * time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("resume holds lock", func(t *testing.T) {
+		dir := newRun("resume-wins")
+		activate()
+		h, err := PrepareResume(filepath.Join(dir, "state.json"), &Options{ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := runretention.Sweep(home, now)
+		if len(r.Removed) != 0 {
+			t.Fatalf("sweep removed active resume: %+v", r)
+		}
+		if _, err := os.Stat(dir); err != nil {
+			t.Fatal(err)
+		}
+		finalizeRun(h.rs, ResultStopped)
+	})
+	t.Run("pruner holds lock", func(t *testing.T) {
+		dir := newRun("pruner-wins")
+		pid, err := runlock.Acquire(dir)
+		if err != nil || pid != 0 {
+			t.Fatalf("lock: %d %v", pid, err)
+		}
+		defer runlock.Delete(dir)
+		_, err = PrepareResume(filepath.Join(dir, "state.json"), &Options{ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{}})
+		if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("PID %d", os.Getpid())) {
+			t.Fatalf("expected lock PID, got %v", err)
+		}
+	})
 }
 
 func TestResumeTopLevelForEachRestartsChangedIteration(t *testing.T) {

@@ -21,6 +21,7 @@ import (
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
@@ -138,6 +139,11 @@ func (c Coordinator) AfterFinalization(summary runner.PostFinalizationSummary) e
 	if !Eligible(&summary) {
 		return nil
 	}
+	release, err := runlock.ClaimLinkage(summary.SessionDir)
+	if err != nil {
+		return err
+	}
+	defer release()
 	now := time.Now
 	if c.Now != nil {
 		now = c.Now

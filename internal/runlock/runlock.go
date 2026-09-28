@@ -9,11 +9,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
 
 const lockFileName = "lock"
+
+var held sync.Map // cleaned session directory -> open, OS-locked descriptor
 
 // LockStatus represents the state of a session's lock file.
 type LockStatus int
@@ -34,6 +37,9 @@ type HeldProof struct {
 // ProveHeld returns a capability only when sessionDir is currently locked by
 // this process.
 func ProveHeld(sessionDir string) (HeldProof, error) {
+	if _, ok := held.Load(filepath.Clean(sessionDir)); !ok {
+		return HeldProof{}, errors.New("prove held run lock: current process does not own the lock")
+	}
 	status, pid, err := checkPID(sessionDir)
 	if err != nil {
 		return HeldProof{}, fmt.Errorf("prove held run lock: %w", err)
@@ -49,6 +55,9 @@ func ProveHeld(sessionDir string) (HeldProof, error) {
 func (p HeldProof) Validate(sessionDir string) error {
 	if p.pid != os.Getpid() || p.sessionDir == "" || p.sessionDir != filepath.Clean(sessionDir) {
 		return errors.New("run lock proof does not match the run directory")
+	}
+	if _, ok := held.Load(p.sessionDir); !ok {
+		return errors.New("run lock proof is no longer held by this process")
 	}
 	status, pid, err := checkPID(sessionDir)
 	if err != nil {
@@ -70,125 +79,102 @@ func Write(sessionDir string) error {
 	return os.WriteFile(filepath.Join(sessionDir, lockFileName), []byte(content), 0o600)
 }
 
-// Acquire atomically creates the lock file with the current PID. Returns:
+// Acquire locks the persistent lock file with an OS advisory lock. Returns:
 //   - activePID == 0 and err == nil: the lock was acquired for this process.
 //   - activePID > 0 and err == nil: an existing active lock is held by that
 //     PID; the caller must NOT proceed.
 //   - activePID == 0 and err != nil: an I/O error prevented a decision; the
 //     caller must NOT proceed and must surface the error.
-//
-// Atomicity is provided by O_CREATE|O_EXCL — two concurrent callers cannot
-// both succeed. If the existing lock is stale (dead PID or unparseable), it
-// is removed and acquisition is retried exactly once.
 func Acquire(sessionDir string) (activePID int, err error) {
 	lockPath := filepath.Join(sessionDir, lockFileName)
-
-	if err := tryCreateLock(lockPath); err == nil {
+	key := filepath.Clean(sessionDir)
+	for attempt := 0; attempt < 100; attempt++ {
+		f, outcome, err := lockStablePath(lockPath)
+		if err != nil {
+			return 0, err
+		}
+		switch outcome {
+		case lockReplaced:
+			continue
+		case lockBusy:
+			_, pid, readErr := checkPID(sessionDir)
+			if readErr != nil {
+				return 0, fmt.Errorf("lock held by another process: %w", readErr)
+			}
+			if pid == 0 || !isProcessAlive(pid) {
+				time.Sleep(2 * time.Millisecond)
+				continue
+			}
+			return pid, nil
+		}
+		sweepStaleTempFiles(sessionDir)
+		if _, loaded := held.LoadOrStore(key, f); loaded {
+			release(f)
+			return os.Getpid(), nil
+		}
+		if err := writePID(f); err != nil {
+			held.Delete(key)
+			release(f)
+			return 0, err
+		}
 		return 0, nil
-	} else if !errors.Is(err, fs.ErrExist) {
-		return 0, fmt.Errorf("create lock: %w", err)
 	}
-
-	status, pid, checkErr := checkPID(sessionDir)
-	if checkErr != nil {
-		return 0, fmt.Errorf("inspect existing lock: %w", checkErr)
-	}
-	if status == LockActive {
-		return pid, nil
-	}
-
-	// Stale: remove and retry once. A concurrent acquirer may win the retry;
-	// in that case the second create returns ErrExist and we re-check.
-	if rmErr := os.Remove(lockPath); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
-		return 0, fmt.Errorf("remove stale lock: %w", rmErr)
-	}
-	if err := tryCreateLock(lockPath); err == nil {
-		return 0, nil
-	} else if !errors.Is(err, fs.ErrExist) {
-		return 0, fmt.Errorf("create lock after stale: %w", err)
-	}
-	status, pid, checkErr = checkPID(sessionDir)
-	if checkErr != nil {
-		return 0, fmt.Errorf("inspect existing lock after race: %w", checkErr)
-	}
-	if status == LockActive {
-		return pid, nil
-	}
-	return 0, errors.New("stale lock reappeared after retry; giving up to avoid a loop")
+	return 0, fmt.Errorf("lock changed during acquisition: %w", fs.ErrNotExist)
 }
 
-// tryCreateLock atomically creates lockPath with the current PID as contents.
-// Uses write-temp-then-hardlink so concurrent readers never observe a
-// partially-written file: the target path either exists with full content or
-// does not exist at all. Returns an ErrExist-wrapping error when another
-// process has already created the target.
-//
-// On filesystems that do not support hard links (FAT/exFAT, some SMB/NFS
-// mounts), os.Link returns EPERM/ENOTSUP; in that case we fall back to
-// O_CREATE|O_EXCL. The fallback is weaker — a concurrent reader could see an
-// empty file between create and write — but it matches the behavior of the
-// pre-atomic path and is only used on filesystems that never supported the
-// stronger guarantee anyway.
-func tryCreateLock(lockPath string) error {
-	dir := filepath.Dir(lockPath)
+type lockOutcome int
 
-	// Best-effort sweep of stale temp files left by prior SIGKILL'd runners.
-	// Uses a conservative age threshold so we never race a live sibling
-	// invocation that has just created its own temp file.
-	sweepStaleTempFiles(dir)
+const (
+	lockAcquired lockOutcome = iota
+	lockBusy
+	lockReplaced
+)
 
-	tmp, err := os.CreateTemp(dir, "lock-*.tmp")
+// lockStablePath opens path, takes a non-blocking exclusive OS lock, and
+// confirms the path still names the locked file. On lockAcquired the caller
+// owns the returned file and must release it.
+func lockStablePath(path string) (*os.File, lockOutcome, error) {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600) // #nosec G304 -- lock path is selected by the caller.
 	if err != nil {
-		return err
+		return nil, 0, fmt.Errorf("open lock: %w", err)
 	}
-	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
-
-	if _, err := fmt.Fprintf(tmp, "%d\n", os.Getpid()); err != nil {
-		_ = tmp.Close()
-		return err
+	locked, err := tryLock(f)
+	if err != nil {
+		_ = f.Close()
+		return nil, 0, fmt.Errorf("lock: %w", err)
 	}
-	if err := tmp.Close(); err != nil {
-		return err
+	if !locked {
+		_ = f.Close()
+		return nil, lockBusy, nil
 	}
-
-	linkErr := os.Link(tmpPath, lockPath)
-	if linkErr == nil {
-		return nil
+	opened, statErr := f.Stat()
+	current, pathErr := os.Lstat(path)
+	if statErr != nil || pathErr != nil || !os.SameFile(opened, current) {
+		release(f)
+		if pathErr != nil && !errors.Is(pathErr, fs.ErrNotExist) {
+			return nil, 0, pathErr
+		}
+		return nil, lockReplaced, nil
 	}
-	if errors.Is(linkErr, fs.ErrExist) {
-		return linkErr
-	}
-
-	// Link may be unsupported on this filesystem. Fall back to O_EXCL so the
-	// lock still works (with a weaker atomicity guarantee).
-	var lerr *os.LinkError
-	if errors.As(linkErr, &lerr) &&
-		(errors.Is(lerr.Err, syscall.EPERM) || errors.Is(lerr.Err, syscall.ENOTSUP)) {
-		return createLockExcl(lockPath)
-	}
-	return linkErr
+	return f, lockAcquired, nil
 }
 
-// createLockExcl is the no-link fallback: O_CREATE|O_EXCL followed by write.
-// A concurrent checkPID can observe the file between create and write, which
-// is why this is only used when os.Link is unavailable.
-func createLockExcl(lockPath string) error {
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G304 -- session dir from internal state tracking
-	if err != nil {
+func release(f *os.File) {
+	unlock(f)
+	_ = f.Close()
+}
+
+func writePID(f *os.File) error {
+	if err := f.Truncate(0); err != nil {
 		return err
 	}
-	_, writeErr := fmt.Fprintf(f, "%d\n", os.Getpid())
-	closeErr := f.Close()
-	if writeErr != nil {
-		_ = os.Remove(lockPath)
-		return writeErr
+	if _, err := f.Seek(0, 0); err != nil {
+		return err
 	}
-	if closeErr != nil {
-		_ = os.Remove(lockPath)
-		return closeErr
+	if _, err := fmt.Fprintf(f, "%d\n", os.Getpid()); err != nil {
+		return err
 	}
-	return nil
+	return f.Sync()
 }
 
 const tempLockMaxAge = 5 * time.Minute
@@ -212,8 +198,36 @@ func sweepStaleTempFiles(dir string) {
 
 // Delete removes the lock file from sessionDir. Best-effort: ignores errors.
 func Delete(sessionDir string) {
-	_ = os.Remove(filepath.Join(sessionDir, lockFileName))
+	key := filepath.Clean(sessionDir)
+	if value, ok := held.LoadAndDelete(key); ok {
+		f := value.(*os.File)
+		if opened, err := f.Stat(); err == nil {
+			if current, err := os.Lstat(filepath.Join(sessionDir, lockFileName)); err == nil && os.SameFile(opened, current) {
+				_ = os.Remove(filepath.Join(sessionDir, lockFileName))
+			}
+		}
+		release(f)
+		return
+	}
+	// Without a held descriptor, take the OS lock first so a lock another
+	// process has just acquired (but not yet stamped) is never unlinked.
+	lockPath := filepath.Join(sessionDir, lockFileName)
+	if _, err := os.Lstat(lockPath); err != nil {
+		return
+	}
+	f, outcome, err := lockStablePath(lockPath)
+	if err != nil || outcome != lockAcquired {
+		return
+	}
+	defer release(f)
+	status, pid, err := checkPID(sessionDir)
+	if err == nil && (status != LockActive || pid == os.Getpid()) {
+		_ = os.Remove(lockPath)
+	}
 }
+
+// Inspect preserves read errors for callers making destructive decisions.
+func Inspect(sessionDir string) (LockStatus, int, error) { return checkPID(sessionDir) }
 
 // Check returns the lock status for the given session directory.
 // Read errors are collapsed to LockStale for backward compatibility with

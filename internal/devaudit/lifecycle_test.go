@@ -10,10 +10,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/runlock"
 	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
@@ -123,6 +125,51 @@ func TestReplayExcludesEvidenceWithoutHistoricalSessionOwnership(t *testing.T) {
 		}
 		if count != 1 {
 			t.Fatalf("replay %s reference count = %d, want 1", category, count)
+		}
+	}
+}
+
+func TestReplayRetentionRace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	runsDir := filepath.Join(home, ".agent-runner", "projects", "p", "runs")
+	source := filepath.Join(runsDir, "source")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := stateio.WriteState(&model.RunState{RunID: "source", Completed: true}, source); err != nil {
+		t.Fatal(err)
+	}
+	release, err := runlock.ClaimLinkage(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() { _, err := Replay(source, "session", home, func(Request) error { return nil }); result <- err }()
+	// The pruner renames the source while it owns the claim. Replay must
+	// validate the source path again after the claim becomes available.
+	if err := os.Rename(source, filepath.Join(runsDir, ".pruning-source")); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("Replay succeeded after source removal")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Replay did not finish")
+	}
+	if err := RecordReportingWarning(&Request{SourceSessionDir: source}, "late"); err == nil {
+		t.Fatal("link-state update recreated removed source")
+	}
+	entries, err := os.ReadDir(runsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != ".pruning-source" {
+			t.Fatalf("orphan audit run: %s", entry.Name())
 		}
 	}
 }

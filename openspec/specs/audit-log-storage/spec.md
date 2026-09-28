@@ -43,11 +43,19 @@ Each line in the log file SHALL be a hybrid format: ISO-8601 timestamp, optional
 
 ### Requirement: Log persistence
 
-Audit log files SHALL never be automatically deleted. No rotation or cleanup is performed by Agent Runner.
+Agent Runner SHALL NOT rotate, truncate, or delete a run's audit log independently of its run. A run's audit log SHALL be deleted only when its entire run directory is removed by run retention (see the `run-retention` capability). When run retention is disabled, audit logs SHALL never be automatically deleted.
 
 #### Scenario: Logs accumulate
-- **WHEN** a workflow is run 100 times
-- **THEN** 100 log files exist in the log directory
+- **WHEN** a workflow is run 100 times within the retention limits
+- **THEN** 100 log files exist, one in each run's session directory
+
+#### Scenario: Log removed with its run
+- **WHEN** run retention removes a run directory
+- **THEN** that run's `audit.log` is removed with it and no other run's audit log is affected
+
+#### Scenario: Retention disabled keeps every log
+- **WHEN** `run_retention.enabled` is `false` in `~/.agent-runner/settings.yaml` and a workflow is run 100 times over several months
+- **THEN** 100 log files exist and none is automatically deleted
 
 ### Requirement: Close on exit
 
@@ -56,3 +64,4 @@ The audit logger SHALL close the log file when workflow execution exits. Entries
 #### Scenario: Completed run closes log
 - **WHEN** Agent Runner exits workflow execution normally
 - **THEN** the audit log file is closed
+
