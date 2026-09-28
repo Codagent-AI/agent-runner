@@ -47,7 +47,15 @@ steps:
     prompt: |
       If the /simplify skill is available, run it focusing on code reuse and readability. If it is not available, review your git diff for duplicated logic that should be extracted into shared helpers, and readability issues like deep nesting, unclear naming, or overly complex conditionals. Fix and commit anything clear-cut, following the project's commit message conventions and prepending [{{step_id}}].
 
-      Fix clear-cut correctness or spec-conformance defects found during this review. Do not defer defects to /code-review or a later review, skip them, or list them as a known follow-up. Add unit regression coverage where applicable, run the narrowest relevant tests, and commit each fix following the project's commit message conventions and prepending [{{step_id}}]. For a defect that requires a product, scope, or design decision, append the finding and the decision needed to `{{session_dir}}/output/acceptance-assumptions.md`; do not drop it or decide it silently. Do not run Agent Validator or push; the next steps handle validation and the pull request.
+      Fix clear-cut correctness or spec-conformance defects found during this review. Do not defer defects to /code-review or a later review, skip them, or list them as a known follow-up. Add unit regression coverage where applicable, run the narrowest relevant tests, and commit each fix following the project's commit message conventions and prepending [{{step_id}}]. For a defect that requires a product, scope, or design decision, append the finding and the decision needed to `{{session_dir}}/output/acceptance-assumptions.md` and report it in your final response; do not drop it or decide it silently. The next step stops finalization until that decision is resolved. Do not run Agent Validator or push; the next steps handle validation and the pull request.
+
+  - id: require-simplify-decisions-resolved
+    command: |
+      if [ -s "{{session_dir}}/output/acceptance-assumptions.md" ]; then
+        echo "simplify found unresolved decisions; resolve them before finalization:" >&2
+        cat "{{session_dir}}/output/acceptance-assumptions.md" >&2
+        exit 1
+      fi
 
   - id: run-validator
     workflow: ../core/run-validator-v1.0.yaml

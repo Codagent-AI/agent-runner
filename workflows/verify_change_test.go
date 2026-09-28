@@ -121,6 +121,39 @@ func TestCoreVerifyChangeSimplifyFixesDefects(t *testing.T) {
 	)
 }
 
+func TestLegacyImplementChangeSimplifyStopsForDecisions(t *testing.T) {
+	for _, ref := range []string{
+		"builtin:openspec/implement-change-v1.0.yaml",
+		"builtin:spec-driven/implement-change-v1.0.yaml",
+	} {
+		t.Run(ref, func(t *testing.T) {
+			workflow := readBuiltinWorkflowForTest(t, ref)
+			simplify := findStep(workflow.Steps, "simplify")
+			if simplify == nil {
+				t.Fatal("simplify step not found")
+			}
+			requirePromptContains(t, simplify.ID, simplify.Prompt,
+				"Fix clear-cut correctness or spec-conformance defects",
+				"Do not defer defects to /code-review or a later review",
+				"{{session_dir}}/output/acceptance-assumptions.md",
+				"[{{step_id}}]",
+			)
+			gate := findStep(workflow.Steps, "require-simplify-decisions-resolved")
+			if gate == nil {
+				t.Fatal("unresolved simplify decisions have no gate before finalization")
+			}
+			if !strings.Contains(gate.Command, "{{session_dir}}/output/acceptance-assumptions.md") ||
+				!strings.Contains(gate.Command, "exit 1") {
+				t.Errorf("decision gate must stop the workflow on unresolved findings: %q", gate.Command)
+			}
+			ids := stepIDs(workflow.Steps)
+			if strings.Index(strings.Join(ids, ","), "simplify,require-simplify-decisions-resolved,run-validator") < 0 {
+				t.Errorf("decision gate must run immediately after simplify: %v", ids)
+			}
+		})
+	}
+}
+
 func TestCoreVerifyChangeValidatorResultStopsBeforePR(t *testing.T) {
 	w := readBuiltinWorkflowForTest(t, verifyChangeRef)
 	validator := findStep(w.Steps, "run-validator")
