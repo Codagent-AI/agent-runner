@@ -31,6 +31,7 @@ func TestSelectedSessionOutcome(t *testing.T) {
 		{name: "open session after successful step", hasSession: true, sessionStatus: metrics.SessionOpen, steps: []metrics.StepRecord{step("", "success")}, want: "unknown"},
 		{name: "interrupted session after successful step", hasSession: true, sessionStatus: metrics.SessionInterrupted, steps: []metrics.StepRecord{step("", "success")}, want: "unknown"},
 		{name: "closed legacy session after successful step", hasSession: true, sessionStatus: metrics.SessionClosed, steps: []metrics.StepRecord{step("", "success")}, want: "success"},
+		{name: "legacy session without status after successful step", hasSession: true, steps: []metrics.StepRecord{step("", "success")}, want: "success"},
 		{name: "legacy nested failure with no top-level step", steps: []metrics.StepRecord{step("group", "failed")}, want: "failed"},
 		{name: "no records", want: "unknown"},
 	}
