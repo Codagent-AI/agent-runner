@@ -209,9 +209,20 @@ func Delete(sessionDir string) {
 		release(f)
 		return
 	}
+	// Without a held descriptor, take the OS lock first so a lock another
+	// process has just acquired (but not yet stamped) is never unlinked.
+	lockPath := filepath.Join(sessionDir, lockFileName)
+	if _, err := os.Lstat(lockPath); err != nil {
+		return
+	}
+	f, outcome, err := lockStablePath(lockPath)
+	if err != nil || outcome != lockAcquired {
+		return
+	}
+	defer release(f)
 	status, pid, err := checkPID(sessionDir)
 	if err == nil && (status != LockActive || pid == os.Getpid()) {
-		_ = os.Remove(filepath.Join(sessionDir, lockFileName))
+		_ = os.Remove(lockPath)
 	}
 }
 

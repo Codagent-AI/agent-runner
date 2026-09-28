@@ -72,11 +72,6 @@ func Plan(all []Run, policy Policy, now time.Time) []Unit {
 		protected, allFinished, allExpired := false, true, true
 		for i := range u.Members {
 			r := &u.Members[i]
-			if r.SourceRunID != "" {
-				if _, exists := parent[r.SourceRunID]; !exists {
-					protected = true
-				}
-			}
 			switch {
 			case r.Class.protected():
 				protected = true

@@ -61,10 +61,10 @@ func LoadRunRetentionAt(path string) (RunRetention, bool, error) {
 		for j := 0; j+1 < len(mapping.Content); j += 2 {
 			key, value := mapping.Content[j].Value, mapping.Content[j+1]
 			if key == "enabled" {
-				if value.Kind != yaml.ScalarNode || value.Tag != "!!bool" {
+				var b bool
+				if value.Kind != yaml.ScalarNode || value.Tag != "!!bool" || value.Decode(&b) != nil {
 					result.Invalid = append(result.Invalid, "enabled")
 				} else {
-					b := value.Value == "true"
 					result.Enabled = &b
 				}
 				continue

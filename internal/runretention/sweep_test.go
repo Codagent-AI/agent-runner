@@ -32,6 +32,7 @@ func TestPlan(t *testing.T) {
 		{"active group", []Run{{ID: "source", Class: Finished, LastActivity: now.Add(-60 * 24 * time.Hour), AuditRunIDs: []string{"audit"}}, {ID: "audit", Class: Active, LastActivity: now.Add(-60 * 24 * time.Hour), SourceRunID: "source"}}, nil},
 		{"recent audit protects source", []Run{{ID: "source", Class: Finished, LastActivity: now.Add(-60 * 24 * time.Hour), AuditRunIDs: []string{"audit"}}, {ID: "audit", Class: Finished, LastActivity: now.Add(-10 * 24 * time.Hour), SourceRunID: "source"}}, nil},
 		{"dangling link", []Run{{ID: "source", Class: Finished, LastActivity: now.Add(-60 * 24 * time.Hour), AuditRunIDs: []string{"gone"}}}, []string{"source"}},
+		{"orphaned audit", []Run{{ID: "audit", Class: Finished, LastActivity: now.Add(-31 * 24 * time.Hour), SourceRunID: "gone"}}, []string{"audit"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

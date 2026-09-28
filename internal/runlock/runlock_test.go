@@ -60,6 +60,27 @@ func TestDelete(t *testing.T) {
 		dir := t.TempDir()
 		Delete(dir) // should not panic
 	})
+
+	t.Run("keeps a lock file whose OS lock is held by another owner", func(t *testing.T) {
+		// Another acquirer has taken the OS lock but has not yet replaced the
+		// stale PID; Delete must not unlink the inode it holds.
+		dir := t.TempDir()
+		lockPath := filepath.Join(dir, "lock")
+		if err := os.WriteFile(lockPath, []byte("999999999\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		other, outcome, err := lockStablePath(lockPath)
+		if err != nil || outcome != lockAcquired {
+			t.Fatalf("lockStablePath() = (%v, %v)", outcome, err)
+		}
+		defer release(other)
+
+		Delete(dir)
+
+		if _, err := os.Stat(lockPath); err != nil {
+			t.Fatalf("Delete removed a lock file held by another owner: %v", err)
+		}
+	})
 }
 
 func TestCheck(t *testing.T) {

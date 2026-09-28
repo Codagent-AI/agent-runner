@@ -37,3 +37,25 @@ func TestLoadRunRetentionAtNullRootIsUnknown(t *testing.T) {
 		t.Fatalf("LoadRunRetentionAt() known=%v err=%v, want unknown policy", known, err)
 	}
 }
+
+func TestLoadRunRetentionAtDecodesYAMLBooleans(t *testing.T) {
+	for body, want := range map[string]bool{
+		"run_retention:\n  enabled: True\n":  true,
+		"run_retention:\n  enabled: TRUE\n":  true,
+		"run_retention:\n  enabled: False\n": false,
+	} {
+		t.Run(body, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "settings.yaml")
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, known, err := LoadRunRetentionAt(path)
+			if err != nil || !known {
+				t.Fatalf("LoadRunRetentionAt() known=%v err=%v", known, err)
+			}
+			if got.Enabled == nil || *got.Enabled != want || len(got.Invalid) != 0 {
+				t.Fatalf("LoadRunRetentionAt() = %+v, want Enabled=%v", got, want)
+			}
+		})
+	}
+}
