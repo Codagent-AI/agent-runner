@@ -79,11 +79,12 @@ The smoke adds the separate `devaudit_smoke` build tag through
 workflow. The fixture tag only registers a hidden workflow and retains the
 production sandbox and lifecycle code.
 
-It uses a temporary project and fake local model responses with no host
-credentials. It keeps artifacts in the selected artifact directory and waits
-for both the linked audit's terminal lifecycle and terminal run state after the
-source CLI has returned. It checks reciprocal source/session linkage, model
-outputs, validated observations, local report, and verified mounted provenance.
+It uses a temporary project and pins both `crosscheck` (source step) and `lead`
+(auditor) to a fake Codex CLI with no host credentials. It keeps artifacts in
+the selected artifact directory and waits for both the linked audit's terminal
+lifecycle and terminal run state after the source CLI has returned. It checks
+reciprocal source/session linkage, model outputs, validated observations, local
+report, and verified mounted provenance.
 That distinction matters: source completion never waits for auditing in normal
 Runner operation. The smoke does not call external model, GitHub, or reporting
 services; missing reporting configuration is expected to remain a local audit
