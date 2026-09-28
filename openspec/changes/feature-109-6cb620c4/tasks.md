@@ -1,0 +1,8 @@
+- [ ] Implement the change described by these files, using TDD per `CLAUDE.md`, satisfying every spec scenario and every `INT-*`/`E2E-*` obligation in the test plan, and finishing with `make fmt`, `make test`, and `make lint` passing:
+  - [proposal.md](proposal.md)
+  - [specs/run-retention/spec.md](specs/run-retention/spec.md)
+  - [specs/run-lock/spec.md](specs/run-lock/spec.md)
+  - [specs/audit-log-storage/spec.md](specs/audit-log-storage/spec.md)
+  - [design.md](design.md)
+  - [test-plan.md](test-plan.md)
+  - [decisions.md](decisions.md)
