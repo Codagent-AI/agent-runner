@@ -125,7 +125,7 @@ func TestControlServerCompletionEligibleAttemptAcceptsCompletion(t *testing.T) {
 		if completion.AttemptID != attempt.ID {
 			t.Fatalf("completion = %#v, want attempt %q", completion, attempt.ID)
 		}
-	default:
+	case <-time.After(time.Second):
 		t.Fatal("accepted completion was not delivered")
 	}
 }
