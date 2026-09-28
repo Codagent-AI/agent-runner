@@ -151,13 +151,15 @@ func TestLegacyImplementChangeSimplifyStopsForDecisions(t *testing.T) {
 				t.Errorf("decision gate must explain how to resume after resolving decisions: %q", gate.Command)
 			}
 			for _, tc := range []struct {
-				name    string
-				ledger  string
-				blocked bool
+				name        string
+				ledger      string
+				grepFailure bool
+				exitCode    int
 			}{
 				{name: "no findings placeholder", ledger: "No unresolved assumptions or context gaps.\n"},
-				{name: "unresolved finding", ledger: "Decision needed: choose a storage format.\n", blocked: true},
-				{name: "placeholder with finding", ledger: "No unresolved assumptions or context gaps.\nDecision needed: choose a storage format.\n", blocked: true},
+				{name: "unresolved finding", ledger: "Decision needed: choose a storage format.\n", exitCode: 1},
+				{name: "placeholder with finding", ledger: "No unresolved assumptions or context gaps.\nDecision needed: choose a storage format.\n", exitCode: 1},
+				{name: "grep read failure", ledger: "No unresolved assumptions or context gaps.\n", grepFailure: true, exitCode: 2},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					sessionDir := t.TempDir()
@@ -169,9 +171,28 @@ func TestLegacyImplementChangeSimplifyStopsForDecisions(t *testing.T) {
 						t.Fatal(err)
 					}
 					command := strings.ReplaceAll(gate.Command, "{{session_dir}}", sessionDir)
-					output, err := exec.Command("sh", "-c", command).CombinedOutput()
-					if (err != nil) != tc.blocked {
-						t.Errorf("decision gate error = %v, want blocked = %t; output: %s", err, tc.blocked, output)
+					cmd := exec.Command("sh", "-c", command)
+					if tc.grepFailure {
+						binDir := filepath.Join(sessionDir, "bin")
+						if err := os.Mkdir(binDir, 0o755); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.WriteFile(filepath.Join(binDir, "grep"), []byte("#!/bin/sh\nexit 2\n"), 0o755); err != nil {
+							t.Fatal(err)
+						}
+						cmd.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
+					}
+					output, err := cmd.CombinedOutput()
+					actualExitCode := 0
+					if err != nil {
+						exitErr, ok := err.(*exec.ExitError)
+						if !ok {
+							t.Fatalf("decision gate execution failed: %v", err)
+						}
+						actualExitCode = exitErr.ExitCode()
+					}
+					if actualExitCode != tc.exitCode {
+						t.Errorf("decision gate exit code = %d, want %d; output: %s", actualExitCode, tc.exitCode, output)
 					}
 				})
 			}
