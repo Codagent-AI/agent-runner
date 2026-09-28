@@ -20,6 +20,7 @@ cleaned_up=0
 child=""
 launching=0
 pending_signal=""
+cleanup_signal=""
 
 if [[ -z "${IMAGE:-}" ]]; then
   IMAGE="agent-runner-dev-audit-smoke:$run_id"
@@ -37,6 +38,9 @@ cleanup() {
     exit "$final_status"
   fi
   cleaned_up=1
+  # Finish cleanup even if interrupted, then report the signal's status.
+  trap 'cleanup_signal=130' INT
+  trap 'cleanup_signal=143' TERM
 
   if [[ "$owns_image" == 1 ]]; then
     local inspect_output rm_output
@@ -63,7 +67,13 @@ cleanup() {
       echo "smoke: removed artifact directory $ARTIFACT_DIR" >&2
     fi
   fi
-  exit "$final_status"
+  exit "${cleanup_signal:-$final_status}"
+}
+
+# Reports whether any live process remains in the runner's process group.
+runner_group_alive() {
+  ps -A -o pgid=,stat= 2>/dev/null |
+    awk -v group="$child" '$1 == group && $2 !~ /^Z/ { found = 1 } END { exit !found }'
 }
 
 on_signal() {
@@ -76,19 +86,19 @@ on_signal() {
   final_status="$1"
   set +e
   if [[ -n "$child" ]]; then
-    pkill -TERM -P "$child" 2>/dev/null
-    kill -TERM "$child" 2>/dev/null
+    # The runner leads its own process group, so this also reaches Docker
+    # clients it starts after the signal arrives.
+    kill -TERM -- "-$child" 2>/dev/null
   fi
   docker rm -f "$container" >/dev/null 2>&1
   if [[ -n "$child" ]]; then
     local waited=0
-    while kill -0 "$child" 2>/dev/null && ((waited < 150)); do
+    while runner_group_alive && ((waited < 150)); do
       sleep 0.2
       waited=$((waited + 1))
     done
-    if kill -0 "$child" 2>/dev/null; then
-      pkill -KILL -P "$child" 2>/dev/null
-      kill -KILL "$child" 2>/dev/null
+    if runner_group_alive; then
+      kill -KILL -- "-$child" 2>/dev/null
       sleep 0.2
     fi
     # Reap only a child that has exited, so a stuck one cannot hang shutdown.
@@ -108,6 +118,9 @@ trap 'on_signal 143' TERM
 mkdir -p "$ARTIFACT_DIR"
 export AUDIT_SMOKE_TIMEOUT_SECONDS="$TIMEOUT_SECONDS"
 launching=1
+# Job control puts the runner and its Docker clients in their own process
+# group, so shutdown can stop the whole tree.
+set -m
 ARTIFACT_DIR="$ARTIFACT_DIR" "$RUNNER_ROOT/scripts/sandbox-run.sh" \
   --dev-audit \
   --dev-audit-smoke \
@@ -119,6 +132,7 @@ ARTIFACT_DIR="$ARTIFACT_DIR" "$RUNNER_ROOT/scripts/sandbox-run.sh" \
   --docker-run-arg "--name=$container" \
   -- "bash /agent-runner-source/scripts/docker-dev-audit-smoke-container.sh" &
 child=$!
+set +m
 if [[ -n "$pending_signal" ]]; then
   on_signal "$pending_signal"
 fi

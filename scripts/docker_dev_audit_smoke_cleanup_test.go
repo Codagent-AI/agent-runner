@@ -41,6 +41,10 @@ case "${1:-}" in
       echo "restricted" > "$evidence/locked/file.txt"
       chmod 0400 "$evidence/locked"
     fi
+    if [[ "${FAKE_DOCKER_RUN_SPAWN:-0}" == 1 ]]; then
+      sleep 300 &
+      echo "$!" > "$FAKE_DOCKER_STATE/descendant.pid"
+    fi
     echo "$$" > "$FAKE_DOCKER_STATE/run.pid"
     if [[ "${FAKE_DOCKER_RUN_BLOCK:-0}" == 1 ]]; then
       while :; do sleep 0.1; done
@@ -534,6 +538,91 @@ func TestDevAuditSmokeCleanupSIGTERMStopsOwnContainerAndCleansUp(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+func TestDevAuditSmokeCleanupSIGTERMStopsRunnerDescendants(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signal delivery is POSIX-only")
+	}
+	f := newSmokeFixture(t)
+	f.env["FAKE_DOCKER_RUN_BLOCK"] = "1"
+	f.env["FAKE_DOCKER_RUN_SPAWN"] = "1"
+	cmd, stderr := f.start()
+	waitForPath(t, filepath.Join(f.stateDir, "run.pid"), 60*time.Second)
+	descendantPID := readPID(t, filepath.Join(f.stateDir, "descendant.pid"))
+	t.Cleanup(func() { _ = syscall.Kill(descendantPID, syscall.SIGKILL) })
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	res := f.result(waitForCommand(cmd, 45*time.Second), stderr.String())
+	if res.exitCode != 143 {
+		t.Fatalf("exit code = %d, want 143\nstderr:\n%s", res.exitCode, res.stderr)
+	}
+	// The wrapper must stop the runner's whole process tree before it exits.
+	if syscall.Kill(descendantPID, 0) == nil {
+		t.Fatalf("runner descendant %d still running after the smoke exited", descendantPID)
+	}
+}
+
+func TestDevAuditSmokeCleanupSignalDuringArtifactRemovalFinishesCleanup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signal delivery is POSIX-only")
+	}
+	f := newSmokeFixture(t)
+	realRm, err := exec.LookPath("rm")
+	if err != nil {
+		t.Fatalf("locate rm: %v", err)
+	}
+	started := filepath.Join(f.stateDir, "rm.started")
+	release := filepath.Join(f.stateDir, "rm.release")
+	writeExecutable(t, filepath.Join(f.binDir, "rm"), `#!/usr/bin/env bash
+for arg in "$@"; do
+  case "$arg" in
+    "$BLOCK_RM_PREFIX"*)
+      : > "$BLOCK_RM_STARTED"
+      while [[ ! -e "$BLOCK_RM_RELEASE" ]]; do sleep 0.05; done
+      ;;
+  esac
+done
+exec "$REAL_RM" "$@"
+`)
+	f.env["REAL_RM"] = realRm
+	f.env["BLOCK_RM_PREFIX"] = filepath.Join(f.tmpDir, "agent-runner-dev-audit-smoke.")
+	f.env["BLOCK_RM_STARTED"] = started
+	f.env["BLOCK_RM_RELEASE"] = release
+	cmd, stderr := f.start()
+	waitForPath(t, started, 60*time.Second)
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	// Give the shell time to take the signal before removal completes.
+	time.Sleep(200 * time.Millisecond)
+	if err := os.WriteFile(release, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := f.result(waitForCommand(cmd, 45*time.Second), stderr.String())
+	if res.exitCode != 143 {
+		t.Fatalf("exit code = %d, want 143\nstderr:\n%s", res.exitCode, res.stderr)
+	}
+	if dirs := f.ownedArtifactDirs(); len(dirs) != 0 {
+		t.Fatalf("owned artifact directories remain: %v", dirs)
+	}
+	if !strings.Contains(res.stderr, "smoke: removed artifact directory") {
+		t.Fatalf("cleanup did not finish and report the artifact directory:\n%s", res.stderr)
+	}
+}
+
+func readPID(t *testing.T, path string) int {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pid
 }
 
 // INT-005
