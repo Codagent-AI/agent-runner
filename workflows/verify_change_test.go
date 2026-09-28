@@ -367,6 +367,7 @@ func TestCoreVerifyChangeOpenDraftPRPushesDirectly(t *testing.T) {
 		"directly with `git` and `gh`",
 		"gh pr create --draft",
 		"gh api --method PATCH",
+		"only the first ordered pair is replaced; later pairs are left unchanged",
 		"prepend",
 		"{{session_dir}}/bundled/core/update-pr-body.sh",
 		"--body-file",
@@ -401,6 +402,7 @@ func TestCoreUpdatePRBodyScript(t *testing.T) {
 		{"start marker only", start + "\nRefs #174\n", block + "\n" + start + "\nRefs #174\n", ""},
 		{"end marker only", end + "\nRefs #174\n", block + "\n" + end + "\nRefs #174\n", ""},
 		{"reversed markers", end + "\nOld\n" + start + "\n", block + "\n" + end + "\nOld\n" + start + "\n", ""},
+		{"duplicated markers", start + "\nA\n" + end + "\nmid\n" + start + "\nB\n" + end + "\ntail\n", block + "mid\n" + start + "\nB\n" + end + "\ntail\n", ""},
 		{"empty body", "", block, ""},
 		{"view fails", "", "", "view"},
 		{"patch fails", "", "", "api"},
@@ -429,14 +431,18 @@ case "$1 $2" in
   'api --method')
     [ "${FAKE_GH_FAIL:-}" != api ] || exit 35
     [ "$3" = PATCH ] && [ "$4" = 'repos/{owner}/{repo}/pulls/174' ] && [ "$5" = -F ] || exit 31
-    case "$6" in body=@*) cat "${6#body=@}" > "$FAKE_GH_PATCHED" ;; *) exit 32 ;; esac ;;
+    case "$6" in body=@*) cat "${6#body=@}" > "$FAKE_GH_PATCHED" ;; *) exit 32 ;; esac
+    printf '{"body":"large response"}\n' ;;
   *) exit 33 ;;
 esac
 `)
-			cmd := exec.Command("sh", script, "174", blockFile)
-			cmd.Dir = dir
-			cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_GH_OLD="+oldFile, "FAKE_GH_ARGS="+argsFile, "FAKE_GH_PATCHED="+bodyFile, "FAKE_GH_FAIL="+tc.failStep)
-			out, err := cmd.CombinedOutput()
+			run := func() ([]byte, error) {
+				cmd := exec.Command("sh", script, "174", blockFile)
+				cmd.Dir = dir
+				cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_GH_OLD="+oldFile, "FAKE_GH_ARGS="+argsFile, "FAKE_GH_PATCHED="+bodyFile, "FAKE_GH_FAIL="+tc.failStep)
+				return cmd.CombinedOutput()
+			}
+			out, err := run()
 			if tc.failStep != "" {
 				if err == nil || !strings.Contains(string(out), "could not") {
 					t.Fatalf("gh failure = (%v, %q), want clear error", err, out)
@@ -446,12 +452,27 @@ esac
 			if err != nil {
 				t.Fatalf("update failed: %v\n%s", err, out)
 			}
-			if got := readFile(t, bodyFile); got != tc.wantBody {
-				t.Errorf("body = %q, want %q", got, tc.wantBody)
+			if diff := cmp.Diff("updated pull request body for #174\n", string(out)); diff != "" {
+				t.Errorf("script output (-want +got):\n%s", diff)
+			}
+			firstBody := readFile(t, bodyFile)
+			if diff := cmp.Diff(tc.wantBody, firstBody); diff != "" {
+				t.Errorf("body (-want +got):\n%s", diff)
 			}
 			calls := readFile(t, argsFile)
 			if !strings.Contains(calls, "api --method PATCH repos/{owner}/{repo}/pulls/174 -F body=@") || strings.Contains(calls, "pr edit") {
 				t.Errorf("gh calls = %q", calls)
+			}
+			mustWriteFile(t, oldFile, firstBody)
+			if err := os.Remove(bodyFile); err != nil {
+				t.Fatal(err)
+			}
+			out, err = run()
+			if err != nil {
+				t.Fatalf("rerun failed: %v\n%s", err, out)
+			}
+			if diff := cmp.Diff(firstBody, readFile(t, bodyFile)); diff != "" {
+				t.Errorf("rerun body (-first +second):\n%s", diff)
 			}
 		})
 	}

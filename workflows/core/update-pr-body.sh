@@ -55,7 +55,8 @@ if ! jq -nrj --rawfile old "$temp_dir/old" --rawfile block "$block" --arg start 
   printf 'could not splice generated pull request body\n' >&2
   exit 1
 fi
-if ! gh api --method PATCH "repos/{owner}/{repo}/pulls/$number" -F "body=@$temp_dir/body"; then
+if ! gh api --method PATCH "repos/{owner}/{repo}/pulls/$number" -F "body=@$temp_dir/body" >/dev/null; then
   printf 'could not update pull request %s body via REST\n' "$number" >&2
   exit 1
 fi
+printf 'updated pull request body for #%s\n' "$number"
