@@ -97,6 +97,30 @@ func TestCoreVerifyChangeShape(t *testing.T) {
 	}
 }
 
+func TestCoreVerifyChangeSimplifyFixesDefects(t *testing.T) {
+	workflow := readBuiltinWorkflowForTest(t, verifyChangeRef)
+	step := findStep(workflow.Steps, "simplify")
+	if step == nil {
+		t.Fatal("simplify step not found")
+	}
+	requirePromptContains(t, step.ID, step.Prompt,
+		"Fix clear-cut correctness or spec-conformance defects",
+		"Do not defer defects to /code-review or a later review",
+		"known follow-up",
+		"{{session_dir}}/output/acceptance-assumptions.md",
+		"[{{step_id}}]",
+	)
+
+	pr := findStep(workflow.Steps, "open-draft-pr")
+	if pr == nil {
+		t.Fatal("open-draft-pr step not found")
+	}
+	requirePromptContains(t, pr.ID, pr.Prompt,
+		"Do not list known defects as Known follow-up items",
+		"{{session_dir}}/output/acceptance-assumptions.md",
+	)
+}
+
 func TestCoreVerifyChangeValidatorResultStopsBeforePR(t *testing.T) {
 	w := readBuiltinWorkflowForTest(t, verifyChangeRef)
 	validator := findStep(w.Steps, "run-validator")
