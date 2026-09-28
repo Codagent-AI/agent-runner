@@ -108,6 +108,7 @@ func TestCoreVerifyChangeSimplifyFixesDefects(t *testing.T) {
 		"Do not defer defects to /code-review or a later review",
 		"known follow-up",
 		"{{session_dir}}/output/acceptance-assumptions.md",
+		"replace any existing `No unresolved assumptions or context gaps.` statement when adding the first entry",
 		"[{{step_id}}]",
 	)
 
@@ -145,6 +146,9 @@ func TestLegacyImplementChangeSimplifyStopsForDecisions(t *testing.T) {
 			if !strings.Contains(gate.Command, "{{session_dir}}/output/acceptance-assumptions.md") ||
 				!strings.Contains(gate.Command, "exit 1") {
 				t.Errorf("decision gate must stop the workflow on unresolved findings: %q", gate.Command)
+			}
+			if !strings.Contains(gate.Command, "After resolving each item, remove or empty {{session_dir}}/output/acceptance-assumptions.md, then resume the run.") {
+				t.Errorf("decision gate must explain how to resume after resolving decisions: %q", gate.Command)
 			}
 			ids := stepIDs(workflow.Steps)
 			if !strings.Contains(strings.Join(ids, ","), "simplify,require-simplify-decisions-resolved,run-validator") {

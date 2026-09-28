@@ -67,7 +67,7 @@ steps:
 
       Fix and commit clear-cut cleanup issues, following the project's commit message conventions and prepending [{{step_id}}]. Do not expand the accepted scope. Fixing a defect in this change's own code is within scope.
 
-      Fix clear-cut correctness or spec-conformance defects found during this review. Do not defer defects to /code-review or a later review, skip them, or list them as a known follow-up. Add unit regression coverage where applicable, run the narrowest relevant tests, and commit each fix following the project's commit message conventions and prepending [{{step_id}}]. For a defect that requires a product, scope, or design decision, append the finding and the decision needed to `{{session_dir}}/output/acceptance-assumptions.md`; do not drop it or decide it silently. Do not run Agent Validator or push; the next steps handle validation and the pull request.
+      Fix clear-cut correctness or spec-conformance defects found during this review. Do not defer defects to /code-review or a later review, skip them, or list them as a known follow-up. Add unit regression coverage where applicable, run the narrowest relevant tests, and commit each fix following the project's commit message conventions and prepending [{{step_id}}]. For a defect that requires a product, scope, or design decision, append the finding and the decision needed to `{{session_dir}}/output/acceptance-assumptions.md`; do not drop it or decide it silently. In that ledger, replace any existing `No unresolved assumptions or context gaps.` statement when adding the first entry. Do not run Agent Validator or push; the next steps handle validation and the pull request.
 
   - id: run-validator
     workflow: run-validator-v1.0.yaml
