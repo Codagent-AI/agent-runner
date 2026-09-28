@@ -51,7 +51,7 @@ steps:
 
   - id: require-simplify-decisions-resolved
     command: |
-      if [ -s "{{session_dir}}/output/acceptance-assumptions.md" ]; then
+      if [ -s "{{session_dir}}/output/acceptance-assumptions.md" ] && grep -Eqv '^[[:space:]]*(No unresolved assumptions or context gaps\.)?[[:space:]]*$' "{{session_dir}}/output/acceptance-assumptions.md"; then
         echo "simplify found unresolved decisions; resolve them before finalization:" >&2
         cat "{{session_dir}}/output/acceptance-assumptions.md" >&2
         echo "After resolving each item, remove or empty {{session_dir}}/output/acceptance-assumptions.md, then resume the run." >&2

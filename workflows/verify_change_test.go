@@ -150,6 +150,31 @@ func TestLegacyImplementChangeSimplifyStopsForDecisions(t *testing.T) {
 			if !strings.Contains(gate.Command, "After resolving each item, remove or empty {{session_dir}}/output/acceptance-assumptions.md, then resume the run.") {
 				t.Errorf("decision gate must explain how to resume after resolving decisions: %q", gate.Command)
 			}
+			for _, tc := range []struct {
+				name    string
+				ledger  string
+				blocked bool
+			}{
+				{name: "no findings placeholder", ledger: "No unresolved assumptions or context gaps.\n"},
+				{name: "unresolved finding", ledger: "Decision needed: choose a storage format.\n", blocked: true},
+				{name: "placeholder with finding", ledger: "No unresolved assumptions or context gaps.\nDecision needed: choose a storage format.\n", blocked: true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					sessionDir := t.TempDir()
+					outputDir := filepath.Join(sessionDir, "output")
+					if err := os.MkdirAll(outputDir, 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(outputDir, "acceptance-assumptions.md"), []byte(tc.ledger), 0o644); err != nil {
+						t.Fatal(err)
+					}
+					command := strings.ReplaceAll(gate.Command, "{{session_dir}}", sessionDir)
+					output, err := exec.Command("sh", "-c", command).CombinedOutput()
+					if (err != nil) != tc.blocked {
+						t.Errorf("decision gate error = %v, want blocked = %t; output: %s", err, tc.blocked, output)
+					}
+				})
+			}
 			ids := stepIDs(workflow.Steps)
 			if !strings.Contains(strings.Join(ids, ","), "simplify,require-simplify-decisions-resolved,run-validator") {
 				t.Errorf("decision gate must run immediately after simplify: %v", ids)
