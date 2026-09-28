@@ -1276,7 +1276,7 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 	}
 	defer cleanup()
 	command.Env = env
-	result, runErr := runCrosscheckOutput(command, adapter)
+	result, spawnTime, runErr := runCrosscheckOutput(command, adapter)
 	if after, err := trustedAuditInputsFingerprint(request); err != nil {
 		return ModelValueBatch{}, err
 	} else if after != trustedInputs {
@@ -1299,7 +1299,7 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 	if err != nil {
 		return ModelValueBatch{}, fmt.Errorf("decode crosscheck result: %w; response: %s", err, crosscheckDiagnostic(response))
 	}
-	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: auditSessionID(adapter, result, response, workspace)}
+	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: auditSessionID(adapter, result, response, workspace, spawnTime)}
 	if output.Provenance.SessionID == "" {
 		output.Provenance.SessionID = "unknown"
 	}

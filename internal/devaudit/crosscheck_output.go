@@ -34,9 +34,10 @@ func crosscheckDiagnostic(text string) string {
 	return text
 }
 
-func runCrosscheckOutput(command *exec.Cmd, adapter cli.Adapter) ([]byte, error) {
+func runCrosscheckOutput(command *exec.Cmd, adapter cli.Adapter) ([]byte, time.Time, error) {
 	var stderr diagnosticBuffer
 	command.Stderr = &stderr
+	spawnTime := time.Now()
 	data, err := runBoundedOutput(command, maxCrosscheckOutput)
 	if err != nil {
 		detail := string(data)
@@ -49,9 +50,9 @@ func runCrosscheckOutput(command *exec.Cmd, adapter cli.Adapter) ([]byte, error)
 		case cli.OutputFilter:
 			detail = adapter.FilterOutput(detail)
 		}
-		return data, fmt.Errorf("%w; provider: %s; stderr: %s", err, crosscheckDiagnostic(detail), crosscheckDiagnostic(string(stderr.data)))
+		return data, spawnTime, fmt.Errorf("%w; provider: %s; stderr: %s", err, crosscheckDiagnostic(detail), crosscheckDiagnostic(string(stderr.data)))
 	}
-	return data, nil
+	return data, spawnTime, nil
 }
 
 type claudeAuditResult struct {
@@ -64,14 +65,14 @@ type claudeAuditResult struct {
 	SessionID        string          `json:"session_id"`
 }
 
-func auditSessionID(adapter cli.Adapter, raw []byte, response, workspace string) string {
+func auditSessionID(adapter cli.Adapter, raw []byte, response, workspace string, spawnTime time.Time) string {
 	if _, ok := adapter.(*cli.ClaudeAdapter); ok {
 		var result claudeAuditResult
 		if json.Unmarshal(raw, &result) == nil && result.SessionID != "" {
 			return result.SessionID
 		}
 	}
-	id := adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: time.Now(), Headless: true, ProcessOutput: response, Workdir: workspace})
+	id := adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: spawnTime, Headless: true, ProcessOutput: response, Workdir: workspace})
 	if id == "" {
 		return "unknown"
 	}

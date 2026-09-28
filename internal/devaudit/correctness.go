@@ -197,7 +197,7 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 	}
 	defer cleanup()
 	command.Env = env
-	data, runErr := runCrosscheckOutput(command, adapter)
+	data, spawnTime, runErr := runCrosscheckOutput(command, adapter)
 	if after, err := trustedAuditInputsFingerprint(request); err != nil {
 		return CorrectnessCandidates{}, err
 	} else if after != trusted {
@@ -226,7 +226,7 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 	if decoder.Decode(&extra) != io.EOF {
 		return CorrectnessCandidates{}, fmt.Errorf("crosscheck result contains multiple JSON values")
 	}
-	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: auditSessionID(adapter, data, response, workspace)}
+	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: auditSessionID(adapter, data, response, workspace, spawnTime)}
 	return output, nil
 }
 

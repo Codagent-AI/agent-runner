@@ -195,6 +195,52 @@ func TestCodexCrosscheckDoesNotRequireClaudeReadDirs(t *testing.T) {
 	cleanup()
 }
 
+func TestCrosscheckDiscoversSessionCreatedDuringJudgeRun(t *testing.T) {
+	for _, stage := range []string{"value", "correctness"} {
+		t.Run(stage, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			request, pkg := crosscheckFixture(t)
+			request.Auditor.CLI = "copilot"
+			if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "request.json"), request); err != nil {
+				t.Fatal(err)
+			}
+			judgment := `{"candidates":[]}`
+			if stage == "value" {
+				judgment = `{"batch_id":"` + pkg.BatchID + `","observations":[]}`
+			}
+			event, err := json.Marshal(map[string]any{"type": "assistant.message", "data": map[string]string{"content": judgment}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			sessionDir := filepath.Join(home, ".copilot", "session-state", "judge-session")
+			original := crosscheckCommand
+			t.Cleanup(func() { crosscheckCommand = original })
+			crosscheckCommand = func(_ []string, workspace, _ string) (*exec.Cmd, error) {
+				const script = `mkdir -p "$1"; printf 'cwd: %s\n' "$2" > "$1/workspace.yaml"; sleep 1; printf '%s' "$3"`
+				return exec.Command("sh", "-c", script, "stub", sessionDir, workspace, string(event)), nil
+			}
+			var provenance BatchProvenance
+			if stage == "value" {
+				result, err := invokeCrosscheckValueBatch(request, pkg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				provenance = result.Provenance
+			} else {
+				result, err := invokeCrosscheckCorrectness(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				provenance = result.Provenance
+			}
+			if diff := cmp.Diff("judge-session", provenance.SessionID); diff != "" {
+				t.Errorf("session ID (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestCrosscheckFailuresRetainRedactedProviderDiagnostics(t *testing.T) {
 	for _, stage := range []string{"value", "correctness"} {
 		for _, code := range []string{"0", "1"} {
