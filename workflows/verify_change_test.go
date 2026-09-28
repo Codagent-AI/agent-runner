@@ -11,6 +11,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/textfmt"
 )
 
 const verifyChangeRef = "builtin:core/verify-change-v1.0.yaml"
@@ -162,7 +163,9 @@ func TestLegacyImplementChangeSimplifyStopsForDecisions(t *testing.T) {
 				{name: "grep read failure", ledger: "No unresolved assumptions or context gaps.\n", grepFailure: true, exitCode: 2},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
-					sessionDir := t.TempDir()
+					// A space and a single quote in the session dir prove the gate
+					// survives the runner's shell-safe interpolation.
+					sessionDir := filepath.Join(t.TempDir(), "session dir's")
 					outputDir := filepath.Join(sessionDir, "output")
 					if err := os.MkdirAll(outputDir, 0o755); err != nil {
 						t.Fatal(err)
@@ -170,7 +173,10 @@ func TestLegacyImplementChangeSimplifyStopsForDecisions(t *testing.T) {
 					if err := os.WriteFile(filepath.Join(outputDir, "acceptance-assumptions.md"), []byte(tc.ledger), 0o644); err != nil {
 						t.Fatal(err)
 					}
-					command := strings.ReplaceAll(gate.Command, "{{session_dir}}", sessionDir)
+					command, err := textfmt.InterpolateShellSafeTyped(gate.Command, nil, nil, map[string]string{"session_dir": sessionDir})
+					if err != nil {
+						t.Fatalf("interpolate decision gate: %v", err)
+					}
 					cmd := exec.Command("sh", "-c", command)
 					if tc.grepFailure {
 						binDir := filepath.Join(sessionDir, "bin")
