@@ -231,7 +231,7 @@ func realDirectory(path string) bool {
 	return err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0
 }
 
-//nolint:gocognit,cyclop,funlen // Removal rechecks every safety condition while holding all group locks.
+//nolint:gocognit,funlen // Removal rechecks every safety condition while holding all group locks.
 func removeUnit(runsDir string, unit *Unit, p Policy, now time.Time, r *Report) {
 	ids := make([]string, 0, len(unit.Members))
 	for i := range unit.Members {

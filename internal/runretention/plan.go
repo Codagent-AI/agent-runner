@@ -12,7 +12,7 @@ type Unit struct {
 	Reason   string
 }
 
-//nolint:gocognit,cyclop,funlen // Eligibility combines grouping, class-specific ages, and count ordering.
+//nolint:gocognit,funlen // Eligibility combines grouping, class-specific ages, and count ordering.
 func Plan(all []Run, policy Policy, now time.Time) []Unit {
 	if !policy.Enabled {
 		return nil
