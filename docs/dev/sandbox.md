@@ -108,7 +108,11 @@ The smoke releases the resources it owns, and only those:
   `agent-runner-dev-audit-smoke.*` directory under `${TMPDIR:-/tmp}`. After
   success it removes that directory and prints `smoke: removed artifact
   directory <path>`. After failure, timeout, invalid results, or interrupt it
-  keeps the directory and prints `smoke: evidence retained in <path>`.
+  keeps the directory and prints `smoke: evidence retained in <path>`. Kept
+  evidence then belongs to the invoker; no later smoke run deletes it.
+  Unattended callers, such as the factory, should set `ARTIFACT_DIR` inside
+  their own per-attempt artifact directory so failure evidence is cleaned up
+  with the attempt instead of accumulating under `${TMPDIR:-/tmp}`.
 - **Caller-owned artifacts.** A directory supplied through `ARTIFACT_DIR` is
   never deleted, whatever the outcome.
 - **Build cache.** The smoke leaves the Docker build cache alone. Untagging

@@ -154,9 +154,12 @@ SHALL NOT change the smoke's exit status.
 When the caller does not set `ARTIFACT_DIR`, the smoke SHALL create a temporary artifact directory
 and own it. After a successful journey, the smoke SHALL remove that directory completely, including
 files the container wrote. After a failure, a timeout, invalid results, or an interrupt, the smoke
-SHALL keep that directory and print its path on stderr. When the caller sets `ARTIFACT_DIR`, the smoke
-SHALL NOT delete that directory or its contents, whatever the outcome. A failure to remove an owned
-directory SHALL be reported with its path and SHALL NOT change the smoke's exit status.
+SHALL keep that directory and print its path on stderr. A kept owned directory SHALL be handed to the
+invoker: the smoke SHALL NOT delete it on any later run. When the caller sets `ARTIFACT_DIR`, the smoke
+SHALL NOT delete that directory or its contents, whatever the outcome. Unattended callers SHOULD pass
+`ARTIFACT_DIR` inside a directory whose lifecycle they manage, so failure evidence does not accumulate
+under `${TMPDIR:-/tmp}`. A failure to remove an owned directory SHALL be reported with its path and
+SHALL NOT change the smoke's exit status.
 
 #### Scenario: Owned directory after success
 - **WHEN** the smoke runs without `ARTIFACT_DIR` and the journey succeeds
@@ -173,6 +176,14 @@ directory SHALL be reported with its path and SHALL NOT change the smoke's exit 
 #### Scenario: Caller-supplied directory after success
 - **WHEN** the smoke runs with `ARTIFACT_DIR` set and the journey succeeds
 - **THEN** that directory and the smoke's evidence inside it remain
+
+#### Scenario: Kept evidence is not removed by a later run
+- **WHEN** a smoke run without `ARTIFACT_DIR` fails and keeps its temporary artifact directory, and a later smoke run succeeds
+- **THEN** the earlier run's directory still exists; only the later run's own directory is removed
+
+#### Scenario: Unattended failure with a caller-managed artifact directory
+- **WHEN** an unattended caller runs the smoke with `ARTIFACT_DIR` inside a directory it manages and the journey fails
+- **THEN** the evidence remains in that caller-managed directory and nothing new is left under `${TMPDIR:-/tmp}`
 
 #### Scenario: Artifact removal fails
 - **WHEN** the owned artifact directory cannot be fully removed after a successful journey

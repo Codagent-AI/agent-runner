@@ -418,6 +418,25 @@ func TestDevAuditSmokeCleanupFailureRemovesImageAndKeepsEvidence(t *testing.T) {
 	}
 }
 
+func TestDevAuditSmokeCleanupLaterSuccessKeepsEarlierRetainedEvidence(t *testing.T) {
+	f := newSmokeFixture(t)
+	f.env["FAKE_DOCKER_RUN_EXIT"] = "1"
+	if res := f.run(); res.exitCode != 1 {
+		t.Fatalf("first run exit code = %d, want 1\nstderr:\n%s", res.exitCode, res.stderr)
+	}
+	kept := f.ownedArtifactDirs()
+	if len(kept) != 1 {
+		t.Fatalf("expected one retained directory after failure, got %v", kept)
+	}
+	f.env["FAKE_DOCKER_RUN_EXIT"] = "0"
+	if res := f.run(); res.exitCode != 0 {
+		t.Fatalf("second run exit code = %d, want 0\nstderr:\n%s", res.exitCode, res.stderr)
+	}
+	if got := f.ownedArtifactDirs(); !slices.Equal(got, kept) {
+		t.Fatalf("artifact directories after later success = %v, want only earlier evidence %v", got, kept)
+	}
+}
+
 // INT-003
 func TestDevAuditSmokeCleanupKeepsCallerImageAndArtifactDir(t *testing.T) {
 	for _, tc := range []struct {

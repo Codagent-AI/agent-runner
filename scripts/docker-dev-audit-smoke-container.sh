@@ -14,6 +14,11 @@ cat > "$project/.agent-runner/config.yaml" <<'YAML'
 profiles:
   default:
     agents:
+      lead:
+        default_mode: autonomous
+        cli: codex
+        model: smoke-model
+        effort: low
       crosscheck:
         default_mode: autonomous
         cli: codex
@@ -36,6 +41,7 @@ for arg in "$@"; do
   fi
   prompt="$arg"
 done
+if [ "$prompt" = "-" ]; then prompt="$(cat)"; fi
 case "$prompt" in
   "You are judging workflow-step value"*)
     while [ ! -f "$AUDIT_SMOKE_RELEASE" ]; do sleep 0.05; done
