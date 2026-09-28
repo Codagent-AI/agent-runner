@@ -3,7 +3,6 @@
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
 import tempfile
 import threading
@@ -37,7 +36,8 @@ class SmokeTest(unittest.TestCase):
                     "execution_session_id": "session"}
         provenance = {"launch_root": "/agent-runner-source", "coverage": "complete",
                       "verified": True, "launch_git_available": False}
-        self.write(self.audit / "request.json", dict(identity, runner_source=provenance))
+        self.write(self.audit / "request.json", dict(identity, runner_source=provenance,
+            auditor={"cli": "codex", "model": "smoke-model", "reasoning_effort": "low"}))
         observation = dict(identity, observation_id="observation", step_id="source-agent",
                            overall_value="medium", change_effect="intended",
                            unique_contribution="unique", downstream_evidence="supporting",
@@ -96,18 +96,15 @@ class SmokeTest(unittest.TestCase):
         result, _ = self.run_smoke()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_fixture_pins_source_and_auditor_to_fake_codex(self):
+    def test_rejects_non_fixture_auditor(self):
+        request = json.loads((self.audit / "request.json").read_text())
+        request["auditor"] = {"cli": "claude", "model": "opus", "reasoning_effort": "high"}
+        self.write(self.audit / "request.json", request)
         result, _ = self.run_smoke()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        config = (self.root / "project/.agent-runner/config.yaml").read_text()
-        for role in ("crosscheck", "lead"):
-            with self.subTest(role=role):
-                match = re.search(r"^      " + role + r":\n((?:^        .+\n)+)", config, re.MULTILINE)
-                self.assertIsNotNone(match, f"{role} is not pinned in the smoke config")
-                fields = dict(re.findall(r"^        (\w+): (.+)$", match.group(1), re.MULTILINE))
-                self.assertEqual(fields["cli"], "codex")
-                self.assertEqual(fields["model"], "smoke-model")
-                self.assertEqual(fields["effort"], "low")
+        self.assertNotEqual(result.returncode, 0, "smoke accepted a non-fixture auditor")
+        self.assertIn("non-fixture auditor", result.stderr)
+        self.assertIn("claude", result.stderr)
+        self.assertNotIn("smoke passed", result.stdout)
 
     def test_fake_codex_reads_audit_prompt_from_stdin(self):
         result, _ = self.run_smoke()
@@ -119,6 +116,33 @@ class SmokeTest(unittest.TestCase):
                                   capture_output=True, text=True, timeout=5)
         self.assertEqual(response.returncode, 0, response.stderr)
         self.assertEqual(output.read_text().strip(), '{"candidates":[]}')
+
+    def test_fake_codex_reads_large_value_prompt_from_stdin(self):
+        result, _ = self.run_smoke()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        fake_codex = self.root / "bin/codex"
+        output = self.root / "value-response.json"
+        release = self.root / "release-audit"
+        release.touch()
+        protected_dir = self.root / "read-only"
+        protected_dir.mkdir()
+        protected_dir.chmod(0o555)
+        self.addCleanup(lambda: protected_dir.chmod(0o755))
+        protected = protected_dir / "protected-source.txt"
+        package = {"batch_id": "value-001", "leaves": [
+            {"skeleton": {"observation_id": "observation"}}]}
+        prompt = ("You are judging workflow-step value\n" + "x" * 1500000
+                  + "\n\n" + json.dumps(package))
+        env = dict(os.environ, AUDIT_SMOKE_RELEASE=str(release),
+                   AUDIT_SMOKE_PROTECTED=str(protected))
+        response = subprocess.run([str(fake_codex), "exec", "--output-last-message", str(output), "-"],
+                                  input=prompt, env=env, capture_output=True, text=True, timeout=5)
+        self.assertEqual(response.returncode, 0, response.stderr)
+        self.assertEqual(json.loads(output.read_text()), {"batch_id": "value-001", "observations": [{
+            "observation_id": "observation", "overall_value": "medium",
+            "change_effect": "intended", "unique_contribution": "unique",
+            "downstream_evidence": "supporting", "confidence": "high",
+            "evidence_coverage": "partial"}]})
 
     def test_waits_for_audit_state_after_lifecycle_completion(self):
         self.state["completed"] = False

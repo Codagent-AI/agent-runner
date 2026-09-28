@@ -50,9 +50,9 @@ case "$prompt" in
       echo "smoke: Linux audit sandbox permitted a protected write" >&2
       exit 44
     fi
-    result="$(python3 - "$prompt" <<'PY'
+    result="$(printf '%s' "$prompt" | python3 -c '
 import json, sys
-package = json.loads(sys.argv[1].rsplit("\n\n", 1)[1])
+package = json.loads(sys.stdin.read().rsplit("\n\n", 1)[1])
 print(json.dumps({
     "batch_id": package["batch_id"],
     "observations": [{
@@ -65,7 +65,7 @@ print(json.dumps({
         "evidence_coverage": "partial"
     } for leaf in package["leaves"]]
 }))
-PY
+'
 )"
     ;;
   "Investigate only reproducible Agent Runner defects"*) result='{"candidates":[]}' ;;
