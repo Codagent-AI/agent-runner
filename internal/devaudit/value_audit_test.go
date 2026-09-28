@@ -10,6 +10,36 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
+func TestSelectedSessionOutcome(t *testing.T) {
+	step := func(prefix, outcome string) metrics.StepRecord {
+		return metrics.StepRecord{ExecutionSessionID: "selected", Prefix: prefix, Kind: "step", Outcome: outcome}
+	}
+	cases := []struct {
+		name           string
+		sessionOutcome string
+		steps          []metrics.StepRecord
+		want           string
+	}{
+		{"warn-only failure with successful run", "success", []metrics.StepRecord{step("", "failed")}, "success"},
+		{"failed run", "failed", []metrics.StepRecord{step("", "success")}, "failed"},
+		{"aborted run", "aborted", []metrics.StepRecord{step("", "success")}, "aborted"},
+		{"legacy nested failure followed by success", "", []metrics.StepRecord{step("group", "failed"), step("", "success")}, "success"},
+		{"legacy final top-level failure", "", []metrics.StepRecord{step("", "success"), step("", "failed")}, "failed"},
+		{"no records", "", nil, "unknown"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			artifact := &metrics.Artifact{Steps: tc.steps}
+			if tc.sessionOutcome != "" {
+				artifact.Sessions = []metrics.SessionRecord{{ExecutionSessionID: "selected", Outcome: tc.sessionOutcome}}
+			}
+			if got := selectedSessionOutcome(artifact, "selected"); got != tc.want {
+				t.Fatalf("outcome = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAggregateGitExcludesPreexistingDirtyPaths(t *testing.T) {
 	start := &audit.GitCheckpoint{Available: true,
 		Worktree:  []audit.GitFileStat{{Path: "a", Added: 3, Deleted: 1}, {Path: "a2", Added: 1}},

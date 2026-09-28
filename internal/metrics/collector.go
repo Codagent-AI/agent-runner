@@ -66,12 +66,14 @@ type ValidatorDeliveryState struct {
 }
 
 type SessionRecord struct {
-	ExecutionSessionID string `json:"execution_session_id"`
-	StartedAt          string `json:"started_at"`
-	LastObservedAt     string `json:"last_observed_at"`
-	EndedAt            string `json:"ended_at,omitempty"`
-	DurationMS         int64  `json:"duration_ms"`
-	Status             string `json:"status"`
+	ExecutionSessionID    string `json:"execution_session_id"`
+	Outcome               string `json:"outcome,omitempty"`
+	CompletedWithWarnings bool   `json:"completed_with_warnings,omitempty"`
+	StartedAt             string `json:"started_at"`
+	LastObservedAt        string `json:"last_observed_at"`
+	EndedAt               string `json:"ended_at,omitempty"`
+	DurationMS            int64  `json:"duration_ms"`
+	Status                string `json:"status"`
 }
 
 type StepRecord struct {
@@ -183,6 +185,11 @@ func (c *Collector) Process(event audit.Event) audit.Event {
 		c.refreshAggregatesLocked()
 		c.persist()
 	case audit.EventRunEnd:
+		if len(c.artifact.Sessions) > 0 {
+			session := &c.artifact.Sessions[len(c.artifact.Sessions)-1]
+			session.Outcome = stringValue(event.Data["outcome"])
+			session.CompletedWithWarnings, _ = event.Data["completed_with_warnings"].(bool)
+		}
 		if at, ok := c.eventTimestamp(event); ok {
 			c.observeSession(at, true)
 		} else {
