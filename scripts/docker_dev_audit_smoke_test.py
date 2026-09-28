@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import threading
@@ -94,6 +95,30 @@ class SmokeTest(unittest.TestCase):
     def test_valid_completed_audit_passes(self):
         result, _ = self.run_smoke()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_fixture_pins_source_and_auditor_to_fake_codex(self):
+        result, _ = self.run_smoke()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        config = (self.root / "project/.agent-runner/config.yaml").read_text()
+        for role in ("crosscheck", "lead"):
+            with self.subTest(role=role):
+                match = re.search(r"^      " + role + r":\n((?:^        .+\n)+)", config, re.MULTILINE)
+                self.assertIsNotNone(match, f"{role} is not pinned in the smoke config")
+                fields = dict(re.findall(r"^        (\w+): (.+)$", match.group(1), re.MULTILINE))
+                self.assertEqual(fields["cli"], "codex")
+                self.assertEqual(fields["model"], "smoke-model")
+                self.assertEqual(fields["effort"], "low")
+
+    def test_fake_codex_reads_audit_prompt_from_stdin(self):
+        result, _ = self.run_smoke()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        fake_codex = self.root / "bin/codex"
+        output = self.root / "audit-response.json"
+        response = subprocess.run([str(fake_codex), "exec", "--output-last-message", str(output), "-"],
+                                  input="Investigate only reproducible Agent Runner defects",
+                                  capture_output=True, text=True, timeout=5)
+        self.assertEqual(response.returncode, 0, response.stderr)
+        self.assertEqual(output.read_text().strip(), '{"candidates":[]}')
 
     def test_waits_for_audit_state_after_lifecycle_completion(self):
         self.state["completed"] = False
