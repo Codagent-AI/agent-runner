@@ -82,11 +82,11 @@ steps:
       - testing envelope and any `HT-*` obligations: `{{change_dir}}/test-plan.md`;
       - implementation evidence: `{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`;
       - evidence directory: `{{session_dir}}/output/`;
-      - scratch directory: `{{session_dir}}/scratch/acceptance-test`;
+      - scratch_dir: `{{session_dir}}/scratch/acceptance-test`;
       - assumptions ledger: `{{session_dir}}/output/acceptance-assumptions.md`;
       - prior tested revision: `{{session_dir}}/output/acceptance-tested-revision.txt`, which the tester diffs against to size the exploration from what that diff moved. If that file is missing or names an unresolvable SHA, require the tester to report an impediment and explore the change as a whole, applying the skill's coverage floor as a first pass does.
 
-      Tell the tester: All temporary files, clones, build outputs, and servers' working directories must go under the scratch directory. Never use `/tmp`, `/private/tmp`, or `$TMPDIR` for them.
+      Tell the tester: All temporary files, clones, build outputs, and servers' working directories must go under `scratch_dir`. Never use `/tmp`, `/private/tmp`, or `$TMPDIR` for them.
 
       Follow codagent:call-agent's verification and autonomous result-accounting rules rather than performing the acceptance testing yourself. If the pass succeeds, summarize the result and continue to next step.
 
@@ -127,11 +127,11 @@ steps:
           - testing envelope and any `HT-*` obligations: `{{change_dir}}/test-plan.md`;
           - implementation evidence: `{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`;
           - evidence directory: `{{session_dir}}/output/`;
-          - scratch directory: `{{session_dir}}/scratch/acceptance-test`;
+          - scratch_dir: `{{session_dir}}/scratch/acceptance-test`;
           - assumptions ledger: `{{session_dir}}/output/acceptance-assumptions.md`;
           - prior tested revision: `{{session_dir}}/output/acceptance-tested-revision.txt`.
 
-          Tell the tester: All temporary files, clones, build outputs, and servers' working directories must go under the scratch directory. Never use `/tmp`, `/private/tmp`, or `$TMPDIR` for them.
+          Tell the tester: All temporary files, clones, build outputs, and servers' working directories must go under `scratch_dir`. Never use `/tmp`, `/private/tmp`, or `$TMPDIR` for them.
 
           Follow codagent:call-agent's independent-verification and result-accounting rules. A finding where the tester reproduced behavior that contradicts the approved specs, or that an ordinary user would clearly consider broken, may not be dismissed as "not a defect": fix it, or present it to the user as a decision, with your reasoning. If testing finds an actionable product defect, fix it, add practical regression coverage, run relevant checks and the full Validator, commit with the `[recover-reacceptance-testing]` prefix, push the draft pull request, and resume the same tester against the resulting diff.
 

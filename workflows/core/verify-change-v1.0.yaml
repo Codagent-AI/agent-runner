@@ -145,11 +145,11 @@ steps:
           - testing envelope and any `HT-*` obligations: `{{change_dir}}/test-plan.md`;
           - implementation evidence: `{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`;
           - evidence directory: `{{session_dir}}/output/`;
-          - scratch directory: `{{session_dir}}/scratch/acceptance-test`;
+          - scratch_dir: `{{session_dir}}/scratch/acceptance-test`;
           - assumptions ledger: `{{session_dir}}/output/acceptance-assumptions.md`;
           - prior tested revision: `{{session_dir}}/output/acceptance-tested-revision.txt`.
 
-          All temporary files, clones, build outputs, and servers' working directories must go under the scratch directory. Never use `/tmp`, `/private/tmp`, or `$TMPDIR` for them.
+          All temporary files, clones, build outputs, and servers' working directories must go under `scratch_dir`. Never use `/tmp`, `/private/tmp`, or `$TMPDIR` for them.
 
           Acceptance is exploratory. You decide what to exercise; nobody hands you a list of cases to run. Read the implementation and diff to decide where to look, never to decide what correct means.
 

@@ -368,8 +368,8 @@ func TestCoreVerifyChangeAcceptanceScratchDirectory(t *testing.T) {
 		t.Fatal("acceptance-test step not found")
 	}
 	requirePromptContains(t, tester.ID, tester.Prompt,
-		"scratch directory: `{{session_dir}}/scratch/acceptance-test`",
-		"All temporary files, clones, build outputs, and servers' working directories",
+		"scratch_dir: `{{session_dir}}/scratch/acceptance-test`",
+		"All temporary files, clones, build outputs, and servers' working directories must go under `scratch_dir`",
 		"Never use `/tmp`, `/private/tmp`, or `$TMPDIR`",
 	)
 }
