@@ -394,3 +394,19 @@ func TestCIWaitAddressedFeedbackAndLatestBotEvidence(t *testing.T) {
 		})
 	}
 }
+
+// The start grace, not the poll interval, decides when an idle wait may finish.
+func TestCIWaitStopsAtGraceEndNotNextPoll(t *testing.T) {
+	for _, tt := range []struct{ name, inputs, want string }{
+		{"no expected bot", "", "CI_PASSED"},
+		{"expected bot never starts", `"review_bots":"coderabbitai",`, "CI_REVIEW_INCOMPLETE"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			input := fmt.Sprintf(`{%s"deadline_seconds":"3","poll_interval_seconds":"1","bot_start_grace_seconds":"0.1"}`, tt.inputs)
+			out, code, elapsed := runCIFixture(t, ciFixture(), input)
+			if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), tt.want) || elapsed > 700*time.Millisecond {
+				t.Fatalf("code=%d elapsed=%s output=%s", code, elapsed, out)
+			}
+		})
+	}
+}

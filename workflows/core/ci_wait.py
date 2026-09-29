@@ -387,7 +387,10 @@ class Collector:
                 break
             print(f"ci-wait: poll {poll}, {len(state['pending']) if state else '?'} checks pending, "
                   f"{max(0, int(self.deadline-now()))}s left", file=sys.stderr)
-            time.sleep(min(self.interval, max(0, self.deadline - now())))
+            wake = self.deadline
+            if state and now() < state["grace_end"]:
+                wake = state["grace_end"]
+            time.sleep(min(self.interval, max(0, wake - now())))
         if not state:
             return self.report(None, "CI_PENDING")
         return self.report(state, self.marker(state))
