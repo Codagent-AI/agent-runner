@@ -557,13 +557,16 @@ func totalsForRecords(records []StepRecord, activeDuration int64) model.RunTotal
 		}
 		agents++
 		if step.Usage != nil && step.Usage.Status == model.UsageCollected {
-			if step.Usage.SubagentCollection == model.CompletenessPartial {
+			// Only partial subagent collection lowers coverage; other partial
+			// records, such as nested Validator projections, count as reported.
+			partial := step.Usage.SubagentCollection == model.CompletenessPartial
+			if partial {
 				usagePartial++
 			} else {
 				usageReported++
 			}
 			if step.Usage.TokenTotals != nil {
-				if step.Usage.SubagentCollection == model.CompletenessPartial {
+				if partial {
 					tokenTotalsPartial++
 				} else {
 					tokenTotalsReported++
@@ -578,12 +581,12 @@ func totalsForRecords(records []StepRecord, activeDuration int64) model.RunTotal
 			cost += *step.EstimatedAPICostUSD
 		}
 	}
-	totals.UsageCoverage = coverageWithPartial(agents, usageReported, usagePartial)
-	totals.TokenTotalCoverage = coverageWithPartial(agents, tokenTotalsReported, tokenTotalsPartial)
+	totals.UsageCoverage = coverage(agents, usageReported, usagePartial)
+	totals.TokenTotalCoverage = coverage(agents, tokenTotalsReported, tokenTotalsPartial)
 	if tokenTotalsReported+tokenTotalsPartial > 0 {
 		totals.TokenTotals = &canonicalTotals
 	}
-	totals.CostCoverage = coverage(agents, costReported)
+	totals.CostCoverage = coverage(agents, costReported, 0)
 	if costReported > 0 {
 		totals.EstimatedAPICostUSD = &cost
 	}
@@ -866,17 +869,9 @@ func emptyTotals() model.RunTotals {
 	return model.RunTotals{Tokens: make(model.TokenCounts), UsageCoverage: model.CoverageNone, TokenTotalCoverage: model.CoverageNone, CostCoverage: model.CoverageNone}
 }
 
-func coverage(eligible, reported int) model.Coverage {
-	if eligible == 0 || reported == 0 {
-		return model.CoverageNone
-	}
-	if eligible == reported {
-		return model.CoverageComplete
-	}
-	return model.CoveragePartial
-}
-
-func coverageWithPartial(eligible, full, partial int) model.Coverage {
+// coverage reports how much of the eligible population reported a metric.
+// Partial reporters contribute known subtotals but never complete coverage.
+func coverage(eligible, full, partial int) model.Coverage {
 	if full+partial == 0 {
 		return model.CoverageNone
 	}

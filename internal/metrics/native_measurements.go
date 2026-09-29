@@ -95,7 +95,62 @@ func nativeUncachedInput(u *model.UsageRecord, legacy bool) measurements.Value {
 	return missingValue("not_reported")
 }
 
-//nolint:gocognit,funlen // Native projection handles independent availability for each field.
+func telemetryObservedIdentity(id, observedModel string) measurements.ObservedIdentity {
+	return measurements.ObservedIdentity{ID: id, Model: observedModel, Provenance: "telemetry", Provider: missingString("not_reported"), Effort: missingString("not_reported")}
+}
+func missingString(reason string) measurements.StringEvidence {
+	return measurements.StringEvidence{Availability: "unavailable", Reason: &reason}
+}
+
+// nativeTokenFields projects a usage record's token categories and canonical
+// totals onto the common field vocabulary.
+func nativeTokenFields(u *model.UsageRecord, legacy bool) map[string]measurements.Value {
+	tokens := map[string]measurements.Value{}
+	for _, name := range CanonicalFields {
+		tokens[name] = missingValue("not_reported")
+	}
+	if u.Status != model.UsageCollected {
+		return tokens
+	}
+	for old, name := range map[string]string{model.TokenCachedInput: "cache_read", model.TokenCacheWrite: "cache_write", model.TokenOutput: "output", model.TokenReasoning: "reasoning"} {
+		if count, ok := u.Tokens[old]; ok {
+			tokens[name] = nativeValue(count, false)
+		}
+	}
+	if u.TokenTotals != nil {
+		tokens["input_total"] = nativeValue(u.TokenTotals.Input, true)
+		tokens["output"] = nativeValue(u.TokenTotals.Output, true)
+		tokens["normalized_total"] = nativeValue(u.TokenTotals.Total, true)
+		for _, name := range []string{"input_total", "output"} {
+			v := tokens[name]
+			v.IncludedIn = []string{"normalized_total"}
+			tokens[name] = v
+		}
+	}
+	// Claude and OpenCode report exclusive input. Codex input_tokens includes
+	// cached_input_tokens, so its uncached input is their difference.
+	// Existing adapter totals retain cumulative baseline protection.
+	tokens["input_uncached"] = nativeUncachedInput(u, legacy)
+	return tokens
+}
+
+// nativeAllocation projects one main-thread or subagent allocation. Its
+// tokens are evidence only; aggregates read the attempt-level fields.
+func nativeAllocation(a *model.UsageAllocation, cliName string, legacy bool, identityRef *string) NativeAllocation {
+	entry := NativeAllocation{ID: a.ID, Kind: a.Kind, ObservedIdentityRef: identityRef, AgentType: a.AgentType, ToolUseID: a.ToolUseID, ParentToolUseID: a.ParentToolUseID, SpawnDepth: a.SpawnDepth, Availability: "available", Cost: missingValue("allocation_cost_not_reported")}
+	switch {
+	case a.Status == model.UsageUnavailable:
+		entry.Availability = "unavailable"
+	case a.Completeness == model.CompletenessPartial:
+		entry.Availability = "partial"
+	}
+	if a.Reason != "" {
+		entry.Reason = pointer(string(a.Reason))
+	}
+	entry.Tokens = nativeTokenFields(&model.UsageRecord{CLI: cliName, Status: a.Status, Tokens: a.Tokens, TokenTotals: a.TokenTotals}, legacy)
+	return entry
+}
+
 func nativeMeasurement(runID string, step *StepRecord, legacy bool) NativeMeasurement {
 	n := NativeMeasurement{Version: 1, Key: step.RecordID, Attribution: Attribution{RunID: runID, ExecutionSessionID: step.ExecutionSessionID, StepID: step.ID, Prefix: step.Prefix, ParentAttemptID: step.ParentAttemptID}, Producer: "agent-runner", Provenance: "native", Observed: []measurements.ObservedIdentity{}, Tokens: map[string]measurements.Value{}, Costs: []measurements.Cost{}, Limitations: []string{}}
 	for _, name := range CanonicalFields {
@@ -110,22 +165,16 @@ func nativeMeasurement(runID string, step *StepRecord, legacy bool) NativeMeasur
 		return n
 	}
 	n.SourceFormat = u.Source
-	if len(u.Allocations) > 0 {
-		n.Version = 2
-		n.Allocations = make([]NativeAllocation, 0, len(u.Allocations))
-		if u.SubagentCollection != "" {
-			n.SubagentCollection = &NativeSubagentCollection{Completeness: u.SubagentCollection, Reason: u.SubagentCollectionReason}
-		}
-	}
+	allocated := len(u.Allocations) > 0
 	id := u.Identity
 	n.Requested = measurements.Identity{Adapter: nullable(id.RequestedCLI), Model: nullable(id.RequestedModel), Effort: nullable(id.RequestedEffort), Provenance: "configuration"}
 	n.Resolved = measurements.Identity{Adapter: nullable(id.EffectiveCLI), Model: nullable(id.EffectiveModel), Provider: nullable(id.EffectiveProvider), Effort: nullable(id.EffectiveEffort), Provenance: "launch_resolution"}
 	if id.ModelSource == model.IdentitySourceTelemetry && id.EffectiveModel != "" {
 		observedID := "observed-1"
-		if len(u.Allocations) > 0 {
+		if allocated {
 			observedID = "observed-main"
 		}
-		observed := measurements.ObservedIdentity{ID: observedID, Model: id.EffectiveModel, Provenance: "telemetry", Provider: measurements.StringEvidence{Availability: "unavailable", Reason: pointer("not_reported")}, Effort: measurements.StringEvidence{Availability: "unavailable", Reason: pointer("not_reported")}}
+		observed := telemetryObservedIdentity(observedID, id.EffectiveModel)
 		if id.ProviderSource == model.IdentitySourceTelemetry && id.EffectiveProvider != "" {
 			observed.Provider = measurements.StringEvidence{Availability: "available", Value: &id.EffectiveProvider}
 		}
@@ -134,85 +183,56 @@ func nativeMeasurement(runID string, step *StepRecord, legacy bool) NativeMeasur
 		}
 		n.Observed = append(n.Observed, observed)
 	}
-	if u.Status == model.UsageCollected {
-		for old, name := range map[string]string{model.TokenCachedInput: "cache_read", model.TokenCacheWrite: "cache_write", model.TokenOutput: "output", model.TokenReasoning: "reasoning"} {
-			if count, ok := u.Tokens[old]; ok {
-				n.Tokens[name] = nativeValue(count, false)
-			}
-		}
-		if u.TokenTotals != nil {
-			n.Tokens["input_total"] = nativeValue(u.TokenTotals.Input, true)
-			n.Tokens["output"] = nativeValue(u.TokenTotals.Output, true)
-			n.Tokens["normalized_total"] = nativeValue(u.TokenTotals.Total, true)
-			for _, name := range []string{"input_total", "output"} {
-				v := n.Tokens[name]
-				v.IncludedIn = []string{"normalized_total"}
-				n.Tokens[name] = v
-			}
-		}
-		// Claude and OpenCode report exclusive input. Codex input_tokens includes
-		// cached_input_tokens, so its uncached input is their difference.
-		// Existing adapter totals retain cumulative baseline protection.
-		n.Tokens["input_uncached"] = nativeUncachedInput(u, legacy)
-	}
-	if len(u.Allocations) > 0 {
-		identityRefs := map[string]string{}
-		for _, observed := range n.Observed {
-			identityRefs[observed.Model] = observed.ID
-		}
-		for i := range u.Allocations {
-			a := &u.Allocations[i]
-			var ref *string
-			if a.Model != "" {
-				id := identityRefs[a.Model]
-				if id == "" {
-					id = fmt.Sprintf("observed-%d", len(n.Observed)+1)
-					identityRefs[a.Model] = id
-					n.Observed = append(n.Observed, measurements.ObservedIdentity{ID: id, Model: a.Model, Provenance: "telemetry", Provider: measurements.StringEvidence{Availability: "unavailable", Reason: pointer("not_reported")}, Effort: measurements.StringEvidence{Availability: "unavailable", Reason: pointer("not_reported")}})
-				}
-				ref = &id
-			}
-			entry := NativeAllocation{ID: a.ID, Kind: a.Kind, ObservedIdentityRef: ref, AgentType: a.AgentType, ToolUseID: a.ToolUseID, ParentToolUseID: a.ParentToolUseID, SpawnDepth: a.SpawnDepth, Availability: "available", Tokens: map[string]measurements.Value{}, Cost: missingValue("allocation_cost_not_reported")}
-			if a.Status == model.UsageUnavailable {
-				entry.Availability = "unavailable"
-			} else if a.Completeness == model.CompletenessPartial {
-				entry.Availability = "partial"
-			}
-			if a.Reason != "" {
-				entry.Reason = pointer(string(a.Reason))
-			}
-			for _, field := range CanonicalFields {
-				entry.Tokens[field] = missingValue("not_reported")
-			}
-			for key, name := range map[string]string{model.TokenInput: "input_uncached", model.TokenCachedInput: "cache_read", model.TokenCacheWrite: "cache_write", model.TokenOutput: "output"} {
-				if count, ok := a.Tokens[key]; ok {
-					entry.Tokens[name] = nativeValue(count, false)
-				}
-			}
-			if a.TokenTotals != nil {
-				entry.Tokens["input_total"] = nativeValue(a.TokenTotals.Input, true)
-				entry.Tokens["normalized_total"] = nativeValue(a.TokenTotals.Total, true)
-			}
-			n.Allocations = append(n.Allocations, entry)
-		}
-	}
-	if len(n.Observed) == 0 && len(u.Allocations) == 0 {
+	n.Tokens = nativeTokenFields(u, legacy)
+	if allocated {
+		n.addAllocations(u, legacy)
+	} else if len(n.Observed) == 0 {
 		value := n.Tokens["normalized_total"]
 		n.UnallocatedUsage = &value
 		n.Limitations = append(n.Limitations, "model_allocation_unavailable")
 	}
-	if u.SubagentCollection == model.CompletenessPartial {
-		reason := strings.ReplaceAll(string(u.SubagentCollectionReason), "-", "_")
-		for key, value := range n.Tokens {
-			if value.Value != nil {
-				value.Availability = "partial"
-				value.Reason = &reason
-				n.Tokens[key] = value
-			}
-		}
-	}
 	n.collectReportedCost(step, legacy)
 	return n
+}
+
+// addAllocations records per-thread allocations, giving each distinct model
+// one observed identity, and marks attempt fields partial when subagent
+// collection was incomplete.
+func (n *NativeMeasurement) addAllocations(u *model.UsageRecord, legacy bool) {
+	n.Version = 2
+	n.Allocations = make([]NativeAllocation, 0, len(u.Allocations))
+	if u.SubagentCollection != "" {
+		n.SubagentCollection = &NativeSubagentCollection{Completeness: u.SubagentCollection, Reason: u.SubagentCollectionReason}
+	}
+	identityRefs := map[string]string{}
+	for _, observed := range n.Observed {
+		identityRefs[observed.Model] = observed.ID
+	}
+	for i := range u.Allocations {
+		a := &u.Allocations[i]
+		var ref *string
+		if a.Model != "" {
+			id := identityRefs[a.Model]
+			if id == "" {
+				id = fmt.Sprintf("observed-%d", len(n.Observed)+1)
+				identityRefs[a.Model] = id
+				n.Observed = append(n.Observed, telemetryObservedIdentity(id, a.Model))
+			}
+			ref = &id
+		}
+		n.Allocations = append(n.Allocations, nativeAllocation(a, u.CLI, legacy, ref))
+	}
+	if u.SubagentCollection != model.CompletenessPartial {
+		return
+	}
+	reason := strings.ReplaceAll(string(u.SubagentCollectionReason), "-", "_")
+	for key, value := range n.Tokens {
+		if value.Value != nil {
+			value.Availability = "partial"
+			value.Reason = &reason
+			n.Tokens[key] = value
+		}
+	}
 }
 func (c *Collector) refreshNativeMeasurementsLocked() {
 	old := map[string]NativeMeasurement{}
