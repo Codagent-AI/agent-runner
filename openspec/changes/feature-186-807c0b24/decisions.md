@@ -115,13 +115,19 @@
 ## approach-review
 
 - **F1 (high): head-tied bot evidence from before the ready transition counted as fresh, and `committedDate` misses old commits that were just pushed. Applied.**
-  - Decision: the push point is the head's earliest check-suite `createdAt` or its force-push event, falling back to the time the wait first saw the head. `committedDate` is dropped.
+  - Decision: the observable push point is the head's earliest check-suite `createdAt` or its force-push event. `committedDate` is dropped. When neither timestamp exists, the first observation bounds the grace but does not invalidate evidence tied to the current head.
     - Head-tied evidence must post-date the freshness point, so a review completed while the PR was a draft is stale after the ready transition.
     - The grace ends at max(freshness point, wait start) + 3 minutes.
     - Bot state resets when the head changes during the wait.
     - Spec, design, and proposal updated, with new scenarios and tests.
   - Alternatives: keep `committedDate`; exempt head-tied evidence from freshness.
   - Decision-bearing: yes. It is not direction-level: it tightens the proposal's own freshness promise.
+
+## implementation-review
+
+- **Missing push timestamp:** Accept existing current-head bot evidence after any ready transition when neither a check suite nor a matching force-push event establishes push time. The observation time still bounds the start grace. This avoids declaring completed reviews unfinished merely because the collector started later.
+- **Latest bot progress:** A newer pending or non-success head-tied result supersedes an earlier success. Top-level comments show that a bot started but do not override check, status, or review progress.
+- **Addressed top-level feedback:** Human top-level comments predating an observable push or a later author top-level reply are no longer actionable. Comments with missing timestamps remain actionable. This is the available deterministic approximation because GitHub issue comments do not form reply threads.
 - **F2 (high): any terminal bot check counted as finished, including skipped or failed ones. Applied.**
   - Decision: only fresh `SUCCESS` checks or statuses, or a review on the head commit, count as finished. `SKIPPED`, `NEUTRAL`, and failure-class outcomes leave the bot unfinished, giving `CI_REVIEW_INCOMPLETE`, and the report shows the conclusion. Scenario and tests added.
   - Alternatives: treat `NEUTRAL` or `SKIPPED` as finished.

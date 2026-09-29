@@ -77,7 +77,7 @@ The CI wait SHALL poll the PR's checks for the current head commit until every c
 
 The CI wait SHALL classify review feedback deterministically:
 - **Blocking review:** a reviewer whose latest review state is `CHANGES_REQUESTED`. It SHALL produce `CI_FAILED`.
-- **Actionable:** an unresolved review thread that is not deferred, or a top-level comment from a human other than the PR author. It SHALL produce `CI_COMMENTS` unless `CI_FAILED` applies.
+- **Actionable:** an unresolved review thread that is not deferred, or a top-level comment from a human other than the PR author that is newer than the latest observable push and has not been followed by a top-level author reply. It SHALL produce `CI_COMMENTS` unless `CI_FAILED` applies. If no push timestamp or comment timestamp is available, the comment SHALL remain actionable unless a later author reply can be established.
 - **Deferred thread:** an unresolved thread where the latest significant comment is from the PR author or from a bot other than the one that raised the finding, after trailing acknowledgments from the reviewing bot are ignored. A deferred thread SHALL be listed and SHALL NOT be actionable. A later human reply SHALL make the thread actionable again.
 - **Informational:** top-level bot summaries, rate-limit notices, "draft not reviewed" notices, and resolved threads. These SHALL NOT be actionable.
 
@@ -97,6 +97,14 @@ The CI wait SHALL classify review feedback deterministically:
 - **WHEN** CI is green and the only bot output is a top-level review summary with no unresolved threads
 - **THEN** the summary is listed as informational and the report ends with `CI_PASSED`
 
+#### Scenario: New push addresses earlier top-level feedback
+- **WHEN** a human top-level comment predates the current head's observable push and there is no newer feedback
+- **THEN** that comment does not keep the new head in `CI_COMMENTS`
+
+#### Scenario: Author reply addresses top-level feedback
+- **WHEN** the PR author posts a top-level reply after a human top-level comment and there is no newer feedback
+- **THEN** that earlier comment does not keep the PR in `CI_COMMENTS`
+
 ### Requirement: Expected review bots and freshness
 
 `core:finalize-pr` SHALL accept an optional `review_bots` param: comma-separated bot logins, empty by default. Surrounding whitespace, letter case, and a trailing `[bot]` suffix SHALL be ignored when matching. Callers that do not pass it SHALL keep working.
@@ -106,11 +114,11 @@ A bot SHALL be expected when it is listed in `review_bots`, or when it has submi
 Checks and commit statuses posted by an expected bot SHALL count as review-bot evidence, not as CI checks. A pending review-bot check SHALL therefore never produce `CI_PENDING`.
 
 Freshness and bot state:
-- The push point of the current head SHALL be the earliest check-suite creation time on the head commit, or the time of a force-push event that set the head, whichever is later. If neither exists, the push point SHALL be the time this wait first observed the head. The commit's own commit time SHALL NOT be used, because an old commit can be pushed long after it was made.
-- The freshness point SHALL be the later of the push point and the PR's most recent ready-for-review transition.
+- The observable push point of the current head SHALL be the earliest check-suite creation time on the head commit, or the time of a force-push event that set the head, whichever is later. The commit's own commit time SHALL NOT be used, because an old commit can be pushed long after it was made. If no push timestamp is observable, the wait's first observation of the head SHALL bound the start grace but SHALL NOT invalidate existing current-head bot evidence.
+- The freshness point SHALL be the later of the observable push point, when available, and the PR's most recent ready-for-review transition.
 - Bot evidence SHALL be fresh only when it is dated after the freshness point. This applies to evidence tied to the current head commit as well. A check or status uses its completion or creation time, a review its submission time, and a top-level comment its last update time. A check, status, or review on the current head completed before a later ready-for-review transition SHALL be stale.
 - Stale evidence SHALL NOT count as the bot having started or finished, and SHALL NOT satisfy a pass.
-- An expected bot SHALL be finished only when it has fresh positive completion evidence: a check run on the current head with conclusion `SUCCESS`, a commit status on the current head with state `SUCCESS`, or a review submitted on the current head commit.
+- An expected bot SHALL be finished only when its latest fresh head-tied progress evidence is positive completion: a check run on the current head with conclusion `SUCCESS`, a commit status on the current head with state `SUCCESS`, or a review submitted on the current head commit. A later pending or non-success check or status SHALL supersede an earlier success. A top-level comment SHALL NOT supersede head-tied progress evidence.
 - Terminal check or status outcomes other than success SHALL NOT count as finished. This includes skipped, neutral, failure, cancelled, timed-out, action-required, stale, and error outcomes. A later fresh success from the same bot SHALL override them.
 - The text of bot comments SHALL NOT be interpreted to decide whether a bot has started or finished.
 - If the PR head changes during the wait, the wait SHALL recompute the push point, the freshness point, and the start grace for the new head, and SHALL discard bot state from the previous head.
@@ -141,6 +149,14 @@ Start grace and outcomes:
 #### Scenario: Bot finishes review within the wait
 - **WHEN** an expected bot posts a pending status on the current head and later sets it to a terminal state before the deadline, with no actionable feedback
 - **THEN** the report ends with `CI_PASSED`
+
+#### Scenario: Current-head success without a push timestamp
+- **WHEN** no check suite or matching force-push event establishes the current head's push time, but an expected bot has a successful status on that head after the most recent ready transition
+- **THEN** the status counts as completed review even if it predates the wait process
+
+#### Scenario: Bot starts another review after success
+- **WHEN** an expected bot has a successful status on the current head and a newer pending status on that head
+- **THEN** the earlier success does not complete the newer review, and the wait reports `CI_REVIEW_INCOMPLETE` if it remains pending at the deadline
 
 #### Scenario: Pending review-bot status is not pending CI
 - **WHEN** every CI check passes and an expected bot's status on the current head is still pending at the deadline

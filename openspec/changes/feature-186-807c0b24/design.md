@@ -136,8 +136,8 @@ A bot identity is `lower(login)` with a trailing `[bot]` removed. For check runs
 1. **Expected bots** are the `review_bots` entries plus every identity whose author `__typename` is `Bot` and that has submitted a pull-request review (any state, any commit). Top-level-only bot commenters are *not* expected. Their comments stay informational. Bots that appear only in check runs are not expected either, which keeps `github-actions` and similar apps out of the set.
 2. **Push point and freshness point.**
    - The push point is the later of two times: the earliest check-suite `createdAt` on the head commit, and the latest `HeadRefForcePushedEvent.createdAt` whose `afterCommit.oid` equals the head. GitHub creates check suites when a commit is pushed, so the earliest one approximates push time even for an old commit.
-   - If neither exists, for example in a repository with no Actions or apps, the push point is the wall-clock time at which this wait first observed the head OID. That is conservative: evidence from before the wait counts as stale, and the worst result is a spurious `CI_REVIEW_INCOMPLETE` warning.
-   - The freshness point is the later of the push point and the latest `ReadyForReviewEvent.createdAt`.
+   - If neither exists, for example in a repository with no Actions or apps, the first observation of the head bounds the start grace. It does not reject already-completed evidence explicitly tied to the current head.
+   - The freshness point is the later of the observable push point, when available, and the latest `ReadyForReviewEvent.createdAt`.
    - The commit's `committedDate` is never used.
 3. **Check partition.** Check contexts on the head whose identity is an expected bot are *bot evidence*. All others are *CI checks*. CI checks are bucketed as pass, fail, or pending using `check-ci.sh`'s state sets:
    - **fail:** `FAILURE`, `CANCELLED`, `TIMED_OUT`, `ACTION_REQUIRED`, `STARTUP_FAILURE`, `ERROR`;
@@ -151,14 +151,14 @@ A bot identity is `lower(login)` with a trailing `[bot]` removed. For check runs
    - top-level comment: `updatedAt`.
 
    The states are:
-   - **finished:** there is fresh positive completion evidence: a head check run with conclusion `SUCCESS`, a head status with state `SUCCESS`, or a review whose `commit.oid` equals the head.
+   - **finished:** the latest fresh head-tied progress evidence is positive completion: a head check run with conclusion `SUCCESS`, a head status with state `SUCCESS`, or a review whose `commit.oid` equals the head. A later pending or non-success status supersedes an earlier success. Top-level comments can show that a bot started but do not supersede head-tied progress.
    - **in progress:** there is fresh head-tied evidence, such as a pending check or status, or a non-success terminal outcome (`SKIPPED`, `NEUTRAL`, `FAILURE`, `CANCELLED`, `TIMED_OUT`, `ACTION_REQUIRED`, `STALE`, `STARTUP_FAILURE`, `ERROR`), and the bot is not finished. The report shows the latest outcome, for example `coderabbitai: skipped`.
    - **started:** there is any fresh evidence, including a fresh top-level comment.
    - **not started:** otherwise.
 
    A later fresh `SUCCESS` from the same identity overrides earlier pending or non-success outcomes. That is the "current-head terminal status overrides earlier notice" rule. Comment text is never interpreted.
 5. **Blocking reviews** are the latest non-`PENDING` review per reviewer with state `CHANGES_REQUESTED`.
-6. **Threads and comments** are classified as in `get-pr-comments.sh`: actionable, deferred, blocking human top-level comments, and informational bot comments.
+6. **Threads and comments** use the `get-pr-comments.sh` thread deferral rules. Human top-level comments are actionable only if they postdate the observable push and any later author top-level reply; when timestamps are unavailable they remain actionable. Bot top-level comments are informational.
 7. **Merge state:** `CONFLICTING` means failed. `UNKNOWN` means not settled.
 
 ### Loop and termination
@@ -258,7 +258,7 @@ On a fatal error, stdout is empty, so the captured report has no marker, and the
    - This removes any need for an LLM classifier step, so none is added, which keeps the passing path agent-free.
 5. **Checks from expected review bots are excluded from CI checks.** A pending CodeRabbit status therefore yields `CI_REVIEW_INCOMPLETE`, not `CI_PENDING`. This preserves today's rule to "use `CI_PENDING` only for real CI checks", and the spec is updated to state it.
 6. **Push time comes from observable PR activity.** GitHub exposes no push time for ordinary pushes.
-   - The push point is the head's earliest check-suite creation or force-push event, falling back to the time the wait first saw the head. `committedDate` is not used, because an old commit can be pushed long after it was made.
+   - The push point is the head's earliest check-suite creation or force-push event. When neither is available, the first observation of the head bounds the grace but does not invalidate current-head evidence. `committedDate` is not used, because an old commit can be pushed long after it was made.
    - Head-tied evidence must also post-date the freshness point, so a review completed while the PR was a draft is not reused after the ready transition.
    - The grace runs from the later of the freshness point and the wait start, and is recomputed when the head changes.
 7. **Timing defaults:** 900 s deadline, 15 s poll interval, 180 s start grace, 30 s per call. The deadline and grace match the skill and the current prompt's "a few minutes". Timings can be overridden through stdin keys. When stdin omits a key, a test-only environment override applies (for example `AGENT_RUNNER_CI_WAIT_TIMINGS`), which workflow-level tests use to drive the embedded YAML. The workflow does not expose timings as params.
@@ -267,7 +267,7 @@ On a fatal error, stdout is empty, so the captured report has no marker, and the
 ## Risks / Trade-offs
 
 - **Rule drift from `codagent:wait-ci`.** Thread and comment classification is duplicated in `ci_wait.py`. *Mitigation:* the Go tests carry the classification fixtures from `get-pr-comments_test.sh`. A comment in `ci_wait.py` names the upstream source.
-- **No check suites on the head.** In a repository with no Actions and no apps, the push point falls back to when the wait first saw the head. In a re-poll cycle, a bot that finished before this wait started then counts as stale, which gives a spurious `CI_REVIEW_INCOMPLETE` warning. The error is conservative and never produces a false pass.
+- **No check suites on the head.** In a repository with no Actions and no apps, there is no observable push timestamp. Current-head bot evidence can therefore be accepted even if it predates an unobservable push. A later ready-for-review transition still makes earlier evidence stale.
 - **First-ever bot review with no pending status.** A review bot that has never reviewed this PR and posts no head status is not detected. The run can pass before that bot's first review arrives. On the next push it is expected. Users can set `review_bots` to close the gap.
 - **Pagination cost.** Large PRs need extra continuation calls per poll. Each call is bounded, and an incomplete read can only produce `CI_PENDING`, never a pass.
 - **Longer wall clock on unfinished bots.** A rate-limited bot now waits up to the deadline instead of an agent giving up earlier. There is no token cost.

@@ -339,3 +339,54 @@ func TestCIWaitBotPendingThenSuccess(t *testing.T) {
 		t.Fatalf("code=%d report=%s", code, out)
 	}
 }
+
+func TestCIWaitAddressedFeedbackAndLatestBotEvidence(t *testing.T) {
+	push := time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339)
+	old := time.Now().Add(-3 * time.Minute).UTC().Format(time.RFC3339)
+	success := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	pending := time.Now().Add(-30 * time.Second).UTC().Format(time.RFC3339)
+	bot := map[string]any{"login": "coderabbitai[bot]"}
+	for _, tt := range []struct {
+		name           string
+		setup          func(map[string]any)
+		inputs, marker string
+	}{
+		{"completed current-head status without push timestamp", func(pr map[string]any) {
+			pr["headRef"].(map[string]any)["target"].(map[string]any)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)["nodes"] = []any{map[string]any{"context": "CodeRabbit", "state": "SUCCESS", "createdAt": success, "creator": bot}}
+		}, `"review_bots":"coderabbitai",`, "CI_PASSED"},
+		{"human comment addressed by push", func(pr map[string]any) {
+			pr["headRef"].(map[string]any)["target"].(map[string]any)["checkSuites"].(map[string]any)["nodes"] = []any{map[string]any{"createdAt": push}}
+			pr["comments"].(map[string]any)["nodes"] = []any{map[string]any{"author": map[string]any{"login": "reviewer", "__typename": "User"}, "body": "fixed already", "updatedAt": old}}
+		}, "", "CI_PASSED"},
+		{"human comment addressed by author reply", func(pr map[string]any) {
+			pr["comments"].(map[string]any)["nodes"] = []any{
+				map[string]any{"author": map[string]any{"login": "reviewer", "__typename": "User"}, "body": "please fix", "updatedAt": old},
+				map[string]any{"author": map[string]any{"login": "alice", "__typename": "User"}, "body": "fixed", "updatedAt": success},
+			}
+		}, "", "CI_PASSED"},
+		{"newer pending status supersedes success", func(pr map[string]any) {
+			pr["headRef"].(map[string]any)["target"].(map[string]any)["checkSuites"].(map[string]any)["nodes"] = []any{map[string]any{"createdAt": push}}
+			pr["headRef"].(map[string]any)["target"].(map[string]any)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)["nodes"] = []any{
+				map[string]any{"context": "CodeRabbit", "state": "SUCCESS", "createdAt": success, "creator": bot},
+				map[string]any{"context": "CodeRabbit", "state": "PENDING", "createdAt": pending, "creator": bot},
+			}
+		}, `"review_bots":"coderabbitai",`, "CI_REVIEW_INCOMPLETE"},
+		{"old-head review does not supersede current-head success", func(pr map[string]any) {
+			pr["headRef"].(map[string]any)["target"].(map[string]any)["checkSuites"].(map[string]any)["nodes"] = []any{map[string]any{"createdAt": push}}
+			pr["headRef"].(map[string]any)["target"].(map[string]any)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)["nodes"] = []any{
+				map[string]any{"context": "CodeRabbit", "state": "SUCCESS", "createdAt": success, "creator": bot},
+			}
+			pr["reviews"].(map[string]any)["nodes"] = []any{map[string]any{"author": map[string]any{"login": "coderabbitai[bot]", "__typename": "Bot"}, "state": "COMMENTED", "submittedAt": pending, "commit": map[string]any{"oid": "old-head"}}}
+		}, `"review_bots":"coderabbitai",`, "CI_PASSED"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := ciFixture()
+			tt.setup(ciPR(fixture))
+			input := fmt.Sprintf(`{%s"deadline_seconds":"0.8","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`, tt.inputs)
+			out, code, _ := runCIFixture(t, fixture, input)
+			if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), tt.marker) {
+				t.Fatalf("code=%d report=%s", code, out)
+			}
+		})
+	}
+}

@@ -230,9 +230,11 @@ class Collector:
         head = pr.get("headRefOid") or ""
         push = min((stamp(s.get("createdAt")) for s in suites if stamp(s.get("createdAt"))), default=0)
         pushes = [stamp(e.get("createdAt")) for e in timeline if (e.get("afterCommit") or {}).get("oid") == head]
-        push = max(push, max(pushes, default=0)) or self.first_seen.get(head, self.started)
+        observed_push = max(push, max(pushes, default=0))
         ready = max((stamp(e.get("createdAt")) for e in timeline if "afterCommit" not in e), default=0)
-        fresh = max(push, ready)
+        # The observation time bounds the start grace, but is not evidence that
+        # a current-head status posted before this process started is stale.
+        fresh = max(observed_push, ready)
         grace_end = min(self.deadline, max(fresh, self.first_seen.get(head, self.started)) + self.grace)
         expected = set(self.configured)
         for review in reviews:
@@ -247,13 +249,14 @@ class Collector:
                     self.discovered.add(identity(creator))
             expected |= self.discovered
         failed, pending, passed = [], [], []
-        bot_evidence = {bot: [] for bot in expected}
+        bot_progress = {bot: [] for bot in expected}
+        bot_activity = {bot: [] for bot in expected}
         for check in checks:
             name, state, timestamp = self.check_fields(check)
             bot = identity((check.get("creator") or {}).get("login") or (((check.get("checkSuite") or {}).get("app") or {}).get("slug")))
             if bot in expected:
                 if timestamp > fresh:
-                    bot_evidence[bot].append((state == "SUCCESS", timestamp, state))
+                    bot_progress[bot].append((state == "SUCCESS", timestamp, state))
                 continue
             entry = {"name": name, "state": state, "link": check.get("detailsUrl") or check.get("targetUrl") or ""}
             if state in {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"}:
@@ -265,19 +268,24 @@ class Collector:
         for review in reviews:
             bot = identity(actor(review).get("login"))
             if bot in expected and stamp(review.get("submittedAt")) > fresh:
-                bot_evidence[bot].append(((review.get("commit") or {}).get("oid") == head,
-                                          stamp(review.get("submittedAt")), review.get("state") or "review"))
+                submitted = stamp(review.get("submittedAt"))
+                if (review.get("commit") or {}).get("oid") == head:
+                    bot_progress[bot].append((True, submitted, review.get("state") or "review"))
+                else:
+                    bot_activity[bot].append((submitted, "reviewed earlier head"))
         for comment in comments:
             bot = identity(actor(comment).get("login"))
             if bot in expected and stamp(comment.get("updatedAt")) > fresh:
-                bot_evidence[bot].append((False, stamp(comment.get("updatedAt")), "commented"))
+                bot_activity[bot].append((stamp(comment.get("updatedAt")), "commented"))
         unfinished = []
         for bot in sorted(expected):
-            evidence = bot_evidence[bot]
-            if any(x[0] for x in evidence):
+            progress = bot_progress[bot]
+            latest = max(progress, key=lambda x: (x[1], not x[0])) if progress else None
+            if latest and latest[0]:
                 continue
-            latest = max(evidence, key=lambda x: x[1])[2].lower() if evidence else "not started"
-            unfinished.append(f"{bot}: {latest}")
+            activity = max(bot_activity[bot], default=None)
+            status = latest[2].lower() if latest else (activity[1] if activity else "not started")
+            unfinished.append(f"{bot}: {status}")
         latest_reviews = {}
         for review in reviews:
             if review.get("state") != "PENDING":
@@ -306,12 +314,21 @@ class Collector:
                                and last.get("login") != finding.get("login")))
             (deferred if is_deferred else actionable).append(item)
         human_comments, bot_comments = [], []
+        author_reply_at = max((stamp(c.get("updatedAt")) for c in comments
+                               if actor(c).get("login") == author_login), default=0)
         for comment in comments:
             who = actor(comment)
             if author_login and who.get("login") == author_login:
                 continue
             item = {"author": who.get("login") or "unknown", "body": comment.get("body") or ""}
-            (bot_comments if who.get("__typename") == "Bot" else human_comments).append(item)
+            if who.get("__typename") == "Bot":
+                bot_comments.append(item)
+                continue
+            comment_time = stamp(comment.get("updatedAt"))
+            if comment_time and ((observed_push and comment_time < observed_push)
+                                 or (author_reply_at and comment_time < author_reply_at)):
+                continue
+            human_comments.append(item)
         return locals()
 
     @staticmethod

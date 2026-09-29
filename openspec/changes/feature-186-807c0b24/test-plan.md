@@ -102,7 +102,7 @@ None. The public journey is `agent-runner run core:finalize-pr`. INT-001 to INT-
   - review-bot identity matching across check-run app slug, status creator login, and review author login, especially the `[bot]` suffix and case;
   - the freshness point that uses commit time instead of push time;
   - pagination: check contexts, reviews, threads, thread comments, and top-level comments beyond the first page;
-  - push-point derivation (check-suite time, force-push event, wait-start fallback) and pre-ready bot completions;
+  - push-point derivation (check-suite time or force-push event), missing push timestamps, and pre-ready bot completions;
   - bot checks with non-success conclusions (skipped or neutral) that must not count as a completed review;
   - stdout purity: progress must never reach `ci_report`, and the marker must be the final non-empty line;
   - process-group cleanup on timeout, so no orphaned `gh` processes are left behind;
