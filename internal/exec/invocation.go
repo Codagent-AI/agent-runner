@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -143,7 +144,7 @@ func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logge
 		runErr = cause
 		outcome = OutcomeFailed
 	}
-	extraction, usageErr := extractAgentUsage(input.Adapter, input.CLI, input.InvocationContext, processResult.Stdout)
+	extraction, usageErr := extractAgentUsage(input.Adapter, input.CLI, input.InvocationContext, processResult.Stdout, cli.UsageContext{Workdir: input.Workdir, Env: BuildAgentEnvironment(os.Environ(), dropEnv, input.Env)})
 	attachInvocationIdentity(&extraction.Usage, input.CLI, input.Model, input.Effort)
 	result := AgentInvocationResult{
 		Outcome: outcome, Stdout: processResult.Stdout, Stderr: processResult.Stderr,
