@@ -1,0 +1,6 @@
+- [ ] Implement the change described by these files, using TDD per `CLAUDE.md`, satisfying every spec scenario and every `INT-*`/`E2E-*` obligation in the test plan, and finishing with `make fmt`, `make test`, and `make lint` passing:
+  - [proposal.md](proposal.md)
+  - [specs/finalize-pr-ci-wait/spec.md](specs/finalize-pr-ci-wait/spec.md)
+  - [design.md](design.md)
+  - [test-plan.md](test-plan.md)
+  - [decisions.md](decisions.md)
