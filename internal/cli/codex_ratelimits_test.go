@@ -328,6 +328,9 @@ func TestCodexRateLimitReaderCrossThreadAndFailures(t *testing.T) {
 			if tc.name == "matching" && (got.BaselineGapMS == nil || *got.BaselineGapMS != int64(time.Minute/time.Millisecond) || *got.Deltas[0].PercentagePoints != 3) {
 				t.Fatalf("cross-thread delta: %+v", got)
 			}
+			if tc.name == "matching" && !slices.Equal(got.Deltas[0].Limitations, []string{"account-wide", "coarse-precision", "unobserved-gap"}) {
+				t.Fatalf("cross-thread limitations = %v", got.Deltas[0].Limitations)
+			}
 		})
 	}
 	home := t.TempDir()

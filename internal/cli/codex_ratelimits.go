@@ -371,9 +371,6 @@ func codexRateLimitDelta(start, end *model.RateLimitSnapshot, provenance, role s
 	case *endWindow.UsedPercent < *startWindow.UsedPercent:
 		return model.UnavailableRateLimitDelta(role, model.RateLimitReasonInconsistent)
 	}
-	delta := model.AvailableRateLimitDelta(role, *endWindow.UsedPercent-*startWindow.UsedPercent)
-	if provenance == model.RateLimitProvenanceCrossThread {
-		delta.Limitations = append(delta.Limitations, model.RateLimitLimitationUnobservedGap)
-	}
-	return delta
+	// Read adds unobserved-gap for every gapped baseline, cross-thread or stale.
+	return model.AvailableRateLimitDelta(role, *endWindow.UsedPercent-*startWindow.UsedPercent)
 }
