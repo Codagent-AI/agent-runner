@@ -10,6 +10,44 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
+func TestSelectedSessionOutcome(t *testing.T) {
+	step := func(prefix, outcome string) metrics.StepRecord {
+		return metrics.StepRecord{ExecutionSessionID: "selected", Prefix: prefix, Kind: "step", Outcome: outcome}
+	}
+	cases := []struct {
+		name           string
+		hasSession     bool
+		sessionOutcome string
+		sessionStatus  string
+		steps          []metrics.StepRecord
+		want           string
+	}{
+		{name: "warn-only failure with successful run", hasSession: true, sessionOutcome: "success", steps: []metrics.StepRecord{step("", "failed")}, want: "success"},
+		{name: "failed run", hasSession: true, sessionOutcome: "failed", steps: []metrics.StepRecord{step("", "success")}, want: "failed"},
+		{name: "aborted run", hasSession: true, sessionOutcome: "aborted", steps: []metrics.StepRecord{step("", "success")}, want: "aborted"},
+		{name: "legacy nested failure followed by success", steps: []metrics.StepRecord{step("group", "failed"), step("", "success")}, want: "success"},
+		{name: "legacy final top-level failure", steps: []metrics.StepRecord{step("", "success"), step("", "failed")}, want: "failed"},
+		{name: "interrupted before any step", hasSession: true, want: "unknown"},
+		{name: "open session after successful step", hasSession: true, sessionStatus: metrics.SessionOpen, steps: []metrics.StepRecord{step("", "success")}, want: "unknown"},
+		{name: "interrupted session after successful step", hasSession: true, sessionStatus: metrics.SessionInterrupted, steps: []metrics.StepRecord{step("", "success")}, want: "unknown"},
+		{name: "closed legacy session after successful step", hasSession: true, sessionStatus: metrics.SessionClosed, steps: []metrics.StepRecord{step("", "success")}, want: "success"},
+		{name: "legacy session without status after successful step", hasSession: true, steps: []metrics.StepRecord{step("", "success")}, want: "success"},
+		{name: "legacy nested failure with no top-level step", steps: []metrics.StepRecord{step("group", "failed")}, want: "failed"},
+		{name: "no records", want: "unknown"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			artifact := &metrics.Artifact{Steps: tc.steps}
+			if tc.hasSession {
+				artifact.Sessions = []metrics.SessionRecord{{ExecutionSessionID: "selected", Outcome: tc.sessionOutcome, Status: tc.sessionStatus}}
+			}
+			if got := selectedSessionOutcome(artifact, "selected"); got != tc.want {
+				t.Fatalf("outcome = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAggregateGitExcludesPreexistingDirtyPaths(t *testing.T) {
 	start := &audit.GitCheckpoint{Available: true,
 		Worktree:  []audit.GitFileStat{{Path: "a", Added: 3, Deleted: 1}, {Path: "a2", Added: 1}},

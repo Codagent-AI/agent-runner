@@ -18,10 +18,10 @@ func TestPrepareEvidenceProjectsSelectedMetricsSessionFromPipeline(t *testing.T)
 	session := "session-selected"
 	collector.Process(audit.Event{Timestamp: "2026-09-01T00:00:00Z", Type: audit.EventRunStart, Data: map[string]any{"execution_session_id": session}})
 	collector.Process(audit.Event{Timestamp: "2026-09-01T00:00:01Z", Type: audit.EventStepEnd, Data: map[string]any{
-		"outcome": "success", "duration_ms": int64(100),
+		"outcome": "failed", "duration_ms": int64(100),
 		metrics.DataIdentity: model.ExecutionIdentity{ExecutionSessionID: session, Prefix: "[group, implement]", StepID: "implement", StepType: "agent", Kind: "step"},
 	}})
-	collector.Process(audit.Event{Timestamp: "2026-09-01T00:00:02Z", Type: audit.EventRunEnd, Data: map[string]any{"outcome": "success"}})
+	collector.Process(audit.Event{Timestamp: "2026-09-01T00:00:02Z", Type: audit.EventRunEnd, Data: map[string]any{"outcome": "success", "completed_with_warnings": true}})
 	request := Request{AuditRunID: "audit-run", AuditSessionDir: filepath.Join(t.TempDir(), "audit"), SnapshotPath: snapshot, SourceRunID: "source-run", ExecutionSessionID: session, SourceWorkflow: "core:example", Trigger: "automatic"}
 	prepared, err := PrepareEvidence(request)
 	if err != nil {
@@ -29,6 +29,9 @@ func TestPrepareEvidenceProjectsSelectedMetricsSessionFromPipeline(t *testing.T)
 	}
 	if len(prepared.Index.Leaves) != 1 || prepared.Index.Leaves[0].Skeleton.StepID != "group/implement" {
 		t.Fatalf("prepared leaves = %#v", prepared.Index.Leaves)
+	}
+	if got := prepared.Index.Leaves[0].Skeleton.SourceOutcome; got != "success" {
+		t.Fatalf("source outcome = %q, want success", got)
 	}
 	if len(prepared.Packages) != 1 || encodedJSONBytes(prepared.Packages[0]) > defaultPackageBytes {
 		t.Fatalf("bounded packages = %#v", prepared.Packages)

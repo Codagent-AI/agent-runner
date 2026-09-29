@@ -409,6 +409,63 @@ func TestCollectorPreAcceptanceRejectionCreatesNoCallRecordOrCoverage(t *testing
 	}
 }
 
+func TestCollectorPersistsRunEndOutcomeAcrossRehydration(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(dir, "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, map[string]any{"execution_session_id": "execution-1"}))
+	identity := agentIdentity("warn-only", true)
+	identity.ExecutionSessionID = "execution-1"
+	c.Process(stepEvent(started.Add(time.Second), identity, unavailableUsage(), nil, "failed", 100))
+	c.Process(event(audit.EventRunEnd, started.Add(2*time.Second), map[string]any{"outcome": "success", "completed_with_warnings": true}))
+
+	assertSession := func(label string) {
+		t.Helper()
+		artifact := readArtifact(t, dir)
+		if len(artifact.Sessions) != 1 {
+			t.Fatalf("%s sessions = %d, want 1", label, len(artifact.Sessions))
+		}
+		got := struct {
+			Outcome               string
+			CompletedWithWarnings bool
+			Status                string
+		}{
+			Outcome: artifact.Sessions[0].Outcome, CompletedWithWarnings: artifact.Sessions[0].CompletedWithWarnings, Status: artifact.Sessions[0].Status,
+		}
+		want := struct {
+			Outcome               string
+			CompletedWithWarnings bool
+			Status                string
+		}{Outcome: "success", CompletedWithWarnings: true, Status: SessionClosed}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Fatalf("%s session mismatch (-want +got):\n%s", label, diff)
+		}
+	}
+	assertSession("persisted")
+	NewCollector(dir, "run", "workflow", started.Add(time.Hour)).Process(event(audit.EventRunStart, started.Add(time.Hour), map[string]any{"resumed": true}))
+	assertSession("rehydrated")
+}
+
+func TestCollectorRunEndWithoutOpenSessionKeepsHistoricalOutcome(t *testing.T) {
+	dir := t.TempDir()
+	started := mustTime(t, "2026-07-17T10:00:00Z")
+	c := NewCollector(dir, "run", "workflow", started)
+	c.Process(event(audit.EventRunStart, started, map[string]any{"execution_session_id": "execution-1"}))
+	c.Process(event(audit.EventRunEnd, started.Add(time.Second), map[string]any{"outcome": "failed"}))
+
+	NewCollector(dir, "run", "workflow", started.Add(time.Hour)).
+		Process(event(audit.EventRunEnd, started.Add(time.Hour), map[string]any{"outcome": "success", "completed_with_warnings": true}))
+
+	artifact := readArtifact(t, dir)
+	if len(artifact.Sessions) != 1 {
+		t.Fatalf("sessions = %d, want 1", len(artifact.Sessions))
+	}
+	got := artifact.Sessions[0]
+	if got.Outcome != "failed" || got.CompletedWithWarnings || got.Status != SessionClosed {
+		t.Fatalf("historical session = outcome %q warnings %v status %q, want failed/false/%s", got.Outcome, got.CompletedWithWarnings, got.Status, SessionClosed)
+	}
+}
+
 func TestCollectorRehydratesAgentCallsAcrossResumeAndReadsOlderSchemaV1(t *testing.T) {
 	dir := t.TempDir()
 	started := mustTime(t, "2026-07-17T10:00:00Z")

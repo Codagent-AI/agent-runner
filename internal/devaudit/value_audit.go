@@ -432,17 +432,39 @@ func missingEvidenceCategories(refs []EvidenceReference) []string {
 
 func selectedSessionOutcome(artifact *metrics.Artifact, executionSessionID string) string {
 	seen := false
+	for index := range artifact.Sessions {
+		session := &artifact.Sessions[index]
+		if session.ExecutionSessionID != executionSessionID {
+			continue
+		}
+		if session.Outcome != "" {
+			return session.Outcome
+		}
+		if session.Status != "" && session.Status != metrics.SessionClosed {
+			return "unknown"
+		}
+	}
+	lastTopLevelOutcome := ""
+	nestedFailure := ""
 	for index := range artifact.Steps {
 		record := &artifact.Steps[index]
 		if record.ExecutionSessionID != executionSessionID {
 			continue
 		}
 		seen = true
-		if record.Outcome == "failed" || record.Outcome == "aborted" {
-			return record.Outcome
+		if record.Prefix == "" && record.Kind == "step" {
+			lastTopLevelOutcome = record.Outcome
+		} else if record.Prefix != "" && record.Kind == "step" && (record.Outcome == "failed" || record.Outcome == "aborted") {
+			nestedFailure = record.Outcome
 		}
 	}
 	if seen {
+		if lastTopLevelOutcome == "failed" || lastTopLevelOutcome == "aborted" {
+			return lastTopLevelOutcome
+		}
+		if lastTopLevelOutcome == "" && nestedFailure != "" {
+			return nestedFailure
+		}
 		return "success"
 	}
 	return "unknown"
