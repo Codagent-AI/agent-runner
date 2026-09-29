@@ -144,6 +144,10 @@ func TestCIWaitClassification(t *testing.T) {
 			pr["headRef"].(map[string]any)["target"].(map[string]any)["checkSuites"].(map[string]any)["nodes"] = []any{map[string]any{"createdAt": past}}
 			pr["headRef"].(map[string]any)["target"].(map[string]any)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)["nodes"] = []any{map[string]any{"context": "CodeRabbit", "state": "PENDING", "createdAt": fresh, "creator": map[string]any{"login": "coderabbitai[bot]"}}}
 		}, "", "CI_REVIEW_INCOMPLETE", "coderabbitai: pending"},
+		{"first-time bot failure stays CI", func(pr map[string]any) {
+			pr["headRef"].(map[string]any)["target"].(map[string]any)["checkSuites"].(map[string]any)["nodes"] = []any{map[string]any{"createdAt": past}}
+			pr["headRef"].(map[string]any)["target"].(map[string]any)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)["nodes"] = []any{map[string]any{"context": "codecov/patch", "state": "FAILURE", "createdAt": fresh, "creator": map[string]any{"login": "codecov[bot]"}}}
+		}, "", "CI_FAILED", "codecov/patch"},
 		{"skipped bot check", func(pr map[string]any) {
 			pr["headRef"].(map[string]any)["target"].(map[string]any)["checkSuites"].(map[string]any)["nodes"] = []any{map[string]any{"createdAt": past}}
 			pr["headRef"].(map[string]any)["target"].(map[string]any)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)["nodes"] = []any{map[string]any{"name": "CodeRabbit", "conclusion": "SKIPPED", "completedAt": fresh, "checkSuite": map[string]any{"app": map[string]any{"slug": "coderabbitai"}}}}

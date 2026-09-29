@@ -13,6 +13,8 @@ PAGE = "pageInfo { hasNextPage endCursor hasPreviousPage startCursor }"
 AUTHOR = "author { login __typename }"
 COMMENT = f"{AUTHOR} body updatedAt path line originalLine"
 TOP_COMMENT = f"{AUTHOR} body updatedAt"
+TERMINAL_CHECK_STATES = {"SUCCESS", "SKIPPED", "NEUTRAL", "STALE", "FAILURE", "CANCELLED", "TIMED_OUT",
+                         "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"}
 THREAD = f"id isResolved comments(first: 100) {{ nodes {{ {COMMENT} }} {PAGE} }}"
 CHECK = """... on CheckRun { name status conclusion startedAt completedAt detailsUrl
   checkSuite { app { slug } } }
@@ -243,8 +245,12 @@ class Collector:
         expected |= self.discovered
         if now() <= grace_end:
             for check in checks:
-                name, _, timestamp = self.check_fields(check)
+                name, state, timestamp = self.check_fields(check)
                 creator = (check.get("creator") or {}).get("login") or (((check.get("checkSuite") or {}).get("app") or {}).get("slug"))
+                # Only a pending check or status can reveal a first-time reviewer;
+                # a terminal result from an unexpected bot stays ordinary CI.
+                if state in TERMINAL_CHECK_STATES:
+                    continue
                 if creator and (creator.lower().endswith("[bot]") or name.lower().startswith("coderabbit")) and timestamp > fresh:
                     self.discovered.add(identity(creator))
             expected |= self.discovered
