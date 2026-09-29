@@ -13,8 +13,17 @@ PAGE = "pageInfo { hasNextPage endCursor hasPreviousPage startCursor }"
 AUTHOR = "author { login __typename }"
 COMMENT = f"{AUTHOR} body updatedAt path line originalLine"
 TOP_COMMENT = f"{AUTHOR} body updatedAt"
-TERMINAL_CHECK_STATES = {"SUCCESS", "SKIPPED", "NEUTRAL", "STALE", "FAILURE", "CANCELLED", "TIMED_OUT",
-                         "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"}
+REVIEW = f"{AUTHOR} state submittedAt commit {{ oid }} body"
+TIMELINE_TYPES = "itemTypes: [READY_FOR_REVIEW_EVENT, HEAD_REF_FORCE_PUSHED_EVENT]"
+TIMELINE = "... on ReadyForReviewEvent { createdAt } ... on HeadRefForcePushedEvent { createdAt afterCommit { oid } }"
+FAILED_STATES = {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"}
+PASSED_STATES = {"SUCCESS", "SKIPPED", "NEUTRAL"}
+TERMINAL_CHECK_STATES = FAILED_STATES | PASSED_STATES | {"STALE"}
+DEFAULT_TIMINGS = {"deadline_seconds": 900, "poll_interval_seconds": 15,
+                   "bot_start_grace_seconds": 180, "call_timeout_seconds": 30}
+LOG_MARGIN_SECONDS = 60
+LOG_TAIL_LINES = 100
+BOT_COMMENT_CHARS = 500
 THREAD = f"id isResolved comments(first: 100) {{ nodes {{ {COMMENT} }} {PAGE} }}"
 CHECK = """... on CheckRun { name status conclusion startedAt completedAt detailsUrl
   checkSuite { app { slug } } }
@@ -26,13 +35,23 @@ QUERY = f"""query($owner: String!, $repo: String!, $number: Int!) {{
    checkSuites(first: 100) {{ nodes {{ createdAt }} {PAGE} }}
    statusCheckRollup {{ contexts(first: 100) {{ nodes {{ {CHECK} }} {PAGE} }} }}
   }} }} }}
-  timelineItems(itemTypes: [READY_FOR_REVIEW_EVENT, HEAD_REF_FORCE_PUSHED_EVENT], last: 100) {{
-   nodes {{ ... on ReadyForReviewEvent {{ createdAt }}
-           ... on HeadRefForcePushedEvent {{ createdAt afterCommit {{ oid }} }} }} {PAGE} }}
-  reviews(last: 100) {{ nodes {{ {AUTHOR} state submittedAt commit {{ oid }} body }} {PAGE} }}
+  timelineItems({TIMELINE_TYPES}, last: 100) {{ nodes {{ {TIMELINE} }} {PAGE} }}
+  reviews(last: 100) {{ nodes {{ {REVIEW} }} {PAGE} }}
   reviewThreads(first: 100) {{ nodes {{ {THREAD} }} {PAGE} }}
   comments(last: 100) {{ nodes {{ {TOP_COMMENT} }} {PAGE} }}
  }} }} }}"""
+THREAD_COMMENTS_PAGE = ("query($id: ID!, $cursor: String!) { node(id: $id) { ... on PullRequestReviewThread { "
+                        f"comments(first: 100, after: $cursor) {{ nodes {{ {COMMENT} }} {PAGE} }}" " } } }")
+
+
+def pr_page_query(fragment):
+    """Continuation query for one paginated connection under the pull request."""
+    return ("query($owner: String!, $repo: String!, $number: Int!, $cursor: String!) "
+            "{ repository(owner: $owner, name: $repo) { pullRequest(number: $number) { " + fragment + " } } }")
+
+
+def head_commit(fragment):
+    return f"headRef {{ target {{ ... on Commit {{ {fragment} }} }} }}"
 
 class Fatal(Exception):
     pass
@@ -64,11 +83,13 @@ def now():
 
 class Collector:
     def __init__(self, inputs):
-        overrides = json.loads(os.environ.get("AGENT_RUNNER_CI_WAIT_TIMINGS", "{}"))
-        self.deadline_seconds = float(inputs.get("deadline_seconds", overrides.get("deadline_seconds", 900)))
-        self.interval = float(inputs.get("poll_interval_seconds", overrides.get("poll_interval_seconds", 15)))
-        self.grace = float(inputs.get("bot_start_grace_seconds", overrides.get("bot_start_grace_seconds", 180)))
-        self.call_timeout = float(inputs.get("call_timeout_seconds", overrides.get("call_timeout_seconds", 30)))
+        # Stdin keys win; the environment override exists for workflow-level tests.
+        timings = {**DEFAULT_TIMINGS, **json.loads(os.environ.get("AGENT_RUNNER_CI_WAIT_TIMINGS", "{}"))}
+        timings = {key: float(inputs.get(key, value)) for key, value in timings.items() if key in DEFAULT_TIMINGS}
+        self.deadline_seconds = timings["deadline_seconds"]
+        self.interval = timings["poll_interval_seconds"]
+        self.grace = timings["bot_start_grace_seconds"]
+        self.call_timeout = timings["call_timeout_seconds"]
         self.started = now()
         self.deadline = self.started + self.deadline_seconds
         self.configured = {identity(x) for x in inputs.get("review_bots", "").split(",") if identity(x)}
@@ -137,7 +158,7 @@ class Collector:
                 time.sleep(min(self.interval, max(0, self.deadline - now())))
         raise Transient("PR lookup deadline reached")
 
-    def more(self, pr, field, query, path, reverse=False):
+    def more(self, pr, field, query, path, reverse=False, extra=None):
         connection = pr.get(field) or {"nodes": [], "pageInfo": {}}
         nodes = list(connection.get("nodes") or [])
         page = connection.get("pageInfo") or {}
@@ -149,7 +170,7 @@ class Collector:
             if not cursor or cursor in seen:
                 raise Transient("invalid pagination cursor for " + field)
             seen.add(cursor)
-            data = self.graphql(query, {"cursor": cursor})
+            data = self.graphql(query, {"cursor": cursor, **(extra or {})})
             conn = data
             for key in path:
                 conn = (conn or {}).get(key)
@@ -172,50 +193,29 @@ class Collector:
             self.head = head
             self.first_seen[head] = now()
             self.discovered.clear()
-            self.snapshot = None
         self.snapshot = pr
         self.complete = False
         commit = (((pr.get("headRef") or {}).get("target")) or {})
-        def connection(field, selection, reverse=False):
+        def connection(field, selection, reverse=False, filters=""):
             side = "last: 100, before: $cursor" if reverse else "first: 100, after: $cursor"
-            filters = "itemTypes: [READY_FOR_REVIEW_EVENT, HEAD_REF_FORCE_PUSHED_EVENT], " if field == "timelineItems" else ""
-            fragment = f"{field}({filters}{side}) {{ nodes {{ {selection} }} {PAGE} }}"
-            query = ("query($owner: String!, $repo: String!, $number: Int!, $cursor: String!) "
-                     "{ repository(owner: $owner, name: $repo) { pullRequest(number: $number) { "
-                     + fragment + " } } }")
+            query = pr_page_query(f"{field}({filters}{side}) {{ nodes {{ {selection} }} {PAGE} }}")
             return self.more(pr, field, query, ["repository", "pullRequest", field], reverse)
-        pr["reviews"]["nodes"] = connection("reviews", f"{AUTHOR} state submittedAt commit {{ oid }} body", True)
+        pr["reviews"]["nodes"] = connection("reviews", REVIEW, True)
         pr["comments"]["nodes"] = connection("comments", TOP_COMMENT, True)
-        pr["timelineItems"]["nodes"] = connection("timelineItems", "... on ReadyForReviewEvent { createdAt } ... on HeadRefForcePushedEvent { createdAt afterCommit { oid } }", True)
+        pr["timelineItems"]["nodes"] = connection("timelineItems", TIMELINE, True, TIMELINE_TYPES + ", ")
         pr["reviewThreads"]["nodes"] = connection("reviewThreads", THREAD)
         for thread in pr["reviewThreads"]["nodes"]:
-            conn = thread.get("comments") or {}
-            page = conn.get("pageInfo") or {}
-            comments = list(conn.get("nodes") or [])
-            seen = set()
-            while page.get("hasNextPage"):
-                cursor = page.get("endCursor")
-                if not cursor or cursor in seen:
-                    raise Transient("invalid thread-comment cursor")
-                seen.add(cursor)
-                query = ("query($id: ID!, $cursor: String!) { node(id: $id) { ... on PullRequestReviewThread { "
-                         f"comments(first: 100, after: $cursor) {{ nodes {{ {COMMENT} }} {PAGE} }}" " } } }")
-                result = self.graphql(query, {"id": thread["id"], "cursor": cursor})
-                conn = ((result.get("node") or {}).get("comments") or {})
-                comments += conn.get("nodes") or []
-                page = conn.get("pageInfo") or {}
-            thread["comments"]["nodes"] = comments
+            if thread.get("comments"):
+                thread["comments"]["nodes"] = self.more(thread, "comments", THREAD_COMMENTS_PAGE, ["node", "comments"],
+                                                        extra={"id": thread.get("id")})
         if commit.get("checkSuites"):
-            query = ("query($owner: String!, $repo: String!, $number: Int!, $cursor: String!) "
-                     "{ repository(owner: $owner, name: $repo) { pullRequest(number: $number) { "
-                     f"headRef {{ target {{ ... on Commit {{ checkSuites(first: 100, after: $cursor) {{ nodes {{ createdAt }} {PAGE} }} }} }} }}" " } } }")
+            query = pr_page_query(head_commit(f"checkSuites(first: 100, after: $cursor) {{ nodes {{ createdAt }} {PAGE} }}"))
             commit["checkSuites"]["nodes"] = self.more(commit, "checkSuites", query,
                 ["repository", "pullRequest", "headRef", "target", "checkSuites"])
         rollup = commit.get("statusCheckRollup") or {}
         if rollup.get("contexts"):
-            query = ("query($owner: String!, $repo: String!, $number: Int!, $cursor: String!) "
-                     "{ repository(owner: $owner, name: $repo) { pullRequest(number: $number) { "
-                     f"headRef {{ target {{ ... on Commit {{ statusCheckRollup {{ contexts(first: 100, after: $cursor) {{ nodes {{ {CHECK} }} {PAGE} }} }} }} }} }}" " } } }")
+            query = pr_page_query(head_commit(
+                f"statusCheckRollup {{ contexts(first: 100, after: $cursor) {{ nodes {{ {CHECK} }} {PAGE} }} }}"))
             rollup["contexts"]["nodes"] = self.more(rollup, "contexts", query,
                 ["repository", "pullRequest", "headRef", "target", "statusCheckRollup", "contexts"])
         self.complete = True
@@ -242,32 +242,31 @@ class Collector:
         for review in reviews:
             if actor(review).get("__typename") == "Bot" and review.get("submittedAt"):
                 expected.add(identity(actor(review).get("login")))
-        expected |= self.discovered
         if now() <= grace_end:
             for check in checks:
                 name, state, timestamp = self.check_fields(check)
-                creator = (check.get("creator") or {}).get("login") or (((check.get("checkSuite") or {}).get("app") or {}).get("slug"))
+                creator = self.check_creator(check)
                 # Only a pending check or status can reveal a first-time reviewer;
                 # a terminal result from an unexpected bot stays ordinary CI.
                 if state in TERMINAL_CHECK_STATES:
                     continue
                 if creator and (creator.lower().endswith("[bot]") or name.lower().startswith("coderabbit")) and timestamp > fresh:
                     self.discovered.add(identity(creator))
-            expected |= self.discovered
+        expected |= self.discovered
         failed, pending, passed = [], [], []
         bot_progress = {bot: [] for bot in expected}
         bot_activity = {bot: [] for bot in expected}
         for check in checks:
             name, state, timestamp = self.check_fields(check)
-            bot = identity((check.get("creator") or {}).get("login") or (((check.get("checkSuite") or {}).get("app") or {}).get("slug")))
+            bot = identity(self.check_creator(check))
             if bot in expected:
                 if timestamp > fresh:
                     bot_progress[bot].append((state == "SUCCESS", timestamp, state))
                 continue
             entry = {"name": name, "state": state, "link": check.get("detailsUrl") or check.get("targetUrl") or ""}
-            if state in {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"}:
+            if state in FAILED_STATES:
                 failed.append(entry)
-            elif state in {"SUCCESS", "SKIPPED", "NEUTRAL"}:
+            elif state in PASSED_STATES:
                 passed.append(entry)
             else:
                 pending.append(entry)
@@ -291,7 +290,7 @@ class Collector:
                 continue
             activity = max(bot_activity[bot], default=None)
             status = latest[2].lower() if latest else (activity[1] if activity else "not started")
-            unfinished.append(f"{bot}: {status}")
+            unfinished.append((bot, status))
         latest_reviews = {}
         for review in reviews:
             if review.get("state") != "PENDING":
@@ -335,7 +334,15 @@ class Collector:
                                  or (author_reply_at and comment_time < author_reply_at)):
                 continue
             human_comments.append(item)
-        return locals()
+        return {"pr": pr, "failed": failed, "pending": pending, "passed": passed, "blocking": blocking,
+                "actionable": actionable, "deferred": deferred, "human_comments": human_comments,
+                "bot_comments": bot_comments, "unfinished": unfinished, "expected": expected,
+                "grace_end": grace_end}
+
+    @staticmethod
+    def check_creator(check):
+        return ((check.get("creator") or {}).get("login")
+                or ((check.get("checkSuite") or {}).get("app") or {}).get("slug"))
 
     @staticmethod
     def check_fields(check):
@@ -349,7 +356,7 @@ class Collector:
             return "CI_FAILED"
         if state["actionable"] or state["human_comments"]:
             return "CI_COMMENTS"
-        if not self.complete or state["pending"] or state["pr"].get("mergeable") not in ("MERGEABLE",):
+        if not self.complete or state["pending"] or state["pr"].get("mergeable") != "MERGEABLE":
             return "CI_PENDING"
         if state["unfinished"]:
             return "CI_REVIEW_INCOMPLETE"
@@ -369,8 +376,6 @@ class Collector:
             try:
                 pr = self.read_snapshot()
                 state = self.classify(pr)
-            except Fatal:
-                raise
             except (Transient, KeyError, TypeError) as exc:
                 self.complete = False
                 print("ci-wait: snapshot: " + str(exc), file=sys.stderr)
@@ -379,7 +384,8 @@ class Collector:
             if state:
                 marker = self.marker(state)
                 grace_end = state["grace_end"]
-                bot_settled = not state["unfinished"] or (all(x.endswith(": not started") for x in state["unfinished"]) and now() >= grace_end)
+                bot_settled = not state["unfinished"] or (
+                    all(status == "not started" for _, status in state["unfinished"]) and now() >= grace_end)
                 if marker == "CI_FAILED" or (self.complete and marker != "CI_PENDING" and bot_settled
                     and (state["expected"] or now() >= grace_end)):
                     break
@@ -406,15 +412,19 @@ class Collector:
                     lines.extend(["", "### " + title])
                     lines.extend("- " + entry for entry in entries)
             failed = []
+            logs = {}  # jobs from one Actions run share its failed-log download
             for check in state["failed"]:
                 detail = check["name"] + (" (" + check["link"] + ")" if check["link"] else "")
                 match = re.search(r"/actions/runs/(\d+)", check["link"])
                 if match and marker == "CI_FAILED":
-                    try:
-                        log = self.run(["gh", "run", "view", match.group(1), "--log-failed"], margin=60)
-                        detail += "\n  " + "\n  ".join(log.splitlines()[-100:])
-                    except (Transient, Fatal) as exc:
-                        detail += " (log unavailable: " + str(exc) + ")"
+                    run_id = match.group(1)
+                    if run_id not in logs:
+                        try:
+                            log = self.run(["gh", "run", "view", run_id, "--log-failed"], margin=LOG_MARGIN_SECONDS)
+                            logs[run_id] = "\n  " + "\n  ".join(log.splitlines()[-LOG_TAIL_LINES:])
+                        except (Transient, Fatal) as exc:
+                            logs[run_id] = " (log unavailable: " + str(exc) + ")"
+                    detail += logs[run_id]
                 failed.append(detail)
             section("Failed Checks", failed)
             if state["pr"].get("mergeable") == "CONFLICTING":
@@ -423,8 +433,6 @@ class Collector:
                 head = state["pr"].get("headRefOid")
                 if base and head:
                     try:
-                        self.run(["git", "cat-file", "-e", base + "^{commit}"])
-                        self.run(["git", "cat-file", "-e", head + "^{commit}"])
                         paths = self.run(["git", "merge-tree", "--name-only", "--no-messages", base, head], allow_failure=True)
                         conflicts += [line for line in paths.splitlines() if line and not re.fullmatch(r"[0-9a-f]{40,64}", line)]
                     except Transient:
@@ -434,8 +442,8 @@ class Collector:
             section("PR Comments", [f"{x['file']}:{x['line']} {x['author']}: {x['body']}" for x in state["actionable"]]
                     + [f"{x['author']}: {x['body']}" for x in state["human_comments"]])
             section("Deferred Threads", [f"{x['file']}:{x['line']} {x['author']}: {x['body']}" for x in state["deferred"]])
-            section("Unfinished Review Bots", state["unfinished"])
-            section("Informational Bot Comments", [f"{x['author']}: {x['body'][:500]}" for x in state["bot_comments"]])
+            section("Unfinished Review Bots", [f"{bot}: {status}" for bot, status in state["unfinished"]])
+            section("Informational Bot Comments", [f"{x['author']}: {x['body'][:BOT_COMMENT_CHARS]}" for x in state["bot_comments"]])
             section("Still Running", [x["name"] for x in state["pending"]])
             section("Passing Checks", [x["name"] for x in state["passed"]])
         lines.extend(["", marker])
