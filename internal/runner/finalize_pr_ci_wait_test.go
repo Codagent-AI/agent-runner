@@ -15,7 +15,7 @@ import (
 )
 
 // finalizeCIBaseSnapshot is a green, mergeable PR with no checks, reviews, or comments.
-const finalizeCIBaseSnapshot = `{"data":{"repository":{"pullRequest":{"url":"https://github.com/example/project/pull/12","headRefOid":"abcdef123456","mergeable":"MERGEABLE","author":{"login":"alice","__typename":"User"},"timelineItems":{"nodes":[],"pageInfo":{"hasPreviousPage":false}},"headRef":{"target":{"checkSuites":{"nodes":[],"pageInfo":{"hasNextPage":false}},"statusCheckRollup":{"contexts":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}},"reviews":{"nodes":[],"pageInfo":{"hasPreviousPage":false}},"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}},"comments":{"nodes":[],"pageInfo":{"hasPreviousPage":false}}}}}}`
+const finalizeCIBaseSnapshot = `{"data":{"repository":{"pullRequest":{"url":"https://github.com/example/project/pull/12","headRefOid":"abcdef1234567890abcdef1234567890abcdef12","mergeable":"MERGEABLE","author":{"login":"alice","__typename":"User"},"timelineItems":{"nodes":[],"pageInfo":{"hasPreviousPage":false}},"headRef":{"target":{"checkSuites":{"nodes":[],"pageInfo":{"hasNextPage":false}},"statusCheckRollup":{"contexts":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}},"reviews":{"nodes":[],"pageInfo":{"hasPreviousPage":false}},"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}},"comments":{"nodes":[],"pageInfo":{"hasPreviousPage":false}}}}}}`
 
 // finalizeCIGHStub serves $CI_SNAPSHOT for every GraphQL call; CI_GH_MODE injects failures.
 const finalizeCIGHStub = `#!/bin/sh
@@ -23,6 +23,7 @@ if [ "$CI_GH_MODE" = no_pr ] && [ "$1" = pr ]; then echo 'no pull requests found
 if [ "$CI_GH_MODE" = auth ] && [ "$1" = api ]; then echo 'HTTP 401 Bad credentials' >&2; exit 1; fi
 case "$*" in
   "pr view --json number,url") echo '{"number":12,"url":"https://github.com/example/project/pull/12"}' ;;
+  "pr view --json headRefOid -q .headRefOid") echo "${CI_HEAD_OID:-abcdef1234567890abcdef1234567890abcdef12}" ;;
   "api graphql"*) cat "$CI_SNAPSHOT" ;;
   "run view"*) echo 'failed job log excerpt' ;;
   *) exit 2 ;;
@@ -63,6 +64,7 @@ type finalizeCIProcessRunner struct {
 	scripts   []string
 	captures  []string
 	snapshots []string
+	head      string
 }
 
 func (r *finalizeCIProcessRunner) RunShell(_ string, _ bool, _ string) (exec.ProcessResult, error) {
@@ -73,6 +75,9 @@ func (r *finalizeCIProcessRunner) RunScript(path string, stdin []byte, _ bool, w
 	r.scripts = append(r.scripts, filepath.Base(path))
 	cmd := osexec.Command("sh", path)
 	cmd.Dir = workdir
+	if r.head != "" {
+		cmd.Env = append(os.Environ(), "CI_HEAD_OID="+r.head)
+	}
 	if filepath.Base(path) == "ci-wait.sh" && len(r.snapshots) > len(r.captures) {
 		cmd.Env = append(os.Environ(), "CI_SNAPSHOT="+r.snapshots[len(r.captures)])
 	}
@@ -106,8 +111,8 @@ func TestFinalizePRGreenRunsNoWaitAgent(t *testing.T) {
 	if len(process.agents) != 1 {
 		t.Fatalf("agent turns=%d, want push-pr only", len(process.agents))
 	}
-	if len(process.captures) != 2 {
-		t.Fatalf("CI waits=%d, want 2", len(process.captures))
+	if len(process.captures) != 1 {
+		t.Fatalf("CI waits=%d, want 1", len(process.captures))
 	}
 	for _, capture := range process.captures {
 		if !strings.HasSuffix(strings.TrimSpace(capture), "CI_PASSED") {
@@ -127,7 +132,7 @@ func TestFinalizePRFailureBudgetAndIncompleteReview(t *testing.T) {
 	}{
 		{"failed checks", strings.Replace(base, `"nodes":[],"pageInfo":{"hasNextPage":false}}}}},"reviews"`, `"nodes":[{"name":"unit tests","conclusion":"FAILURE","detailsUrl":"https://github.com/example/project/actions/runs/123"}],"pageInfo":{"hasNextPage":false}}}}},"reviews"`, 1), "", map[string]string{"ci_fix_cycles": "2"}, 3, 3, "failed", "CI_FAILED",
 			[]string{"unit tests", "failed job log excerpt", "CI_FAILED", "<ci-report>"}},
-		{"incomplete review", base, "", map[string]string{"review_bots": "coderabbitai"}, 1, 2, "success", "CI_REVIEW_INCOMPLETE", nil},
+		{"incomplete review", base, "", map[string]string{"review_bots": "coderabbitai"}, 1, 1, "success", "CI_REVIEW_INCOMPLETE", nil},
 		{"missing PR", base, "no_pr", map[string]string{"ci_fix_cycles": "2"}, 1, 3, "failed", "", nil},
 		{"authentication failure", base, "auth", map[string]string{"ci_fix_cycles": "2"}, 1, 3, "failed", "", nil},
 	} {
@@ -202,15 +207,24 @@ func runFinalizePRSequence(t *testing.T, firstKind, firstMarker string, agentTur
 	if err != nil || result != "success" {
 		t.Fatalf("result=%s error=%v reports=%v", result, err, process.captures)
 	}
-	if len(process.agents) != agentTurns || len(process.captures) != 3 {
+	if len(process.agents) != agentTurns || len(process.captures) != 2 {
 		t.Fatalf("agents=%d waits=%d reports=%v", len(process.agents), len(process.captures), process.captures)
 	}
-	for i, marker := range []string{firstMarker, "CI_PASSED", "CI_PASSED"} {
+	for i, marker := range []string{firstMarker, "CI_PASSED"} {
 		if !strings.HasSuffix(strings.TrimSpace(process.captures[i]), marker) {
 			t.Fatalf("wait %d report=%s", i, process.captures[i])
 		}
 	}
 	if firstKind == "comments" && !strings.Contains(process.agents[1], "please fix") {
 		t.Fatalf("fix prompt missing first cycle report: %s", process.agents[1])
+	}
+}
+
+func TestFinalizePRHeadChangeRequiresFinalWait(t *testing.T) {
+	dir := setupFinalizeCI(t, finalizeCIBaseSnapshot)
+	process := &finalizeCIProcessRunner{head: "different123456"}
+	result, err := runFinalizePR(t, dir, nil, process)
+	if err != nil || result != "success" || len(process.captures) != 2 {
+		t.Fatalf("result=%s err=%v waits=%d scripts=%v", result, err, len(process.captures), process.scripts)
 	}
 }

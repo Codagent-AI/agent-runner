@@ -354,6 +354,38 @@ func TestCIWaitBotPendingThenSuccess(t *testing.T) {
 	}
 }
 
+func TestCIWaitDiscoveredBotFailureIsCI(t *testing.T) {
+	past := time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339)
+	fresh := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	makeSnapshot := func(state string) map[string]any {
+		fixture := ciFixture()
+		pr := ciPR(fixture)
+		ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": past}}
+		ciChecks(pr)["nodes"] = []any{
+			map[string]any{"name": "test", "conclusion": "SUCCESS"},
+			map[string]any{"context": "vercel", "state": state, "createdAt": fresh, "creator": map[string]any{"login": "vercel[bot]"}},
+		}
+		return fixture
+	}
+	for _, tt := range []struct{ name, bots, want, detail string }{
+		{"discovered", "", "CI_FAILED", "### Failed Checks\n- vercel"},
+		{"configured", `"review_bots":"vercel",`, "CI_REVIEW_INCOMPLETE", "vercel: failure"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			first, second := makeSnapshot("PENDING"), makeSnapshot("FAILURE")
+			useCISequence(t, first, second)
+			input := fmt.Sprintf(`{%s"deadline_seconds":"0.8","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`, tt.bots)
+			out, code, elapsed := runCIFixture(t, first, input)
+			if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), tt.want) || !strings.Contains(out, tt.detail) {
+				t.Fatalf("code=%d elapsed=%s report=%s", code, elapsed, out)
+			}
+			if tt.name == "discovered" && elapsed >= 700*time.Millisecond {
+				t.Fatalf("failure waited until deadline: %s", elapsed)
+			}
+		})
+	}
+}
+
 func TestCIWaitAddressedFeedbackAndLatestBotEvidence(t *testing.T) {
 	push := time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339)
 	old := time.Now().Add(-3 * time.Minute).UTC().Format(time.RFC3339)

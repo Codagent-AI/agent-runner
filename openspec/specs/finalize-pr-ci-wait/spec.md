@@ -9,19 +9,33 @@ The `core:finalize-pr` workflow SHALL wait for pull-request CI and review state 
 
 #### Scenario: Passing run has no agent turns after push
 - **WHEN** `core:finalize-pr` runs, `push-pr` completes, and the first CI wait reports `CI_PASSED`
-- **THEN** the workflow runs the CI wait, the loop gates, the final CI wait, and the final gates without starting or resuming any agent session, and finishes successfully
+- **THEN** the workflow runs the CI wait, the loop gates, and the final gates without starting or resuming any agent session, and finishes successfully; it reuses the passing report when the PR head is unchanged
 
 #### Scenario: Incomplete bot review needs no agent turn
-- **WHEN** the first CI wait and the final CI wait both report `CI_REVIEW_INCOMPLETE`
+- **WHEN** the first CI wait reports `CI_REVIEW_INCOMPLETE` and the PR head is unchanged
 - **THEN** no agent session is started or resumed after `push-pr`, and the workflow finishes with the existing incomplete-review warning
 
 #### Scenario: Final verification is not an agent step
 - **WHEN** `ci-fix-loop` ends, whether by a passing gate or an exhausted budget
-- **THEN** the final CI status is produced by a non-agent step and captured as `final_ci_report`, and no agent is resumed to produce it
+- **THEN** the final CI status is captured as `final_ci_report` by a non-agent step, and no agent is resumed to produce it
+
+The final wait SHALL be skipped when the loop's last `ci_report` ends with `CI_PASSED` or `CI_REVIEW_INCOMPLETE` and its full head SHA equals the PR's current head SHA. In that case, `final_ci_report` SHALL reuse `ci_report`, and the final gates SHALL inspect it. If the report is missing, has another marker, or names a different head, the final wait SHALL run.
+
+#### Scenario: Passing report on unchanged head skips final wait
+- **WHEN** the loop's last report passes and its full head SHA still equals the PR head
+- **THEN** `verify-final` is skipped, `final_ci_report` reuses that report, and the final gates run
+
+#### Scenario: Changed head requires final wait
+- **WHEN** the loop's last report passes but the PR head has changed
+- **THEN** `verify-final` runs and its report becomes `final_ci_report`
+
+#### Scenario: Failing last report requires final wait
+- **WHEN** the fix budget is exhausted and the loop's last report ends with `CI_FAILED`
+- **THEN** `verify-final` runs and its report becomes `final_ci_report`
 
 ### Requirement: CI report and terminal marker contract
 
-Each CI wait SHALL capture a human-readable report: `ci_report` for the in-loop wait and `final_ci_report` for the final wait. The final non-empty line of every report the wait produces SHALL be exactly one of `CI_PASSED`, `CI_FAILED`, `CI_COMMENTS`, `CI_PENDING`, or `CI_REVIEW_INCOMPLETE`, with nothing after it. When more than one condition applies, the marker SHALL follow this precedence: `CI_FAILED`, `CI_COMMENTS`, `CI_PENDING`, `CI_REVIEW_INCOMPLETE`, `CI_PASSED`.
+Each CI wait SHALL capture a human-readable report: `ci_report` for the in-loop wait and `final_ci_report` for the final wait. Reports SHALL carry the full head SHA. The final non-empty line of every report the wait produces SHALL be exactly one of `CI_PASSED`, `CI_FAILED`, `CI_COMMENTS`, `CI_PENDING`, or `CI_REVIEW_INCOMPLETE`, with nothing after it. When more than one condition applies, the marker SHALL follow this precedence: `CI_FAILED`, `CI_COMMENTS`, `CI_PENDING`, `CI_REVIEW_INCOMPLETE`, `CI_PASSED`.
 
 Above the marker, the report SHALL include the PR URL and the determined status, plus each of these sections when it is non-empty:
 - failed checks, with links and the last 100 lines of failed GitHub Actions job logs where available;
@@ -114,7 +128,7 @@ The CI wait SHALL classify review feedback deterministically:
 
 A bot SHALL be expected when it is listed in `review_bots`, or when it has submitted a pull-request review on the PR for any head. A bot that has only posted top-level comments or check results SHALL NOT become expected that way.
 
-Checks and commit statuses posted by an expected bot SHALL count as review-bot evidence, not as CI checks. A pending review-bot check SHALL therefore never produce `CI_PENDING`.
+Checks and commit statuses posted by a configured bot or a bot with a submitted PR review SHALL count as review-bot evidence, not as CI checks. A bot discovered only during the start grace follows the failure exception below. A pending review-bot check SHALL never produce `CI_PENDING`.
 
 Freshness and bot state:
 - The observable push point of the current head SHALL be the earliest check-suite creation time on the head commit, or the time of a force-push event that set the head, whichever is later. The commit's own commit time SHALL NOT be used, because an old commit can be pushed long after it was made. If no push timestamp is observable, the wait's first observation of the head SHALL bound the start grace but SHALL NOT invalidate existing current-head bot evidence.
@@ -132,6 +146,7 @@ Start grace and outcomes:
 - An expected bot with fresh evidence that is not finished SHALL be waited for until it finishes or the overall deadline passes.
 - If any expected bot is not finished when the wait ends, and CI is otherwise green with no actionable feedback, the result SHALL be `CI_REVIEW_INCOMPLETE`. This covers bots that never start, are rate-limited, are skipped, fail, or run out of time.
 - When no bot is expected, the wait SHALL still allow the start grace before reporting `CI_PASSED`. A bot that posts a pending check or status on the current head during that time SHALL be expected for the rest of the wait.
+- A bot expected only through start-grace discovery, with no configuration or submitted PR review, SHALL keep failure-class check and status results as CI failures. Its pending and success results SHALL count as review-bot progress.
 
 #### Scenario: Stale bot pass does not count
 - **WHEN** an expected bot's only terminal status is on an earlier head, CI on the current head is green, and the bot shows no fresh evidence before the start grace ends
@@ -172,6 +187,10 @@ Start grace and outcomes:
 #### Scenario: First-time bot detected during grace
 - **WHEN** `review_bots` is empty, no bot has reviewed the PR, and a bot posts a pending status on the current head during the start grace
 - **THEN** the wait keeps polling for that bot, and reports `CI_REVIEW_INCOMPLETE` if the status is still pending at the deadline
+
+#### Scenario: First-time bot discovered during grace later fails
+- **WHEN** `review_bots` is empty, no bot has reviewed the PR, and a bot posts a pending status during the start grace that later becomes `FAILURE`
+- **THEN** the report lists that status under failed checks and ends with `CI_FAILED` without waiting for the deadline
 
 #### Scenario: Review completed while draft is stale after ready
 - **WHEN** an expected bot set a success status on the current head while the PR was a draft, the PR was then marked ready for review, and the bot shows no newer evidence during the start grace
@@ -262,5 +281,4 @@ The final gates SHALL keep their current behavior:
 
 #### Scenario: Fix makes CI green
 - **WHEN** the first cycle reports `CI_COMMENTS`, `fix-pr` pushes a fix, and the second cycle's wait reports `CI_PASSED`
-- **THEN** the loop breaks after the second wait, the final CI wait reports `CI_PASSED`, and the workflow succeeds
-
+- **THEN** the loop breaks after the second wait and, if the head is unchanged, its `CI_PASSED` report is reused for the final gates and the workflow succeeds

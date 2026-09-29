@@ -239,9 +239,11 @@ class Collector:
         fresh = max(observed_push, ready)
         grace_end = min(self.deadline, max(fresh, self.first_seen.get(head, self.started)) + self.grace)
         expected = set(self.configured)
+        prior_reviewers = set()
         for review in reviews:
             if actor(review).get("__typename") == "Bot" and review.get("submittedAt"):
-                expected.add(identity(actor(review).get("login")))
+                prior_reviewers.add(identity(actor(review).get("login")))
+        expected |= prior_reviewers
         if now() <= grace_end:
             for check in checks:
                 name, state, timestamp = self.check_fields(check)
@@ -253,13 +255,14 @@ class Collector:
                 if creator and (creator.lower().endswith("[bot]") or name.lower().startswith("coderabbit")) and timestamp > fresh:
                     self.discovered.add(identity(creator))
         expected |= self.discovered
+        grace_only = self.discovered - self.configured - prior_reviewers
         failed, pending, passed = [], [], []
         bot_progress = {bot: [] for bot in expected}
         bot_activity = {bot: [] for bot in expected}
         for check in checks:
             name, state, timestamp = self.check_fields(check)
             bot = identity(self.check_creator(check))
-            if bot in expected:
+            if bot in expected and not (bot in grace_only and state in FAILED_STATES):
                 if timestamp > fresh:
                     bot_progress[bot].append((state == "SUCCESS", timestamp, state))
                 continue
@@ -404,7 +407,7 @@ class Collector:
     def report(self, state, marker):
         label = marker.removeprefix("CI_").lower().replace("_", " ")
         lines = [f"## CI Status: {label}", "", f"**PR:** {self.url}",
-                 f"**Head:** {(self.head or 'unknown')[:12]}",
+                 f"**Head:** {self.head or 'unknown'}",
                  f"**Elapsed:** ~{round((now()-self.started)/60, 1)} minutes"]
         if state:
             def section(title, entries):
