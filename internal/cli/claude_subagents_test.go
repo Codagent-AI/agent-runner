@@ -247,3 +247,31 @@ func TestClaudeTranscriptReadsStayInsideConfigRoot(t *testing.T) {
 		t.Fatalf("usage=%+v", got.Usage)
 	}
 }
+
+func TestClaudeBackgroundShellTaskIsNotSubagent(t *testing.T) {
+	for _, finished := range []bool{true, false} {
+		t.Run(map[bool]string{true: "finished", false: "still running"}[finished], func(t *testing.T) {
+			root := t.TempDir()
+			session := "55555555-5555-5555-5555-555555555555"
+			project := filepath.Join(root, "projects", "project")
+			writeClaudeFixture(t, filepath.Join(project, session+".jsonl"),
+				`{"uuid":"first","type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","id":"bash-tool"}]}}`+"\n"+
+					`{"uuid":"last","type":"assistant","message":{"content":[]}}`+"\n")
+			stdout := `{"uuid":"first","type":"system","subtype":"init","session_id":"` + session + `","model":"claude-opus-5-5"}` + "\n" +
+				`{"type":"system","subtype":"task_started","task_id":"b1","tool_use_id":"bash-tool","task_type":"local_bash"}` + "\n"
+			if finished {
+				stdout += `{"type":"system","subtype":"task_notification","task_id":"b1","tool_use_id":"bash-tool","status":"completed"}` + "\n"
+			}
+			stdout += `{"uuid":"last","type":"assistant","message":{"model":"claude-opus-5-5"}}` + "\n" +
+				`{"type":"result","session_id":"` + session + `","total_cost_usd":1,"usage":{"input_tokens":1,"cache_read_input_tokens":2,"cache_creation_input_tokens":3,"output_tokens":4}}` + "\n"
+			got, err := (&ClaudeAdapter{}).ExtractUsageWithContext(stdout, UsageContext{Env: []string{"CLAUDE_CONFIG_DIR=" + root}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			u := got.Usage
+			if u.SubagentCollection != model.CompletenessComplete || u.SubagentCollectionReason != "" || len(u.Allocations) != 1 || u.Completeness != model.CompletenessComplete {
+				t.Fatalf("background shell task counted as subagent: %+v", u)
+			}
+		})
+	}
+}

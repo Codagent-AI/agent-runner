@@ -23,6 +23,7 @@ type claudeEntry struct {
 	ToolUseID       string `json:"tool_use_id"`
 	Status          string `json:"status"`
 	Subtype         string `json:"subtype"`
+	TaskType        string `json:"task_type"`
 	Message         struct {
 		ID      string          `json:"id"`
 		Model   string          `json:"model"`
@@ -48,6 +49,12 @@ type claudeSidecar struct {
 type claudeSpawn struct {
 	id, parent string
 	depth      int
+}
+
+// claudeAgentTask treats an unreported task type as an agent so an older
+// stream format cannot hide a spawn.
+func claudeAgentTask(taskType string) bool {
+	return taskType == "" || strings.Contains(taskType, "agent")
 }
 
 func parseClaudeEntry(line []byte) (claudeEntry, error) {
@@ -121,13 +128,14 @@ func (a *ClaudeAdapter) ExtractUsageWithContext(stdout string, uc UsageContext) 
 				spawns[id] = claudeSpawn{id: id, depth: 1}
 			}
 			if e.ToolUseID != "" {
-				if e.Subtype == "task_started" {
+				// Background shell tools also emit task events; only agent tasks
+				// are subagent spawns. Completion events carry no task type.
+				if e.Subtype == "task_started" && claudeAgentTask(e.TaskType) {
 					running[e.ToolUseID] = true
 					spawns[e.ToolUseID] = claudeSpawn{id: e.ToolUseID, depth: 1}
 				}
 				if e.Subtype == "task_notification" || (e.Subtype == "task_updated" && (e.Status == "completed" || e.Status == "failed")) {
 					running[e.ToolUseID] = false
-					spawns[e.ToolUseID] = claudeSpawn{id: e.ToolUseID, depth: 1}
 				}
 			}
 		}
