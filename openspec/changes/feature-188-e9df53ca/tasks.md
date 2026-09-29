@@ -1,0 +1,9 @@
+- [ ] Implement the change described by these files, using TDD per `CLAUDE.md`. Satisfy every spec scenario and every `INT-*` and `E2E-*` obligation in the test plan, and finish with `make fmt`, `make test`, and `make lint` passing:
+  - [proposal.md](proposal.md)
+  - [specs/claude-subagent-usage/spec.md](specs/claude-subagent-usage/spec.md)
+  - [specs/agent-usage-collection/spec.md](specs/agent-usage-collection/spec.md)
+  - [specs/run-metrics-artifact/spec.md](specs/run-metrics-artifact/spec.md)
+  - [specs/cost-capture/spec.md](specs/cost-capture/spec.md)
+  - [design.md](design.md)
+  - [test-plan.md](test-plan.md)
+  - [decisions.md](decisions.md)
