@@ -32,6 +32,9 @@ func TestJudgeUsageProcessFailureAndResume(t *testing.T) {
 	if summary.AttemptCount != 1 || summary.Attempts[0].Outcome != "failed" || summary.Attempts[0].FailureCategory != "process_exit" || summary.TokenCoverage != model.CoverageComplete || summary.CostUSD == nil || *summary.CostUSD != 0.25 {
 		t.Fatalf("failed attempt: %+v", summary)
 	}
+	if attempt := summary.Attempts[0]; attempt.AuditRunID != request.AuditRunID || attempt.Stage != "value" || attempt.BatchID != pkg.BatchID || attempt.CLI != "claude" || attempt.Model != "fable" {
+		t.Fatalf("attempt identity: %+v", attempt)
+	}
 	stubCrosscheck(t, response, "", "0", nil)
 	if err := ensureValueOutputs(request); err != nil {
 		t.Fatal(err)
