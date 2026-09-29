@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -57,7 +58,7 @@ func TestReplayExcludesEvidenceWithoutHistoricalSessionOwnership(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(workflowPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	workflowYAML := []byte("name: source\nsteps: []\n")
+	workflowYAML := []byte("name: source\nsteps:\n  - id: checkpoint\n    script: checkpoint.sh\n")
 	if err := os.WriteFile(workflowPath, workflowYAML, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -155,9 +156,11 @@ func TestSnapshotWorkflowDefinitionIncludesSiblingFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	files := map[string]string{
-		"main.yaml":     "name: main\nsteps: []\n",
-		"child.yaml":    "name: child\nsteps: []\n",
+		"main.yaml":     "name: main\nsteps:\n  - id: child\n    workflow: child.yaml\n  - id: checkpoint\n    script: checkpoint.sh\n    skip_if: 'sh: workflows/skip.sh'\n  - id: log\n    command: \"printf '%s\\\\n' 'credentials.sh'\"\n  - id: linked\n    script: linked.sh\n",
+		"child.yaml":    "name: child\nsteps:\n  - id: record\n    script: record.sh\n",
 		"checkpoint.sh": "#!/bin/sh\necho checkpoint\n",
+		"record.sh":     "#!/bin/sh\necho record\n",
+		"skip.sh":       "#!/bin/sh\nexit 0\n",
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(workflowDir, name), []byte(content), 0o600); err != nil {
@@ -168,6 +171,12 @@ func TestSnapshotWorkflowDefinitionIncludesSiblingFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink("checkpoint.sh", filepath.Join(workflowDir, "linked.sh")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, ".env"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, "credentials.sh"), []byte("secret"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	snapshot := t.TempDir()
@@ -199,7 +208,7 @@ func TestSnapshotWorkflowDefinitionIncludesSiblingFiles(t *testing.T) {
 			t.Fatalf("%s mode = %v; want 0400", name, info.Mode())
 		}
 	}
-	for _, name := range []string{"nested", "linked.sh"} {
+	for _, name := range []string{"nested", "linked.sh", ".env", "credentials.sh"} {
 		if _, err := os.Lstat(filepath.Join(snapshot, "source-workflow", name)); !os.IsNotExist(err) {
 			t.Fatalf("%s was copied: %v", name, err)
 		}
@@ -208,10 +217,16 @@ func TestSnapshotWorkflowDefinitionIncludesSiblingFiles(t *testing.T) {
 
 func TestSnapshotWorkflowDefinitionSkipsOversizedDirectory(t *testing.T) {
 	project := t.TempDir()
-	if err := os.WriteFile(filepath.Join(project, "main.yaml"), []byte("name: main\nsteps: []\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(project, "main.yaml"), []byte("name: main\nsteps:\n  - id: large\n    script: large.sh\n  - id: small\n    script: small.sh\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(project, "large.sh"), make([]byte, 2*1024*1024+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "small.sh"), []byte("echo small\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "unrelated.bin"), make([]byte, 2*1024*1024+1), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	snapshot := t.TempDir()
@@ -222,11 +237,19 @@ func TestSnapshotWorkflowDefinitionSkipsOversizedDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != "SKIPPED.txt" {
-		t.Fatalf("oversized directory entries = %v; want only SKIPPED.txt", entries)
+	if len(entries) != 3 {
+		t.Fatalf("oversized directory entries = %v; want main.yaml, small.sh and SKIPPED.txt", entries)
 	}
-	if note, err := os.ReadFile(filepath.Join(snapshot, "source-workflow", "SKIPPED.txt")); err != nil || !strings.Contains(string(note), "2 MiB") {
+	if note, err := os.ReadFile(filepath.Join(snapshot, "source-workflow", "SKIPPED.txt")); err != nil || !strings.Contains(string(note), "large.sh") {
 		t.Fatalf("skip note = %q, %v", note, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(snapshot, "source-workflow", "small.sh")); err != nil || string(got) != "echo small\n" {
+		t.Fatalf("small script = %q, %v", got, err)
+	}
+	for _, name := range []string{"large.sh", "unrelated.bin"} {
+		if _, err := os.Stat(filepath.Join(snapshot, "source-workflow", name)); !os.IsNotExist(err) {
+			t.Fatalf("%s copied: %v", name, err)
+		}
 	}
 }
 
@@ -253,8 +276,8 @@ func TestSnapshotWorkflowDefinitionUnreadableDirectoryKeepsWorkflow(t *testing.T
 	if got, err := os.ReadFile(filepath.Join(snapshot, "source-workflow.yaml")); err != nil || string(got) != "name: main\nsteps: []\n" {
 		t.Fatalf("source workflow = %q, %v", got, err)
 	}
-	if note, err := os.ReadFile(filepath.Join(snapshot, "source-workflow", "SKIPPED.txt")); err != nil || !strings.Contains(string(note), "could not be listed") {
-		t.Fatalf("skip note = %q, %v", note, err)
+	if got, err := os.ReadFile(filepath.Join(snapshot, "source-workflow", "main.yaml")); err != nil || string(got) != "name: main\nsteps: []\n" {
+		t.Fatalf("sibling main workflow = %q, %v", got, err)
 	}
 }
 
@@ -265,6 +288,31 @@ func TestSnapshotWorkflowDefinitionBuiltinHasNoSiblingDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(snapshot, "source-workflow")); !os.IsNotExist(err) {
 		t.Fatalf("builtin source-workflow directory: %v", err)
+	}
+}
+
+func TestShellScriptInvocationsOnlyExecutables(t *testing.T) {
+	for _, test := range []struct {
+		command string
+		want    []string
+	}{
+		{command: "printf '%s\\n' 'credentials.sh'"},
+		{command: "sh -c 'printf credentials.sh'"},
+		{command: "bash -lc 'printf credentials.sh'"},
+		{command: "sh -c './checkpoint.sh'", want: []string{"./checkpoint.sh"}},
+		{command: "bash -lc './checkpoint.sh'", want: []string{"./checkpoint.sh"}},
+		{command: "CONFIG_DIR=./cfg ./checkpoint.sh", want: []string{"./checkpoint.sh"}},
+		{command: "echo ok # ignored; credentials.sh"},
+		{command: "echo 'x; credentials.sh' && ./checkpoint.sh", want: []string{"./checkpoint.sh"}},
+		{command: "sh workflows/skip.sh", want: []string{"workflows/skip.sh"}},
+		{command: "if test -f file; then ./checkpoint.sh; fi", want: []string{"./checkpoint.sh"}},
+	} {
+		t.Run(test.command, func(t *testing.T) {
+			got := shellScriptInvocations(test.command)
+			if !slices.Equal(got, test.want) {
+				t.Fatalf("scripts = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 
