@@ -1120,7 +1120,7 @@ func emitAgentEnd(
 	emitStepEnd(ctx, prefix, startTime, string(outcome), data, step)
 }
 
-func extractAgentUsage(adapter cli.Adapter, cliName string, invocationContext cli.InvocationContext, rawStdout string, usageContext ...cli.UsageContext) (cli.UsageExtraction, error) {
+func extractAgentUsage(adapter cli.Adapter, cliName string, invocationContext cli.InvocationContext, rawStdout string, usageContext cli.UsageContext) (cli.UsageExtraction, error) {
 	if !invocationContext.IsHeadless() {
 		return cli.UsageExtraction{Usage: defaultAgentUsage(cliName, false)}, nil
 	}
@@ -1130,8 +1130,8 @@ func extractAgentUsage(adapter cli.Adapter, cliName string, invocationContext cl
 	}
 	var extraction cli.UsageExtraction
 	var err error
-	if contextual, ok := adapter.(cli.ContextualUsageExtractor); ok && len(usageContext) > 0 {
-		extraction, err = contextual.ExtractUsageWithContext(rawStdout, usageContext[0])
+	if contextual, ok := adapter.(cli.ContextualUsageExtractor); ok {
+		extraction, err = contextual.ExtractUsageWithContext(rawStdout, usageContext)
 	} else {
 		extraction, err = extractor.ExtractUsage(rawStdout)
 	}
