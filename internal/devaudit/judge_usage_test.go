@@ -60,3 +60,29 @@ func TestSummarizeJudgeUsageRecoversAndCountsLegacy(t *testing.T) {
 		t.Fatalf("summary = %+v", summary)
 	}
 }
+
+func TestJudgeUsageLedgerDoesNotReadOutsideRoot(t *testing.T) {
+	request := &Request{AuditSessionDir: t.TempDir(), AuditRunID: "audit"}
+	if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "value-packages.json"), []ValuePackage{{BatchID: "batch"}}); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "forged.json")
+	cost := 999.0
+	if err := stateio.WriteJSONAtomic(outside, JudgeAttempt{Outcome: "succeeded", CostUSD: &cost, Usage: model.UsageRecord{Status: model.UsageCollected, TokenTotals: &model.TokenTotals{Total: 999}}}); err != nil {
+		t.Fatal(err)
+	}
+	ledger := filepath.Join(request.AuditSessionDir, "judge-usage", "value", "batch")
+	if err := os.MkdirAll(ledger, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(ledger, "attempt.json")); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := summarizeJudgeUsage(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.AttemptCount != 1 || summary.CostUSD != nil || summary.TotalTokens != nil {
+		t.Fatalf("external ledger data was trusted: %+v", summary)
+	}
+}

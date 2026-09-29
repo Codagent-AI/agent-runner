@@ -143,20 +143,23 @@ func summarizeJudgeUsage(request *Request) (*JudgeUsageSummary, error) {
 }
 
 func loadJudgeAttempts(request *Request, summary *JudgeUsageSummary) (map[string][]int, error) {
-	root := filepath.Join(request.AuditSessionDir, "judge-usage")
 	groups := map[string][]int{}
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+	root, err := os.OpenRoot(filepath.Join(request.AuditSessionDir, "judge-usage"))
+	if os.IsNotExist(err) {
+		return groups, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	err = fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		if entry.IsDir() || filepath.Ext(path) != ".json" {
 			return nil
 		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		parts := strings.Split(filepath.ToSlash(rel), "/")
+		parts := strings.Split(path, "/")
 		if len(parts) != 2 && len(parts) != 3 {
 			return nil
 		}
@@ -166,8 +169,8 @@ func loadJudgeAttempts(request *Request, summary *JudgeUsageSummary) (map[string
 		} else if stage != "correctness" || len(parts) != 2 {
 			return nil
 		}
-		attempt := JudgeAttempt{AttemptID: strings.TrimSuffix(filepath.ToSlash(rel), ".json"), AuditRunID: request.AuditRunID, Stage: stage, BatchID: batch, CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, Outcome: "unknown", Usage: unavailableJudgeUsage(model.UnavailableParseFailure)}
-		data, err := os.ReadFile(path) // #nosec G304 -- audit-owned ledger path discovered under the audit directory.
+		attempt := JudgeAttempt{AttemptID: strings.TrimSuffix(path, ".json"), AuditRunID: request.AuditRunID, Stage: stage, BatchID: batch, CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, Outcome: "unknown", Usage: unavailableJudgeUsage(model.UnavailableParseFailure)}
+		data, err := root.ReadFile(path)
 		if err == nil {
 			var stored JudgeAttempt
 			if json.Unmarshal(data, &stored) == nil {
@@ -175,7 +178,7 @@ func loadJudgeAttempts(request *Request, summary *JudgeUsageSummary) (map[string
 			}
 		}
 		// The path is authoritative even if the file is corrupt or contains mismatched fields.
-		attempt.AttemptID, attempt.Stage, attempt.BatchID = strings.TrimSuffix(filepath.ToSlash(rel), ".json"), stage, batch
+		attempt.AttemptID, attempt.Stage, attempt.BatchID = strings.TrimSuffix(path, ".json"), stage, batch
 		groups[stage+"/"+batch] = append(groups[stage+"/"+batch], len(summary.Attempts))
 		summary.Attempts = append(summary.Attempts, attempt)
 		return nil
