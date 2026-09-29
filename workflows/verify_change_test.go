@@ -11,6 +11,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/textfmt"
 )
 
 const verifyChangeRef = "builtin:core/verify-change-v1.0.yaml"
@@ -94,6 +95,118 @@ func TestCoreVerifyChangeShape(t *testing.T) {
 	}
 	if diff := cmp.Diff(wantSteps, stepIDs(workflow.Steps)); diff != "" {
 		t.Errorf("verify-change steps mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCoreVerifyChangeSimplifyFixesDefects(t *testing.T) {
+	workflow := readBuiltinWorkflowForTest(t, verifyChangeRef)
+	step := findStep(workflow.Steps, "simplify")
+	if step == nil {
+		t.Fatal("simplify step not found")
+	}
+	requirePromptContains(t, step.ID, step.Prompt,
+		"Fix clear-cut correctness or spec-conformance defects",
+		"Do not defer defects to /code-review or a later review",
+		"known follow-up",
+		"{{session_dir}}/output/acceptance-assumptions.md",
+		"replace any existing `No unresolved assumptions or context gaps.` statement when adding the first entry",
+		"[{{step_id}}]",
+	)
+
+	pr := findStep(workflow.Steps, "open-draft-pr")
+	if pr == nil {
+		t.Fatal("open-draft-pr step not found")
+	}
+	requirePromptContains(t, pr.ID, pr.Prompt,
+		"Do not list known defects as Known follow-up items",
+		"{{session_dir}}/output/acceptance-assumptions.md",
+	)
+}
+
+func TestLegacyImplementChangeSimplifyStopsForDecisions(t *testing.T) {
+	for _, ref := range []string{
+		"builtin:openspec/implement-change-v1.0.yaml",
+		"builtin:spec-driven/implement-change-v1.0.yaml",
+	} {
+		t.Run(ref, func(t *testing.T) {
+			workflow := readBuiltinWorkflowForTest(t, ref)
+			simplify := findStep(workflow.Steps, "simplify")
+			if simplify == nil {
+				t.Fatal("simplify step not found")
+			}
+			requirePromptContains(t, simplify.ID, simplify.Prompt,
+				"Fix clear-cut correctness or spec-conformance defects",
+				"Do not defer defects to /code-review or a later review",
+				"{{session_dir}}/output/acceptance-assumptions.md",
+				"[{{step_id}}]",
+			)
+			gate := findStep(workflow.Steps, "require-simplify-decisions-resolved")
+			if gate == nil {
+				t.Fatal("unresolved simplify decisions have no gate before finalization")
+			}
+			if !strings.Contains(gate.Command, "{{session_dir}}/output/acceptance-assumptions.md") ||
+				!strings.Contains(gate.Command, "exit 1") {
+				t.Errorf("decision gate must stop the workflow on unresolved findings: %q", gate.Command)
+			}
+			if !strings.Contains(gate.Command, "After resolving each item, remove or empty {{session_dir}}/output/acceptance-assumptions.md, then resume the run.") {
+				t.Errorf("decision gate must explain how to resume after resolving decisions: %q", gate.Command)
+			}
+			for _, tc := range []struct {
+				name        string
+				ledger      string
+				grepFailure bool
+				exitCode    int
+			}{
+				{name: "no findings placeholder", ledger: "No unresolved assumptions or context gaps.\n"},
+				{name: "unresolved finding", ledger: "Decision needed: choose a storage format.\n", exitCode: 1},
+				{name: "placeholder with finding", ledger: "No unresolved assumptions or context gaps.\nDecision needed: choose a storage format.\n", exitCode: 1},
+				{name: "grep read failure", ledger: "No unresolved assumptions or context gaps.\n", grepFailure: true, exitCode: 2},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					// A space and a single quote in the session dir prove the gate
+					// survives the runner's shell-safe interpolation.
+					sessionDir := filepath.Join(t.TempDir(), "session dir's")
+					outputDir := filepath.Join(sessionDir, "output")
+					if err := os.MkdirAll(outputDir, 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(outputDir, "acceptance-assumptions.md"), []byte(tc.ledger), 0o644); err != nil {
+						t.Fatal(err)
+					}
+					command, err := textfmt.InterpolateShellSafeTyped(gate.Command, nil, nil, map[string]string{"session_dir": sessionDir})
+					if err != nil {
+						t.Fatalf("interpolate decision gate: %v", err)
+					}
+					cmd := exec.Command("sh", "-c", command)
+					if tc.grepFailure {
+						binDir := filepath.Join(sessionDir, "bin")
+						if err := os.Mkdir(binDir, 0o755); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.WriteFile(filepath.Join(binDir, "grep"), []byte("#!/bin/sh\nexit 2\n"), 0o755); err != nil {
+							t.Fatal(err)
+						}
+						cmd.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
+					}
+					output, err := cmd.CombinedOutput()
+					actualExitCode := 0
+					if err != nil {
+						exitErr, ok := err.(*exec.ExitError)
+						if !ok {
+							t.Fatalf("decision gate execution failed: %v", err)
+						}
+						actualExitCode = exitErr.ExitCode()
+					}
+					if actualExitCode != tc.exitCode {
+						t.Errorf("decision gate exit code = %d, want %d; output: %s", actualExitCode, tc.exitCode, output)
+					}
+				})
+			}
+			ids := stepIDs(workflow.Steps)
+			if !strings.Contains(strings.Join(ids, ","), "simplify,require-simplify-decisions-resolved,run-validator") {
+				t.Errorf("decision gate must run immediately after simplify: %v", ids)
+			}
+		})
 	}
 }
 
