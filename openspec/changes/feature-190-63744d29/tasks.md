@@ -1,0 +1,7 @@
+- [ ] Implement the change described by these files, using TDD per `CLAUDE.md`. Satisfy every spec scenario and every `INT-*`/`E2E-*` obligation in the test plan. The E2E obligations extend the opt-in real-agent tests under the `e2e_agents` build tag and must compile. Finish with `make fmt`, `make test`, and `make lint` passing:
+  - [proposal.md](proposal.md)
+  - [specs/codex-rate-limit-capture/spec.md](specs/codex-rate-limit-capture/spec.md)
+  - [specs/run-metrics-artifact/spec.md](specs/run-metrics-artifact/spec.md)
+  - [design.md](design.md)
+  - [test-plan.md](test-plan.md)
+  - [decisions.md](decisions.md)
