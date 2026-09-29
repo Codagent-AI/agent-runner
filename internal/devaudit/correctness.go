@@ -134,7 +134,7 @@ func writeCorrectnessDiagnostic(request *Request, message string) error {
 // correctnessPrompt directs the auditor at defects in how Agent Runner
 // executed the source workflow. Measurement discrepancies and behavior the
 // current specifications already describe are not filed.
-const correctnessPrompt = `Investigate only reproducible Agent Runner defects in how the source workflow was executed, using this immutable audit evidence and the read-only Runner source under evidence/runner-source.
+const correctnessPrompt = `Investigate only reproducible Agent Runner defects in how the source workflow was executed, using this immutable audit evidence and the read-only Runner source under evidence/runner-source. The audit-launch source workflow definition is at evidence/source-workflow.yaml when available. Local sub-workflows and scripts referenced by the source workflow (sibling files in its directory) are under evidence/source-workflow/ when available.
 
 In scope (scope "workflow_execution"): step sequencing and outcomes, session new/resume/inherit handling, agent CLI invocation and arguments, loops, retries, repair cycles, skip_if and break_if, captures and interpolation, sub-workflows, dispatch, run resume, state persistence, and Git commits or other effects a step produced. The question is whether Agent Runner did what the workflow and its specifications say it should.
 
@@ -178,7 +178,7 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 		}
 		return CorrectnessCandidates{}, err
 	}
-	args, finalResponsePath, removeStructuredFiles, err := withCrosscheckOutputSchema(request.Auditor.CLI, args, filepath.Join(request.AuditSessionDir, "model-output"), "correctness", correctnessOutputSchema(allEvidenceReferences(&prepared.Index)))
+	args, finalResponsePath, removeStructuredFiles, err := withAuditEvidenceAndOutputSchema(request, args, "correctness", correctnessOutputSchema(allEvidenceReferences(&prepared.Index)))
 	if err != nil {
 		return CorrectnessCandidates{}, err
 	}
@@ -197,7 +197,7 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 	}
 	defer cleanup()
 	command.Env = env
-	data, runErr := runCrosscheckOutput(command, adapter)
+	data, spawnTime, runErr := runCrosscheckOutput(command, adapter)
 	if after, err := trustedAuditInputsFingerprint(request); err != nil {
 		return CorrectnessCandidates{}, err
 	} else if after != trusted {
@@ -206,6 +206,7 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 	if runErr != nil {
 		return CorrectnessCandidates{}, fmt.Errorf("run crosscheck: %w", runErr)
 	}
+	rawOutput := data
 	if finalResponsePath != "" {
 		data, err = os.ReadFile(finalResponsePath) // #nosec G304 -- path is created below the audit-owned output directory.
 		if err != nil {
@@ -226,7 +227,7 @@ func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error
 	if decoder.Decode(&extra) != io.EOF {
 		return CorrectnessCandidates{}, fmt.Errorf("crosscheck result contains multiple JSON values")
 	}
-	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: "unknown"}
+	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: auditSessionID(adapter, rawOutput, workspace, spawnTime)}
 	return output, nil
 }
 

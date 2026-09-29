@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
@@ -96,6 +98,186 @@ func TestClaudeCrosscheckConsumesStructuredResultForBothStages(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+			}
+		})
+	}
+}
+
+func TestClaudeCrosscheckGrantsEvidenceReadsAndRecordsSession(t *testing.T) {
+	for _, stage := range []string{"value", "correctness"} {
+		t.Run(stage, func(t *testing.T) {
+			request, pkg := crosscheckFixture(t)
+			// The configured paths may be symlinks, while Claude checks their resolved targets.
+			resolvedSnapshot, err := filepath.EvalSymlinks(request.SnapshotPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := t.TempDir()
+			linkedSnapshot := filepath.Join(root, "linked-snapshot")
+			if err := os.Symlink(request.SnapshotPath, linkedSnapshot); err != nil {
+				t.Fatal(err)
+			}
+			request.SnapshotPath = linkedSnapshot
+			runnerSource := filepath.Join(root, "runner-source")
+			if err := os.Mkdir(runnerSource, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			request.RunnerSource.SnapshotPath = runnerSource
+			resolvedSource, err := filepath.EvalSymlinks(runnerSource)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "request.json"), request); err != nil {
+				t.Fatal(err)
+			}
+			output := `{"candidates":[]}`
+			if stage == "value" {
+				output = `{"batch_id":"` + pkg.BatchID + `","observations":[]}`
+			}
+			response := `{"type":"result","subtype":"success","session_id":"judge-session","structured_output":` + output + `}`
+			stubCrosscheck(t, response, "", "0", func(args []string) {
+				var dirs []string
+				for i, arg := range args {
+					if arg == "--add-dir" && i+1 < len(args) {
+						dirs = append(dirs, args[i+1])
+					}
+					if arg == "--" {
+						for _, later := range args[i+1:] {
+							if later == "--add-dir" {
+								t.Error("read grant follows argument terminator")
+							}
+						}
+					}
+				}
+				if diff := cmp.Diff([]string{resolvedSnapshot, resolvedSource}, dirs); diff != "" {
+					t.Errorf("read directories (-want +got):\n%s", diff)
+				}
+			})
+			var provenance BatchProvenance
+			if stage == "value" {
+				result, err := invokeCrosscheckValueBatch(request, pkg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				provenance = result.Provenance
+			} else {
+				result, err := invokeCrosscheckCorrectness(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				provenance = result.Provenance
+			}
+			if diff := cmp.Diff("judge-session", provenance.SessionID); diff != "" {
+				t.Errorf("session ID (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestAuditReadDirsPrecedeClaudePromptSeparator(t *testing.T) {
+	args := []string{"claude", "-p", "--", "judge this"}
+	want := []string{"claude", "-p", "--add-dir", "/snapshot", "--", "judge this"}
+	if diff := cmp.Diff(want, withAuditReadDirs("claude", args, "/snapshot")); diff != "" {
+		t.Errorf("Claude arguments (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(args, withAuditReadDirs("codex", args, "/snapshot")); diff != "" {
+		t.Errorf("other CLI arguments changed (-want +got):\n%s", diff)
+	}
+}
+
+func TestCodexCrosscheckDoesNotRequireClaudeReadDirs(t *testing.T) {
+	request := &Request{SnapshotPath: filepath.Join(t.TempDir(), "missing"), AuditSessionDir: t.TempDir(), Auditor: AgentProvenance{CLI: "codex"}}
+	args := []string{"codex", "exec", "judge this"}
+	_, _, cleanup, err := withAuditEvidenceAndOutputSchema(request, args, "value", map[string]any{"type": "object"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup()
+}
+
+func TestCrosscheckDiscoversSessionCreatedDuringJudgeRun(t *testing.T) {
+	for _, stage := range []string{"value", "correctness"} {
+		t.Run(stage, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			request, pkg := crosscheckFixture(t)
+			request.Auditor.CLI = "copilot"
+			if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "request.json"), request); err != nil {
+				t.Fatal(err)
+			}
+			judgment := `{"candidates":[]}`
+			if stage == "value" {
+				judgment = `{"batch_id":"` + pkg.BatchID + `","observations":[]}`
+			}
+			event, err := json.Marshal(map[string]any{"type": "assistant.message", "data": map[string]string{"content": judgment}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			sessionDir := filepath.Join(home, ".copilot", "session-state", "judge-session")
+			original := crosscheckCommand
+			t.Cleanup(func() { crosscheckCommand = original })
+			crosscheckCommand = func(_ []string, workspace, _ string) (*exec.Cmd, error) {
+				const script = `mkdir -p "$1"; printf 'cwd: %s\n' "$2" > "$1/workspace.yaml"; sleep 1; printf '%s' "$3"`
+				return exec.Command("sh", "-c", script, "stub", sessionDir, workspace, string(event)), nil
+			}
+			var provenance BatchProvenance
+			if stage == "value" {
+				result, err := invokeCrosscheckValueBatch(request, pkg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				provenance = result.Provenance
+			} else {
+				result, err := invokeCrosscheckCorrectness(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				provenance = result.Provenance
+			}
+			if diff := cmp.Diff("judge-session", provenance.SessionID); diff != "" {
+				t.Errorf("session ID (-want +got):\n%s", diff)
+			}
+		})
+	}
+	for _, stage := range []string{"value", "correctness"} {
+		t.Run("codex-"+stage, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			request, pkg := crosscheckFixture(t)
+			request.Auditor.CLI = "codex"
+			if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "request.json"), request); err != nil {
+				t.Fatal(err)
+			}
+			judgment := `{"candidates":[]}`
+			if stage == "value" {
+				judgment = `{"batch_id":"` + pkg.BatchID + `","observations":[]}`
+			}
+			original := crosscheckCommand
+			t.Cleanup(func() { crosscheckCommand = original })
+			crosscheckCommand = func(args []string, _, _ string) (*exec.Cmd, error) {
+				for i, arg := range args {
+					if arg == "--output-last-message" && i+1 < len(args) {
+						const script = `printf '%s' "$2" > "$1"; printf '%s\n' '{"type":"thread.started","thread_id":"judge-thread"}'`
+						return exec.Command("sh", "-c", script, "stub", args[i+1], judgment), nil
+					}
+				}
+				return nil, fmt.Errorf("Codex invocation missing final response path")
+			}
+			var provenance BatchProvenance
+			if stage == "value" {
+				result, err := invokeCrosscheckValueBatch(request, pkg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				provenance = result.Provenance
+			} else {
+				result, err := invokeCrosscheckCorrectness(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				provenance = result.Provenance
+			}
+			if diff := cmp.Diff("judge-thread", provenance.SessionID); diff != "" {
+				t.Errorf("session ID (-want +got):\n%s", diff)
 			}
 		})
 	}

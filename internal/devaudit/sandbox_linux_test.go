@@ -131,6 +131,11 @@ func TestLinuxAuditDisposableRuntime(t *testing.T) {
 	testSandboxedCodexRuntime(t)
 }
 
+func TestLinuxAuditEvidenceSymlinkReadOnly(t *testing.T) {
+	requireLinuxAuditSandbox(t)
+	testAuditEvidenceSymlinkReadOnly(t)
+}
+
 func TestLinuxAuditDockerRetainsSeccomp(t *testing.T) {
 	if os.Getenv("AGENT_RUNNER_REQUIRE_LINUX_SANDBOX") != "1" {
 		t.Skip("supported Docker invocation only")

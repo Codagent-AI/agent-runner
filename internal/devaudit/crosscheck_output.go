@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/codagent/agent-runner/internal/cli"
 )
@@ -33,9 +34,10 @@ func crosscheckDiagnostic(text string) string {
 	return text
 }
 
-func runCrosscheckOutput(command *exec.Cmd, adapter cli.Adapter) ([]byte, error) {
+func runCrosscheckOutput(command *exec.Cmd, adapter cli.Adapter) ([]byte, time.Time, error) {
 	var stderr diagnosticBuffer
 	command.Stderr = &stderr
+	spawnTime := time.Now()
 	data, err := runBoundedOutput(command, maxCrosscheckOutput)
 	if err != nil {
 		detail := string(data)
@@ -48,9 +50,9 @@ func runCrosscheckOutput(command *exec.Cmd, adapter cli.Adapter) ([]byte, error)
 		case cli.OutputFilter:
 			detail = adapter.FilterOutput(detail)
 		}
-		return data, fmt.Errorf("%w; provider: %s; stderr: %s", err, crosscheckDiagnostic(detail), crosscheckDiagnostic(string(stderr.data)))
+		return data, spawnTime, fmt.Errorf("%w; provider: %s; stderr: %s", err, crosscheckDiagnostic(detail), crosscheckDiagnostic(string(stderr.data)))
 	}
-	return data, nil
+	return data, spawnTime, nil
 }
 
 type claudeAuditResult struct {
@@ -60,6 +62,21 @@ type claudeAuditResult struct {
 	Result           string          `json:"result"`
 	Errors           []string        `json:"errors"`
 	StructuredOutput json.RawMessage `json:"structured_output"`
+	SessionID        string          `json:"session_id"`
+}
+
+func auditSessionID(adapter cli.Adapter, raw []byte, workspace string, spawnTime time.Time) string {
+	if _, ok := adapter.(*cli.ClaudeAdapter); ok {
+		var result claudeAuditResult
+		if json.Unmarshal(raw, &result) == nil && result.SessionID != "" {
+			return result.SessionID
+		}
+	}
+	id := adapter.DiscoverSessionID(&cli.DiscoverOptions{SpawnTime: spawnTime, Headless: true, ProcessOutput: string(raw), Workdir: workspace})
+	if id == "" {
+		return "unknown"
+	}
+	return id
 }
 
 func (r *claudeAuditResult) diagnostic() string {

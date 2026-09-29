@@ -3,10 +3,12 @@
 package devaudit
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -51,7 +53,19 @@ func TestReplayExcludesEvidenceWithoutHistoricalSessionOwnership(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(source, "output"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := stateio.WriteState(&model.RunState{RunID: "source-run", WorkflowFile: "builtin:openspec/change-v1.0.yaml", WorkflowName: "change"}, source); err != nil {
+	workflowRef := filepath.Join(".agent-runner", "workflows", "source-v1.0.yaml")
+	workflowPath := filepath.Join(project, workflowRef)
+	if err := os.MkdirAll(filepath.Dir(workflowPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	workflowYAML := []byte("name: source\nsteps:\n  - id: checkpoint\n    script: checkpoint.sh\n")
+	if err := os.WriteFile(workflowPath, workflowYAML, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(workflowPath), "checkpoint.sh"), []byte("echo checkpoint\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := stateio.WriteState(&model.RunState{RunID: "source-run", WorkflowFile: workflowRef, WorkflowName: "source"}, source); err != nil {
 		t.Fatal(err)
 	}
 	artifact := metrics.Artifact{
@@ -99,6 +113,12 @@ func TestReplayExcludesEvidenceWithoutHistoricalSessionOwnership(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(request.SnapshotPath, "output", "later-session.out")); !os.IsNotExist(err) {
 		t.Fatalf("ambiguous later-session output remains in replay snapshot: %v", err)
 	}
+	if got, err := os.ReadFile(filepath.Join(request.SnapshotPath, "source-workflow.yaml")); err != nil || !bytes.Equal(got, workflowYAML) {
+		t.Fatalf("replay workflow snapshot = %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(request.SnapshotPath, "source-workflow", "checkpoint.sh")); err != nil || string(got) != "echo checkpoint\n" {
+		t.Fatalf("replay sibling script = %q, %v", got, err)
+	}
 	projected, err := readMetrics(filepath.Join(request.SnapshotPath, metrics.FileName))
 	if err != nil {
 		t.Fatal(err)
@@ -126,6 +146,213 @@ func TestReplayExcludesEvidenceWithoutHistoricalSessionOwnership(t *testing.T) {
 		if count != 1 {
 			t.Fatalf("replay %s reference count = %d, want 1", category, count)
 		}
+	}
+}
+
+func TestSnapshotWorkflowDefinitionIncludesSiblingFiles(t *testing.T) {
+	project := t.TempDir()
+	workflowDir := filepath.Join(project, ".agent-runner", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"main.yaml":        "name: main\nsteps:\n  - id: child\n    workflow: child.yaml\n  - id: checkpoint\n    script: checkpoint.sh\n    skip_if: 'sh: .agent-runner/workflows/skip.sh'\n  - id: python\n    command: 'python3 .agent-runner/workflows/x.py --flag'\n  - id: prompt\n    prompt: 'Read .agent-runner/workflows/rules.md first.'\n    repair:\n      prompt: 'Review .agent-runner/workflows/repair-rules.md too.'\n  - id: log\n    command: \"cat .env && printf '%s\\\\n' 'credentials.sh'\"\n  - id: linked\n    script: linked.sh\n  - id: hidden\n    script: .env\n",
+		"child.yaml":       "name: child\nsteps:\n  - id: record\n    script: record.sh\n",
+		"checkpoint.sh":    "#!/bin/sh\n\"$(dirname \"$0\")/helper.py\"\n",
+		"record.sh":        "#!/bin/sh\n$(dirname $0)/second-helper.py\n",
+		"skip.sh":          "#!/bin/sh\nexit 0\n",
+		"x.py":             "print('workflow')\n",
+		"helper.py":        "# $(dirname $0)/nested.py\nprint('helper')\n",
+		"second-helper.py": "print('second helper')\n",
+		"rules.md":         "# Rules\n",
+		"repair-rules.md":  "# Repair rules\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(workflowDir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(workflowDir, "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("checkpoint.sh", filepath.Join(workflowDir, "linked.sh")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, ".env"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, "credentials.sh"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, "nested.py"), []byte("not referenced directly"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := t.TempDir()
+	t.Cleanup(func() {
+		_ = filepath.WalkDir(snapshot, func(path string, _ os.DirEntry, err error) error {
+			if err == nil {
+				_ = os.Chmod(path, 0o700)
+			}
+			return nil
+		})
+	})
+	if err := snapshotWorkflowDefinition(filepath.Join(".agent-runner", "workflows", "main.yaml"), project, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := sealSnapshot(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range files {
+		path := filepath.Join(snapshot, "source-workflow", name)
+		got, err := os.ReadFile(path)
+		if err != nil || string(got) != want {
+			t.Fatalf("%s = %q, %v; want %q", name, got, err, want)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o400 {
+			t.Fatalf("%s mode = %v; want 0400", name, info.Mode())
+		}
+	}
+	for _, name := range []string{"nested", "linked.sh", ".env", "credentials.sh", "nested.py"} {
+		if _, err := os.Lstat(filepath.Join(snapshot, "source-workflow", name)); !os.IsNotExist(err) {
+			t.Fatalf("%s was copied: %v", name, err)
+		}
+	}
+}
+
+func TestSnapshotWorkflowDefinitionIgnoresCommandsWithoutSiblingFiles(t *testing.T) {
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "main.yaml"), []byte("name: main\nsteps:\n  - id: tools\n    command: git status && jq . out.json && sh helper.sh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "helper.sh"), []byte("echo helper\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := t.TempDir()
+	if err := snapshotWorkflowDefinition("main.yaml", project, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.ReadFile(filepath.Join(snapshot, "source-workflow", "helper.sh")); err != nil {
+		t.Fatalf("helper.sh not copied: %v", err)
+	}
+	if note, err := os.ReadFile(filepath.Join(snapshot, "source-workflow", "SKIPPED.txt")); !os.IsNotExist(err) {
+		t.Fatalf("SKIPPED.txt written for command words: %q, %v", note, err)
+	}
+}
+
+func TestSnapshotWorkflowDefinitionSkipsOversizedDirectory(t *testing.T) {
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "main.yaml"), []byte("name: main\nsteps:\n  - id: large\n    script: large.sh\n  - id: small\n    script: small.sh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "large.sh"), make([]byte, 2*1024*1024+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "small.sh"), []byte("echo small\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "unrelated.bin"), make([]byte, 2*1024*1024+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := t.TempDir()
+	if err := snapshotWorkflowDefinition("main.yaml", project, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(filepath.Join(snapshot, "source-workflow"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("oversized directory entries = %v; want main.yaml, small.sh and SKIPPED.txt", entries)
+	}
+	if note, err := os.ReadFile(filepath.Join(snapshot, "source-workflow", "SKIPPED.txt")); err != nil || !strings.Contains(string(note), "large.sh") {
+		t.Fatalf("skip note = %q, %v", note, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(snapshot, "source-workflow", "small.sh")); err != nil || string(got) != "echo small\n" {
+		t.Fatalf("small script = %q, %v", got, err)
+	}
+	for _, name := range []string{"large.sh", "unrelated.bin"} {
+		if _, err := os.Stat(filepath.Join(snapshot, "source-workflow", name)); !os.IsNotExist(err) {
+			t.Fatalf("%s copied: %v", name, err)
+		}
+	}
+}
+
+func TestSnapshotWorkflowDefinitionUnreadableDirectoryKeepsWorkflow(t *testing.T) {
+	project := t.TempDir()
+	workflowDir := filepath.Join(project, "workflows")
+	if err := os.Mkdir(workflowDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, "main.yaml"), []byte("name: main\nsteps: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(workflowDir, 0o100); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(workflowDir, 0o700) })
+	if _, err := os.ReadDir(workflowDir); err == nil {
+		t.Skip("directory listing remains available under this account")
+	}
+	snapshot := t.TempDir()
+	if err := snapshotWorkflowDefinition(filepath.Join("workflows", "main.yaml"), project, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(snapshot, "source-workflow.yaml")); err != nil || string(got) != "name: main\nsteps: []\n" {
+		t.Fatalf("source workflow = %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(snapshot, "source-workflow", "main.yaml")); err != nil || string(got) != "name: main\nsteps: []\n" {
+		t.Fatalf("sibling main workflow = %q, %v", got, err)
+	}
+}
+
+func TestSnapshotWorkflowDefinitionBuiltinHasNoSiblingDirectory(t *testing.T) {
+	snapshot := t.TempDir()
+	if err := snapshotWorkflowDefinition("builtin:openspec/change-v1.0.yaml", t.TempDir(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(snapshot, "source-workflow")); !os.IsNotExist(err) {
+		t.Fatalf("builtin source-workflow directory: %v", err)
+	}
+}
+
+func TestShellScriptInvocationsOnlyExecutables(t *testing.T) {
+	for _, test := range []struct {
+		command string
+		want    []string
+	}{
+		{command: "printf '%s\\n' 'credentials.sh'"},
+		{command: "sh -c 'printf credentials.sh'"},
+		{command: "bash -lc 'printf credentials.sh'"},
+		{command: "sh -c './checkpoint.sh'", want: []string{"./checkpoint.sh"}},
+		{command: "bash -lc './checkpoint.sh'", want: []string{"./checkpoint.sh"}},
+		{command: "CONFIG_DIR=./cfg ./checkpoint.sh", want: []string{"./checkpoint.sh"}},
+		{command: "echo ok # ignored; credentials.sh"},
+		{command: "echo 'x; credentials.sh' && ./checkpoint.sh", want: []string{"./checkpoint.sh"}},
+		{command: "sh workflows/skip.sh", want: []string{"workflows/skip.sh"}},
+		{command: "if test -f file; then ./checkpoint.sh; fi", want: []string{"./checkpoint.sh"}},
+		{command: "python3 .agent-runner/workflows/x.py --flag", want: []string{".agent-runner/workflows/x.py"}},
+		{command: "python3 -u x.py", want: []string{"x.py"}},
+		{command: "python3 -W ignore x.py", want: []string{"x.py"}},
+		{command: "node tool.js", want: []string{"tool.js"}},
+		{command: "node --require preload.js tool.js", want: []string{"tool.js"}},
+		{command: "node --experimental-loader loader.mjs tool.js", want: []string{"tool.js"}},
+		{command: "./helper.py", want: []string{"./helper.py"}},
+		{command: "python3 -c 'print(1)'"},
+		{command: "python3 -m module"},
+		{command: "node -e 'console.log(1)'"},
+		{command: "cat .env"},
+		{command: "./.env"},
+	} {
+		t.Run(test.command, func(t *testing.T) {
+			got := shellScriptInvocations(test.command)
+			if !slices.Equal(got, test.want) {
+				t.Fatalf("scripts = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 
@@ -176,6 +403,14 @@ func TestReplayRetentionRace(t *testing.T) {
 
 func TestReconcileReservedAutomaticAuditUsesOriginalIdentity(t *testing.T) {
 	home := t.TempDir()
+	t.Cleanup(func() {
+		_ = filepath.WalkDir(home, func(path string, entry os.DirEntry, err error) error {
+			if err == nil {
+				_ = os.Chmod(path, 0o700)
+			}
+			return nil
+		})
+	})
 	t.Setenv("HOME", home)
 	project := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(project, ".agent-runner"), 0o700); err != nil {
@@ -266,6 +501,9 @@ func TestE2E002CoordinatorReservesOneEligibleAuditPerExecutionSession(t *testing
 	link := state.Links[0]
 	if link.State != LaunchStarted || link.AuditRunID == "" || link.SnapshotPath == "" {
 		t.Fatalf("link = %#v, want started audit with ID and snapshot", link)
+	}
+	if data, err := os.ReadFile(filepath.Join(link.SnapshotPath, "source-workflow.yaml")); err != nil || !strings.Contains(string(data), "name: change") {
+		t.Fatalf("automatic workflow snapshot = %q, %v", data, err)
 	}
 }
 

@@ -13,12 +13,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/config"
+	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runlock"
@@ -27,6 +31,10 @@ import (
 )
 
 const lifecycleFileName = "audit-lifecycle.json"
+const sourceWorkflowDirectoryLimit = 2 * 1024 * 1024
+
+var workflowPromptPath = regexp.MustCompile(`[A-Za-z0-9_./-]+/[A-Za-z0-9_.-]+`)
+var scriptSiblingPath = regexp.MustCompile(`\$\(dirname "?\$0"?\)/([A-Za-z0-9_.-]+)`)
 
 const (
 	LaunchReserved  = "reserved"
@@ -199,6 +207,9 @@ func (c Coordinator) launch(summary *runner.PostFinalizationSummary, lifecycle *
 		return c.persistFailure(summary, lifecycle, link.AuditRunID, err, now())
 	}
 	request := Request{AuditRunID: link.AuditRunID, AuditSessionDir: auditSessionDir(summary.SessionDir, link.AuditRunID), SourceSessionDir: summary.SessionDir, SourceRunID: summary.RunID, ExecutionSessionID: summary.ExecutionSessionID, Trigger: link.Trigger, SnapshotPath: link.SnapshotPath, ProfileSet: summary.ProfileSet, SourceWorkflow: summary.WorkflowFile, Project: projectForRepository(summary.WorkingDir), RunnerSource: snapshotRunnerSource(link.SnapshotPath), Auditor: auditor}
+	if err := snapshotWorkflowDefinition(summary.WorkflowFile, summary.WorkingDir, request.SnapshotPath); err != nil {
+		return c.persistFailure(summary, lifecycle, link.AuditRunID, err, now())
+	}
 	if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "request.json"), request); err != nil {
 		return c.persistFailure(summary, lifecycle, link.AuditRunID, err, now())
 	}
@@ -344,6 +355,376 @@ func snapshotEvidenceAt(sessionDir, dir string) (string, error) {
 		return "", err
 	}
 	return dir, nil
+}
+
+func snapshotWorkflowDefinition(workflowRef, projectRoot, snapshotDir string) error {
+	if workflowRef == "" {
+		return nil
+	}
+	path := workflowRef
+	if !strings.HasPrefix(path, "builtin:") && !filepath.IsAbs(path) {
+		path = filepath.Join(projectRoot, path)
+	}
+	data, err := loader.ReadWorkflowFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read source workflow: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(snapshotDir, "source-workflow.yaml"), data, 0o600); err != nil { // #nosec G306 -- sealed with the rest of the owner-only snapshot before model launch.
+		return fmt.Errorf("snapshot source workflow: %w", err)
+	}
+	if strings.HasPrefix(workflowRef, "builtin:") {
+		return nil
+	}
+	destination := filepath.Join(snapshotDir, "source-workflow")
+	if err := os.Mkdir(destination, 0o700); err != nil {
+		return fmt.Errorf("create source workflow directory: %w", err)
+	}
+	return snapshotReferencedWorkflowFiles(path, projectRoot, data, destination)
+}
+
+// snapshotReferencedWorkflowFiles follows only static references to regular
+// files beside the source workflow. The source YAML itself is included because
+// the judge also uses this directory to inspect local workflow dependencies.
+func snapshotReferencedWorkflowFiles(sourcePath, projectRoot string, sourceData []byte, destination string) error {
+	baseDir := filepath.Clean(filepath.Dir(sourcePath))
+	collector := workflowReferenceCollector{
+		baseDir: baseDir, projectRoot: projectRoot,
+		referenced: map[string]struct{}{filepath.Base(sourcePath): {}},
+		visited:    make(map[string]bool),
+	}
+	collector.inspect(sourcePath, sourceData)
+	// Scan only the first set of referenced files. Helpers found here do not
+	// trigger another pass through their own contents.
+	initialReferences := make([]string, 0, len(collector.referenced))
+	for name := range collector.referenced {
+		initialReferences = append(initialReferences, name)
+	}
+	for _, name := range initialReferences {
+		if name == filepath.Base(sourcePath) || strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml") {
+			continue
+		}
+		path := filepath.Join(baseDir, name)
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Size() > sourceWorkflowDirectoryLimit {
+			continue
+		}
+		data, err := os.ReadFile(path) // #nosec G304 -- static sibling reference inside the workflow directory.
+		if err != nil {
+			continue
+		}
+		for _, match := range scriptSiblingPath.FindAllSubmatch(data, -1) {
+			name := string(match[1])
+			if strings.HasPrefix(name, ".") {
+				continue
+			}
+			info, err := os.Lstat(filepath.Join(baseDir, name)) // #nosec G703 -- the regex captures only a single filename without path separators.
+			if err == nil && info.Mode().IsRegular() {
+				collector.add(path, name)
+			}
+		}
+	}
+	files := make([]string, 0, len(collector.referenced))
+	for name := range collector.referenced {
+		files = append(files, name)
+	}
+	sort.Strings(files)
+	var used int64
+	var omitted []string
+	for _, name := range files {
+		path := filepath.Join(baseDir, name)
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			// Command words such as git or jq resolve to no sibling file; they are not omitted evidence.
+			continue
+		}
+		if err != nil || !info.Mode().IsRegular() {
+			omitted = append(omitted, name)
+			continue
+		}
+		if info.Size() > sourceWorkflowDirectoryLimit-used {
+			omitted = append(omitted, name)
+			continue
+		}
+		if err := copyIfExists(path, filepath.Join(destination, name)); err != nil {
+			return fmt.Errorf("copy source workflow reference %s: %w", name, err)
+		}
+		used += info.Size()
+	}
+	if len(omitted) > 0 {
+		note := "Referenced source workflow files omitted by the 2 MiB limit or unavailable: " + strings.Join(omitted, ", ") + "\n"
+		return os.WriteFile(filepath.Join(destination, "SKIPPED.txt"), []byte(note), 0o600) // #nosec G306 -- sealed with the snapshot before model launch.
+	}
+	return nil
+}
+
+type workflowReferenceCollector struct {
+	baseDir, projectRoot string
+	referenced           map[string]struct{}
+	visited              map[string]bool
+}
+
+func (c *workflowReferenceCollector) inspect(workflowPath string, data []byte) {
+	if c.visited[workflowPath] {
+		return
+	}
+	c.visited[workflowPath] = true
+	var workflow model.Workflow
+	if yaml.Unmarshal(data, &workflow) != nil {
+		return
+	}
+	c.walkSteps(workflowPath, workflow.Steps)
+}
+
+func (c *workflowReferenceCollector) walkSteps(workflowPath string, steps []model.Step) {
+	for i := range steps {
+		step := &steps[i]
+		c.add(workflowPath, step.Script)
+		for _, command := range []string{step.Command, strings.TrimPrefix(step.SkipIf, "sh:")} {
+			for _, script := range shellScriptInvocations(command) {
+				c.add(workflowPath, script)
+			}
+		}
+		prompts := []string{step.Prompt}
+		if step.Repair != nil {
+			prompts = append(prompts, step.Repair.Prompt)
+		}
+		for _, prompt := range prompts {
+			for _, path := range workflowPromptPath.FindAllString(prompt, -1) {
+				c.add(workflowPath, path)
+			}
+		}
+		if !strings.HasPrefix(step.Workflow, "builtin:") {
+			if name, ok := c.add(workflowPath, step.Workflow); ok {
+				c.inspectChild(name)
+			}
+		}
+		c.walkSteps(workflowPath, step.Steps)
+	}
+}
+
+func (c *workflowReferenceCollector) add(workflowPath, reference string) (string, bool) {
+	name, ok := localWorkflowSibling(c.baseDir, workflowPath, reference, c.projectRoot)
+	if ok && strings.HasPrefix(name, ".") {
+		return "", false
+	}
+	if ok {
+		c.referenced[name] = struct{}{}
+	}
+	return name, ok
+}
+
+func (c *workflowReferenceCollector) inspectChild(name string) {
+	childPath := filepath.Join(c.baseDir, name)
+	info, err := os.Lstat(childPath)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > sourceWorkflowDirectoryLimit {
+		return
+	}
+	childData, err := os.ReadFile(childPath) // #nosec G304 -- static sibling reference inside the workflow directory.
+	if err == nil {
+		c.inspect(childPath, childData)
+	}
+}
+
+type shellWord struct {
+	text     string
+	operator bool
+}
+
+// shellScriptInvocations recognizes script paths in executable positions.
+// It intentionally ignores arguments, so a printed filename cannot make an
+// unrelated file available to the audit model.
+func shellScriptInvocations(command string) []string {
+	var scripts []string
+	expectingCommand, interpreter, shellProgram := true, false, false
+	interpreterName := ""
+	skipInterpreterArgument := false
+	for _, word := range shellWords(command) {
+		if word.operator {
+			expectingCommand, interpreter, shellProgram = true, false, false
+			skipInterpreterArgument = false
+			continue
+		}
+		if shellProgram {
+			scripts = append(scripts, shellScriptInvocations(word.text)...)
+			shellProgram = false
+			continue
+		}
+		if interpreter {
+			script, program, done := interpreterScript(word.text, interpreterName, &skipInterpreterArgument)
+			if script != "" {
+				scripts = append(scripts, script)
+			}
+			if done {
+				expectingCommand, interpreter, shellProgram = false, false, program
+			}
+			continue
+		}
+		if !expectingCommand {
+			continue
+		}
+		switch word.text {
+		case "if", "then", "do", "!":
+			continue
+		case "sh", "bash", ".", "source":
+			interpreter = true
+			interpreterName = word.text
+			continue
+		case "python", "python3", "node":
+			interpreter = true
+			interpreterName = word.text
+			continue
+		}
+		if isShellAssignment(word.text) {
+			continue
+		}
+		if !strings.HasPrefix(filepath.Base(word.text), ".") && !isShellUtility(word.text) {
+			scripts = append(scripts, word.text)
+		}
+		expectingCommand = false
+	}
+	return scripts
+}
+
+func interpreterScript(word, interpreter string, skipArgument *bool) (script string, shellProgram, done bool) {
+	if *skipArgument {
+		*skipArgument = false
+		return "", false, false
+	}
+	shell := interpreter == "sh" || interpreter == "bash" || interpreter == "." || interpreter == "source"
+	if shell && strings.HasPrefix(word, "-") && strings.Contains(word[1:], "c") {
+		return "", true, true
+	}
+	if !shell && (word == "-c" || word == "-m" || word == "-e") {
+		return "", false, true
+	}
+	if interpreterOptionTakesValue(interpreter, word) {
+		*skipArgument = true
+		return "", false, false
+	}
+	if strings.HasPrefix(word, "-") {
+		return "", false, false
+	}
+	if strings.HasPrefix(filepath.Base(word), ".") {
+		return "", false, true
+	}
+	return word, false, true
+}
+
+func interpreterOptionTakesValue(interpreter, option string) bool {
+	switch interpreter {
+	case "python", "python3":
+		return option == "-W" || option == "-X"
+	case "node":
+		switch option {
+		case "-r", "--require", "--loader", "--experimental-loader", "--import", "--conditions", "--input-type":
+			return true
+		}
+	}
+	return false
+}
+
+func isShellUtility(word string) bool {
+	switch word {
+	case "cat", "echo", "printf", "test", "[", "]", "fi":
+		return true
+	}
+	return false
+}
+
+func isShellAssignment(word string) bool {
+	name, _, ok := strings.Cut(word, "=")
+	if !ok || name == "" {
+		return false
+	}
+	for i, ch := range name {
+		if ch == '_' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z' {
+			continue
+		}
+		if i > 0 && ch >= '0' && ch <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func shellWords(command string) []shellWord {
+	var words []shellWord
+	var current strings.Builder
+	var quote rune
+	escaped := false
+	comment := false
+	flush := func() {
+		if current.Len() > 0 {
+			words = append(words, shellWord{text: current.String()})
+			current.Reset()
+		}
+	}
+	for _, ch := range command {
+		if comment {
+			if ch == '\n' {
+				words = append(words, shellWord{operator: true})
+				comment = false
+			}
+			continue
+		}
+		if escaped {
+			current.WriteRune(ch)
+			escaped = false
+			continue
+		}
+		if ch == '\\' && quote != '\'' {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if ch == quote {
+				quote = 0
+			} else {
+				current.WriteRune(ch)
+			}
+			continue
+		}
+		switch ch {
+		case '\'', '"':
+			quote = ch
+		case '#':
+			if current.Len() == 0 {
+				comment = true
+			} else {
+				current.WriteRune(ch)
+			}
+		case ';', '|', '&', '\n':
+			flush()
+			words = append(words, shellWord{operator: true})
+		case ' ', '\t':
+			flush()
+		default:
+			current.WriteRune(ch)
+		}
+	}
+	flush()
+	return words
+}
+
+func localWorkflowSibling(baseDir, workflowPath, reference, projectRoot string) (string, bool) {
+	if reference == "" || filepath.IsAbs(reference) || strings.Contains(reference, "{{") {
+		return "", false
+	}
+	for _, part := range strings.Split(filepath.ToSlash(reference), "/") {
+		if part == ".." {
+			return "", false
+		}
+	}
+	for _, candidate := range []string{filepath.Join(filepath.Dir(workflowPath), reference), filepath.Join(projectRoot, reference)} {
+		if filepath.Clean(filepath.Dir(candidate)) == baseDir {
+			return filepath.Base(candidate), true
+		}
+	}
+	return "", false
 }
 
 // snapshotReplayEvidenceAt retains only metrics whose durable session
