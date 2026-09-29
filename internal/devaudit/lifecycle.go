@@ -28,6 +28,7 @@ import (
 )
 
 const lifecycleFileName = "audit-lifecycle.json"
+const sourceWorkflowDirectoryLimit = 2 * 1024 * 1024
 
 const (
 	LaunchReserved  = "reserved"
@@ -367,6 +368,38 @@ func snapshotWorkflowDefinition(workflowRef, projectRoot, snapshotDir string) er
 	}
 	if err := os.WriteFile(filepath.Join(snapshotDir, "source-workflow.yaml"), data, 0o600); err != nil { // #nosec G306 -- sealed with the rest of the owner-only snapshot before model launch.
 		return fmt.Errorf("snapshot source workflow: %w", err)
+	}
+	if strings.HasPrefix(workflowRef, "builtin:") {
+		return nil
+	}
+	destination := filepath.Join(snapshotDir, "source-workflow")
+	if err := os.Mkdir(destination, 0o700); err != nil {
+		return fmt.Errorf("create source workflow directory: %w", err)
+	}
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		return os.WriteFile(filepath.Join(destination, "SKIPPED.txt"), []byte("Source workflow directory could not be listed; sibling files were not copied.\n"), 0o600) // #nosec G306 -- sealed with the snapshot before model launch.
+	}
+	var files []string
+	var total int64
+	for _, entry := range entries {
+		info, err := os.Lstat(filepath.Join(filepath.Dir(path), entry.Name()))
+		if err != nil {
+			return fmt.Errorf("stat source workflow sibling %s: %w", entry.Name(), err)
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		files = append(files, entry.Name())
+		total += info.Size()
+	}
+	if total > sourceWorkflowDirectoryLimit {
+		return os.WriteFile(filepath.Join(destination, "SKIPPED.txt"), []byte("Source workflow directory exceeds the 2 MiB snapshot limit; sibling files were not copied.\n"), 0o600) // #nosec G306 -- sealed with the snapshot before model launch.
+	}
+	for _, file := range files {
+		if err := copyIfExists(filepath.Join(filepath.Dir(path), file), filepath.Join(destination, file)); err != nil {
+			return fmt.Errorf("copy source workflow sibling %s: %w", file, err)
+		}
 	}
 	return nil
 }

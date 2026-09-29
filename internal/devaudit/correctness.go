@@ -134,7 +134,7 @@ func writeCorrectnessDiagnostic(request *Request, message string) error {
 // correctnessPrompt directs the auditor at defects in how Agent Runner
 // executed the source workflow. Measurement discrepancies and behavior the
 // current specifications already describe are not filed.
-const correctnessPrompt = `Investigate only reproducible Agent Runner defects in how the source workflow was executed, using this immutable audit evidence and the read-only Runner source under evidence/runner-source. The audit-launch source workflow definition is at evidence/source-workflow.yaml when available.
+const correctnessPrompt = `Investigate only reproducible Agent Runner defects in how the source workflow was executed, using this immutable audit evidence and the read-only Runner source under evidence/runner-source. The audit-launch source workflow definition is at evidence/source-workflow.yaml when available. Local sub-workflows and scripts referenced by the source workflow (sibling files in its directory) are under evidence/source-workflow/ when available.
 
 In scope (scope "workflow_execution"): step sequencing and outcomes, session new/resume/inherit handling, agent CLI invocation and arguments, loops, retries, repair cycles, skip_if and break_if, captures and interpolation, sub-workflows, dispatch, run resume, state persistence, and Git commits or other effects a step produced. The question is whether Agent Runner did what the workflow and its specifications say it should.
 
