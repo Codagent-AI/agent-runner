@@ -296,6 +296,12 @@ func TestComputeCodexRateLimitDeltas(t *testing.T) {
 	end.Primary.ResetsAt = &reset
 	end.Primary.Reported = false
 	check("unavailable", "window-not-reported", nil)
+	// Without a known window length and reset time neither snapshot can be
+	// shown to belong to the same window, so no delta is computed.
+	end.Primary.Reported = true
+	start.Primary.ResetsAt, end.Primary.ResetsAt = nil, nil
+	start.Primary.WindowMinutes, end.Primary.WindowMinutes = nil, nil
+	check("unavailable", "window-not-reported", nil)
 }
 
 func TestCodexRateLimitReaderCrossThreadAndFailures(t *testing.T) {
@@ -368,4 +374,84 @@ func writeRateLimitTestLog(t *testing.T, home, id, account string, events []stri
 
 func rateLimitTestEvent(at time.Time, used float64, reset int64) string {
 	return `{"timestamp":"` + at.Format(time.RFC3339Nano) + `","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","plan_type":"pro","primary":{"used_percent":` + strconv.FormatFloat(used, 'f', -1, 64) + `,"window_minutes":10080,"resets_at":` + strconv.FormatInt(reset, 10) + `},"secondary":null}}}`
+}
+
+func TestCodexRateLimitReaderEmptyHomeIsLogUnavailable(t *testing.T) {
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("HOME", "")
+	if _, err := os.UserHomeDir(); err == nil {
+		t.Skip("platform resolves a home directory without HOME")
+	}
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	start := time.Date(2026, 9, 29, 14, 0, 0, 0, time.UTC)
+	writeRateLimitTestLog(t, cwd, "cwd-thread", "account-1", []string{rateLimitTestEvent(start.Add(time.Second), 43, 12345)})
+	got := (CodexRateLimitReader{}).Read(model.CodexRateLimitRequest{ThreadID: "cwd-thread", RunID: "run", StartedAt: start, EndedAt: start.Add(2 * time.Second)})
+	if got.Status != "unavailable" || got.Reason != "session-log-unavailable" || got.End != nil {
+		t.Fatalf("unresolved Codex home searched the working directory: %+v", got)
+	}
+}
+
+func TestCodexRateLimitCrossThreadSkipsLaterNonMatchingSnapshot(t *testing.T) {
+	start := time.Date(2026, 9, 29, 14, 0, 0, 0, time.UTC)
+	for _, later := range []string{
+		`"limit_id":"other","plan_type":"pro"`,
+		`"limit_id":"codex","plan_type":"plus"`,
+	} {
+		t.Run(later, func(t *testing.T) {
+			home := t.TempDir()
+			writeRateLimitTestLog(t, home, "fresh", "account-1", []string{rateLimitTestEvent(start.Add(time.Second), 43, 12345)})
+			writeRateLimitTestLog(t, home, "candidate", "account-1", []string{
+				rateLimitTestEvent(start.Add(-2*time.Minute), 40, 12345),
+				rateLimitTestRawEvent(start.Add(-time.Minute), `{`+later+`,"primary":{"used_percent":10,"window_minutes":10080,"resets_at":12345},"secondary":null}`),
+			})
+			candidatePath := filepath.Join(home, "sessions", "2026", "09", "29", "rollout-2026-09-29T02-00-00-candidate.jsonl")
+			mtime := start.Add(-time.Minute)
+			if err := os.Chtimes(candidatePath, mtime, mtime); err != nil {
+				t.Fatal(err)
+			}
+			got := (CodexRateLimitReader{Home: home}).Read(model.CodexRateLimitRequest{ThreadID: "fresh", RunID: "run", StartedAt: start, EndedAt: start.Add(2 * time.Second)})
+			if got.StartProvenance != "cross-thread" || got.Start == nil || *got.Start.Primary.UsedPercent != 40 || got.Deltas[0].PercentagePoints == nil || *got.Deltas[0].PercentagePoints != 3 {
+				t.Fatalf("older matching cross-thread snapshot ignored: %+v", got)
+			}
+		})
+	}
+}
+
+func TestCodexRateLimitReaderEvaluatesWindowsIndependently(t *testing.T) {
+	start := time.Date(2026, 9, 29, 14, 0, 0, 0, time.UTC)
+	home := t.TempDir()
+	reader := CodexRateLimitReader{Home: home}
+	read := func(id string) model.CodexRateLimitEvidence {
+		return reader.Read(model.CodexRateLimitRequest{ThreadID: id, RunID: "run", StartedAt: start, EndedAt: start.Add(2 * time.Second)})
+	}
+
+	writeRateLimitTestLog(t, home, "secondary-only", "account-1", []string{rateLimitTestRawEvent(start.Add(time.Second),
+		`{"limit_id":"codex","plan_type":"pro","primary":null,"secondary":{"used_percent":20,"window_minutes":300,"resets_at":999}}`)})
+	got := read("secondary-only")
+	if got.Status != "captured" || got.End == nil || got.End.Primary.Reported || !got.End.Secondary.Reported ||
+		got.End.Secondary.UsedPercent == nil || *got.End.Secondary.UsedPercent != 20 ||
+		got.End.Secondary.WindowMinutes == nil || *got.End.Secondary.WindowMinutes != 300 ||
+		got.End.Secondary.ResetsAt == nil || *got.End.Secondary.ResetsAt != 999 {
+		t.Fatalf("reported secondary discarded: %+v", got)
+	}
+
+	writeRateLimitTestLog(t, home, "incomplete-secondary", "account-1", []string{rateLimitTestRawEvent(start.Add(time.Second),
+		`{"limit_id":"codex","plan_type":"pro","primary":{"used_percent":43,"window_minutes":10080,"resets_at":12345},"secondary":{"used_percent":5,"window_minutes":300}}`)})
+	got = read("incomplete-secondary")
+	if got.Status != "captured" || got.End == nil || !got.End.Primary.Reported || !got.End.Secondary.Reported ||
+		got.End.Secondary.UsedPercent == nil || *got.End.Secondary.UsedPercent != 5 || got.End.Secondary.ResetsAt != nil {
+		t.Fatalf("incomplete secondary not preserved as reported: %+v", got)
+	}
+
+	writeRateLimitTestLog(t, home, "no-windows", "account-1", []string{rateLimitTestRawEvent(start.Add(time.Second),
+		`{"limit_id":"codex","plan_type":"pro","primary":null,"secondary":null}`)})
+	got = read("no-windows")
+	if got.Reason != "no-snapshots" || got.End != nil {
+		t.Fatalf("windowless rate limits: %+v", got)
+	}
+}
+
+func rateLimitTestRawEvent(at time.Time, rateLimits string) string {
+	return `{"timestamp":"` + at.Format(time.RFC3339Nano) + `","type":"event_msg","payload":{"type":"token_count","rate_limits":` + rateLimits + `}}`
 }

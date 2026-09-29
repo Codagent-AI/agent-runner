@@ -116,11 +116,6 @@ func (s *RateLimitSnapshot) ObservedTime() (time.Time, bool) {
 	return at, err == nil
 }
 
-// Complete reports whether Codex reported every value needed to compare the window.
-func (w *RateLimitWindow) Complete() bool {
-	return w.UsedPercent != nil && w.WindowMinutes != nil && w.ResetsAt != nil
-}
-
 // AvailableRateLimitDelta is an approximate change carrying the limitations every delta has.
 func AvailableRateLimitDelta(role string, points float64) RateLimitDelta {
 	return RateLimitDelta{
