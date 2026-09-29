@@ -416,7 +416,7 @@ func sumClaudeAllocations(u *model.UsageRecord) {
 }
 
 //nolint:funlen // Keeps transcript parsing and message deduplication together.
-func readClaudeSubagent(root *os.Root, transcript string, base *model.UsageAllocation) ([]model.UsageAllocation, []string, bool, error) {
+func readClaudeSubagent(root *os.Root, transcript string, base *model.UsageAllocation) (allocations []model.UsageAllocation, children []string, invalid bool, err error) {
 	f, err := root.Open(transcript)
 	if err != nil {
 		return nil, nil, true, err
@@ -430,8 +430,7 @@ func readClaudeSubagent(root *os.Root, transcript string, base *model.UsageAlloc
 	}
 	messages := map[string]message{}
 	anonymous := []message{}
-	children := []string{}
-	invalid := false
+	children = []string{}
 	for scanner.Scan() {
 		e, err := parseClaudeEntry(scanner.Bytes())
 		if err != nil {
@@ -495,7 +494,7 @@ func readClaudeSubagent(root *os.Root, transcript string, base *model.UsageAlloc
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	allocations := make([]model.UsageAllocation, 0, len(keys))
+	allocations = make([]model.UsageAllocation, 0, len(keys))
 	for _, k := range keys {
 		a := byModel[k]
 		if a.Completeness == model.CompletenessComplete {
