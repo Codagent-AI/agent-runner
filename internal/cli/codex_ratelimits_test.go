@@ -49,6 +49,31 @@ func TestCodexRateLimitReaderOldSameThreadBaselineExposesGap(t *testing.T) {
 	}
 }
 
+func TestCodexRateLimitReaderOversizedToolOutputMentioningTokenCountIsNotMalformed(t *testing.T) {
+	home := t.TempDir()
+	start := time.Date(2026, 9, 29, 14, 0, 0, 0, time.UTC)
+	writeRateLimitTestLog(t, home, "tool-output", "account-1", []string{
+		`{"timestamp":"` + start.Add(time.Second).Format(time.RFC3339Nano) + `","type":"response_item","payload":{"type":"function_call_output","output":"grep token_count ` + strings.Repeat("x", maxCodexLogLineBytes) + `"}}`,
+		`{"timestamp":"` + start.Add(2*time.Second).Format(time.RFC3339Nano) + `","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":500}},"rate_limits":null}}`,
+	})
+	got := (CodexRateLimitReader{Home: home}).Read(CodexRateLimitRequest{ThreadID: "tool-output", RunID: "run", StartedAt: start, EndedAt: start.Add(3 * time.Second)})
+	if got.Reason != "no-snapshots" {
+		t.Fatalf("oversized tool output treated as a malformed metric record: %+v", got)
+	}
+}
+
+func TestCodexRateLimitReaderOversizedTokenCountRecordIsMalformed(t *testing.T) {
+	home := t.TempDir()
+	start := time.Date(2026, 9, 29, 14, 0, 0, 0, time.UTC)
+	writeRateLimitTestLog(t, home, "huge-metric", "account-1", []string{
+		`{"timestamp":"` + start.Add(time.Second).Format(time.RFC3339Nano) + `","type":"event_msg","payload":{"type":"token_count","info":"` + strings.Repeat("x", maxCodexLogLineBytes) + `"}}`,
+	})
+	got := (CodexRateLimitReader{Home: home}).Read(CodexRateLimitRequest{ThreadID: "huge-metric", RunID: "run", StartedAt: start, EndedAt: start.Add(3 * time.Second)})
+	if got.Reason != "unparseable" {
+		t.Fatalf("oversized token_count record silently dropped: %+v", got)
+	}
+}
+
 func TestCodexRateLimitReaderSkipsOversizedNonMetricLine(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader(strings.Repeat("x", maxCodexLogLineBytes+1) + "\n" + "next\n"))
 	line, oversized, err := readCodexLogLine(reader)

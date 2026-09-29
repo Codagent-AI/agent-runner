@@ -20,7 +20,10 @@ import (
 const crossThreadBaselineFreshness = 10 * time.Minute
 const maxCodexLogLineBytes = 1 << 20
 
+const codexLogRecordHeaderBytes = 512
+
 var safeCodexThreadID = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+var codexTokenCountHeader = regexp.MustCompile(`"payload"\s*:\s*\{\s*"type"\s*:\s*"token_count"`)
 
 type CodexRateLimitRequest struct {
 	ThreadID, RunID    string
@@ -257,7 +260,10 @@ func (entry *cachedCodexLog) refresh(path string) error {
 func parseCodexLogLine(line []byte, oversized bool) (string, *model.RateLimitSnapshot, bool) {
 	metric := bytes.Contains(line, []byte("token_count"))
 	if oversized {
-		return "", nil, metric
+		// Only a record whose envelope declares a token_count payload is lost
+		// metric evidence; oversized tool output merely mentioning it is not.
+		head := line[:min(len(line), codexLogRecordHeaderBytes)]
+		return "", nil, codexTokenCountHeader.Match(head)
 	}
 	if !metric && !bytes.Contains(line, []byte("session_meta")) {
 		return "", nil, false
