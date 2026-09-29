@@ -24,6 +24,8 @@ import (
 
 const connectionFileName = "development-audit-connection.json"
 
+// stepValueHeader is the original step_value_v1 worksheet header. Local
+// observations keep valueSchemaVersion; only delivered rows use the v2 layout.
 var stepValueHeader = []string{
 	"schema_version", "observation_id", "observed_at_utc", "project", "workflow", "source_run_id", "execution_session_id", "audit_run_id", "trigger", "source_outcome", "step_id", "step_outcome", "lineage", "duration_ms", "cost_usd", "total_tokens", "source_models", "git_attribution", "commit_shas", "files_changed", "lines_added", "lines_deleted", "overall_value", "change_effect", "unique_contribution", "downstream_evidence", "confidence", "evidence_coverage", "judge_model", "rubric_version", "note",
 }
@@ -374,28 +376,8 @@ func (r SheetsReporter) validateHeader(ctx context.Context, token string, destin
 }
 
 func (r SheetsReporter) upgradeHeader(ctx context.Context, token string, destination DestinationState) error {
-	body, err := json.Marshal(struct {
-		Values [][]string `json:"values"`
-	}{Values: [][]string{judgeHeader}})
-	if err != nil {
-		return err
-	}
-	endpoint := r.baseURL() + "/spreadsheets/" + url.PathEscape(destination.SpreadsheetID) + "/values/" + url.PathEscape(a1Range(destination.Tab, "AF1:AL1")) + "?valueInputOption=RAW"
-	request, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, strings.NewReader(string(body)))
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("Content-Type", "application/json")
-	response, err := r.client().Do(request)
-	if err != nil {
-		return fmt.Errorf("upgrade worksheet header: %w", err)
-	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("upgrade worksheet header: HTTP %d", response.StatusCode)
-	}
-	return nil
+	first, last := sheetColumn(len(stepValueHeader)+1), sheetColumn(len(stepValueHeaderV2))
+	return r.writeValues(ctx, token, destination, http.MethodPut, a1Range(destination.Tab, first+"1:"+last+"1"), "?valueInputOption=RAW", [][]string{judgeHeader}, "upgrade worksheet header")
 }
 
 func (r SheetsReporter) existingObservationIDs(ctx context.Context, token string, destination DestinationState) (map[string]struct{}, error) {
@@ -436,14 +418,20 @@ func (r SheetsReporter) getJSON(ctx context.Context, token string, destination D
 }
 
 func (r SheetsReporter) append(ctx context.Context, token string, destination DestinationState, rows [][]string) error {
+	return r.writeValues(ctx, token, destination, http.MethodPost, a1Range(destination.Tab, "A:"+sheetColumn(len(stepValueHeaderV2))), ":append?valueInputOption=RAW&insertDataOption=INSERT_ROWS", rows, "append worksheet rows")
+}
+
+// writeValues sends rows to a worksheet values endpoint; suffix carries the
+// operation and query string that follow the escaped A1 range.
+func (r SheetsReporter) writeValues(ctx context.Context, token string, destination DestinationState, method, cellRange, suffix string, rows [][]string, operation string) error {
 	body, err := json.Marshal(struct {
 		Values [][]string `json:"values"`
 	}{Values: rows})
 	if err != nil {
 		return err
 	}
-	endpoint := r.baseURL() + "/spreadsheets/" + url.PathEscape(destination.SpreadsheetID) + "/values/" + url.PathEscape(a1Range(destination.Tab, "A:AL")) + ":append?valueInputOption=RAW&insertDataOption=INSERT_ROWS"
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))
+	endpoint := r.baseURL() + "/spreadsheets/" + url.PathEscape(destination.SpreadsheetID) + "/values/" + url.PathEscape(cellRange) + suffix
+	request, err := http.NewRequestWithContext(ctx, method, endpoint, strings.NewReader(string(body)))
 	if err != nil {
 		return err
 	}
@@ -451,13 +439,22 @@ func (r SheetsReporter) append(ctx context.Context, token string, destination De
 	request.Header.Set("Content-Type", "application/json")
 	response, err := r.client().Do(request)
 	if err != nil {
-		return fmt.Errorf("append worksheet rows: %w", err)
+		return fmt.Errorf("%s: %w", operation, err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("append worksheet rows: HTTP %d", response.StatusCode)
+		return fmt.Errorf("%s: HTTP %d", operation, response.StatusCode)
 	}
 	return nil
+}
+
+// sheetColumn returns the A1 column letters for a 1-based column index.
+func sheetColumn(index int) string {
+	name := ""
+	for ; index > 0; index = (index - 1) / 26 {
+		name = string(rune('A'+(index-1)%26)) + name
+	}
+	return name
 }
 
 func (r SheetsReporter) lock(ctx context.Context, destination DestinationState) (func(), error) {

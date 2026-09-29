@@ -111,6 +111,14 @@ func TestA1RangeQuotesWorksheetNames(t *testing.T) {
 	}
 }
 
+func TestSheetColumnNamesWorksheetRanges(t *testing.T) {
+	for index, want := range map[int]string{1: "A", 26: "Z", 27: "AA", 31: "AE", 32: "AF", 38: "AL", 702: "ZZ", 703: "AAA"} {
+		if got := sheetColumn(index); got != want {
+			t.Errorf("sheetColumn(%d) = %q, want %q", index, got, want)
+		}
+	}
+}
+
 func TestProjectFromRemoteDoesNotExportLocalRemoteParents(t *testing.T) {
 	if got, want := projectFromRemote("/Users/alice/private-repo.git", "/work/local-project"), "local-project"; got != want {
 		t.Fatalf("project from local remote = %q, want %q", got, want)
