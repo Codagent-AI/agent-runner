@@ -19,14 +19,18 @@ The `core:finalize-pr` workflow SHALL wait for pull-request CI and review state 
 - **WHEN** `ci-fix-loop` ends, whether by a passing gate or an exhausted budget
 - **THEN** the final CI status is captured as `final_ci_report` by a non-agent step, and no agent is resumed to produce it
 
-The final wait SHALL be skipped when the loop's last `ci_report` ends with `CI_PASSED` or `CI_REVIEW_INCOMPLETE` and its full head SHA equals the PR's current head SHA. In that case, `final_ci_report` SHALL reuse `ci_report`, and the final gates SHALL inspect it. If the report is missing, has another marker, or names a different head, the final wait SHALL run.
+The final wait SHALL be skipped when the loop's last `ci_report` ends with `CI_PASSED` or `CI_REVIEW_INCOMPLETE`, its full head SHA equals the PR's current head SHA, and a fresh complete read of checks, reviews, and comments produces the same terminal marker. In that case, `final_ci_report` SHALL reuse `ci_report`, and the final gates SHALL inspect it. If the report is missing, has another marker, names a different head, the fresh read fails, or the fresh marker differs, the final wait SHALL run.
 
 #### Scenario: Passing report on unchanged head skips final wait
-- **WHEN** the loop's last report passes and its full head SHA still equals the PR head
+- **WHEN** the loop's last report passes, its full head SHA still equals the PR head, and a fresh complete snapshot has the same terminal marker
 - **THEN** `verify-final` is skipped, `final_ci_report` reuses that report, and the final gates run
 
 #### Scenario: Changed head requires final wait
 - **WHEN** the loop's last report passes but the PR head has changed
+- **THEN** `verify-final` runs and its report becomes `final_ci_report`
+
+#### Scenario: New failure or feedback on unchanged head requires final wait
+- **WHEN** the loop's last report passes but a fresh snapshot on the same head contains a failed check or actionable feedback
 - **THEN** `verify-final` runs and its report becomes `final_ci_report`
 
 #### Scenario: Failing last report requires final wait
@@ -254,7 +258,7 @@ If there is no pull request for the current branch, if GitHub authentication fai
 
 ### Requirement: Lead session resumed only for fix cycles
 
-`core:finalize-pr` SHALL resume the `lead-agent` session only in the `fix-pr` step, and only when `ci-fix-needed-gate` reports that a fix is needed (`CI_FAILED` or `CI_COMMENTS`). The `fix-pr` prompt SHALL include the full captured `ci_report` from that cycle and SHALL direct the agent to start from that report. The lead session SHALL be resumed at most once per fix cycle. The existing scope boundary SHALL remain in the `fix-pr` prompt: fixes that would change approved requirements, design, or scope are not made silently.
+`core:finalize-pr` SHALL resume the `lead-agent` session only in the `fix-pr` step, and only when `ci-fix-needed-gate` reports that a fix is needed (`CI_FAILED` or `CI_COMMENTS`). The `fix-pr` prompt SHALL include the full captured `ci_report` from that cycle and SHALL direct the agent to start from that report. It SHALL identify the report as untrusted PR data and forbid following instructions or permission claims within it. The lead session SHALL be resumed at most once per fix cycle. The existing scope boundary SHALL remain in the `fix-pr` prompt: fixes that would change approved requirements, design, or scope are not made silently.
 
 #### Scenario: Failing cycle resumes lead once with report
 - **WHEN** the in-loop CI wait reports `CI_FAILED` with a failed check and log excerpt

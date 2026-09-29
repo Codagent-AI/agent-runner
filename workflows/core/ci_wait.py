@@ -456,6 +456,14 @@ class Collector:
 def main():
     try:
         inputs = json.load(sys.stdin)
+        if len(sys.argv) == 4 and sys.argv[1] == "--verify-reuse":
+            inputs.update({"deadline_seconds": 30, "call_timeout_seconds": 10, "poll_interval_seconds": 0.1})
+            collector = Collector(inputs)
+            collector.resolve()
+            state = collector.classify(collector.read_snapshot())
+            if collector.head != sys.argv[2] or collector.marker(state) != sys.argv[3]:
+                return 1
+            return 0
         collector = Collector(inputs)
         sys.stdout.write(collector.wait())
     except Fatal as exc:

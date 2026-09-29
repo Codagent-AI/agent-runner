@@ -5,7 +5,7 @@ payload=$(cat)
 if command -v jq >/dev/null 2>&1; then
   report=$(printf '%s' "$payload" | jq -r '.report // ""')
 else
-  report=$(printf '%s' "$payload" | sed -n 's/.*"report"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  report=$(printf '%s' "$payload" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("report", ""))')
 fi
 
 status=$(printf '%s\n' "$report" | sed '/^[[:space:]]*$/d' | tail -n 1)
@@ -25,6 +25,10 @@ current=$(gh pr view --json headRefOid -q .headRefOid) || {
 }
 if [ "$head" != "$current" ]; then
   echo 'ci-reuse-report: PR head changed' >&2
+  exit 1
+fi
+if ! printf '%s' "$payload" | python3 "$(dirname "$0")/ci_wait.py" --verify-reuse "$head" "$status"; then
+  echo 'ci-reuse-report: current CI or review state differs' >&2
   exit 1
 fi
 printf '%s\n' "$report"

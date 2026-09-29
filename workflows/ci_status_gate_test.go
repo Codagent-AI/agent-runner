@@ -1,6 +1,7 @@
 package builtinworkflows
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -77,30 +78,77 @@ func TestCIReuseReportRequiresPassingMarkerAndCurrentFullHead(t *testing.T) {
 	if err := os.WriteFile(path, script, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	collector, err := ReadAsset("core/ci_wait.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ci_wait.py"), collector, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fixture := ciFixture()
+	ciPR(fixture)["headRefOid"] = head
+	snapshot, err := json.Marshal(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "snapshot.json"), snapshot, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	stub := filepath.Join(dir, "gh")
-	if err := os.WriteFile(stub, []byte("#!/bin/sh\n[ \"$CI_GH_FAIL\" = 1 ] && exit 1\necho \"$CI_HEAD\"\n"), 0o700); err != nil {
+	stubBody := `#!/bin/sh
+[ "$CI_GH_FAIL" = 1 ] && exit 1
+case "$*" in
+  "pr view --json headRefOid -q .headRefOid") echo "$CI_HEAD" ;;
+  "pr view --json number,url") echo '{"number":12,"url":"https://github.com/example/project/pull/12"}' ;;
+  "api graphql"*) cat "$CI_SNAPSHOT" ;;
+  *) exit 2 ;;
+esac
+`
+	if err := os.WriteFile(stub, []byte(stubBody), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	noJQDir := filepath.Join(dir, "no-jq")
+	if err := os.Mkdir(noJQDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range []string{"cat", "sed", "tail", "head", "python3", "dirname"} {
+		found, err := exec.LookPath(tool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(found, filepath.Join(noJQDir, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(stub, filepath.Join(noJQDir, "gh")); err != nil {
 		t.Fatal(err)
 	}
 	for _, tt := range []struct {
-		name, report, current string
-		fail                  bool
-		wantCode              int
+		name, report, current, bots string
+		fail                        bool
+		noJQ                        bool
+		wantCode                    int
 	}{
-		{"passed current head", "**Head:** " + head + "\nCI_PASSED\n", head, false, 0},
-		{"incomplete current head", "**Head:** " + head + "\nCI_REVIEW_INCOMPLETE\n", head, false, 0},
-		{"changed head", "**Head:** " + head + "\nCI_PASSED\n", other, false, 1},
-		{"failed report", "**Head:** " + head + "\nCI_FAILED\n", head, false, 1},
-		{"missing report", "", head, false, 1},
-		{"truncated head", "**Head:** abcdef123456\nCI_PASSED\n", head, false, 1},
-		{"lookup failure", "**Head:** " + head + "\nCI_PASSED\n", head, true, 1},
+		{"passed current head", "**Head:** " + head + "\nCI_PASSED\n", head, "", false, false, 0},
+		{"passed without jq", "**Head:** " + head + "\nCI_PASSED\n", head, "", false, true, 0},
+		{"incomplete current head", "**Head:** " + head + "\nCI_REVIEW_INCOMPLETE\n", head, "coderabbitai", false, false, 0},
+		{"changed head", "**Head:** " + head + "\nCI_PASSED\n", other, "", false, false, 1},
+		{"failed report", "**Head:** " + head + "\nCI_FAILED\n", head, "", false, false, 1},
+		{"missing report", "", head, "", false, false, 1},
+		{"truncated head", "**Head:** abcdef123456\nCI_PASSED\n", head, "", false, false, 1},
+		{"lookup failure", "**Head:** " + head + "\nCI_PASSED\n", head, "", true, false, 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd := exec.Command("sh", path)
-			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "CI_HEAD="+tt.current)
+			searchPath := dir + ":" + os.Getenv("PATH")
+			if tt.noJQ {
+				searchPath = noJQDir
+			}
+			cmd.Env = append(os.Environ(), "PATH="+searchPath, "CI_HEAD="+tt.current, "CI_SNAPSHOT="+filepath.Join(dir, "snapshot.json"))
 			if tt.fail {
 				cmd.Env = append(cmd.Env, "CI_GH_FAIL=1")
 			}
-			cmd.Stdin = strings.NewReader(`{"report":` + strconv.Quote(tt.report) + `}`)
+			cmd.Stdin = strings.NewReader(`{"report":` + strconv.Quote(tt.report) + `,"review_bots":` + strconv.Quote(tt.bots) + `}`)
 			out, err := cmd.CombinedOutput()
 			code := 0
 			if exit, ok := err.(*exec.ExitError); ok {
