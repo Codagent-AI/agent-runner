@@ -2,12 +2,12 @@
 
 ## 0.4.0
 
-Agent Runner 0.4.0 ships the v2 change workflows, interactive intake, exploratory acceptance, and automatic failure recovery, plus a long run of reliability fixes found in real workflow runs.
+Agent Runner 0.4.0 ships the v2 change workflows, experimental interactive intake, exploratory acceptance, and automatic failure recovery, plus a long run of reliability fixes found in real workflow runs.
 
 ### Highlights
 
 - **v2 change workflows.** Full and simple workflows for OpenSpec and spec-driven changes run proposal, specs, design, test plan, tasks, implementation, acceptance, archive, and PR finalization, with dedicated Lead, Crosscheck, Implementor, and Tester roles. Spec-driven keeps its artifacts outside the repository. ([#58](https://github.com/Codagent-AI/agent-runner/pull/58), [#155](https://github.com/Codagent-AI/agent-runner/pull/155))
-- **Interactive intake.** `agent-runner -i` opens a conversation with an agent that clarifies what you want, then routes it into the right workflow with that context carried along. ([#59](https://github.com/Codagent-AI/agent-runner/pull/59), [#58](https://github.com/Codagent-AI/agent-runner/pull/58))
+- **Interactive intake (experimental).** `agent-runner -i` opens a conversation with an agent that clarifies what you want, then routes it into the right workflow with that context carried along. ([#59](https://github.com/Codagent-AI/agent-runner/pull/59), [#58](https://github.com/Codagent-AI/agent-runner/pull/58))
 - **Exploratory acceptance.** Acceptance reads the change to decide where to look and probes it like a user would, instead of replaying a checklist written before the code existed. Acceptance and flow-testing steps get their own scratch folder. ([#82](https://github.com/Codagent-AI/agent-runner/pull/82), [#183](https://github.com/Codagent-AI/agent-runner/pull/183))
 - **Automatic failure recovery.** When a deterministic check fails, such as an archive commit rejected by a hook or a task left uncommitted, Agent Runner runs a bounded repair cycle with an agent, re-verifies, and shows the repair attempts and failure evidence in the run view. ([#114](https://github.com/Codagent-AI/agent-runner/pull/114))
 - **Role-based setup.** Setup recommends Lead, Crosscheck, Implementor, and Tester agents from your installed CLIs, favoring model-family diversity, with accept-all or per-role customization. `planner` and `reviewer` still work as deprecated aliases. ([#57](https://github.com/Codagent-AI/agent-runner/pull/57))
