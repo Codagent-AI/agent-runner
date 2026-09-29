@@ -113,7 +113,7 @@ that real Codex output and the real session-log format produce evidence. That is
   - the `agent-call` record carries evidence for the child's thread and the parent record carries
     none;
   - an idempotent retry does not duplicate evidence or double-count it in the rollup;
-  - the overlapping variant adds rollup limitation `overlapping-attempts`.
+  - the overlapping variant makes the group sum unavailable with reason and limitation `overlapping-attempts`.
 - Execution: `go test ./internal/exec -run AgentCall` (CI).
 
 ### INT-004: Nested Validator enrichment survives refresh, revision, conflict, and resume
@@ -229,7 +229,7 @@ that real Codex output and the real session-log format produce evidence. That is
   - resumed threads leaking pre-launch snapshots into the end snapshot;
   - private-`CODEX_HOME` symlinks, and the interactive-discovery home resolution change (a regression
     risk for existing session discovery);
-  - parallel Codex steps and calls, which accept double-counting as a limitation;
+  - parallel Codex steps and calls, whose overlapping rollup sums are unavailable;
   - `used_percent` coarseness, which makes zero deltas possible and accepted;
   - fresh threads with no baseline show `no-baseline` by design;
   - nested Validator attempts show `session-unidentified` until Validator exports

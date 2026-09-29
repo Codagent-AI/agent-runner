@@ -30,7 +30,7 @@ The rollup SHALL contain one window group per distinct combination of account sc
 - the run-span change from the group's earliest start snapshot to its latest end snapshot (both in that same window by construction), unavailable with reason `no-baseline` when no attempt in the group has a start snapshot for that window;
 - for the `unverified` account scope, the sum and run span SHALL both be unavailable with reason `account-unverified`, and only the contributing-attempt count is reported, because those attempts cannot be shown to share one account.
 
-The rollup SHALL NOT report any total that combines different account scopes or different reset windows. Coverage SHALL be reported per window role across the whole run: the number of measured Codex attempts, how many have an available delta for that role, and a `complete`/`partial`/`none` indicator. When measured Codex attempts in a group overlapped in time, that group's sum SHALL carry limitation `overlapping-attempts`, because account-wide deltas of concurrent attempts count shared consumption more than once. The rollup SHALL be absent when the run has no measured Codex attempts. Unavailable per-attempt deltas SHALL contribute nothing to sums and SHALL reduce coverage, never add zero.
+The rollup SHALL NOT report any total that combines different account scopes or different reset windows. Coverage SHALL be reported per window role across the whole run: the number of measured Codex attempts, how many have an available delta for that role, and a `complete`/`partial`/`none` indicator. When measured Codex attempts in a group overlapped in time, that group's sum SHALL be unavailable with reason and limitation `overlapping-attempts`, because account-wide deltas of concurrent attempts count shared consumption more than once. The contributing-attempt count remains visible. The rollup SHALL be absent when the run has no measured Codex attempts. Unavailable per-attempt deltas SHALL contribute nothing to sums and SHALL reduce coverage, never add zero.
 
 #### Scenario: Two sequential Codex steps
 - **WHEN** a run has two sequential Codex steps on the same account with available primary deltas of 3 and 2 percentage points in the same window
@@ -54,7 +54,7 @@ The rollup SHALL NOT report any total that combines different account scopes or 
 
 #### Scenario: Parallel Codex attempts
 - **WHEN** two Codex attempts in the same window group overlap in time
-- **THEN** that group's sum carries limitation `overlapping-attempts`
+- **THEN** that group's sum is unavailable with reason and limitation `overlapping-attempts`, while the contributing-attempt count remains visible
 
 #### Scenario: Resumed run rollup
 - **WHEN** a run executes a Codex step, is interrupted, and is resumed to execute another Codex step on the same account and window

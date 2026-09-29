@@ -23,8 +23,9 @@
    Decision-bearing: no.
 6. **Add fields to schema v4 without bumping the version.** Alternative: bump to v5. The spec requires
    a bump only for backward-incompatible changes. Decision-bearing: no.
-7. **Run rollup: sum of attempt deltas, run-span change, and coverage.** Alternative: sum only. The sum
-   double-counts parallel attempts, so the span change is reported next to it. Decision-bearing: no.
+7. **Run rollup: sum of attempt deltas, run-span change, and coverage.** Alternative: sum only. A group
+   with parallel attempts leaves the sum unavailable because adding its deltas would double-count.
+   Decision-bearing: no.
 8. **(Extended by PR-1 below to include agent calls.) Scope: headless and interactive Codex agent steps, plus nested Validator Codex attempts through
    the existing `provider_session_id`, with no Validator changes.** Alternatives: native steps only,
    which under-delivers the issue's "every Codex attempt"; or changing the Validator contract, which
@@ -74,8 +75,8 @@
 4. **A decrease within the same window is `inconsistent` (unavailable), not a negative delta.**
    Alternative: clamp to 0 or report the negative number. Both would misreport. Decision-bearing: no.
 5. **Rollup windows are keyed by limit identity + role (primary/secondary) + window length. Each window
-   reports the sum, the run-span change and coverage, plus an `overlapping-attempts` limitation when
-   attempts overlapped in time.** Alternative: sum only. Rejected: parallel attempts double-count.
+   reports the sum, the run-span change and coverage; an overlapping group's sum is unavailable with
+   reason `overlapping-attempts`.** Alternative: sum only. Rejected: parallel attempts double-count.
    Decision-bearing: no.
 6. **The rollup is run-level only; there is no per-execution-session rate-limit rollup.**
    Alternative: mirror the per-execution-session rollups. The issue asks only for a per-run rollup, and

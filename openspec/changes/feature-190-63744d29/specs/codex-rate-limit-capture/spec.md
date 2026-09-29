@@ -131,11 +131,15 @@ For each window, the delta SHALL be the end snapshot's `used_percent` minus the 
 
 ### Requirement: Stated precision and limitations
 
-Every available delta SHALL be marked approximate and SHALL list its applicable limitations: `account-wide` (always: usage from any other Codex session on the same account during the interval, including parallel steps in the same run, is included), `coarse-precision` (always: Codex's reported percentage granularity can hide small consumption), and `unobserved-gap` for a `cross-thread` baseline, including the length of the interval between the baseline observation and the attempt's launch.
+Every available delta SHALL be marked approximate and SHALL list its applicable limitations: `account-wide` (always: usage from any other Codex session on the same account during the interval, including parallel steps in the same run, is included), `coarse-precision` (always: Codex's reported percentage granularity can hide small consumption), and `unobserved-gap` for a `cross-thread` baseline or a `same-thread` baseline older than 10 minutes. The latter two cases SHALL include the interval between the baseline observation and the attempt's launch.
 
 #### Scenario: Same-thread delta limitations
 - **WHEN** an attempt's delta uses a `same-thread` baseline
 - **THEN** the delta is marked approximate with limitations `account-wide` and `coarse-precision`
+
+#### Scenario: Old same-thread baseline
+- **WHEN** the last pre-launch rate-limit state in a resumed thread was recorded more than 10 minutes before launch
+- **THEN** each available delta also carries limitation `unobserved-gap` and the evidence records the gap in milliseconds
 
 #### Scenario: Cross-thread delta limitations
 - **WHEN** an attempt's delta uses a `cross-thread` baseline observed 90 seconds before launch

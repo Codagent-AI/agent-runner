@@ -76,7 +76,7 @@ type CodexRateLimitEvidence struct {
     AttemptEndedAt   string              `json:"attempt_ended_at"`
     Start            *RateLimitSnapshot  `json:"start"`             // nil = no qualifying baseline
     StartProvenance  string              `json:"start_provenance,omitempty"` // "same-thread" | "cross-thread"
-    BaselineGapMS    *int64              `json:"baseline_gap_ms,omitempty"`  // cross-thread only
+    BaselineGapMS    *int64              `json:"baseline_gap_ms,omitempty"`  // cross-thread or stale same-thread
     AccountScope     string              `json:"account_scope,omitempty"`    // opaque run-local scope or "unverified"
     End              *RateLimitSnapshot  `json:"end"`
     Deltas           []RateLimitDelta    `json:"deltas"`            // one per role: primary, secondary
@@ -130,8 +130,10 @@ It works in this order:
    `sessions/*/*/*/rollout-*-<ThreadID>.jsonl`. The thread ID is checked against a UUID/safe-ID
    pattern before it is used in the glob. No match or an open error gives
    `session-log-unavailable`.
-2. **Scan once, streaming.** Use `bufio.Reader` line reads so a line length is never capped. Any line
-   that does not contain `"token_count"` or `"session_meta"` is skipped before JSON decoding.
+2. **Scan incrementally, streaming.** Read at most 1 MiB per JSONL line and discard the rest of an
+   oversized record. Cache parsed snapshots and the last byte offset for up to 128 session logs in
+   the Runner process, reading only appended records on later attempts. Any line that does not contain
+   `"token_count"` or `"session_meta"` is skipped before JSON decoding.
    - Remember `session_meta.payload.creator_account_id`, in memory only.
    - For each `token_count` with a non-null `rate_limits`, parse a snapshot. A malformed line or
      block is skipped and counted.
@@ -142,7 +144,8 @@ It works in this order:
      `unparseable`; otherwise it is `no-snapshots`.
    - The end snapshot is the last in-attempt snapshot.
 4. **Choose a baseline.**
-   - `lastPreLaunch` found gives `same-thread`.
+   - `lastPreLaunch` found gives `same-thread`. If it is more than 10 minutes old, record the gap in
+     `baseline_gap_ms` and add `unobserved-gap` to available deltas.
    - Otherwise search for a cross-thread baseline, described below.
    - With neither, `Start` is nil.
 5. **Per-window deltas** (`computeDeltas(start, end, provenance)`), evaluated in this order:
@@ -152,7 +155,8 @@ It works in this order:
       `no-baseline` for a cross-thread baseline (the spec's "candidate in a different window" rule).
    4. `end - start < 0`: `inconsistent`.
    5. Otherwise the delta is available and `approximate`, with limitations `account-wide` and
-      `coarse-precision`, plus `unobserved-gap` when the baseline is cross-thread.
+      `coarse-precision`, plus `unobserved-gap` when the baseline is cross-thread or a same-thread
+      snapshot more than 10 minutes old.
 
 **Cross-thread baseline search.**
 - **Freshness bound:** a constant `crossThreadBaselineFreshness = 10 * time.Minute`.
@@ -279,7 +283,9 @@ type RateLimitWindowGroup struct {
   that window, so each delta belongs to exactly one group. No total is computed across groups, which
   means none across accounts or resets.
 - **Sum:** adds only the available deltas in the group. For the `unverified` scope, the sum and span
-  are unavailable with reason `account-unverified`, and only `Contributing` is reported.
+  are unavailable with reason `account-unverified`, and only `Contributing` is reported. When measured
+  attempts overlap, the sum is unavailable with reason `overlapping-attempts`; the contributing count
+  remains visible.
 - **Run span:**
   - start = the earliest-observed start snapshot for this window among the group's attempts;
   - end = the latest-observed end snapshot;
@@ -290,7 +296,8 @@ type RateLimitWindowGroup struct {
 - **Coverage:** computed per role across the whole run, as attempts with an available delta for the
   role over measured attempts.
 - **Overlap:** computed within each group from `attempt_started_at`/`attempt_ended_at` intervals, by
-  sorting and checking whether any interval starts before the previous maximum end.
+  sorting and checking whether any interval starts before the previous maximum end. An overlapping
+  group's sum is unavailable because adding its account-wide deltas would count shared usage twice.
 - The schema version stays 4. Every added field is optional and `omitempty`.
 
 ## Decisions
@@ -341,8 +348,9 @@ type RateLimitWindowGroup struct {
   and mtime prefilter bounds this; each line gets a substring check before JSON decoding.
 - **Clock skew between Validator and Runner.** Both run on the same host. The 2s end tolerance covers
   flush ordering.
-- **Parallel steps.** Account-wide deltas double-count. Every delta carries the `account-wide`
-  limitation, and the rollup adds `overlapping-attempts`.
+- **Parallel steps.** Account-wide deltas can cover the same usage. Every delta carries the
+  `account-wide` limitation; the rollup leaves an overlapping group's sum unavailable with reason
+  `overlapping-attempts`.
 
 ## Migration Plan
 

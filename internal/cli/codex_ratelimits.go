@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,12 +11,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/codagent/agent-runner/internal/model"
 )
 
 const crossThreadBaselineFreshness = 10 * time.Minute
+const maxCodexLogLineBytes = 1 << 20
 
 var safeCodexThreadID = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
@@ -47,6 +50,37 @@ type codexLogScan struct {
 	before  *model.RateLimitSnapshot
 	end     *model.RateLimitSnapshot
 	bad     bool
+}
+
+type cachedCodexLog struct {
+	mu        sync.Mutex
+	file      os.FileInfo
+	offset    int64
+	account   string
+	snapshots []model.RateLimitSnapshot
+	bad       bool
+}
+
+var codexLogCache = struct {
+	sync.Mutex
+	entries map[string]*cachedCodexLog
+	order   []string
+}{entries: make(map[string]*cachedCodexLog)}
+
+func cachedCodexLogFor(path string) *cachedCodexLog {
+	codexLogCache.Lock()
+	defer codexLogCache.Unlock()
+	if entry := codexLogCache.entries[path]; entry != nil {
+		return entry
+	}
+	if len(codexLogCache.order) >= 128 {
+		delete(codexLogCache.entries, codexLogCache.order[0])
+		codexLogCache.order = codexLogCache.order[1:]
+	}
+	entry := &cachedCodexLog{}
+	codexLogCache.entries[path] = entry
+	codexLogCache.order = append(codexLogCache.order, path)
+	return entry
 }
 
 //nolint:gocritic // Keep the reader's public request value API consistent with invocation callers.
@@ -93,8 +127,15 @@ func (r CodexRateLimitReader) Read(req CodexRateLimitRequest) model.CodexRateLim
 	}
 	e.Status = "captured"
 	e.End = scan.end
+	staleSameThread := false
 	if scan.before != nil {
 		e.Start, e.StartProvenance = scan.before, "same-thread"
+		at, _ := time.Parse(time.RFC3339Nano, scan.before.ObservedAt)
+		if gap := req.StartedAt.Sub(at); gap > crossThreadBaselineFreshness {
+			milliseconds := gap.Milliseconds()
+			e.BaselineGapMS = &milliseconds
+			staleSameThread = true
+		}
 	} else if scan.account != "" {
 		if candidate := r.crossThreadBaseline(req, scan.account, scan.end); candidate != nil {
 			e.Start, e.StartProvenance = candidate, "cross-thread"
@@ -104,6 +145,13 @@ func (r CodexRateLimitReader) Read(req CodexRateLimitRequest) model.CodexRateLim
 		}
 	}
 	e.Deltas = ComputeCodexRateLimitDeltas(e.Start, e.End, e.StartProvenance)
+	if staleSameThread {
+		for i := range e.Deltas {
+			if e.Deltas[i].Availability == "available" {
+				e.Deltas[i].Limitations = append(e.Deltas[i].Limitations, "unobserved-gap")
+			}
+		}
+	}
 	return e
 }
 
@@ -137,65 +185,144 @@ func (r CodexRateLimitReader) crossThreadBaseline(req CodexRateLimitRequest, acc
 	return latest
 }
 
-//nolint:gocognit // Streaming parsing and error isolation share one scan state.
 func scanCodexLog(path string, start, end time.Time, out *codexLogScan) error {
+	entry := cachedCodexLogFor(path)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if err := entry.refresh(path); err != nil {
+		return err
+	}
+	if entry.account != "" {
+		out.account = entry.account
+	}
+	out.bad = out.bad || entry.bad
+	for i := range entry.snapshots {
+		snapshot := &entry.snapshots[i]
+		at, _ := time.Parse(time.RFC3339Nano, snapshot.ObservedAt)
+		if at.Before(start) {
+			if out.before == nil || snapshotBefore(out.before, snapshot) {
+				out.before = snapshot
+			}
+		} else if !at.After(end) && (out.end == nil || snapshotBefore(out.end, snapshot)) {
+			out.end = snapshot
+		}
+	}
+	return nil
+}
+
+// refresh reads only appended JSONL records. Parsed snapshots are kept in a
+// bounded file cache so resumed attempts do not rescan large rollout logs.
+func (entry *cachedCodexLog) refresh(path string) error {
 	f, err := os.Open(path) // #nosec G304 -- path is located under the configured Codex sessions directory
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if entry.file == nil || !os.SameFile(entry.file, info) || info.Size() < entry.offset {
+		entry.offset, entry.account, entry.snapshots, entry.bad = 0, "", nil, false
+	}
+	entry.file = info
+	if _, err := f.Seek(entry.offset, io.SeekStart); err != nil {
+		return err
+	}
 	reader := bufio.NewReader(f)
 	for {
-		line, readErr := reader.ReadBytes('\n')
-		if len(line) > 0 && (strings.Contains(string(line), "token_count") || strings.Contains(string(line), "session_meta")) {
-			var event struct {
-				Timestamp string `json:"timestamp"`
-				Type      string `json:"type"`
-				Payload   struct {
-					Type       string          `json:"type"`
-					Account    string          `json:"creator_account_id"`
-					RateLimits json.RawMessage `json:"rate_limits"`
-				} `json:"payload"`
-			}
-			switch {
-			case json.Unmarshal(line, &event) != nil:
-				out.bad = true
-			case event.Type == "session_meta":
-				out.account = event.Payload.Account
-			case event.Type == "event_msg" && event.Payload.Type == "token_count" && len(event.Payload.RateLimits) > 0 && string(event.Payload.RateLimits) != "null":
-				var raw struct {
-					LimitID   *string                `json:"limit_id"`
-					PlanType  *string                `json:"plan_type"`
-					Primary   *model.RateLimitWindow `json:"primary"`
-					Secondary *model.RateLimitWindow `json:"secondary"`
-				}
-				at, timeErr := time.Parse(time.RFC3339Nano, event.Timestamp)
-				if json.Unmarshal(event.Payload.RateLimits, &raw) != nil || timeErr != nil || raw.Primary == nil || raw.Primary.UsedPercent == nil || raw.Primary.WindowMinutes == nil || raw.Primary.ResetsAt == nil {
-					out.bad = true
-				} else {
-					snapshot := &model.RateLimitSnapshot{ObservedAt: at.Format(time.RFC3339Nano), LimitID: raw.LimitID, PlanType: raw.PlanType}
-					snapshot.Primary = *raw.Primary
-					snapshot.Primary.Reported = true
-					if raw.Secondary != nil && raw.Secondary.UsedPercent != nil && raw.Secondary.WindowMinutes != nil && raw.Secondary.ResetsAt != nil {
-						snapshot.Secondary = *raw.Secondary
-						snapshot.Secondary.Reported = true
-					}
-					if at.Before(start) {
-						if out.before == nil || snapshotBefore(out.before, snapshot) {
-							out.before = snapshot
-						}
-					} else if !at.After(end) && (out.end == nil || snapshotBefore(out.end, snapshot)) {
-						out.end = snapshot
-					}
-				}
-			}
+		line, oversized, readErr := readCodexLogLine(reader)
+		if len(line) == 0 && readErr == io.EOF {
+			return nil
+		}
+		account, snapshot, bad := parseCodexLogLine(line, oversized)
+		if account != "" {
+			entry.account = account
+		}
+		if snapshot != nil {
+			entry.snapshots = append(entry.snapshots, *snapshot)
+		}
+		entry.bad = entry.bad || bad
+		position, seekErr := f.Seek(0, io.SeekCurrent)
+		if seekErr != nil {
+			return seekErr
+		}
+		entry.offset = position - int64(reader.Buffered())
+		if readErr == io.EOF {
+			return nil
 		}
 		if readErr != nil {
-			if readErr == io.EOF {
-				return nil
-			}
 			return readErr
 		}
+	}
+}
+
+func parseCodexLogLine(line []byte, oversized bool) (string, *model.RateLimitSnapshot, bool) {
+	metric := bytes.Contains(line, []byte("token_count"))
+	if oversized {
+		return "", nil, metric
+	}
+	if !metric && !bytes.Contains(line, []byte("session_meta")) {
+		return "", nil, false
+	}
+	var event struct {
+		Timestamp string `json:"timestamp"`
+		Type      string `json:"type"`
+		Payload   struct {
+			Type       string          `json:"type"`
+			Account    string          `json:"creator_account_id"`
+			RateLimits json.RawMessage `json:"rate_limits"`
+		} `json:"payload"`
+	}
+	if json.Unmarshal(line, &event) != nil {
+		return "", nil, true
+	}
+	if event.Type == "session_meta" {
+		return event.Payload.Account, nil, false
+	}
+	if event.Type != "event_msg" || event.Payload.Type != "token_count" || len(event.Payload.RateLimits) == 0 || string(event.Payload.RateLimits) == "null" {
+		return "", nil, false
+	}
+	var raw struct {
+		LimitID   *string                `json:"limit_id"`
+		PlanType  *string                `json:"plan_type"`
+		Primary   *model.RateLimitWindow `json:"primary"`
+		Secondary *model.RateLimitWindow `json:"secondary"`
+	}
+	at, timeErr := time.Parse(time.RFC3339Nano, event.Timestamp)
+	if json.Unmarshal(event.Payload.RateLimits, &raw) != nil || timeErr != nil || raw.Primary == nil || raw.Primary.UsedPercent == nil || raw.Primary.WindowMinutes == nil || raw.Primary.ResetsAt == nil {
+		return "", nil, true
+	}
+	snapshot := &model.RateLimitSnapshot{ObservedAt: at.Format(time.RFC3339Nano), LimitID: raw.LimitID, PlanType: raw.PlanType}
+	snapshot.Primary = *raw.Primary
+	snapshot.Primary.Reported = true
+	if raw.Secondary != nil && raw.Secondary.UsedPercent != nil && raw.Secondary.WindowMinutes != nil && raw.Secondary.ResetsAt != nil {
+		snapshot.Secondary = *raw.Secondary
+		snapshot.Secondary.Reported = true
+	}
+	return "", snapshot, false
+}
+
+// readCodexLogLine consumes exactly one line while retaining at most one MiB.
+// Large tool-response records are discarded without allocating their full body.
+func readCodexLogLine(reader *bufio.Reader) (line []byte, oversized bool, readErr error) {
+	for {
+		fragment, err := reader.ReadSlice('\n')
+		if len(line) < maxCodexLogLineBytes {
+			remaining := maxCodexLogLineBytes - len(line)
+			if len(fragment) > remaining {
+				line = append(line, fragment[:remaining]...)
+				oversized = true
+			} else {
+				line = append(line, fragment...)
+			}
+		} else if len(fragment) > 0 {
+			oversized = true
+		}
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		return line, oversized, err
 	}
 }
 

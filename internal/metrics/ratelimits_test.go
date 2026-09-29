@@ -52,7 +52,7 @@ func TestCodexRateLimitRollupUnverifiedAndOverlap(t *testing.T) {
 	for _, group := range got.Windows {
 		switch group.AccountScope {
 		case "acct-a":
-			if len(group.Limitations) != 1 || group.Limitations[0] != "overlapping-attempts" {
+			if len(group.Limitations) != 1 || group.Limitations[0] != "overlapping-attempts" || group.DeltaSum.Availability != "unavailable" || group.DeltaSum.Reason != "overlapping-attempts" || group.DeltaSum.PercentagePoints != nil {
 				t.Fatalf("overlap: %+v", group)
 			}
 		case "unverified":

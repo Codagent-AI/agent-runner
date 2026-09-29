@@ -243,7 +243,7 @@ func rollupCodexRateLimits(steps []StepRecord) *CodexRateLimitRollup {
 			}
 			if acc.intervals[i][0].Before(latestEnd) {
 				acc.group.Limitations = []string{"overlapping-attempts"}
-				acc.group.DeltaSum.Limitations = append(acc.group.DeltaSum.Limitations, "overlapping-attempts")
+				acc.group.DeltaSum = model.RateLimitDelta{Window: acc.group.Window, Availability: "unavailable", Reason: "overlapping-attempts", Limitations: []string{"overlapping-attempts"}}
 				break
 			}
 		}
