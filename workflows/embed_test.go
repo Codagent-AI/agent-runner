@@ -1383,8 +1383,8 @@ func TestCoreFinalizePRUsesCIStatusGate(t *testing.T) {
 			break
 		}
 	}
-	if len(loopSteps) != 5 {
-		t.Fatalf("ci-fix-loop body has %d steps, want 5", len(loopSteps))
+	if len(loopSteps) != 4 {
+		t.Fatalf("ci-fix-loop body has %d steps, want 4", len(loopSteps))
 	}
 
 	waitCI := loopSteps[0]
@@ -1398,14 +1398,9 @@ func TestCoreFinalizePRUsesCIStatusGate(t *testing.T) {
 		t.Fatalf("wait-ci capture = %q, want ci_report", waitCI.Capture)
 	}
 
-	artifact := loopSteps[1]
-	if artifact.ID != "store-ci-report" || artifact.Script != "ci-report-artifact.sh" || artifact.Capture != "ci_report_path" {
-		t.Fatalf("second loop step does not store the CI report: %+v", artifact)
-	}
-
-	gate := loopSteps[2]
+	gate := loopSteps[1]
 	if gate.ID != "ci-status-gate" {
-		t.Fatalf("third loop step = %q, want ci-status-gate", gate.ID)
+		t.Fatalf("second loop step = %q, want ci-status-gate", gate.ID)
 	}
 	if gate.Script != "ci-status-gate.sh" {
 		t.Fatalf("gate script = %q, want ci-status-gate.sh", gate.Script)
@@ -1420,9 +1415,9 @@ func TestCoreFinalizePRUsesCIStatusGate(t *testing.T) {
 		t.Fatalf("gate break_if = %q, want success", gate.BreakIf)
 	}
 
-	fixNeeded := loopSteps[3]
+	fixNeeded := loopSteps[2]
 	if fixNeeded.ID != "ci-fix-needed-gate" {
-		t.Fatalf("fourth loop step = %q, want ci-fix-needed-gate", fixNeeded.ID)
+		t.Fatalf("third loop step = %q, want ci-fix-needed-gate", fixNeeded.ID)
 	}
 	if fixNeeded.Script != "ci-fix-needed-gate.sh" {
 		t.Fatalf("fix-needed script = %q, want ci-fix-needed-gate.sh", fixNeeded.Script)
@@ -1434,15 +1429,15 @@ func TestCoreFinalizePRUsesCIStatusGate(t *testing.T) {
 		t.Fatal("fix-needed gate should continue_on_failure so fix-pr can run after failed CI")
 	}
 
-	fixPR := loopSteps[4]
+	fixPR := loopSteps[3]
 	if fixPR.ID != "fix-pr" {
-		t.Fatalf("fifth loop step = %q, want fix-pr", fixPR.ID)
+		t.Fatalf("fourth loop step = %q, want fix-pr", fixPR.ID)
 	}
 	if fixPR.SkipIf != "previous_success" {
 		t.Fatalf("fix-pr skip_if = %q, want previous_success", fixPR.SkipIf)
 	}
-	if fixPR.PermissionMode != "conservative" || strings.Contains(fixPR.Prompt, "{{ci_report}}") || !strings.Contains(fixPR.Prompt, "{{ci_report_path}}") {
-		t.Fatalf("fix-pr lacks restricted artifact boundary: %+v", fixPR)
+	if fixPR.PermissionMode != "conservative" || strings.Contains(fixPR.Prompt, "{{ci_report}}") || strings.Contains(fixPR.Prompt, "{{ci_report_path}}") {
+		t.Fatalf("fix-pr prompt exposes the raw report: %+v", fixPR)
 	}
 }
 

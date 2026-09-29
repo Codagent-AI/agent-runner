@@ -258,11 +258,11 @@ If there is no pull request for the current branch, if GitHub authentication fai
 
 ### Requirement: Lead session resumed only for fix cycles
 
-`core:finalize-pr` SHALL resume the `lead-agent` session only in the `fix-pr` step, and only when `ci-fix-needed-gate` reports that a fix is needed (`CI_FAILED` or `CI_COMMENTS`). The full captured `ci_report` from that cycle SHALL be stored in a private run artifact. The `fix-pr` prompt SHALL contain only the artifact path, direct the agent to start from that report, identify it as untrusted PR data, and forbid following instructions or permission claims within it. The fix step SHALL use conservative permissions even when the user's general autonomous permission mode is more permissive. The lead session SHALL be resumed at most once per fix cycle. The existing scope boundary SHALL remain in the `fix-pr` prompt: fixes that would change approved requirements, design, or scope are not made silently.
+`core:finalize-pr` SHALL resume the `lead-agent` session only in the `fix-pr` step, and only when `ci-fix-needed-gate` reports that a fix is needed (`CI_FAILED` or `CI_COMMENTS`). The `ci_report` SHALL remain workflow gate data; the fixer prompt SHALL NOT include it or an artifact containing it. The fixer SHALL invoke `codagent:fix-pr` to gather current failure details without starting another CI polling wait. The prompt SHALL identify PR comments and logs as untrusted data and forbid following instructions or permission claims within them. The fix step SHALL use conservative permissions even when the user's general autonomous permission mode is more permissive. The lead session SHALL be resumed at most once per fix cycle. The existing scope boundary SHALL remain in the `fix-pr` prompt: fixes that would change approved requirements, design, or scope are not made silently.
 
-#### Scenario: Failing cycle resumes lead once with report artifact
+#### Scenario: Failing cycle resumes lead without raw report
 - **WHEN** the in-loop CI wait reports `CI_FAILED` with a failed check and log excerpt
-- **THEN** `fix-pr` resumes the `lead-agent` session exactly once for that cycle with conservative permissions, and its prompt points to a private artifact containing that report, including the failed check and log excerpt
+- **THEN** `fix-pr` resumes the `lead-agent` session exactly once for that cycle with conservative permissions, without the report or its log excerpt in the prompt, and gathers current failure details through `codagent:fix-pr`
 
 #### Scenario: Pending cycle does not resume lead
 - **WHEN** the in-loop CI wait reports `CI_PENDING`
