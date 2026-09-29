@@ -100,6 +100,7 @@ func (c *Collector) IncorporateValidator(attr Attribution, store string, raws []
 		head.Attribution = previous.Attribution
 		c.artifact.MeasurementHeads[found] = head
 	}
+	c.captureRateLimitEnrichmentsLocked()
 	delivery.Attribution = attr
 	delivery.StoreID = store
 	if conflict {
@@ -166,6 +167,9 @@ func (c *Collector) refreshMeasurementsLocked() {
 			continue
 		}
 		step := validatorStepProjection(head, &record, usable)
+		if isCodexMeasurement(&record) {
+			step.CodexRateLimits = c.enrichmentForHead(head, &record)
+		}
 		c.artifact.Steps = append(c.artifact.Steps, step)
 		accumulateFields(fields, attemptAggregateTokens(&p), usable)
 	}
@@ -240,6 +244,18 @@ func FilterMeasurementSessions(artifact *Artifact, allowed map[string]struct{}) 
 		}
 	}
 	artifact.MeasurementHeads = heads
+	retainedKeys := make(map[string]bool, len(heads))
+	for i := range heads {
+		retainedKeys[heads[i].Key] = true
+	}
+	enrichments := []RateLimitEnrichment{}
+	for i := range artifact.RateLimitEnrichments {
+		enrichment := &artifact.RateLimitEnrichments[i]
+		if retainedKeys[enrichment.HeadKey] {
+			enrichments = append(enrichments, *enrichment)
+		}
+	}
+	artifact.RateLimitEnrichments = enrichments
 	contexts := []DeliveryContext{}
 	for i := range artifact.ValidatorContexts {
 		ctx := &artifact.ValidatorContexts[i]
@@ -258,7 +274,7 @@ func FilterMeasurementSessions(artifact *Artifact, allowed map[string]struct{}) 
 	artifact.NativeMeasurements = native
 	artifact.ValidatorDelivery = nil
 	c := Collector{artifact: *artifact}
-	c.refreshMeasurementsLocked()
+	c.refreshAggregatesLocked()
 	*artifact = c.artifact
 }
 

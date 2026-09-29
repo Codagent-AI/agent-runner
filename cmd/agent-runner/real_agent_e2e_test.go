@@ -22,6 +22,7 @@ import (
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
+	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
 
@@ -32,7 +33,9 @@ func TestClaudeHeadlessRealAgentE2E(t *testing.T) {
 }
 
 func TestCodexHeadlessRealAgentE2E(t *testing.T) {
-	runRealHeadlessAgentE2E(t, "codex")
+	if runRealHeadlessAgentE2E(t, "codex") && runRealHeadlessAgentE2E(t, "codex") {
+		t.Fatal("Codex rate-limit window reset during both real-agent attempts")
+	}
 }
 
 func TestCopilotHeadlessRealAgentE2E(t *testing.T) {
@@ -439,7 +442,7 @@ func TestDurabilityTimeoutResumeUsesFreshCredentialE2E(t *testing.T) {
 	}
 }
 
-func runRealHeadlessAgentE2E(t *testing.T, agent string) {
+func runRealHeadlessAgentE2E(t *testing.T, agent string) bool {
 	t.Helper()
 	_, workdir, runnerBin := prepareRealAgentE2E(t, agent)
 	token := "headless-" + strings.ReplaceAll(uuid.NewString(), "-", "")
@@ -482,6 +485,10 @@ steps:
 		t.Fatalf("real %s resumed token = %q, want %q\n%s", agent, got, token, output)
 	}
 	assertRealAgentRunCompleted(t, workdir, workflowName, []string{agent + "-headless-fresh", "remove-headless-artifact", agent + "-headless-resume"})
+	if agent == "codex" {
+		return assertRealCodexRateLimits(t, workdir, workflowName, false)
+	}
+	return false
 }
 
 // runRealInteractiveAgentE2E proves completing-turn durability: the agent
@@ -546,6 +553,62 @@ steps:
 		t.Fatalf("real %s resumed answer did not recall the phrase invented in the completing turn: fresh=%q resume=%q\n%s", agent, freshPhrase, resumePhrase, result.output)
 	}
 	assertRealAgentRunCompleted(t, workdir, workflowName, stepIDs)
+	if agent == "codex" {
+		assertRealCodexRateLimits(t, workdir, workflowName, true)
+	}
+}
+
+func assertRealCodexRateLimits(t *testing.T, workdir, workflowName string, interactive bool) bool {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := latestWorkflowRunDir(t, home, workdir, workflowName)
+	data, err := os.ReadFile(filepath.Join(dir, metrics.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var artifact metrics.Artifact
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		t.Fatal(err)
+	}
+	var evidence []*metrics.StepRecord
+	for i := range artifact.Steps {
+		step := &artifact.Steps[i]
+		if strings.HasPrefix(step.ID, "codex-") {
+			if step.CodexRateLimits == nil {
+				t.Fatalf("Codex step %s lacks rate-limit evidence", step.ID)
+			}
+			evidence = append(evidence, step)
+		}
+	}
+	if len(evidence) != 2 || artifact.CodexRateLimits == nil || artifact.CodexRateLimits.MeasuredAttempts != 2 {
+		t.Fatalf("Codex rate-limit records or rollup missing: steps=%d rollup=%+v", len(evidence), artifact.CodexRateLimits)
+	}
+	if interactive {
+		for _, step := range evidence {
+			e := step.CodexRateLimits
+			if e.Status != "captured" && (e.Status != "unavailable" || e.Reason != "session-unidentified" && e.Reason != "no-snapshots") {
+				t.Fatalf("unexpected interactive evidence: %+v", e)
+			}
+		}
+		return false
+	}
+	fresh, resumed := evidence[0].CodexRateLimits, evidence[1].CodexRateLimits
+	if fresh.Status == "unavailable" && fresh.Reason == "no-snapshots" {
+		t.Skip("delta acceptance unverified: account reports no rate_limits")
+	}
+	if fresh.Status != "captured" || resumed.Status != "captured" || fresh.End == nil || resumed.End == nil || resumed.Start == nil || resumed.StartProvenance != "same-thread" {
+		t.Fatalf("headless Codex evidence incomplete: fresh=%+v resumed=%+v", fresh, resumed)
+	}
+	if len(resumed.Deltas) > 0 && resumed.Deltas[0].Reason == "window-reset" && resumed.Start.Primary.ResetsAt != nil && resumed.End.Primary.ResetsAt != nil && *resumed.Start.Primary.ResetsAt != *resumed.End.Primary.ResetsAt {
+		return true
+	}
+	if len(resumed.Deltas) == 0 || resumed.Deltas[0].Availability != "available" || *resumed.End.Primary.UsedPercent < *resumed.Start.Primary.UsedPercent {
+		t.Fatalf("resume delta unavailable: %+v", resumed)
+	}
+	return false
 }
 
 func realAgentExplicitCompletionCommand(agent string) string {

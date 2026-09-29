@@ -25,6 +25,7 @@ const (
 
 	DataIdentity            = "identity"
 	DataUsage               = "usage"
+	DataCodexRateLimits     = "codex_rate_limits"
 	DataEstimatedAPICostUSD = "estimated_api_cost_usd"
 	DataTotals              = "totals"
 
@@ -52,7 +53,9 @@ type Artifact struct {
 	// ValidatorDelivery is separate from native collection and totals so a
 	// missing, blocked, or legacy producer history can never be interpreted as
 	// confirmed zero model work.
-	ValidatorDelivery *ValidatorDeliveryState `json:"validator_delivery,omitempty"`
+	ValidatorDelivery    *ValidatorDeliveryState `json:"validator_delivery,omitempty"`
+	CodexRateLimits      *CodexRateLimitRollup   `json:"codex_rate_limits,omitempty"`
+	RateLimitEnrichments []RateLimitEnrichment   `json:"rate_limit_enrichments,omitempty"`
 }
 
 // ValidatorDeliveryState is the v4 downstream projection of Validator
@@ -77,33 +80,34 @@ type SessionRecord struct {
 }
 
 type StepRecord struct {
-	LegacyMeasurement        bool                   `json:"legacy_measurement,omitempty"`
-	MeasurementKey           string                 `json:"measurement_key,omitempty"`
-	RecordID                 string                 `json:"record_id"`
-	Prefix                   string                 `json:"prefix"`
-	ID                       string                 `json:"id"`
-	Kind                     string                 `json:"kind"`
-	Type                     string                 `json:"type"`
-	Attempt                  int                    `json:"attempt"`
-	Iteration                *int                   `json:"iteration"`
-	Outcome                  string                 `json:"outcome"`
-	DurationMS               int64                  `json:"duration_ms"`
-	SessionID                string                 `json:"session_id,omitempty"`
-	AgentInvoked             bool                   `json:"agent_invoked"`
-	Role                     string                 `json:"role,omitempty"`
-	Tool                     string                 `json:"tool,omitempty"`
-	Usage                    *model.UsageRecord     `json:"usage"`
-	EstimatedAPICostUSD      *float64               `json:"estimated_api_cost_usd"`
-	CallID                   string                 `json:"call_id,omitempty"`
-	InvocationID             string                 `json:"invocation_id,omitempty"`
-	ParentAttemptID          string                 `json:"parent_attempt_id,omitempty"`
-	TargetKind               string                 `json:"target_kind,omitempty"`
-	TargetName               string                 `json:"target_name,omitempty"`
-	ExecutionSessionID       string                 `json:"execution_session_id,omitempty"`
-	ExecutionSessionCoverage string                 `json:"execution_session_coverage,omitempty"`
-	GitStart                 *audit.GitCheckpoint   `json:"git_start,omitempty"`
-	GitEnd                   *audit.GitCheckpoint   `json:"git_end,omitempty"`
-	GitChanges               *audit.GitChangeCounts `json:"git_changes,omitempty"`
+	LegacyMeasurement        bool                          `json:"legacy_measurement,omitempty"`
+	MeasurementKey           string                        `json:"measurement_key,omitempty"`
+	RecordID                 string                        `json:"record_id"`
+	Prefix                   string                        `json:"prefix"`
+	ID                       string                        `json:"id"`
+	Kind                     string                        `json:"kind"`
+	Type                     string                        `json:"type"`
+	Attempt                  int                           `json:"attempt"`
+	Iteration                *int                          `json:"iteration"`
+	Outcome                  string                        `json:"outcome"`
+	DurationMS               int64                         `json:"duration_ms"`
+	SessionID                string                        `json:"session_id,omitempty"`
+	AgentInvoked             bool                          `json:"agent_invoked"`
+	Role                     string                        `json:"role,omitempty"`
+	Tool                     string                        `json:"tool,omitempty"`
+	Usage                    *model.UsageRecord            `json:"usage"`
+	EstimatedAPICostUSD      *float64                      `json:"estimated_api_cost_usd"`
+	CallID                   string                        `json:"call_id,omitempty"`
+	InvocationID             string                        `json:"invocation_id,omitempty"`
+	ParentAttemptID          string                        `json:"parent_attempt_id,omitempty"`
+	TargetKind               string                        `json:"target_kind,omitempty"`
+	TargetName               string                        `json:"target_name,omitempty"`
+	ExecutionSessionID       string                        `json:"execution_session_id,omitempty"`
+	ExecutionSessionCoverage string                        `json:"execution_session_coverage,omitempty"`
+	GitStart                 *audit.GitCheckpoint          `json:"git_start,omitempty"`
+	GitEnd                   *audit.GitCheckpoint          `json:"git_end,omitempty"`
+	GitChanges               *audit.GitChangeCounts        `json:"git_changes,omitempty"`
+	CodexRateLimits          *model.CodexRateLimitEvidence `json:"codex_rate_limits,omitempty"`
 }
 
 // SessionRollup exposes work attributable to exactly one Runner invocation.
@@ -140,6 +144,7 @@ type Collector struct {
 	artifactLoaded            bool
 	currentExecutionSessionID string
 	now                       func() time.Time
+	rateLimitReader           func(CodexRateLimitRequest) model.CodexRateLimitEvidence
 }
 
 // NewCollector creates a collector and rehydrates an existing artifact when
@@ -291,6 +296,9 @@ func (c *Collector) processTerminal(event *audit.Event) {
 		CallID: stringValue(event.Data["call_id"]), ParentAttemptID: stringValue(event.Data["parent_attempt_id"]),
 		TargetKind: stringValue(event.Data["target_kind"]), TargetName: stringValue(event.Data["target_name"]),
 		ExecutionSessionID: identity.ExecutionSessionID,
+	}
+	if evidence, ok := event.Data[DataCodexRateLimits].(model.CodexRateLimitEvidence); ok {
+		record.CodexRateLimits = &evidence
 	}
 	if record.ExecutionSessionID == "" {
 		record.ExecutionSessionID = stringValue(event.Data["execution_session_id"])
@@ -584,6 +592,7 @@ func (c *Collector) refreshAggregatesLocked() {
 	c.artifact.AggregateVersion = 1
 	c.refreshMeasurementsLocked()
 	c.artifact.Totals = c.totalsLocked(false)
+	c.artifact.CodexRateLimits = rollupCodexRateLimits(c.artifact.Steps)
 	c.artifact.RepositoryChanges = aggregateRepositoryChanges(c.artifact.Steps)
 	rollups := make([]SessionRollup, 0, len(c.artifact.Sessions))
 	for _, session := range c.artifact.Sessions {

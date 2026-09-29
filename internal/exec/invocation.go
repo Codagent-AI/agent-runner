@@ -35,6 +35,8 @@ type AgentInvocation struct {
 	Effort            string
 	SessionID         string
 	SessionResumed    bool
+	RunID             string
+	RateLimitReader   func(cli.CodexRateLimitRequest) model.CodexRateLimitEvidence
 
 	Log         Logger
 	SuspendHook func() error
@@ -62,6 +64,7 @@ type AgentInvocationResult struct {
 	Usage            model.UsageRecord
 	EstimatedCostUSD *float64
 	UsageError       error
+	RateLimits       *model.CodexRateLimitEvidence
 
 	StartedAt   time.Time
 	FinishedAt  time.Time
@@ -71,6 +74,8 @@ type AgentInvocationResult struct {
 
 // InvokeAgent executes one resolved agent invocation and returns typed output,
 // identity, session-discovery, usage, cost, timing, and launch evidence.
+//
+//nolint:funlen // Invocation owns the ordered launch, extraction and evidence lifecycle.
 func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logger) (AgentInvocationResult, error) {
 	now := input.Now
 	if now == nil {
@@ -163,6 +168,19 @@ func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logge
 	}
 	result.FinishedAt = now()
 	result.Duration = result.FinishedAt.Sub(result.StartedAt)
+	if launched && input.CLI == "codex" {
+		reader := input.RateLimitReader
+		if reader == nil {
+			r := cli.NewCodexRateLimitReader()
+			reader = r.Read
+		}
+		threadID := result.DiscoveredSessionID
+		if threadID == "" {
+			threadID = input.SessionID
+		}
+		evidence := reader(cli.CodexRateLimitRequest{ThreadID: threadID, RunID: input.RunID, StartedAt: result.StartedAt, EndedAt: result.FinishedAt})
+		result.RateLimits = &evidence
+	}
 	return result, runErr
 }
 

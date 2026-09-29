@@ -827,7 +827,8 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 		Workdir: call.workdir, Prefix: agentCallPrefix(h.options.Parent.Prefix, record.callID),
 		InvocationContext: cli.ContextAutonomousHeadless,
 		CLI:               call.cliName, Model: call.model, Effort: call.profile.Effort, SessionID: sessionID, SessionResumed: call.resume,
-		Log: h.options.Log, Now: h.options.Now,
+		RunID: input.RunID,
+		Log:   h.options.Log, Now: h.options.Now,
 		StdoutWrapper: childStdoutCapture(call.adapter, output),
 		OnStarted: func() {
 			go h.probeChildSessionID(probeCtx, record, call, output)
@@ -928,6 +929,9 @@ func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *res
 	data["identity"] = identity
 	data["usage"] = invocation.Usage
 	data["estimated_api_cost_usd"] = invocation.EstimatedCostUSD
+	if invocation.RateLimits != nil {
+		data["codex_rate_limits"] = *invocation.RateLimits
+	}
 	if invocation.CLILaunched {
 		data["exit_code"] = invocation.ExitCode
 	}

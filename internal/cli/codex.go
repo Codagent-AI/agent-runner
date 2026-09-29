@@ -463,12 +463,12 @@ func isCodexIgnoredStderrLine(line string, state *codexIgnoredStderrState) bool 
 	return false
 }
 
-// discoverCodexInteractiveSession scans ~/.codex/sessions/YYYY/MM/DD/ for the
+// discoverCodexInteractiveSession scans the configured Codex sessions directory for the
 // most recent .jsonl file created after spawn time, matching CWD from the
 // session_meta payload.
 func discoverCodexInteractiveSession(spawnTime time.Time) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
+	home := codexSourceHome()
+	if home == "" {
 		return ""
 	}
 
@@ -477,7 +477,7 @@ func discoverCodexInteractiveSession(spawnTime time.Time) string {
 		return ""
 	}
 
-	sessionsDir := filepath.Join(home, ".codex", "sessions")
+	sessionsDir := filepath.Join(home, "sessions")
 
 	type candidate struct {
 		path    string

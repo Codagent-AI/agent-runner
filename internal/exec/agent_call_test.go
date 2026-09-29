@@ -615,6 +615,57 @@ func TestPrepareAgentCallRuntimeStampsParentExecutionAttempt(t *testing.T) {
 	}
 }
 
+func TestAgentCallCodexRateLimitEvidenceStaysOnCallRecord(t *testing.T) {
+	dir := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	adapter := &callTestAdapter{discovered: "child-thread"}
+	runner := &callTestRunner{result: ProcessResult{Started: true, ExitCode: 0, Stdout: "done"}}
+	runner.beforeRun = func() {
+		at := time.Now().UTC()
+		folder := filepath.Join(home, "sessions", at.In(time.Local).Format("2006/01/02"))
+		if err := os.MkdirAll(folder, 0o700); err != nil {
+			t.Error(err)
+			return
+		}
+		path := filepath.Join(folder, "rollout-test-child-thread.jsonl")
+		body := `{"type":"session_meta","payload":{"id":"child-thread","creator_account_id":"fixture-account"}}` + "\n" +
+			fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":40,"window_minutes":10080,"resets_at":9999999999},"secondary":null}}}`+"\n", at.Format(time.RFC3339Nano))
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Error(err)
+		}
+	}
+	options := testAgentCallOptions(dir, runner, adapter)
+	options.Context.ProfileStore = &config.Config{ActiveAgents: map[string]*config.Agent{"implementor": {DefaultMode: "autonomous", CLI: "codex", Model: "gpt-5.6-sol"}}}
+	options.Adapter = func(string) (cli.Adapter, error) { return adapter, nil }
+	collector := metrics.NewCollector(dir, "run", "wf", time.Now())
+	options.Context.AuditLogger = metrics.NewExecutionPipeline(collector, nil, dir, "execution")
+	handler := NewAgentCallHandler(options)
+	response := startAndAwaitAgentCall(t, handler, control.AgentCallRequest{RequestID: "request", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`)})
+	if response.Error != nil {
+		t.Fatalf("call failed: %+v", response)
+	}
+	duplicate := startAndAwaitAgentCall(t, handler, control.AgentCallRequest{RequestID: "request", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`)})
+	if duplicate.CallID != response.CallID || runner.calls != 1 {
+		t.Fatalf("duplicate call launched again: first=%+v duplicate=%+v calls=%d", response, duplicate, runner.calls)
+	}
+	collector.Process(audit.Event{Type: audit.EventStepEnd, Timestamp: time.Now().Format(time.RFC3339Nano), Data: map[string]any{
+		metrics.DataIdentity: model.ExecutionIdentity{StepID: "parent", StepType: "agent", Kind: "step", CLI: "claude", AgentInvoked: true},
+		metrics.DataUsage:    model.UsageRecord{Status: model.UsageCollected, CLI: "claude"}, "outcome": "success",
+	}})
+	data, err := os.ReadFile(filepath.Join(dir, metrics.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var artifact metrics.Artifact
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		t.Fatal(err)
+	}
+	if len(artifact.Steps) != 2 || artifact.Steps[0].Kind != "agent-call" || artifact.Steps[0].CodexRateLimits == nil || artifact.Steps[0].CodexRateLimits.Status != "captured" || artifact.Steps[1].CodexRateLimits != nil || artifact.CodexRateLimits == nil || artifact.CodexRateLimits.MeasuredAttempts != 1 {
+		t.Fatalf("call evidence: %+v", artifact)
+	}
+}
+
 func TestPrepareAgentCallRuntimeNotifiesLiveRunnerBeforeLaunchAndAfterFinish(t *testing.T) {
 	workdir := t.TempDir()
 	base := &callTestRunner{result: ProcessResult{Started: true, Stdout: "done"}}

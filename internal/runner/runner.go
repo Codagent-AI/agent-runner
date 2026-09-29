@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/control"
 	"github.com/codagent/agent-runner/internal/engine"
@@ -525,6 +526,10 @@ func buildExecutionContext(
 		log.Printf("agent-runner: warning: audit trail unavailable: %v\n", auditErr)
 	}
 	metricsCollector := metrics.NewCollector(sessionDir, sessionID, workflow.Name, runStart)
+	rateLimitReader := cli.NewCodexRateLimitReader()
+	metricsCollector.SetCodexRateLimitReader(func(req metrics.CodexRateLimitRequest) model.CodexRateLimitEvidence {
+		return rateLimitReader.Read(cli.CodexRateLimitRequest{ThreadID: req.ThreadID, RunID: req.RunID, StartedAt: req.StartedAt, EndedAt: req.EndedAt, EndTolerance: req.EndTolerance})
+	})
 	executionSessionID := uuid.NewString()
 	auditEventLogger := metrics.NewExecutionPipeline(metricsCollector, auditSink, opts.ProjectRoot, executionSessionID)
 

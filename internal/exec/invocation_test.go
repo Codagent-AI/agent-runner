@@ -94,6 +94,24 @@ func TestInvokeAgentRetainsLaunchEvidenceWhenRunningProcessIsCanceled(t *testing
 	}
 }
 
+func TestInvokeAgentCapturesCodexRateLimitEvidence(t *testing.T) {
+	runner := &invocationRecordingRunner{options: make(chan AgentProcessOptions, 1), result: ProcessResult{Started: true, ExitCode: 0, Stdout: "usage"}}
+	called := false
+	result, err := InvokeAgent(&AgentInvocation{
+		Adapter: &invocationTestAdapter{}, Args: []string{"codex"}, InvocationContext: cli.ContextAutonomousHeadless,
+		CLI: "codex", RunID: "run-1", SessionID: "thread-1", RateLimitReader: func(req cli.CodexRateLimitRequest) model.CodexRateLimitEvidence {
+			called = true
+			if req.ThreadID != "discovered-session" || req.RunID != "run-1" || req.EndedAt.Before(req.StartedAt) || req.EndTolerance != 0 {
+				t.Fatalf("reader request: %+v", req)
+			}
+			return model.CodexRateLimitEvidence{Status: "unavailable", Reason: "session-log-unavailable"}
+		},
+	}, runner, &mockLogger{})
+	if err != nil || !called || result.RateLimits == nil || result.RateLimits.Reason != "session-log-unavailable" || result.Usage.Status != model.UsageCollected {
+		t.Fatalf("capture affected invocation: result=%+v err=%v called=%v", result, err, called)
+	}
+}
+
 func TestInvokeAgentAttachesRequestedIdentityAndFallsBackToInvocationModel(t *testing.T) {
 	runner := &invocationRecordingRunner{
 		options: make(chan AgentProcessOptions, 1),

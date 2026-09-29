@@ -97,13 +97,9 @@ func prepareCodexRunnerHome(completion *CompletionCommand, integration *RunnerIn
 	if err != nil {
 		return "", fmt.Errorf("locate user cache: %w", err)
 	}
-	sourceHome := os.Getenv("CODEX_HOME")
+	sourceHome := codexSourceHome()
 	if sourceHome == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("locate Codex home: %w", err)
-		}
-		sourceHome = filepath.Join(home, ".codex")
+		return "", fmt.Errorf("locate Codex home")
 	}
 	config, err := os.ReadFile(filepath.Join(sourceHome, "config.toml")) // #nosec G703,G304 -- CODEX_HOME is the user's documented Codex root and the joined name is fixed
 	if err != nil && !os.IsNotExist(err) {

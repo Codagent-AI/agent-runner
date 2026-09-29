@@ -198,7 +198,7 @@ func ExecuteAgentStep(
 	// Bind the run-scoped endpoint before releasing the terminal lease.
 	if controlErr := ensureRunnerControl(ctx, invocationContext, agentCallEligible); controlErr != nil {
 		extraction := cli.UsageExtraction{Usage: defaultAgentUsage(cliName, invocationContext.IsHeadless())}
-		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), nil, controlErr, &extraction, nil)
+		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), nil, controlErr, &extraction, nil, nil)
 		return OutcomeFailed, controlErr
 	}
 
@@ -208,7 +208,7 @@ func ExecuteAgentStep(
 	)
 	if controlErr != nil {
 		extraction := cli.UsageExtraction{Usage: defaultAgentUsage(cliName, invocationContext.IsHeadless())}
-		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), nil, controlErr, &extraction, nil)
+		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), nil, controlErr, &extraction, nil, nil)
 		return OutcomeFailed, controlErr
 	}
 	if deactivate != nil {
@@ -281,7 +281,7 @@ func finishAgentStep(
 	identity := executionIdentity(ctx, step, "step", 0, invocation.CLILaunched, cliName, resolvedSessionID)
 	attempt := attemptForIdentity(ctx, &identity)
 	extraction := cli.UsageExtraction{Usage: invocation.Usage, EstimatedCostUSD: invocation.EstimatedCostUSD}
-	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, invocation.CLILaunched, discoveredID, invocation.Outcome, invocation.Response, invocation.Stderr, &invocation.ExitCode, runErr, &extraction, invocation.UsageError)
+	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, invocation.CLILaunched, discoveredID, invocation.Outcome, invocation.Response, invocation.Stderr, &invocation.ExitCode, runErr, &extraction, invocation.UsageError, invocation.RateLimits)
 	if runErr == nil {
 		publishLastAgentExecution(ctx, prefix, attempt, invocation.Response, callHandler)
 	}
@@ -343,7 +343,8 @@ func buildWorkflowAgentInvocation(
 		InvocationContext: invocationContext, CLI: cliName, Model: resolvedModel,
 		Effort:    resolvedEffort,
 		SessionID: sessionID, SessionResumed: isResume,
-		Log: log, SuspendHook: ctx.SuspendHook, ResumeHook: ctx.ResumeHook,
+		RunID: filepath.Base(filepath.Clean(ctx.SessionDir)),
+		Log:   log, SuspendHook: ctx.SuspendHook, ResumeHook: ctx.ResumeHook,
 		OnStarted: onStarted, direct: direct,
 	}
 }
@@ -1089,6 +1090,7 @@ func emitAgentEnd(
 	runErr error,
 	extraction *cli.UsageExtraction,
 	usageErr error,
+	rateLimits *model.CodexRateLimitEvidence,
 ) {
 	resolvedSessionID := discoveredID
 	if resolvedSessionID == "" {
@@ -1101,6 +1103,9 @@ func emitAgentEnd(
 		"identity":               identity,
 		"usage":                  extraction.Usage,
 		"estimated_api_cost_usd": extraction.EstimatedCostUSD,
+	}
+	if rateLimits != nil {
+		data["codex_rate_limits"] = *rateLimits
 	}
 	if stdout != "" {
 		data["stdout"] = stdout

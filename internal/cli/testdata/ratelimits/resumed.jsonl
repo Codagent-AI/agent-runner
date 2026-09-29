@@ -1,0 +1,4 @@
+{"timestamp":"2026-09-29T13:59:59Z","type":"session_meta","payload":{"id":"thread-1","creator_account_id":"fixture-account"}}
+{"timestamp":"2026-09-29T13:59:59Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","plan_type":"pro","primary":{"used_percent":40,"window_minutes":10080,"resets_at":12345},"secondary":null}}}
+{"timestamp":"2026-09-29T14:00:01Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","plan_type":"pro","primary":{"used_percent":42,"window_minutes":10080,"resets_at":12345},"secondary":null}}}
+{"timestamp":"2026-09-29T14:00:02Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","plan_type":"pro","primary":{"used_percent":43,"window_minutes":10080,"resets_at":12345},"secondary":null}}}
