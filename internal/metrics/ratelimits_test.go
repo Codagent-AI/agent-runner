@@ -69,7 +69,7 @@ func TestCodexRateLimitEnrichmentRevisionAndResume(t *testing.T) {
 	dir := t.TempDir()
 	c := NewCollector(dir, "run", "wf", time.Now())
 	reads := 0
-	c.SetCodexRateLimitReader(func(req CodexRateLimitRequest) model.CodexRateLimitEvidence {
+	c.SetCodexRateLimitReader(func(req model.CodexRateLimitRequest) model.CodexRateLimitEvidence {
 		reads++
 		if req.ThreadID != "thread-1" || req.EndTolerance != 2*time.Second {
 			t.Fatalf("wrong nested reader request: %+v", req)
@@ -113,7 +113,7 @@ func TestCodexRateLimitEnrichmentRevisionAndResume(t *testing.T) {
 
 func TestCodexRateLimitEnrichmentUnavailableAndConflict(t *testing.T) {
 	c := NewCollector(t.TempDir(), "run", "wf", time.Now())
-	c.SetCodexRateLimitReader(func(req CodexRateLimitRequest) model.CodexRateLimitEvidence {
+	c.SetCodexRateLimitReader(func(req model.CodexRateLimitRequest) model.CodexRateLimitEvidence {
 		if req.ThreadID == "" {
 			return model.CodexRateLimitEvidence{Status: "unavailable", Reason: "session-unidentified", Source: "codex:session-log"}
 		}
@@ -145,7 +145,7 @@ func TestCodexRateLimitEnrichmentUnavailableAndConflict(t *testing.T) {
 
 func TestCodexRateLimitUnsupportedHeadExcludedFromCoverage(t *testing.T) {
 	c := NewCollector(t.TempDir(), "run", "wf", time.Now())
-	c.SetCodexRateLimitReader(func(req CodexRateLimitRequest) model.CodexRateLimitEvidence {
+	c.SetCodexRateLimitReader(func(req model.CodexRateLimitRequest) model.CodexRateLimitEvidence {
 		return *rateLimitEvidenceForTest("acct-a", 100, 40, 43, req.StartedAt)
 	})
 	attr := Attribution{ContextID: "ctx", ExecutionSessionID: "execution", StepID: "validator"}

@@ -99,7 +99,7 @@ func TestInvokeAgentCapturesCodexRateLimitEvidence(t *testing.T) {
 	called := false
 	result, err := InvokeAgent(&AgentInvocation{
 		Adapter: &invocationTestAdapter{}, Args: []string{"codex"}, InvocationContext: cli.ContextAutonomousHeadless,
-		CLI: "codex", RunID: "run-1", SessionID: "thread-1", RateLimitReader: func(req cli.CodexRateLimitRequest) model.CodexRateLimitEvidence {
+		CLI: "codex", RunID: "run-1", SessionID: "thread-1", RateLimitReader: func(req model.CodexRateLimitRequest) model.CodexRateLimitEvidence {
 			called = true
 			if req.ThreadID != "discovered-session" || req.RunID != "run-1" || req.EndedAt.Before(req.StartedAt) || req.EndTolerance != 0 {
 				t.Fatalf("reader request: %+v", req)

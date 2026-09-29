@@ -25,12 +25,6 @@ const codexLogRecordHeaderBytes = 512
 var safeCodexThreadID = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 var codexTokenCountHeader = regexp.MustCompile(`"payload"\s*:\s*\{\s*"type"\s*:\s*"token_count"`)
 
-type CodexRateLimitRequest struct {
-	ThreadID, RunID    string
-	StartedAt, EndedAt time.Time
-	EndTolerance       time.Duration
-}
-
 type CodexRateLimitReader struct{ Home string }
 
 func NewCodexRateLimitReader() CodexRateLimitReader {
@@ -48,20 +42,38 @@ func codexSourceHome() string {
 	return filepath.Join(home, ".codex")
 }
 
+func (r CodexRateLimitReader) home() string {
+	if r.Home != "" {
+		return r.Home
+	}
+	return codexSourceHome()
+}
+
+// timedSnapshot keeps the parsed observation time beside the persisted snapshot
+// so scans compare times without reparsing ObservedAt.
+type timedSnapshot struct {
+	at       time.Time
+	snapshot *model.RateLimitSnapshot
+}
+
+func (t timedSnapshot) before(other timedSnapshot) bool {
+	return t.snapshot == nil || t.at.Before(other.at)
+}
+
 type codexLogScan struct {
-	account string
-	before  *model.RateLimitSnapshot
-	end     *model.RateLimitSnapshot
-	bad     bool
+	account     string
+	before      timedSnapshot
+	end         timedSnapshot
+	unparseable bool
 }
 
 type cachedCodexLog struct {
-	mu        sync.Mutex
-	file      os.FileInfo
-	offset    int64
-	account   string
-	snapshots []model.RateLimitSnapshot
-	bad       bool
+	mu          sync.Mutex
+	file        os.FileInfo
+	offset      int64
+	account     string
+	snapshots   []timedSnapshot
+	unparseable bool
 }
 
 var codexLogCache = struct {
@@ -87,25 +99,18 @@ func cachedCodexLogFor(path string) *cachedCodexLog {
 }
 
 //nolint:gocritic // Keep the reader's public request value API consistent with invocation callers.
-func (r CodexRateLimitReader) Read(req CodexRateLimitRequest) model.CodexRateLimitEvidence {
+func (r CodexRateLimitReader) Read(req model.CodexRateLimitRequest) model.CodexRateLimitEvidence {
 	e := model.CodexRateLimitEvidence{
-		Status: "unavailable", Source: "codex:session-log", AccountScope: "unverified",
+		Status: model.RateLimitStatusUnavailable, Source: model.RateLimitSourceCodexSessionLog, AccountScope: model.RateLimitAccountUnverified,
 		AttemptStartedAt: req.StartedAt.Format(time.RFC3339Nano), AttemptEndedAt: req.EndedAt.Format(time.RFC3339Nano),
-		Deltas: []model.RateLimitDelta{{Window: "primary", Availability: "unavailable", Reason: "no-baseline"}, {Window: "secondary", Availability: "unavailable", Reason: "no-baseline"}},
+		Deltas: model.UnavailableRateLimitDeltas(model.RateLimitReasonNoBaseline),
 	}
 	if req.ThreadID == "" || !safeCodexThreadID.MatchString(req.ThreadID) {
-		e.Reason = "session-unidentified"
+		e.Reason = model.RateLimitReasonSessionUnidentified
 		return e
 	}
-	home := r.Home
-	if home == "" {
-		home = codexSourceHome()
-	}
+	home := r.home()
 	paths, _ := filepath.Glob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*-"+req.ThreadID+".jsonl"))
-	if len(paths) == 0 {
-		e.Reason = "session-log-unavailable"
-		return e
-	}
 	var scan codexLogScan
 	readable := false
 	for _, path := range paths {
@@ -114,74 +119,79 @@ func (r CodexRateLimitReader) Read(req CodexRateLimitRequest) model.CodexRateLim
 		}
 	}
 	if !readable {
-		e.Reason = "session-log-unavailable"
+		e.Reason = model.RateLimitReasonLogUnavailable
 		return e
 	}
 	if scan.account != "" {
 		digest := sha256.Sum256([]byte(req.RunID + "\x00" + scan.account))
 		e.AccountScope = "acct-" + hex.EncodeToString(digest[:8])
 	}
-	if scan.end == nil {
-		e.Reason = "no-snapshots"
-		if scan.bad {
-			e.Reason = "unparseable"
+	if scan.end.snapshot == nil {
+		e.Reason = model.RateLimitReasonNoSnapshots
+		if scan.unparseable {
+			e.Reason = model.RateLimitReasonUnparseable
 		}
 		return e
 	}
-	e.Status = "captured"
-	e.End = scan.end
-	staleSameThread := false
-	if scan.before != nil {
-		e.Start, e.StartProvenance = scan.before, "same-thread"
-		at, _ := time.Parse(time.RFC3339Nano, scan.before.ObservedAt)
-		if gap := req.StartedAt.Sub(at); gap > crossThreadBaselineFreshness {
-			milliseconds := gap.Milliseconds()
-			e.BaselineGapMS = &milliseconds
-			staleSameThread = true
-		}
+	e.Status = model.RateLimitStatusCaptured
+	e.End = scan.end.snapshot
+	baseline := scan.before
+	if baseline.snapshot != nil {
+		e.StartProvenance = model.RateLimitProvenanceSameThread
 	} else if scan.account != "" {
-		if candidate := r.crossThreadBaseline(req, scan.account, scan.end); candidate != nil {
-			e.Start, e.StartProvenance = candidate, "cross-thread"
-			at, _ := time.Parse(time.RFC3339Nano, candidate.ObservedAt)
-			gap := req.StartedAt.Sub(at).Milliseconds()
-			e.BaselineGapMS = &gap
+		baseline = crossThreadBaseline(home, req, scan.account, scan.end.snapshot)
+		if baseline.snapshot != nil {
+			e.StartProvenance = model.RateLimitProvenanceCrossThread
 		}
 	}
-	e.Deltas = ComputeCodexRateLimitDeltas(e.Start, e.End, e.StartProvenance)
-	if staleSameThread {
+	e.Start = baseline.snapshot
+	gap := req.StartedAt.Sub(baseline.at)
+	// A same-thread baseline only carries an unobserved gap once it is stale.
+	gapped := e.StartProvenance == model.RateLimitProvenanceCrossThread ||
+		e.StartProvenance == model.RateLimitProvenanceSameThread && gap > crossThreadBaselineFreshness
+	if gapped {
+		milliseconds := gap.Milliseconds()
+		e.BaselineGapMS = &milliseconds
+	}
+	e.Deltas = computeCodexRateLimitDeltas(e.Start, e.End, e.StartProvenance)
+	if gapped {
 		for i := range e.Deltas {
-			if e.Deltas[i].Availability == "available" {
-				e.Deltas[i].Limitations = append(e.Deltas[i].Limitations, "unobserved-gap")
+			if e.Deltas[i].Availability == model.RateLimitAvailable {
+				e.Deltas[i].Limitations = append(e.Deltas[i].Limitations, model.RateLimitLimitationUnobservedGap)
 			}
 		}
 	}
 	return e
 }
 
+// crossThreadBaseline returns the latest fresh pre-launch snapshot recorded by
+// another session of the same account, limit, and plan.
+//
 //nolint:gocritic // Request is immutable across candidate scans.
-func (r CodexRateLimitReader) crossThreadBaseline(req CodexRateLimitRequest, account string, end *model.RateLimitSnapshot) *model.RateLimitSnapshot {
-	home := r.Home
-	if home == "" {
-		home = codexSourceHome()
-	}
-	var latest *model.RateLimitSnapshot
+func crossThreadBaseline(home string, req model.CodexRateLimitRequest, account string, end *model.RateLimitSnapshot) timedSnapshot {
+	var latest timedSnapshot
 	first := req.StartedAt.Add(-crossThreadBaselineFreshness)
-	for day := time.Date(first.In(time.Local).Year(), first.In(time.Local).Month(), first.In(time.Local).Day(), 0, 0, 0, 0, time.Local); !day.After(req.StartedAt.In(time.Local)); day = day.AddDate(0, 0, 1) {
+	localFirst := first.In(time.Local)
+	lastDay := req.StartedAt.In(time.Local)
+	for day := time.Date(localFirst.Year(), localFirst.Month(), localFirst.Day(), 0, 0, 0, 0, time.Local); !day.After(lastDay); day = day.AddDate(0, 0, 1) {
 		paths, _ := filepath.Glob(filepath.Join(home, "sessions", day.Format("2006/01/02"), "rollout-*.jsonl"))
 		for _, path := range paths {
 			if strings.HasSuffix(path, "-"+req.ThreadID+".jsonl") {
 				continue
 			}
-			info, err := os.Stat(path)
-			if err != nil || info.ModTime().Before(first) {
+			if info, err := os.Stat(path); err != nil || info.ModTime().Before(first) {
 				continue
 			}
 			var scan codexLogScan
-			if scanCodexLog(path, first, req.StartedAt.Add(-time.Nanosecond), &scan) != nil || scan.account != account || scan.end == nil || !sameString(scan.end.LimitID, end.LimitID) || !sameString(scan.end.PlanType, end.PlanType) {
+			if err := scanCodexLog(path, first, req.StartedAt.Add(-time.Nanosecond), &scan); err != nil {
 				continue
 			}
-			if latest == nil || snapshotBefore(latest, scan.end) {
-				latest = scan.end
+			candidate := scan.end
+			if scan.account != account || candidate.snapshot == nil || !candidate.snapshot.SameLimit(end) {
+				continue
+			}
+			if latest.before(candidate) {
+				latest = candidate
 			}
 		}
 	}
@@ -198,16 +208,17 @@ func scanCodexLog(path string, start, end time.Time, out *codexLogScan) error {
 	if entry.account != "" {
 		out.account = entry.account
 	}
-	out.bad = out.bad || entry.bad
-	for i := range entry.snapshots {
-		snapshot := &entry.snapshots[i]
-		at, _ := time.Parse(time.RFC3339Nano, snapshot.ObservedAt)
-		if at.Before(start) {
-			if out.before == nil || snapshotBefore(out.before, snapshot) {
+	out.unparseable = out.unparseable || entry.unparseable
+	for _, snapshot := range entry.snapshots {
+		switch {
+		case snapshot.at.Before(start):
+			if out.before.before(snapshot) {
 				out.before = snapshot
 			}
-		} else if !at.After(end) && (out.end == nil || snapshotBefore(out.end, snapshot)) {
-			out.end = snapshot
+		case !snapshot.at.After(end):
+			if out.end.before(snapshot) {
+				out.end = snapshot
+			}
 		}
 	}
 	return nil
@@ -226,47 +237,48 @@ func (entry *cachedCodexLog) refresh(path string) error {
 		return err
 	}
 	if entry.file == nil || !os.SameFile(entry.file, info) || info.Size() < entry.offset {
-		entry.offset, entry.account, entry.snapshots, entry.bad = 0, "", nil, false
+		entry.offset, entry.account, entry.snapshots, entry.unparseable = 0, "", nil, false
 	}
 	entry.file = info
+	if info.Size() == entry.offset {
+		return nil
+	}
 	if _, err := f.Seek(entry.offset, io.SeekStart); err != nil {
 		return err
 	}
 	reader := bufio.NewReader(f)
+	var buffer []byte
 	for {
-		line, oversized, readErr := readCodexLogLine(reader)
+		line, consumed, oversized, readErr := readCodexLogLine(reader, buffer[:0])
+		buffer = line
 		if readErr != nil {
 			if readErr == io.EOF {
 				return nil // Retry an unterminated record from its start on the next refresh.
 			}
 			return readErr
 		}
-		account, snapshot, bad := parseCodexLogLine(line, oversized)
+		entry.offset += consumed
+		account, snapshot, unparseable := parseCodexLogLine(line, oversized)
 		if account != "" {
 			entry.account = account
 		}
-		if snapshot != nil {
-			entry.snapshots = append(entry.snapshots, *snapshot)
+		if snapshot.snapshot != nil {
+			entry.snapshots = append(entry.snapshots, snapshot)
 		}
-		entry.bad = entry.bad || bad
-		position, seekErr := f.Seek(0, io.SeekCurrent)
-		if seekErr != nil {
-			return seekErr
-		}
-		entry.offset = position - int64(reader.Buffered())
+		entry.unparseable = entry.unparseable || unparseable
 	}
 }
 
-func parseCodexLogLine(line []byte, oversized bool) (string, *model.RateLimitSnapshot, bool) {
-	metric := bytes.Contains(line, []byte("token_count"))
+func parseCodexLogLine(line []byte, oversized bool) (account string, snapshot timedSnapshot, unparseable bool) {
 	if oversized {
 		// Only a record whose envelope declares a token_count payload is lost
 		// metric evidence; oversized tool output merely mentioning it is not.
 		head := line[:min(len(line), codexLogRecordHeaderBytes)]
-		return "", nil, codexTokenCountHeader.Match(head)
+		return "", timedSnapshot{}, codexTokenCountHeader.Match(head)
 	}
+	metric := bytes.Contains(line, []byte("token_count"))
 	if !metric && !bytes.Contains(line, []byte("session_meta")) {
-		return "", nil, false
+		return "", timedSnapshot{}, false
 	}
 	var event struct {
 		Timestamp string `json:"timestamp"`
@@ -278,13 +290,13 @@ func parseCodexLogLine(line []byte, oversized bool) (string, *model.RateLimitSna
 		} `json:"payload"`
 	}
 	if json.Unmarshal(line, &event) != nil {
-		return "", nil, true
+		return "", timedSnapshot{}, true
 	}
 	if event.Type == "session_meta" {
-		return event.Payload.Account, nil, false
+		return event.Payload.Account, timedSnapshot{}, false
 	}
 	if event.Type != "event_msg" || event.Payload.Type != "token_count" || len(event.Payload.RateLimits) == 0 || string(event.Payload.RateLimits) == "null" {
-		return "", nil, false
+		return "", timedSnapshot{}, false
 	}
 	var raw struct {
 		LimitID   *string                `json:"limit_id"`
@@ -293,96 +305,75 @@ func parseCodexLogLine(line []byte, oversized bool) (string, *model.RateLimitSna
 		Secondary *model.RateLimitWindow `json:"secondary"`
 	}
 	at, timeErr := time.Parse(time.RFC3339Nano, event.Timestamp)
-	if json.Unmarshal(event.Payload.RateLimits, &raw) != nil || timeErr != nil || raw.Primary == nil || raw.Primary.UsedPercent == nil || raw.Primary.WindowMinutes == nil || raw.Primary.ResetsAt == nil {
-		return "", nil, true
+	if json.Unmarshal(event.Payload.RateLimits, &raw) != nil || timeErr != nil || raw.Primary == nil || !raw.Primary.Complete() {
+		return "", timedSnapshot{}, true
 	}
-	snapshot := &model.RateLimitSnapshot{ObservedAt: at.Format(time.RFC3339Nano), LimitID: raw.LimitID, PlanType: raw.PlanType}
-	snapshot.Primary = *raw.Primary
-	snapshot.Primary.Reported = true
-	if raw.Secondary != nil && raw.Secondary.UsedPercent != nil && raw.Secondary.WindowMinutes != nil && raw.Secondary.ResetsAt != nil {
-		snapshot.Secondary = *raw.Secondary
-		snapshot.Secondary.Reported = true
+	parsed := &model.RateLimitSnapshot{ObservedAt: at.Format(time.RFC3339Nano), LimitID: raw.LimitID, PlanType: raw.PlanType}
+	parsed.Primary = *raw.Primary
+	parsed.Primary.Reported = true
+	if raw.Secondary != nil && raw.Secondary.Complete() {
+		parsed.Secondary = *raw.Secondary
+		parsed.Secondary.Reported = true
 	}
-	return "", snapshot, false
+	return "", timedSnapshot{at: at, snapshot: parsed}, false
 }
 
-// readCodexLogLine consumes exactly one line while retaining at most one MiB.
-// Large tool-response records are discarded without allocating their full body.
-func readCodexLogLine(reader *bufio.Reader) (line []byte, oversized bool, readErr error) {
+// readCodexLogLine consumes exactly one line while retaining at most one MiB in
+// line, which reuses the caller's buffer. consumed counts every byte read so
+// callers can track the file offset without seeking.
+func readCodexLogLine(reader *bufio.Reader, line []byte) (kept []byte, consumed int64, oversized bool, readErr error) {
 	for {
 		fragment, err := reader.ReadSlice('\n')
-		if len(line) < maxCodexLogLineBytes {
-			remaining := maxCodexLogLineBytes - len(line)
-			if len(fragment) > remaining {
-				line = append(line, fragment[:remaining]...)
-				oversized = true
-			} else {
-				line = append(line, fragment...)
-			}
-		} else if len(fragment) > 0 {
+		consumed += int64(len(fragment))
+		if remaining := maxCodexLogLineBytes - len(line); len(fragment) > remaining {
+			line = append(line, fragment[:max(remaining, 0)]...)
 			oversized = true
+		} else {
+			line = append(line, fragment...)
 		}
 		if err == bufio.ErrBufferFull {
 			continue
 		}
-		return line, oversized, err
+		return line, consumed, oversized, err
 	}
 }
 
-func ComputeCodexRateLimitDeltas(start, end *model.RateLimitSnapshot, provenance string) []model.RateLimitDelta {
-	result := make([]model.RateLimitDelta, 0, 2)
-	for _, role := range []string{"primary", "secondary"} {
-		d := model.RateLimitDelta{Window: role, Availability: "unavailable"}
-		if end == nil {
-			d.Reason = "no-baseline"
-			result = append(result, d)
-			continue
-		}
-		ew := end.Primary
-		if role == "secondary" {
-			ew = end.Secondary
-		}
-		var sw model.RateLimitWindow
-		if start != nil {
-			sw = start.Primary
-			if role == "secondary" {
-				sw = start.Secondary
-			}
-		}
-		switch {
-		case !ew.Reported:
-			d.Reason = "window-not-reported"
-		case start == nil:
-			d.Reason = "no-baseline"
-		case !sw.Reported:
-			d.Reason = "window-not-reported"
-		case !sameString(start.LimitID, end.LimitID) || !sameInt(sw.WindowMinutes, ew.WindowMinutes) || !sameInt(sw.ResetsAt, ew.ResetsAt):
-			d.Reason = "window-reset"
-			if provenance == "cross-thread" {
-				d.Reason = "no-baseline"
-			}
-		case ew.UsedPercent == nil || sw.UsedPercent == nil:
-			d.Reason = "window-not-reported"
-		case *ew.UsedPercent < *sw.UsedPercent:
-			d.Reason = "inconsistent"
-		default:
-			value := *ew.UsedPercent - *sw.UsedPercent
-			d.Availability, d.PercentagePoints, d.Precision = "available", &value, "approximate"
-			d.Limitations = []string{"account-wide", "coarse-precision"}
-			if provenance == "cross-thread" {
-				d.Limitations = append(d.Limitations, "unobserved-gap")
-			}
-		}
-		result = append(result, d)
+func computeCodexRateLimitDeltas(start, end *model.RateLimitSnapshot, provenance string) []model.RateLimitDelta {
+	result := make([]model.RateLimitDelta, 0, len(model.RateLimitWindowRoles))
+	for _, role := range model.RateLimitWindowRoles {
+		result = append(result, codexRateLimitDelta(start, end, provenance, role))
 	}
 	return result
 }
 
-func sameString(a, b *string) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }
-func sameInt(a, b *int64) bool     { return a == nil && b == nil || a != nil && b != nil && *a == *b }
-
-func snapshotBefore(a, b *model.RateLimitSnapshot) bool {
-	aTime, aErr := time.Parse(time.RFC3339Nano, a.ObservedAt)
-	bTime, bErr := time.Parse(time.RFC3339Nano, b.ObservedAt)
-	return aErr == nil && bErr == nil && aTime.Before(bTime)
+func codexRateLimitDelta(start, end *model.RateLimitSnapshot, provenance, role string) model.RateLimitDelta {
+	if end == nil {
+		return model.UnavailableRateLimitDelta(role, model.RateLimitReasonNoBaseline)
+	}
+	endWindow := end.Window(role)
+	if !endWindow.Reported {
+		return model.UnavailableRateLimitDelta(role, model.RateLimitReasonWindowNotReported)
+	}
+	if start == nil {
+		return model.UnavailableRateLimitDelta(role, model.RateLimitReasonNoBaseline)
+	}
+	startWindow := start.Window(role)
+	switch {
+	case !startWindow.Reported:
+		return model.UnavailableRateLimitDelta(role, model.RateLimitReasonWindowNotReported)
+	case !start.SameWindow(end, role) && provenance == model.RateLimitProvenanceCrossThread:
+		// A cross-thread snapshot from another window is no baseline at all.
+		return model.UnavailableRateLimitDelta(role, model.RateLimitReasonNoBaseline)
+	case !start.SameWindow(end, role):
+		return model.UnavailableRateLimitDelta(role, model.RateLimitReasonWindowReset)
+	case endWindow.UsedPercent == nil || startWindow.UsedPercent == nil:
+		return model.UnavailableRateLimitDelta(role, model.RateLimitReasonWindowNotReported)
+	case *endWindow.UsedPercent < *startWindow.UsedPercent:
+		return model.UnavailableRateLimitDelta(role, model.RateLimitReasonInconsistent)
+	}
+	delta := model.AvailableRateLimitDelta(role, *endWindow.UsedPercent-*startWindow.UsedPercent)
+	if provenance == model.RateLimitProvenanceCrossThread {
+		delta.Limitations = append(delta.Limitations, model.RateLimitLimitationUnobservedGap)
+	}
+	return delta
 }

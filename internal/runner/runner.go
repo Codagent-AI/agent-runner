@@ -526,10 +526,7 @@ func buildExecutionContext(
 		log.Printf("agent-runner: warning: audit trail unavailable: %v\n", auditErr)
 	}
 	metricsCollector := metrics.NewCollector(sessionDir, sessionID, workflow.Name, runStart)
-	rateLimitReader := cli.NewCodexRateLimitReader()
-	metricsCollector.SetCodexRateLimitReader(func(req metrics.CodexRateLimitRequest) model.CodexRateLimitEvidence {
-		return rateLimitReader.Read(cli.CodexRateLimitRequest{ThreadID: req.ThreadID, RunID: req.RunID, StartedAt: req.StartedAt, EndedAt: req.EndedAt, EndTolerance: req.EndTolerance})
-	})
+	metricsCollector.SetCodexRateLimitReader(cli.NewCodexRateLimitReader().Read)
 	executionSessionID := uuid.NewString()
 	auditEventLogger := metrics.NewExecutionPipeline(metricsCollector, auditSink, opts.ProjectRoot, executionSessionID)
 

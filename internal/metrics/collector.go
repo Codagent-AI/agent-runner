@@ -144,7 +144,7 @@ type Collector struct {
 	artifactLoaded            bool
 	currentExecutionSessionID string
 	now                       func() time.Time
-	rateLimitReader           func(CodexRateLimitRequest) model.CodexRateLimitEvidence
+	rateLimitReader           model.CodexRateLimitReadFunc
 }
 
 // NewCollector creates a collector and rehydrates an existing artifact when

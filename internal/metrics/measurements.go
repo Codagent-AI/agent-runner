@@ -65,6 +65,7 @@ func (c *Collector) IncorporateValidator(attr Attribution, store string, raws []
 		records = append(records, record)
 	}
 	var conflict bool
+	changed := make(map[string]struct{}, len(records))
 	for n := range records {
 		record := &records[n]
 		key := store + "/" + record.Type + "/" + record.ID
@@ -79,6 +80,7 @@ func (c *Collector) IncorporateValidator(attr Attribution, store string, raws []
 		head := MeasurementHead{Key: key, StoreID: store, Attribution: attr, Record: append(json.RawMessage(nil), raws[n]...), Status: "supported"}
 		if found < 0 {
 			c.artifact.MeasurementHeads = append(c.artifact.MeasurementHeads, head)
+			changed[key] = struct{}{}
 			continue
 		}
 		previous := &c.artifact.MeasurementHeads[found]
@@ -99,8 +101,9 @@ func (c *Collector) IncorporateValidator(attr Attribution, store string, raws []
 		// Producer identity remains attached to its original execution on recovery.
 		head.Attribution = previous.Attribution
 		c.artifact.MeasurementHeads[found] = head
+		changed[key] = struct{}{}
 	}
-	c.captureRateLimitEnrichmentsLocked()
+	c.captureRateLimitEnrichmentsLocked(changed)
 	delivery.Attribution = attr
 	delivery.StoreID = store
 	if conflict {
@@ -146,6 +149,7 @@ func (c *Collector) refreshMeasurementsLocked() {
 	}
 	c.artifact.Steps = kept
 	fields := map[string]FieldAggregate{}
+	enrichments := c.rateLimitEnrichmentIndexLocked()
 	for i := range c.artifact.MeasurementHeads {
 		head := &c.artifact.MeasurementHeads[i]
 		var record measurements.Record
@@ -168,7 +172,7 @@ func (c *Collector) refreshMeasurementsLocked() {
 		}
 		step := validatorStepProjection(head, &record, usable)
 		if isCodexMeasurement(&record) {
-			step.CodexRateLimits = c.enrichmentForHead(head, &record)
+			step.CodexRateLimits = enrichmentForHead(head, &record, enrichments)
 		}
 		c.artifact.Steps = append(c.artifact.Steps, step)
 		accumulateFields(fields, attemptAggregateTokens(&p), usable)

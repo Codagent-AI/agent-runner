@@ -36,7 +36,7 @@ type AgentInvocation struct {
 	SessionID         string
 	SessionResumed    bool
 	RunID             string
-	RateLimitReader   func(cli.CodexRateLimitRequest) model.CodexRateLimitEvidence
+	RateLimitReader   model.CodexRateLimitReadFunc
 
 	Log         Logger
 	SuspendHook func() error
@@ -171,14 +171,13 @@ func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logge
 	if launched && input.CLI == "codex" {
 		reader := input.RateLimitReader
 		if reader == nil {
-			r := cli.NewCodexRateLimitReader()
-			reader = r.Read
+			reader = cli.NewCodexRateLimitReader().Read
 		}
 		threadID := result.DiscoveredSessionID
 		if threadID == "" {
 			threadID = input.SessionID
 		}
-		evidence := reader(cli.CodexRateLimitRequest{ThreadID: threadID, RunID: input.RunID, StartedAt: result.StartedAt, EndedAt: result.FinishedAt})
+		evidence := reader(model.CodexRateLimitRequest{ThreadID: threadID, RunID: input.RunID, StartedAt: result.StartedAt, EndedAt: result.FinishedAt})
 		result.RateLimits = &evidence
 	}
 	return result, runErr
