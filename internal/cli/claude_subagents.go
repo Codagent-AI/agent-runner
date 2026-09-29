@@ -146,9 +146,21 @@ func (a *ClaudeAdapter) ExtractUsageWithContext(stdout string, uc UsageContext) 
 	if pathErr != "" {
 		reason = pathErr
 	}
+	var transcriptRoot *os.Root
+	if parent != "" {
+		configRoot := filepath.Dir(filepath.Dir(filepath.Dir(parent)))
+		transcriptRoot, err = os.OpenRoot(configRoot)
+		if err != nil {
+			parent, subdir = "", ""
+			reason = model.UnavailableSubagentSpanUnavailable
+		} else {
+			defer func() { _ = transcriptRoot.Close() }()
+		}
+	}
 	failed := map[string]bool{}
 	if parent != "" {
-		lines, readErr := os.ReadFile(parent)
+		parentRelative, _ := filepath.Rel(transcriptRoot.Name(), parent)
+		lines, readErr := transcriptRoot.ReadFile(parentRelative)
 		if readErr != nil {
 			reason = model.UnavailableSubagentSpanUnavailable
 		} else {
@@ -214,7 +226,8 @@ func (a *ClaudeAdapter) ExtractUsageWithContext(stdout string, uc UsageContext) 
 		metadata := map[string]claudeSidecar{}
 		for _, path := range sidecars {
 			var m claudeSidecar
-			raw, err := os.ReadFile(path)
+			relative, _ := filepath.Rel(transcriptRoot.Name(), path)
+			raw, err := transcriptRoot.ReadFile(relative)
 			if err == nil && json.Unmarshal(raw, &m) == nil && m.ToolUseID != "" {
 				byID[m.ToolUseID] = strings.TrimSuffix(path, ".meta.json") + ".jsonl"
 				metadata[m.ToolUseID] = m
@@ -248,7 +261,8 @@ func (a *ClaudeAdapter) ExtractUsageWithContext(stdout string, uc UsageContext) 
 				}
 				continue
 			}
-			if _, err := os.Stat(path); err != nil {
+			relative, _ := filepath.Rel(transcriptRoot.Name(), path)
+			if _, err := transcriptRoot.Stat(relative); err != nil {
 				base.Status = model.UsageUnavailable
 				base.Reason = model.UnavailableSubagentTranscriptMissing
 				u.Allocations = append(u.Allocations, base)
@@ -257,7 +271,7 @@ func (a *ClaudeAdapter) ExtractUsageWithContext(stdout string, uc UsageContext) 
 				}
 				continue
 			}
-			allocations, children, invalid := readClaudeSubagent(path, &base)
+			allocations, children, invalid := readClaudeSubagent(transcriptRoot, relative, &base)
 			if len(allocations) == 0 {
 				base.Status = model.UsageUnavailable
 				base.Reason = model.UnavailableSubagentTranscriptInvalid
@@ -341,8 +355,8 @@ func (a *ClaudeAdapter) ExtractUsageWithContext(stdout string, uc UsageContext) 
 }
 
 //nolint:funlen // Keeps transcript parsing and message deduplication together.
-func readClaudeSubagent(path string, base *model.UsageAllocation) ([]model.UsageAllocation, []string, bool) {
-	f, err := os.Open(path)
+func readClaudeSubagent(root *os.Root, path string, base *model.UsageAllocation) ([]model.UsageAllocation, []string, bool) {
+	f, err := root.Open(path)
 	if err != nil {
 		return nil, nil, true
 	}
@@ -438,15 +452,22 @@ func claudeTranscriptPaths(session string, uc UsageContext) (parentPath, subagen
 		return "", "", model.UnavailableSubagentSpanUnavailable
 	}
 	root := ""
+	home := ""
 	for _, entry := range uc.Env {
 		if value, ok := strings.CutPrefix(entry, "CLAUDE_CONFIG_DIR="); ok {
 			root = value
 		}
+		if value, ok := strings.CutPrefix(entry, "HOME="); ok {
+			home = value
+		}
 	}
 	if root == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", "", model.UnavailableSubagentSpanUnavailable
+		if home == "" {
+			var err error
+			home, err = os.UserHomeDir()
+			if err != nil {
+				return "", "", model.UnavailableSubagentSpanUnavailable
+			}
 		}
 		root = filepath.Join(home, ".claude")
 	}

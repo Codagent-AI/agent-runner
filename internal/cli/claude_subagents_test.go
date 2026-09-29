@@ -205,3 +205,45 @@ func TestClaudeParallelSubagentsAllCounted(t *testing.T) {
 		t.Fatalf("usage=%+v", u)
 	}
 }
+
+func TestClaudeTranscriptPathsUsesInvocationHome(t *testing.T) {
+	home := t.TempDir()
+	session := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	project := filepath.Join(home, ".claude", "projects", "project")
+	sub := filepath.Join(project, session, "subagents")
+	writeClaudeFixture(t, filepath.Join(project, session+".jsonl"), `{"uuid":"first","type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent","id":"tool"}]}}`+"\n"+`{"uuid":"last","type":"assistant","message":{"content":[]}}`+"\n")
+	writeClaudeFixture(t, filepath.Join(sub, "agent-a.meta.json"), `{"toolUseId":"tool"}`)
+	writeClaudeFixture(t, filepath.Join(sub, "agent-a.jsonl"), `{"type":"assistant","message":{"id":"m","model":"haiku","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":2}}}`+"\n")
+	stdout := `{"uuid":"first","type":"system","session_id":"` + session + `","model":"opus"}` + "\n" + `{"uuid":"last","type":"assistant","message":{"model":"opus"}}` + "\n" + `{"type":"result","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}` + "\n"
+	got, err := (&ClaudeAdapter{}).ExtractUsageWithContext(stdout, UsageContext{Env: []string{"HOME=" + home}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage.SubagentCollection != model.CompletenessComplete || len(got.Usage.Allocations) != 2 {
+		t.Fatalf("usage=%+v", got.Usage)
+	}
+}
+
+func TestClaudeTranscriptReadsStayInsideConfigRoot(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	work := t.TempDir()
+	session := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	encoded := claudePathUnsafeRe.ReplaceAllString(work, "-")
+	writeClaudeFixture(t, filepath.Join(outside, session+".jsonl"), `{"uuid":"first","type":"assistant","message":{"content":[]}}`+"\n"+`{"uuid":"last","type":"assistant","message":{"content":[]}}`+"\n")
+	projects := filepath.Join(root, "projects")
+	if err := os.MkdirAll(projects, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(projects, encoded)); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	stdout := `{"uuid":"first","type":"system","session_id":"` + session + `","model":"opus"}` + "\n" + `{"uuid":"last","type":"assistant","message":{"model":"opus"}}` + "\n" + `{"type":"result","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}` + "\n"
+	got, err := (&ClaudeAdapter{}).ExtractUsageWithContext(stdout, UsageContext{Workdir: work, Env: []string{"CLAUDE_CONFIG_DIR=" + root}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage.SubagentCollectionReason != model.UnavailableSubagentSpanUnavailable {
+		t.Fatalf("usage=%+v", got.Usage)
+	}
+}
