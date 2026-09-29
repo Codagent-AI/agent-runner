@@ -258,6 +258,8 @@ func invokeCrosscheckCorrectnessWithAttempt(request *Request) (output Correctnes
 	if decoder.Decode(&extra) != io.EOF {
 		return CorrectnessCandidates{}, handle, fmt.Errorf("crosscheck result contains multiple JSON values")
 	}
+	// The exit record already resolved the session through auditSessionID,
+	// which reports "unknown" rather than an empty ID.
 	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: handle.record.SessionID}
 	return output, handle, nil
 }

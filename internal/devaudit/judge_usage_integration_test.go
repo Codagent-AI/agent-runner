@@ -270,3 +270,15 @@ func TestJudgeUsageCorrectnessAndOutputWriteFailure(t *testing.T) {
 		t.Fatalf("all attempts: %+v", summary)
 	}
 }
+
+func TestJudgeUsageMissingSessionIDIsUnknownInRecordAndProvenance(t *testing.T) {
+	request, pkg := crosscheckFixture(t)
+	stubCrosscheck(t, `{"type":"result","subtype":"success","is_error":false,"structured_output":{"batch_id":"`+pkg.BatchID+`","observations":[]}}`, "", "0", nil)
+	output, handle, err := invokeCrosscheckValueBatchWithAttempt(request, pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handle.record.SessionID != "unknown" || output.Provenance.SessionID != "unknown" {
+		t.Fatalf("record session=%q provenance session=%q, want unknown", handle.record.SessionID, output.Provenance.SessionID)
+	}
+}

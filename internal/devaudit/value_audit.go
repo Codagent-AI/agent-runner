@@ -1355,6 +1355,8 @@ func invokeCrosscheckValueBatchWithAttempt(request *Request, pkg ValuePackage) (
 	if err != nil {
 		return ModelValueBatch{}, handle, fmt.Errorf("decode crosscheck result: %w; response: %s", err, crosscheckDiagnostic(response))
 	}
+	// The exit record already resolved the session through auditSessionID,
+	// which reports "unknown" rather than an empty ID.
 	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: handle.record.SessionID}
 	return output, handle, nil
 }
