@@ -151,16 +151,21 @@ func TestReplayExcludesEvidenceWithoutHistoricalSessionOwnership(t *testing.T) {
 
 func TestSnapshotWorkflowDefinitionIncludesSiblingFiles(t *testing.T) {
 	project := t.TempDir()
-	workflowDir := filepath.Join(project, "workflows")
-	if err := os.Mkdir(workflowDir, 0o700); err != nil {
+	workflowDir := filepath.Join(project, ".agent-runner", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	files := map[string]string{
-		"main.yaml":     "name: main\nsteps:\n  - id: child\n    workflow: child.yaml\n  - id: checkpoint\n    script: checkpoint.sh\n    skip_if: 'sh: workflows/skip.sh'\n  - id: log\n    command: \"printf '%s\\\\n' 'credentials.sh'\"\n  - id: linked\n    script: linked.sh\n",
-		"child.yaml":    "name: child\nsteps:\n  - id: record\n    script: record.sh\n",
-		"checkpoint.sh": "#!/bin/sh\necho checkpoint\n",
-		"record.sh":     "#!/bin/sh\necho record\n",
-		"skip.sh":       "#!/bin/sh\nexit 0\n",
+		"main.yaml":        "name: main\nsteps:\n  - id: child\n    workflow: child.yaml\n  - id: checkpoint\n    script: checkpoint.sh\n    skip_if: 'sh: .agent-runner/workflows/skip.sh'\n  - id: python\n    command: 'python3 .agent-runner/workflows/x.py --flag'\n  - id: prompt\n    prompt: 'Read .agent-runner/workflows/rules.md first.'\n    repair:\n      prompt: 'Review .agent-runner/workflows/repair-rules.md too.'\n  - id: log\n    command: \"cat .env && printf '%s\\\\n' 'credentials.sh'\"\n  - id: linked\n    script: linked.sh\n  - id: hidden\n    script: .env\n",
+		"child.yaml":       "name: child\nsteps:\n  - id: record\n    script: record.sh\n",
+		"checkpoint.sh":    "#!/bin/sh\n\"$(dirname \"$0\")/helper.py\"\n",
+		"record.sh":        "#!/bin/sh\n$(dirname $0)/second-helper.py\n",
+		"skip.sh":          "#!/bin/sh\nexit 0\n",
+		"x.py":             "print('workflow')\n",
+		"helper.py":        "# $(dirname $0)/nested.py\nprint('helper')\n",
+		"second-helper.py": "print('second helper')\n",
+		"rules.md":         "# Rules\n",
+		"repair-rules.md":  "# Repair rules\n",
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(workflowDir, name), []byte(content), 0o600); err != nil {
@@ -179,6 +184,9 @@ func TestSnapshotWorkflowDefinitionIncludesSiblingFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workflowDir, "credentials.sh"), []byte("secret"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(workflowDir, "nested.py"), []byte("not referenced directly"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	snapshot := t.TempDir()
 	t.Cleanup(func() {
 		_ = filepath.WalkDir(snapshot, func(path string, _ os.DirEntry, err error) error {
@@ -188,7 +196,7 @@ func TestSnapshotWorkflowDefinitionIncludesSiblingFiles(t *testing.T) {
 			return nil
 		})
 	})
-	if err := snapshotWorkflowDefinition(filepath.Join("workflows", "main.yaml"), project, snapshot); err != nil {
+	if err := snapshotWorkflowDefinition(filepath.Join(".agent-runner", "workflows", "main.yaml"), project, snapshot); err != nil {
 		t.Fatal(err)
 	}
 	if err := sealSnapshot(snapshot); err != nil {
@@ -208,7 +216,7 @@ func TestSnapshotWorkflowDefinitionIncludesSiblingFiles(t *testing.T) {
 			t.Fatalf("%s mode = %v; want 0400", name, info.Mode())
 		}
 	}
-	for _, name := range []string{"nested", "linked.sh", ".env", "credentials.sh"} {
+	for _, name := range []string{"nested", "linked.sh", ".env", "credentials.sh", "nested.py"} {
 		if _, err := os.Lstat(filepath.Join(snapshot, "source-workflow", name)); !os.IsNotExist(err) {
 			t.Fatalf("%s was copied: %v", name, err)
 		}
@@ -306,6 +314,18 @@ func TestShellScriptInvocationsOnlyExecutables(t *testing.T) {
 		{command: "echo 'x; credentials.sh' && ./checkpoint.sh", want: []string{"./checkpoint.sh"}},
 		{command: "sh workflows/skip.sh", want: []string{"workflows/skip.sh"}},
 		{command: "if test -f file; then ./checkpoint.sh; fi", want: []string{"./checkpoint.sh"}},
+		{command: "python3 .agent-runner/workflows/x.py --flag", want: []string{".agent-runner/workflows/x.py"}},
+		{command: "python3 -u x.py", want: []string{"x.py"}},
+		{command: "python3 -W ignore x.py", want: []string{"x.py"}},
+		{command: "node tool.js", want: []string{"tool.js"}},
+		{command: "node --require preload.js tool.js", want: []string{"tool.js"}},
+		{command: "node --experimental-loader loader.mjs tool.js", want: []string{"tool.js"}},
+		{command: "./helper.py", want: []string{"./helper.py"}},
+		{command: "python3 -c 'print(1)'"},
+		{command: "python3 -m module"},
+		{command: "node -e 'console.log(1)'"},
+		{command: "cat .env"},
+		{command: "./.env"},
 	} {
 		t.Run(test.command, func(t *testing.T) {
 			got := shellScriptInvocations(test.command)

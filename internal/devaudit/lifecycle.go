@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -31,6 +32,9 @@ import (
 
 const lifecycleFileName = "audit-lifecycle.json"
 const sourceWorkflowDirectoryLimit = 2 * 1024 * 1024
+
+var workflowPromptPath = regexp.MustCompile(`[A-Za-z0-9_./-]+/[A-Za-z0-9_.-]+`)
+var scriptSiblingPath = regexp.MustCompile(`\$\(dirname "?\$0"?\)/([A-Za-z0-9_.-]+)`)
 
 const (
 	LaunchReserved  = "reserved"
@@ -392,6 +396,36 @@ func snapshotReferencedWorkflowFiles(sourcePath, projectRoot string, sourceData 
 		visited:    make(map[string]bool),
 	}
 	collector.inspect(sourcePath, sourceData)
+	// Scan only the first set of referenced files. Helpers found here do not
+	// trigger another pass through their own contents.
+	initialReferences := make([]string, 0, len(collector.referenced))
+	for name := range collector.referenced {
+		initialReferences = append(initialReferences, name)
+	}
+	for _, name := range initialReferences {
+		if name == filepath.Base(sourcePath) || strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml") {
+			continue
+		}
+		path := filepath.Join(baseDir, name)
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Size() > sourceWorkflowDirectoryLimit {
+			continue
+		}
+		data, err := os.ReadFile(path) // #nosec G304 -- static sibling reference inside the workflow directory.
+		if err != nil {
+			continue
+		}
+		for _, match := range scriptSiblingPath.FindAllSubmatch(data, -1) {
+			name := string(match[1])
+			if strings.HasPrefix(name, ".") {
+				continue
+			}
+			info, err := os.Lstat(filepath.Join(baseDir, name)) // #nosec G703 -- the regex captures only a single filename without path separators.
+			if err == nil && info.Mode().IsRegular() {
+				collector.add(path, name)
+			}
+		}
+	}
 	files := make([]string, 0, len(collector.referenced))
 	for name := range collector.referenced {
 		files = append(files, name)
@@ -449,6 +483,15 @@ func (c *workflowReferenceCollector) walkSteps(workflowPath string, steps []mode
 				c.add(workflowPath, script)
 			}
 		}
+		prompts := []string{step.Prompt}
+		if step.Repair != nil {
+			prompts = append(prompts, step.Repair.Prompt)
+		}
+		for _, prompt := range prompts {
+			for _, path := range workflowPromptPath.FindAllString(prompt, -1) {
+				c.add(workflowPath, path)
+			}
+		}
 		if !strings.HasPrefix(step.Workflow, "builtin:") {
 			if name, ok := c.add(workflowPath, step.Workflow); ok {
 				c.inspectChild(name)
@@ -460,6 +503,9 @@ func (c *workflowReferenceCollector) walkSteps(workflowPath string, steps []mode
 
 func (c *workflowReferenceCollector) add(workflowPath, reference string) (string, bool) {
 	name, ok := localWorkflowSibling(c.baseDir, workflowPath, reference, c.projectRoot)
+	if ok && strings.HasPrefix(name, ".") {
+		return "", false
+	}
 	if ok {
 		c.referenced[name] = struct{}{}
 	}
@@ -489,9 +535,12 @@ type shellWord struct {
 func shellScriptInvocations(command string) []string {
 	var scripts []string
 	expectingCommand, interpreter, shellProgram := true, false, false
+	interpreterName := ""
+	skipInterpreterArgument := false
 	for _, word := range shellWords(command) {
 		if word.operator {
 			expectingCommand, interpreter, shellProgram = true, false, false
+			skipInterpreterArgument = false
 			continue
 		}
 		if shellProgram {
@@ -500,17 +549,13 @@ func shellScriptInvocations(command string) []string {
 			continue
 		}
 		if interpreter {
-			if strings.HasPrefix(word.text, "-") && strings.Contains(word.text[1:], "c") {
-				expectingCommand, interpreter, shellProgram = false, false, true
-				continue
+			script, program, done := interpreterScript(word.text, interpreterName, &skipInterpreterArgument)
+			if script != "" {
+				scripts = append(scripts, script)
 			}
-			if strings.HasPrefix(word.text, "-") {
-				continue
+			if done {
+				expectingCommand, interpreter, shellProgram = false, false, program
 			}
-			if strings.HasSuffix(word.text, ".sh") {
-				scripts = append(scripts, word.text)
-			}
-			expectingCommand, interpreter = false, false
 			continue
 		}
 		if !expectingCommand {
@@ -521,17 +566,68 @@ func shellScriptInvocations(command string) []string {
 			continue
 		case "sh", "bash", ".", "source":
 			interpreter = true
+			interpreterName = word.text
+			continue
+		case "python", "python3", "node":
+			interpreter = true
+			interpreterName = word.text
 			continue
 		}
 		if isShellAssignment(word.text) {
 			continue
 		}
-		if strings.HasSuffix(word.text, ".sh") {
+		if !strings.HasPrefix(filepath.Base(word.text), ".") && !isShellUtility(word.text) {
 			scripts = append(scripts, word.text)
 		}
 		expectingCommand = false
 	}
 	return scripts
+}
+
+func interpreterScript(word, interpreter string, skipArgument *bool) (script string, shellProgram, done bool) {
+	if *skipArgument {
+		*skipArgument = false
+		return "", false, false
+	}
+	shell := interpreter == "sh" || interpreter == "bash" || interpreter == "." || interpreter == "source"
+	if shell && strings.HasPrefix(word, "-") && strings.Contains(word[1:], "c") {
+		return "", true, true
+	}
+	if !shell && (word == "-c" || word == "-m" || word == "-e") {
+		return "", false, true
+	}
+	if interpreterOptionTakesValue(interpreter, word) {
+		*skipArgument = true
+		return "", false, false
+	}
+	if strings.HasPrefix(word, "-") {
+		return "", false, false
+	}
+	if strings.HasPrefix(filepath.Base(word), ".") {
+		return "", false, true
+	}
+	return word, false, true
+}
+
+func interpreterOptionTakesValue(interpreter, option string) bool {
+	switch interpreter {
+	case "python", "python3":
+		return option == "-W" || option == "-X"
+	case "node":
+		switch option {
+		case "-r", "--require", "--loader", "--experimental-loader", "--import", "--conditions", "--input-type":
+			return true
+		}
+	}
+	return false
+}
+
+func isShellUtility(word string) bool {
+	switch word {
+	case "cat", "echo", "printf", "test", "[", "]", "fi":
+		return true
+	}
+	return false
 }
 
 func isShellAssignment(word string) bool {
