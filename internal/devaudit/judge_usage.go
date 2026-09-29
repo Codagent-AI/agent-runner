@@ -36,6 +36,7 @@ type JudgeAttempt struct {
 	Usage           model.UsageRecord `json:"usage"`
 	CostUSD         *float64          `json:"estimated_api_cost_usd"`
 	Legacy          bool              `json:"legacy,omitempty"`
+	Recovered       bool              `json:"recovered,omitempty"`
 }
 
 type JudgeUsageSummary struct {
@@ -135,6 +136,11 @@ func summarizeJudgeUsage(request *Request) (*JudgeUsageSummary, error) {
 	}
 	if err := reconcileJudgeOutputs(request, summary, groups); err != nil {
 		return nil, err
+	}
+	for i := range summary.Attempts {
+		if summary.Attempts[i].Outcome == "exited" {
+			summary.Attempts[i].Outcome = "unknown"
+		}
 	}
 	sort.Slice(summary.Attempts, func(i, j int) bool {
 		if summary.Attempts[i].LaunchedAt == summary.Attempts[j].LaunchedAt {
@@ -243,7 +249,8 @@ func recoverJudgeOutputAttempt(attempts []JudgeAttempt, indices []int) {
 	}
 	for i := len(indices) - 1; i >= 0; i-- {
 		if attempt := &attempts[indices[i]]; attempt.Outcome == "exited" || attempt.Outcome == "unknown" {
-			attempt.Outcome = "succeeded (recovered)"
+			attempt.Outcome = "succeeded"
+			attempt.Recovered = true
 			return
 		}
 	}

@@ -9,6 +9,8 @@ In a development-audit build, the audit SHALL produce exactly one judge usage re
 
 Each record SHALL identify the audit run, the stage (`value` with its batch identity, or `correctness`), the judge CLI, the resolved judge model and reasoning effort frozen in the audit request, the judge CLI session identity when known, and the attempt's outcome: succeeded; failed with a non-secret reason category; or unknown when an interruption prevented the final outcome from being recorded and no completed output establishes success. An attempt whose valid response could not be written as the judge output SHALL be recorded as failed.
 
+A success established by a completed judge output SHALL be reported with outcome `succeeded` and a `recovered: true` marker when the attempt's final outcome was not recorded.
+
 #### Scenario: Value batches and correctness each record usage
 - **WHEN** an audit launches two value-batch judge attempts and one correctness judge attempt, and all succeed
 - **THEN** the audit has three judge usage records, one per attempt, each with its stage, batch identity where applicable, judge CLI, resolved model, and effort
@@ -104,4 +106,3 @@ Judge usage SHALL be recorded only in the audit run's artifacts and in the value
 #### Scenario: Source metrics unchanged by audit
 - **WHEN** an audit of a source run completes with judge usage and cost recorded
 - **THEN** the source run's metrics artifact and each step observation's source cost and token fields are unchanged by the judge's usage
-

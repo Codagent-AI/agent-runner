@@ -161,12 +161,13 @@ field `JudgeUsage *JudgeUsageSummary \`json:"judge_usage,omitempty"\`` holds the
 2. It groups records by (stage, batch) and resolves each group against output existence:
    - **Output exists and no `succeeded` record.** The latest record in the group that is `exited`
      or undecodable is reported as the attempt that produced the output, with outcome
-     `succeeded (recovered)`. Its usage is kept.
+     `succeeded` and `recovered: true`. Its usage is kept.
    - **Output exists and the group has no record at all.** This happens for an audit started
      before this change. The summary adds exactly one synthesized `Legacy` attempt, with usage
      unavailable and cost null.
-   - **Any other record.** It is counted exactly once, as recorded. Every group then contributes
-     each of its files exactly once, and legacy synthesis applies only to groups with no files.
+   - **Any other record.** It is counted exactly once. An orphaned `exited` record is reported as
+     `unknown`. Every group contributes each of its files exactly once, and legacy synthesis applies
+     only to groups with no files.
      So a single invocation can never be counted twice.
    Nothing is written back. Re-assembly stays idempotent.
 3. It aggregates:
@@ -282,8 +283,8 @@ Sheets HTTP server patterns.
   - An output write that fails yields `failed/output_write_failed` and no output. On resume, a new
     attempt is launched and both attempts are counted.
   - A crash simulated after the output write and before finalization leaves an `exited` record
-    beside the output. The summary reports that attempt once, as `succeeded (recovered)`, with its
-    usage.
+    beside the output. The summary reports that attempt once, with outcome `succeeded`,
+    `recovered: true`, and its usage.
   - A corrupted `succeeded` ledger file beside its completed output counts as one attempt, with no
     extra legacy attempt.
   - Ledger writes go through `WriteJSONDurable`. Assert this with the existing `stateio` sync hook

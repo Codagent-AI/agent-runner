@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/stateio"
@@ -58,6 +60,62 @@ func TestSummarizeJudgeUsageRecoversAndCountsLegacy(t *testing.T) {
 	}
 	if summary.AttemptCount != 3 || summary.TokenCoverage != model.CoveragePartial || summary.TotalTokens == nil || *summary.TotalTokens != 12 || summary.CostCoverage != model.CoverageNone || summary.CostUSD != nil {
 		t.Fatalf("summary = %+v", summary)
+	}
+	var recovered int
+	for _, attempt := range summary.Attempts {
+		if attempt.Recovered {
+			recovered++
+			if attempt.Outcome != "succeeded" {
+				t.Errorf("recovered outcome = %q, want succeeded", attempt.Outcome)
+			}
+		}
+	}
+	if recovered != 1 {
+		t.Errorf("recovered attempts = %d, want 1", recovered)
+	}
+}
+
+func TestSummarizeJudgeUsageMapsOrphanedExitedToUnknown(t *testing.T) {
+	request := &Request{AuditSessionDir: t.TempDir(), AuditRunID: "audit", Auditor: AgentProvenance{CLI: "claude", Model: "opus", Effort: "high"}}
+	if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "value-packages.json"), []ValuePackage{{BatchID: "value-002"}, {BatchID: "value-003"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "model-output", "value-002.json"), map[string]any{"batch_id": "value-002"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range []struct {
+		batch, name, outcome string
+	}{
+		{"value-002", "attempt-1", "exited"},
+		{"value-002", "attempt-2", "succeeded"},
+		{"value-003", "attempt-1", "exited"},
+	} {
+		path := filepath.Join(request.AuditSessionDir, "judge-usage", "value", record.batch, record.name+".json")
+		if err := stateio.WriteJSONDurable(path, JudgeAttempt{Outcome: record.outcome}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	summary, err := summarizeJudgeUsage(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var withOutput, withoutOutput []string
+	for _, attempt := range summary.Attempts {
+		switch attempt.BatchID {
+		case "value-002":
+			withOutput = append(withOutput, attempt.Outcome)
+		case "value-003":
+			withoutOutput = append(withoutOutput, attempt.Outcome)
+		}
+	}
+	if summary.AttemptCount != 3 {
+		t.Errorf("attempt count = %d, want 3", summary.AttemptCount)
+	}
+	if diff := cmp.Diff([]string{"unknown", "succeeded"}, withOutput); diff != "" {
+		t.Errorf("value-002 outcomes (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{"unknown"}, withoutOutput); diff != "" {
+		t.Errorf("value-003 outcomes (-want +got):\n%s", diff)
 	}
 }
 
