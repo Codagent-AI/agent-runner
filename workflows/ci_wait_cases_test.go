@@ -26,6 +26,51 @@ func ciPR(f map[string]any) map[string]any {
 	return f["data"].(map[string]any)["repository"].(map[string]any)["pullRequest"].(map[string]any)
 }
 
+// ciConn returns a top-level pull-request connection such as "reviews".
+func ciConn(pr map[string]any, field string) map[string]any {
+	return pr[field].(map[string]any)
+}
+
+func ciCommit(pr map[string]any) map[string]any {
+	return pr["headRef"].(map[string]any)["target"].(map[string]any)
+}
+
+func ciSuites(pr map[string]any) map[string]any {
+	return ciCommit(pr)["checkSuites"].(map[string]any)
+}
+
+func ciChecks(pr map[string]any) map[string]any {
+	return ciCommit(pr)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)
+}
+
+// useCISequence makes the fake gh serve one snapshot per GraphQL call, repeating the last.
+func useCISequence(t *testing.T, fixtures ...map[string]any) {
+	t.Helper()
+	dir := t.TempDir()
+	for i, fixture := range fixtures {
+		data, err := json.Marshal(fixture)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("%d.json", i+1)), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "count"), []byte("0"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CI_SEQUENCE_DIR", dir)
+}
+
+func writeCIPage(t *testing.T, page string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "page.json")
+	if err := os.WriteFile(path, []byte(page), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func runCIFixture(t *testing.T, fixture map[string]any, inputs string) (output string, exitCode int, elapsed time.Duration) {
 	t.Helper()
 	dir := t.TempDir()
@@ -57,7 +102,8 @@ case "$*" in
       n=$(cat "$CI_SEQUENCE_DIR/count")
       n=$((n + 1))
       echo "$n" > "$CI_SEQUENCE_DIR/count"
-      if [ -f "$CI_SEQUENCE_DIR/$n.json" ]; then cat "$CI_SEQUENCE_DIR/$n.json"; else cat "$CI_SEQUENCE_DIR/2.json"; fi
+      if [ ! -f "$CI_SEQUENCE_DIR/$n.json" ]; then n=$(ls "$CI_SEQUENCE_DIR" | grep -c '\.json$'); fi
+      cat "$CI_SEQUENCE_DIR/$n.json"
       exit 0
     fi
     case "$*" in
@@ -101,65 +147,66 @@ func TestCIWaitClassification(t *testing.T) {
 		want     string
 		contains string
 	}{
+		{"green snapshot", func(map[string]any) {}, "", "CI_PASSED", "**PR:**"},
 		{"failed check and log", func(pr map[string]any) {
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)["nodes"] = []any{map[string]any{"name": "unit tests", "conclusion": "FAILURE", "detailsUrl": "https://github.com/example/project/actions/runs/123"}}
+			ciChecks(pr)["nodes"] = []any{map[string]any{"name": "unit tests", "conclusion": "FAILURE", "detailsUrl": "https://github.com/example/project/actions/runs/123"}}
 		}, "", "CI_FAILED", "failed job log excerpt"},
 		{"merge conflict", func(pr map[string]any) { pr["mergeable"] = "CONFLICTING" }, "", "CI_FAILED", "Merge Conflicts"},
 		{"blocking review", func(pr map[string]any) {
-			pr["reviews"].(map[string]any)["nodes"] = []any{map[string]any{"author": human, "state": "CHANGES_REQUESTED", "body": "fix this"}}
+			ciConn(pr, "reviews")["nodes"] = []any{map[string]any{"author": human, "state": "CHANGES_REQUESTED", "body": "fix this"}}
 		}, "", "CI_FAILED", "Blocking Reviews"},
 		{"actionable thread", func(pr map[string]any) {
-			pr["reviewThreads"].(map[string]any)["nodes"] = []any{map[string]any{"isResolved": false, "comments": map[string]any{"nodes": []any{map[string]any{"author": human, "body": "fix", "path": "a.go", "line": 3}}, "pageInfo": map[string]any{"hasNextPage": false}}}}
+			ciConn(pr, "reviewThreads")["nodes"] = []any{map[string]any{"isResolved": false, "comments": map[string]any{"nodes": []any{map[string]any{"author": human, "body": "fix", "path": "a.go", "line": 3}}, "pageInfo": map[string]any{"hasNextPage": false}}}}
 		}, "", "CI_COMMENTS", "a.go:3"},
 		{"comment outranks pending CI", func(pr map[string]any) {
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)["nodes"] = []any{map[string]any{"name": "build", "status": "IN_PROGRESS"}}
-			pr["reviewThreads"].(map[string]any)["nodes"] = []any{map[string]any{"isResolved": false, "comments": map[string]any{"nodes": []any{map[string]any{"author": human, "body": "fix", "path": "a.go", "line": 3}}, "pageInfo": map[string]any{"hasNextPage": false}}}}
+			ciChecks(pr)["nodes"] = []any{map[string]any{"name": "build", "status": "IN_PROGRESS"}}
+			ciConn(pr, "reviewThreads")["nodes"] = []any{map[string]any{"isResolved": false, "comments": map[string]any{"nodes": []any{map[string]any{"author": human, "body": "fix", "path": "a.go", "line": 3}}, "pageInfo": map[string]any{"hasNextPage": false}}}}
 		}, "", "CI_COMMENTS", "Still Running"},
 		{"deferred thread", func(pr map[string]any) {
-			pr["reviewThreads"].(map[string]any)["nodes"] = []any{map[string]any{"isResolved": false, "comments": map[string]any{"nodes": []any{map[string]any{"author": human, "body": "fix", "path": "a.go", "line": 3}, map[string]any{"author": map[string]any{"login": "alice", "__typename": "User"}, "body": "deferred"}}, "pageInfo": map[string]any{"hasNextPage": false}}}}
+			ciConn(pr, "reviewThreads")["nodes"] = []any{map[string]any{"isResolved": false, "comments": map[string]any{"nodes": []any{map[string]any{"author": human, "body": "fix", "path": "a.go", "line": 3}, map[string]any{"author": map[string]any{"login": "alice", "__typename": "User"}, "body": "deferred"}}, "pageInfo": map[string]any{"hasNextPage": false}}}}
 		}, "", "CI_PASSED", "Deferred Threads"},
 		{"human reply reopens", func(pr map[string]any) {
-			pr["reviewThreads"].(map[string]any)["nodes"] = []any{map[string]any{"isResolved": false, "comments": map[string]any{"nodes": []any{map[string]any{"author": human, "body": "fix", "path": "a.go", "line": 3}, map[string]any{"author": map[string]any{"login": "alice", "__typename": "User"}, "body": "deferred"}, map[string]any{"author": human, "body": "still broken"}}, "pageInfo": map[string]any{"hasNextPage": false}}}}
+			ciConn(pr, "reviewThreads")["nodes"] = []any{map[string]any{"isResolved": false, "comments": map[string]any{"nodes": []any{map[string]any{"author": human, "body": "fix", "path": "a.go", "line": 3}, map[string]any{"author": map[string]any{"login": "alice", "__typename": "User"}, "body": "deferred"}, map[string]any{"author": human, "body": "still broken"}}, "pageInfo": map[string]any{"hasNextPage": false}}}}
 		}, "", "CI_COMMENTS", "PR Comments"},
 		{"bot summary", func(pr map[string]any) {
-			pr["comments"].(map[string]any)["nodes"] = []any{map[string]any{"author": bot, "body": "summary"}}
+			ciConn(pr, "comments")["nodes"] = []any{map[string]any{"author": bot, "body": "summary"}}
 		}, "", "CI_PASSED", "Informational Bot Comments"},
 		{"pending check", func(pr map[string]any) {
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)["nodes"] = []any{map[string]any{"name": "build", "status": "IN_PROGRESS"}}
+			ciChecks(pr)["nodes"] = []any{map[string]any{"name": "build", "status": "IN_PROGRESS"}}
 		}, "", "CI_PENDING", "Still Running"},
 		{"unknown mergeability", func(pr map[string]any) { pr["mergeable"] = "UNKNOWN" }, "", "CI_PENDING", "pending"},
 		{"configured bot absent", func(pr map[string]any) {}, `"review_bots":"CodeRabbitAI[bot]",`, "CI_REVIEW_INCOMPLETE", "coderabbitai: not started"},
 		{"old bot review", func(pr map[string]any) {
-			pr["reviews"].(map[string]any)["nodes"] = []any{map[string]any{"author": bot, "state": "APPROVED", "submittedAt": past, "commit": map[string]any{"oid": "old-head"}}}
+			ciConn(pr, "reviews")["nodes"] = []any{map[string]any{"author": bot, "state": "APPROVED", "submittedAt": past, "commit": map[string]any{"oid": "old-head"}}}
 		}, "", "CI_REVIEW_INCOMPLETE", "Unfinished Review Bots"},
 		{"fresh bot success", func(pr map[string]any) {
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["checkSuites"].(map[string]any)["nodes"] = []any{map[string]any{"createdAt": past}}
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)["nodes"] = []any{map[string]any{"context": "CodeRabbit", "state": "SUCCESS", "createdAt": fresh, "creator": map[string]any{"login": "coderabbitai[bot]"}}}
+			ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": past}}
+			ciChecks(pr)["nodes"] = []any{map[string]any{"context": "CodeRabbit", "state": "SUCCESS", "createdAt": fresh, "creator": map[string]any{"login": "coderabbitai[bot]"}}}
 		}, `"review_bots":"coderabbitai",`, "CI_PASSED", "passed"},
 		{"pending bot status", func(pr map[string]any) {
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["checkSuites"].(map[string]any)["nodes"] = []any{map[string]any{"createdAt": past}}
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)["nodes"] = []any{map[string]any{"context": "CodeRabbit", "state": "PENDING", "createdAt": fresh, "creator": map[string]any{"login": "coderabbitai[bot]"}}}
+			ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": past}}
+			ciChecks(pr)["nodes"] = []any{map[string]any{"context": "CodeRabbit", "state": "PENDING", "createdAt": fresh, "creator": map[string]any{"login": "coderabbitai[bot]"}}}
 		}, `"review_bots":"coderabbitai",`, "CI_REVIEW_INCOMPLETE", "coderabbitai: pending"},
 		{"first-time bot pending", func(pr map[string]any) {
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["checkSuites"].(map[string]any)["nodes"] = []any{map[string]any{"createdAt": past}}
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)["nodes"] = []any{map[string]any{"context": "CodeRabbit", "state": "PENDING", "createdAt": fresh, "creator": map[string]any{"login": "coderabbitai[bot]"}}}
+			ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": past}}
+			ciChecks(pr)["nodes"] = []any{map[string]any{"context": "CodeRabbit", "state": "PENDING", "createdAt": fresh, "creator": map[string]any{"login": "coderabbitai[bot]"}}}
 		}, "", "CI_REVIEW_INCOMPLETE", "coderabbitai: pending"},
 		{"first-time bot failure stays CI", func(pr map[string]any) {
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["checkSuites"].(map[string]any)["nodes"] = []any{map[string]any{"createdAt": past}}
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)["nodes"] = []any{map[string]any{"context": "codecov/patch", "state": "FAILURE", "createdAt": fresh, "creator": map[string]any{"login": "codecov[bot]"}}}
+			ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": past}}
+			ciChecks(pr)["nodes"] = []any{map[string]any{"context": "codecov/patch", "state": "FAILURE", "createdAt": fresh, "creator": map[string]any{"login": "codecov[bot]"}}}
 		}, "", "CI_FAILED", "codecov/patch"},
 		{"skipped bot check", func(pr map[string]any) {
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["checkSuites"].(map[string]any)["nodes"] = []any{map[string]any{"createdAt": past}}
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)["nodes"] = []any{map[string]any{"name": "CodeRabbit", "conclusion": "SKIPPED", "completedAt": fresh, "checkSuite": map[string]any{"app": map[string]any{"slug": "coderabbitai"}}}}
+			ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": past}}
+			ciChecks(pr)["nodes"] = []any{map[string]any{"name": "CodeRabbit", "conclusion": "SKIPPED", "completedAt": fresh, "checkSuite": map[string]any{"app": map[string]any{"slug": "coderabbitai"}}}}
 		}, `"review_bots":"coderabbitai",`, "CI_REVIEW_INCOMPLETE", "coderabbitai: skipped"},
 		{"bot comment does not finish", func(pr map[string]any) {
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["checkSuites"].(map[string]any)["nodes"] = []any{map[string]any{"createdAt": past}}
-			pr["comments"].(map[string]any)["nodes"] = []any{map[string]any{"author": bot, "body": "review complete", "updatedAt": fresh}}
+			ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": past}}
+			ciConn(pr, "comments")["nodes"] = []any{map[string]any{"author": bot, "body": "review complete", "updatedAt": fresh}}
 		}, `"review_bots":"coderabbitai",`, "CI_REVIEW_INCOMPLETE", "coderabbitai: commented"},
 		{"stale after ready", func(pr map[string]any) {
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["checkSuites"].(map[string]any)["nodes"] = []any{map[string]any{"createdAt": past}}
-			pr["timelineItems"].(map[string]any)["nodes"] = []any{map[string]any{"createdAt": fresh}}
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)["nodes"] = []any{map[string]any{"context": "CodeRabbit", "state": "SUCCESS", "createdAt": past, "creator": map[string]any{"login": "coderabbitai[bot]"}}}
+			ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": past}}
+			ciConn(pr, "timelineItems")["nodes"] = []any{map[string]any{"createdAt": fresh}}
+			ciChecks(pr)["nodes"] = []any{map[string]any{"context": "CodeRabbit", "state": "SUCCESS", "createdAt": past, "creator": map[string]any{"login": "coderabbitai[bot]"}}}
 		}, `"review_bots":"coderabbitai",`, "CI_REVIEW_INCOMPLETE", "not started"},
 	}
 	for _, tt := range tests {
@@ -191,11 +238,9 @@ func TestCIWaitRecordedGraphQLFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	pr := ciPR(fixture)
-	commit := pr["headRef"].(map[string]any)["target"].(map[string]any)
 	for _, conn := range []map[string]any{
-		pr["reviews"].(map[string]any), pr["reviewThreads"].(map[string]any), pr["comments"].(map[string]any),
-		pr["timelineItems"].(map[string]any), commit["checkSuites"].(map[string]any),
-		commit["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any),
+		ciConn(pr, "reviews"), ciConn(pr, "reviewThreads"), ciConn(pr, "comments"),
+		ciConn(pr, "timelineItems"), ciSuites(pr), ciChecks(pr),
 	} {
 		if _, ok := conn["pageInfo"].(map[string]any); !ok {
 			t.Fatal("connection missing pageInfo")
@@ -238,19 +283,15 @@ func TestCIWaitReadsContinuationPages(t *testing.T) {
 			pr := ciPR(fixture)
 			var conn map[string]any
 			if tt.field == "checks" {
-				conn = pr["headRef"].(map[string]any)["target"].(map[string]any)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)
+				conn = ciChecks(pr)
 			} else {
-				conn = pr["reviewThreads"].(map[string]any)
+				conn = ciConn(pr, "reviewThreads")
 			}
 			conn["pageInfo"] = map[string]any{"hasNextPage": true, "endCursor": "cursor1"}
 			if tt.page == "fail" {
 				t.Setenv("CI_PAGE", "fail")
 			} else {
-				path := filepath.Join(t.TempDir(), "page.json")
-				if err := os.WriteFile(path, []byte(tt.page), 0o600); err != nil {
-					t.Fatal(err)
-				}
-				t.Setenv("CI_PAGE", path)
+				t.Setenv("CI_PAGE", writeCIPage(t, tt.page))
 			}
 			out, code, _ := runCIFixture(t, fixture, `{"deadline_seconds":"0.5","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
 			if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), tt.want) || !strings.Contains(out, tt.detail) {
@@ -263,17 +304,13 @@ func TestCIWaitReadsContinuationPages(t *testing.T) {
 func TestCIWaitPaginatesThreadRepliesBeforeDeferring(t *testing.T) {
 	fixture := ciFixture()
 	pr := ciPR(fixture)
-	pr["reviewThreads"].(map[string]any)["nodes"] = []any{map[string]any{
+	ciConn(pr, "reviewThreads")["nodes"] = []any{map[string]any{
 		"id": "thread1", "isResolved": false, "comments": map[string]any{"nodes": []any{
 			map[string]any{"author": map[string]any{"login": "reviewer", "__typename": "User"}, "body": "fix", "path": "a.go", "line": 3},
 		}, "pageInfo": map[string]any{"hasNextPage": true, "endCursor": "cursor1"}},
 	}}
 	page := `{"data":{"node":{"comments":{"nodes":[{"author":{"login":"alice","__typename":"User"},"body":"deferred"}],"pageInfo":{"hasNextPage":false}}}}}`
-	path := filepath.Join(t.TempDir(), "page.json")
-	if err := os.WriteFile(path, []byte(page), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("CI_PAGE", path)
+	t.Setenv("CI_PAGE", writeCIPage(t, page))
 	out, code, _ := runCIFixture(t, fixture, `{"deadline_seconds":"0.5","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
 	if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), "CI_PASSED") || !strings.Contains(out, "Deferred Threads") {
 		t.Fatalf("code=%d report=%s", code, out)
@@ -285,28 +322,14 @@ func TestCIWaitRechecksBotWhenHeadChanges(t *testing.T) {
 	fresh := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
 	first := ciFixture()
 	firstPR := ciPR(first)
-	commit := firstPR["headRef"].(map[string]any)["target"].(map[string]any)
-	commit["checkSuites"].(map[string]any)["nodes"] = []any{map[string]any{"createdAt": past}}
-	commit["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)["nodes"] = []any{
+	ciSuites(firstPR)["nodes"] = []any{map[string]any{"createdAt": past}}
+	ciChecks(firstPR)["nodes"] = []any{
 		map[string]any{"name": "build", "status": "IN_PROGRESS"},
 		map[string]any{"context": "CodeRabbit", "state": "SUCCESS", "createdAt": fresh, "creator": map[string]any{"login": "coderabbitai[bot]"}},
 	}
 	second := ciFixture()
 	ciPR(second)["headRefOid"] = "newhead123456"
-	dir := t.TempDir()
-	for i, fixture := range []map[string]any{first, second} {
-		data, err := json.Marshal(fixture)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("%d.json", i+1)), data, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(dir, "count"), []byte("0"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("CI_SEQUENCE_DIR", dir)
+	useCISequence(t, first, second)
 	out, code, _ := runCIFixture(t, first, `{"review_bots":"coderabbitai","deadline_seconds":"0.8","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
 	if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), "CI_REVIEW_INCOMPLETE") || !strings.Contains(out, "**Head:** newhead") {
 		t.Fatalf("code=%d report=%s", code, out)
@@ -318,26 +341,13 @@ func TestCIWaitBotPendingThenSuccess(t *testing.T) {
 	fresh := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
 	makeSnapshot := func(state string) map[string]any {
 		fixture := ciFixture()
-		commit := ciPR(fixture)["headRef"].(map[string]any)["target"].(map[string]any)
-		commit["checkSuites"].(map[string]any)["nodes"] = []any{map[string]any{"createdAt": past}}
-		commit["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)["nodes"] = []any{map[string]any{"context": "CodeRabbit", "state": state, "createdAt": fresh, "creator": map[string]any{"login": "coderabbitai[bot]"}}}
+		pr := ciPR(fixture)
+		ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": past}}
+		ciChecks(pr)["nodes"] = []any{map[string]any{"context": "CodeRabbit", "state": state, "createdAt": fresh, "creator": map[string]any{"login": "coderabbitai[bot]"}}}
 		return fixture
 	}
 	first, second := makeSnapshot("PENDING"), makeSnapshot("SUCCESS")
-	dir := t.TempDir()
-	for i, fixture := range []map[string]any{first, second} {
-		data, err := json.Marshal(fixture)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("%d.json", i+1)), data, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(dir, "count"), []byte("0"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("CI_SEQUENCE_DIR", dir)
+	useCISequence(t, first, second)
 	out, code, _ := runCIFixture(t, first, `{"review_bots":"coderabbitai","deadline_seconds":"0.8","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
 	if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), "CI_PASSED") {
 		t.Fatalf("code=%d report=%s", code, out)
@@ -356,31 +366,31 @@ func TestCIWaitAddressedFeedbackAndLatestBotEvidence(t *testing.T) {
 		inputs, marker string
 	}{
 		{"completed current-head status without push timestamp", func(pr map[string]any) {
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)["nodes"] = []any{map[string]any{"context": "CodeRabbit", "state": "SUCCESS", "createdAt": success, "creator": bot}}
+			ciChecks(pr)["nodes"] = []any{map[string]any{"context": "CodeRabbit", "state": "SUCCESS", "createdAt": success, "creator": bot}}
 		}, `"review_bots":"coderabbitai",`, "CI_PASSED"},
 		{"human comment addressed by push", func(pr map[string]any) {
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["checkSuites"].(map[string]any)["nodes"] = []any{map[string]any{"createdAt": push}}
-			pr["comments"].(map[string]any)["nodes"] = []any{map[string]any{"author": map[string]any{"login": "reviewer", "__typename": "User"}, "body": "fixed already", "updatedAt": old}}
+			ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": push}}
+			ciConn(pr, "comments")["nodes"] = []any{map[string]any{"author": map[string]any{"login": "reviewer", "__typename": "User"}, "body": "fixed already", "updatedAt": old}}
 		}, "", "CI_PASSED"},
 		{"human comment addressed by author reply", func(pr map[string]any) {
-			pr["comments"].(map[string]any)["nodes"] = []any{
+			ciConn(pr, "comments")["nodes"] = []any{
 				map[string]any{"author": map[string]any{"login": "reviewer", "__typename": "User"}, "body": "please fix", "updatedAt": old},
 				map[string]any{"author": map[string]any{"login": "alice", "__typename": "User"}, "body": "fixed", "updatedAt": success},
 			}
 		}, "", "CI_PASSED"},
 		{"newer pending status supersedes success", func(pr map[string]any) {
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["checkSuites"].(map[string]any)["nodes"] = []any{map[string]any{"createdAt": push}}
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)["nodes"] = []any{
+			ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": push}}
+			ciChecks(pr)["nodes"] = []any{
 				map[string]any{"context": "CodeRabbit", "state": "SUCCESS", "createdAt": success, "creator": bot},
 				map[string]any{"context": "CodeRabbit", "state": "PENDING", "createdAt": pending, "creator": bot},
 			}
 		}, `"review_bots":"coderabbitai",`, "CI_REVIEW_INCOMPLETE"},
 		{"old-head review does not supersede current-head success", func(pr map[string]any) {
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["checkSuites"].(map[string]any)["nodes"] = []any{map[string]any{"createdAt": push}}
-			pr["headRef"].(map[string]any)["target"].(map[string]any)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)["nodes"] = []any{
+			ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": push}}
+			ciChecks(pr)["nodes"] = []any{
 				map[string]any{"context": "CodeRabbit", "state": "SUCCESS", "createdAt": success, "creator": bot},
 			}
-			pr["reviews"].(map[string]any)["nodes"] = []any{map[string]any{"author": map[string]any{"login": "coderabbitai[bot]", "__typename": "Bot"}, "state": "COMMENTED", "submittedAt": pending, "commit": map[string]any{"oid": "old-head"}}}
+			ciConn(pr, "reviews")["nodes"] = []any{map[string]any{"author": map[string]any{"login": "coderabbitai[bot]", "__typename": "Bot"}, "state": "COMMENTED", "submittedAt": pending, "commit": map[string]any{"oid": "old-head"}}}
 		}, `"review_bots":"coderabbitai",`, "CI_PASSED"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
