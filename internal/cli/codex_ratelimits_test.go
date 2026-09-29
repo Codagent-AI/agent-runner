@@ -98,6 +98,60 @@ func TestCodexRateLimitReaderCachesAppendedSnapshots(t *testing.T) {
 	}
 }
 
+func TestCodexRateLimitReaderRetriesPartialRecord(t *testing.T) {
+	home := t.TempDir()
+	start := time.Date(2026, 9, 29, 14, 0, 0, 0, time.UTC)
+	writeRateLimitTestLog(t, home, "partial-thread", "account-1", []string{
+		rateLimitTestEvent(start.Add(-time.Second), 40, 12345),
+	})
+	path := filepath.Join(home, "sessions", "2026", "09", "29", "rollout-2026-09-29T02-00-00-partial-thread.jsonl")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeOffset := info.Size()
+	event := rateLimitTestEvent(start.Add(time.Second), 43, 12345)
+	split := len(event) - 10
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.WriteString(event[:split])
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reader := CodexRateLimitReader{Home: home}
+	req := CodexRateLimitRequest{ThreadID: "partial-thread", RunID: "run", StartedAt: start, EndedAt: start.Add(2 * time.Second)}
+	first := reader.Read(req)
+	entry := cachedCodexLogFor(path)
+	entry.mu.Lock()
+	offset, bad := entry.offset, entry.bad
+	entry.mu.Unlock()
+	if first.Reason != "no-snapshots" || offset != completeOffset || bad {
+		t.Fatalf("partial record consumed: evidence=%+v offset=%d want=%d bad=%v", first, offset, completeOffset, bad)
+	}
+
+	f, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.WriteString(event[split:] + "\n")
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := reader.Read(req)
+	if second.Status != "captured" || second.Deltas[0].PercentagePoints == nil || *second.Deltas[0].PercentagePoints != 3 {
+		t.Fatalf("completed record missed: %+v", second)
+	}
+}
+
 func TestCodexRateLimitFixtureIsReadOnly(t *testing.T) {
 	original, err := os.ReadFile("testdata/ratelimits/resumed.jsonl")
 	if err != nil {

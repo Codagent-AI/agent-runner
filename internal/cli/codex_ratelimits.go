@@ -232,8 +232,11 @@ func (entry *cachedCodexLog) refresh(path string) error {
 	reader := bufio.NewReader(f)
 	for {
 		line, oversized, readErr := readCodexLogLine(reader)
-		if len(line) == 0 && readErr == io.EOF {
-			return nil
+		if readErr != nil {
+			if readErr == io.EOF {
+				return nil // Retry an unterminated record from its start on the next refresh.
+			}
+			return readErr
 		}
 		account, snapshot, bad := parseCodexLogLine(line, oversized)
 		if account != "" {
@@ -248,12 +251,6 @@ func (entry *cachedCodexLog) refresh(path string) error {
 			return seekErr
 		}
 		entry.offset = position - int64(reader.Buffered())
-		if readErr == io.EOF {
-			return nil
-		}
-		if readErr != nil {
-			return readErr
-		}
 	}
 }
 
