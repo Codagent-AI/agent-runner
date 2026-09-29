@@ -302,12 +302,7 @@ func (a *ClaudeAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) 
 		}, nil
 	}
 
-	tokens, complete, err := tokenCountsFromObject(lastUsage, map[string]string{
-		"input_tokens":                model.TokenInput,
-		"cache_read_input_tokens":     model.TokenCachedInput,
-		"cache_creation_input_tokens": model.TokenCacheWrite,
-		"output_tokens":               model.TokenOutput,
-	})
+	tokens, complete, err := tokenCountsFromObject(lastUsage, claudeTokenFields)
 	if err != nil {
 		return UsageExtraction{}, fmt.Errorf("claude: parse result usage: %w", err)
 	}
@@ -319,9 +314,7 @@ func (a *ClaudeAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) 
 		RawCumulativeCostUSD: lastCost,
 	}
 	if complete {
-		input := tokens[model.TokenInput] + tokens[model.TokenCachedInput] + tokens[model.TokenCacheWrite]
-		output := tokens[model.TokenOutput]
-		usage.TokenTotals = &model.TokenTotals{Input: input, Output: output, Total: input + output}
+		usage.TokenTotals = claudeTokenTotals(tokens)
 	}
 	return UsageExtraction{Usage: usage}, nil
 }

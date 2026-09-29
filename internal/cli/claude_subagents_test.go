@@ -275,3 +275,47 @@ func TestClaudeBackgroundShellTaskIsNotSubagent(t *testing.T) {
 		})
 	}
 }
+
+func TestClaudeSubagentCollectionReasonFollowsPrecedence(t *testing.T) {
+	root := t.TempDir()
+	session := "66666666-6666-6666-6666-666666666666"
+	project := filepath.Join(root, "projects", "project")
+	writeClaudeFixture(t, filepath.Join(project, session+".jsonl"),
+		`{"uuid":"first","type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent","id":"a-running"},{"type":"tool_use","name":"Agent","id":"b-missing"}]}}`+"\n"+
+			`{"uuid":"last","type":"assistant","message":{"content":[]}}`+"\n")
+	sub := filepath.Join(project, session, "subagents")
+	writeClaudeFixture(t, filepath.Join(sub, "agent-a.meta.json"), `{"toolUseId":"a-running"}`)
+	writeClaudeFixture(t, filepath.Join(sub, "agent-a.jsonl"), `{"type":"assistant","message":{"id":"m","model":"haiku","usage":{"input_tokens":1,"cache_read_input_tokens":1,"cache_creation_input_tokens":1,"output_tokens":1}}}`+"\n")
+	stdout := `{"uuid":"first","type":"system","subtype":"init","session_id":"` + session + `","model":"opus"}` + "\n" +
+		`{"type":"system","subtype":"task_started","tool_use_id":"a-running","task_type":"local_agent"}` + "\n" +
+		`{"uuid":"last","type":"assistant","message":{"model":"opus"}}` + "\n" +
+		`{"type":"result","usage":{"input_tokens":1,"cache_read_input_tokens":2,"cache_creation_input_tokens":3,"output_tokens":4},"total_cost_usd":1}` + "\n"
+	got, err := (&ClaudeAdapter{}).ExtractUsageWithContext(stdout, UsageContext{Env: []string{"CLAUDE_CONFIG_DIR=" + root}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage.SubagentCollectionReason != model.UnavailableSubagentTranscriptMissing {
+		t.Fatalf("reason = %q, want %q (transcript-missing outranks still-running)", got.Usage.SubagentCollectionReason, model.UnavailableSubagentTranscriptMissing)
+	}
+}
+
+func TestClaudeParentInvalidLineAfterSpanFollowedByValidLine(t *testing.T) {
+	root := t.TempDir()
+	session := "77777777-7777-7777-7777-777777777777"
+	project := filepath.Join(root, "projects", "project")
+	writeClaudeFixture(t, filepath.Join(project, session+".jsonl"),
+		`{"uuid":"first","type":"assistant","message":{"content":[]}}`+"\n"+
+			`{"uuid":"last","type":"assistant","message":{"content":[]}}`+"\n"+
+			`{"uuid":"trunc`+"\n"+
+			`{"uuid":"later","type":"assistant","message":{"content":[]}}`+"\n")
+	stdout := `{"uuid":"first","type":"system","session_id":"` + session + `","model":"opus"}` + "\n" +
+		`{"uuid":"last","type":"assistant","message":{"model":"opus"}}` + "\n" +
+		`{"type":"result","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}` + "\n"
+	got, err := (&ClaudeAdapter{}).ExtractUsageWithContext(stdout, UsageContext{Env: []string{"CLAUDE_CONFIG_DIR=" + root}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage.SubagentCollectionReason != model.UnavailableSubagentParentInvalid {
+		t.Fatalf("usage=%+v", got.Usage)
+	}
+}
