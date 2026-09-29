@@ -4,6 +4,7 @@ package devaudit
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -13,6 +14,14 @@ import (
 )
 
 const maxCrosscheckDiagnostic = 2048
+
+func crosscheckFailureCategory(err error) string {
+	var exitError *exec.ExitError
+	if errors.As(err, &exitError) {
+		return "process_exit"
+	}
+	return "output_unavailable"
+}
 
 // Keep diagnostics bounded without blocking a provider that writes more stderr.
 type diagnosticBuffer struct{ data []byte }
@@ -34,11 +43,11 @@ func crosscheckDiagnostic(text string) string {
 	return text
 }
 
-func runCrosscheckOutput(command *exec.Cmd, adapter cli.Adapter) ([]byte, time.Time, error) {
+func runCrosscheckOutputWithStart(command *exec.Cmd, adapter cli.Adapter) (raw []byte, at time.Time, started bool, runErr error) {
 	var stderr diagnosticBuffer
 	command.Stderr = &stderr
 	spawnTime := time.Now()
-	data, err := runBoundedOutput(command, maxCrosscheckOutput)
+	data, started, err := runBoundedOutputWithStart(command, maxCrosscheckOutput)
 	if err != nil {
 		detail := string(data)
 		switch adapter := adapter.(type) {
@@ -50,9 +59,9 @@ func runCrosscheckOutput(command *exec.Cmd, adapter cli.Adapter) ([]byte, time.T
 		case cli.OutputFilter:
 			detail = adapter.FilterOutput(detail)
 		}
-		return data, spawnTime, fmt.Errorf("%w; provider: %s; stderr: %s", err, crosscheckDiagnostic(detail), crosscheckDiagnostic(string(stderr.data)))
+		return data, spawnTime, started, fmt.Errorf("%w; provider: %s; stderr: %s", err, crosscheckDiagnostic(detail), crosscheckDiagnostic(string(stderr.data)))
 	}
-	return data, spawnTime, nil
+	return data, spawnTime, started, nil
 }
 
 type claudeAuditResult struct {

@@ -28,6 +28,11 @@ var stepValueHeader = []string{
 	"schema_version", "observation_id", "observed_at_utc", "project", "workflow", "source_run_id", "execution_session_id", "audit_run_id", "trigger", "source_outcome", "step_id", "step_outcome", "lineage", "duration_ms", "cost_usd", "total_tokens", "source_models", "git_attribution", "commit_shas", "files_changed", "lines_added", "lines_deleted", "overall_value", "change_effect", "unique_contribution", "downstream_evidence", "confidence", "evidence_coverage", "judge_model", "rubric_version", "note",
 }
 
+const sheetRowSchemaVersion = "step_value_v2"
+
+var judgeHeader = []string{"judge_cli", "judge_effort", "audit_judge_attempts", "audit_judge_total_tokens", "audit_judge_token_coverage", "audit_judge_cost_usd", "audit_judge_cost_coverage"}
+var stepValueHeaderV2 = append(append([]string{}, stepValueHeader...), judgeHeader...)
+
 var allowInsecureDevelopmentAuditTestURI bool
 
 // SetupInput names operator-provided source files. Paths are used only while
@@ -280,7 +285,7 @@ func (r SheetsReporter) Deliver(ctx context.Context, report *LocalReport) error 
 		if _, found := existing[observation.ObservationID]; found {
 			continue
 		}
-		row, err := projectObservation(observation)
+		row, err := projectObservation(observation, report.JudgeUsage)
 		if err != nil {
 			return fmt.Errorf("project observation %q: %w", observation.ObservationID, err)
 		}
@@ -357,8 +362,38 @@ func (r SheetsReporter) validateHeader(ctx context.Context, token string, destin
 	if err := r.getJSON(ctx, token, destination, a1Range(destination.Tab, "1:1"), &response); err != nil {
 		return err
 	}
-	if len(response.Values) != 1 || !equalStrings(response.Values[0], stepValueHeader) {
-		return fmt.Errorf("worksheet header does not match step_value_v1")
+	if len(response.Values) == 1 {
+		if equalStrings(response.Values[0], stepValueHeaderV2) {
+			return nil
+		}
+		if equalStrings(response.Values[0], stepValueHeader) {
+			return r.upgradeHeader(ctx, token, destination)
+		}
+	}
+	return fmt.Errorf("worksheet header does not match step_value_v2")
+}
+
+func (r SheetsReporter) upgradeHeader(ctx context.Context, token string, destination DestinationState) error {
+	body, err := json.Marshal(struct {
+		Values [][]string `json:"values"`
+	}{Values: [][]string{judgeHeader}})
+	if err != nil {
+		return err
+	}
+	endpoint := r.baseURL() + "/spreadsheets/" + url.PathEscape(destination.SpreadsheetID) + "/values/" + url.PathEscape(a1Range(destination.Tab, "AF1:AL1")) + "?valueInputOption=RAW"
+	request, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := r.client().Do(request)
+	if err != nil {
+		return fmt.Errorf("upgrade worksheet header: %w", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("upgrade worksheet header: HTTP %d", response.StatusCode)
 	}
 	return nil
 }
@@ -407,7 +442,7 @@ func (r SheetsReporter) append(ctx context.Context, token string, destination De
 	if err != nil {
 		return err
 	}
-	endpoint := r.baseURL() + "/spreadsheets/" + url.PathEscape(destination.SpreadsheetID) + "/values/" + url.PathEscape(a1Range(destination.Tab, "A:AE")) + ":append?valueInputOption=RAW&insertDataOption=INSERT_ROWS"
+	endpoint := r.baseURL() + "/spreadsheets/" + url.PathEscape(destination.SpreadsheetID) + "/values/" + url.PathEscape(a1Range(destination.Tab, "A:AL")) + ":append?valueInputOption=RAW&insertDataOption=INSERT_ROWS"
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))
 	if err != nil {
 		return err
@@ -446,7 +481,7 @@ func a1Range(tab, cells string) string {
 	return "'" + strings.ReplaceAll(tab, "'", "''") + "'!" + cells
 }
 
-func projectObservation(observation *ValueObservation) ([]string, error) {
+func projectObservation(observation *ValueObservation, summary *JudgeUsageSummary) ([]string, error) {
 	if err := safeValueNote(observation.Note); err != nil {
 		return nil, err
 	}
@@ -454,11 +489,15 @@ func projectObservation(observation *ValueObservation) ([]string, error) {
 		return nil, fmt.Errorf("unsupported schema %q", observation.SchemaVersion)
 	}
 	models, commits := sortedJoined(observation.Cost.SourceModels), sortedJoined(observation.Git.CommitSHAs)
-	return []string{
-		observation.SchemaVersion, observation.ObservationID, observation.ObservedAtUTC, sanitizeProject(observation.Project), observation.Workflow, observation.SourceRunID, observation.ExecutionSessionID, observation.AuditRunID, observation.Trigger, observation.SourceOutcome, observation.StepID, observation.StepOutcome, observation.Lineage,
+	row := []string{
+		sheetRowSchemaVersion, observation.ObservationID, observation.ObservedAtUTC, sanitizeProject(observation.Project), observation.Workflow, observation.SourceRunID, observation.ExecutionSessionID, observation.AuditRunID, observation.Trigger, observation.SourceOutcome, observation.StepID, observation.StepOutcome, observation.Lineage,
 		intString(observation.Cost.DurationMS), floatString(observation.Cost.CostUSD), intString(observation.Cost.TotalTokens), models, observation.Git.Attribution, commits, intString(observation.Git.FilesChanged), intString(observation.Git.LinesAdded), intString(observation.Git.LinesDeleted),
 		observation.OverallValue, observation.ChangeEffect, observation.UniqueContribution, observation.DownstreamEvidence, observation.Confidence, observation.EvidenceCoverage, observation.JudgeModel, observation.RubricVersion, observation.Note,
-	}, nil
+	}
+	if summary == nil {
+		return append(row, observation.JudgeCLI, observation.JudgeEffort, "", "", "", "", ""), nil
+	}
+	return append(row, summary.CLI, summary.Effort, strconv.Itoa(summary.AttemptCount), intString(summary.TotalTokens), string(summary.TokenCoverage), floatString(summary.CostUSD), string(summary.CostCoverage)), nil
 }
 
 func sanitizeProject(project string) string {

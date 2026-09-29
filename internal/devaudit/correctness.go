@@ -120,11 +120,15 @@ func ensureCorrectnessOutput(request *Request) error {
 	if request.Auditor.CLI == "" {
 		return writeCorrectnessDiagnostic(request, "frozen auditor CLI is unavailable")
 	}
-	output, err := invokeCrosscheckCorrectness(request)
+	output, handle, err := invokeCrosscheckCorrectnessWithAttempt(request)
 	if err != nil {
 		return writeCorrectnessDiagnostic(request, err.Error())
 	}
-	return stateio.WriteJSONAtomic(path, output)
+	if err := writeJudgeOutput(path, output); err != nil {
+		_ = handle.finish("failed", "output_write_failed")
+		return err
+	}
+	return handle.finish("succeeded", "")
 }
 
 func writeCorrectnessDiagnostic(request *Request, message string) error {
@@ -147,88 +151,116 @@ Return exactly one JSON object with candidates. A candidate has status (confirme
 `
 
 func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error) {
+	output, handle, err := invokeCrosscheckCorrectnessWithAttempt(request)
+	if handle != nil && err == nil {
+		err = handle.finish("succeeded", "")
+	}
+	return output, err
+}
+
+//nolint:funlen // The ordered launch, persistence, and response checks form one invocation boundary.
+func invokeCrosscheckCorrectnessWithAttempt(request *Request) (output CorrectnessCandidates, handle *judgeAttemptHandle, err error) {
+	failureCategory := "response_invalid"
+	defer func() {
+		if err != nil && handle != nil {
+			if finishErr := handle.finish("failed", failureCategory); finishErr != nil {
+				err = fmt.Errorf("%w; record judge failure: %v", err, finishErr)
+			}
+		}
+	}()
+
 	trusted, err := trustedAuditInputsFingerprint(request)
 	if err != nil {
-		return CorrectnessCandidates{}, err
+		return CorrectnessCandidates{}, handle, err
 	}
 	adapter, err := cli.Get(request.Auditor.CLI)
 	if err != nil {
-		return CorrectnessCandidates{}, err
+		return CorrectnessCandidates{}, handle, err
 	}
 	prepared, err := loadPreparedValueAudit(request.AuditSessionDir)
 	if err != nil {
-		return CorrectnessCandidates{}, err
+		return CorrectnessCandidates{}, handle, err
 	}
 	input, err := json.Marshal(struct {
 		Evidence EvidenceIndex    `json:"evidence"`
 		Source   SourceProvenance `json:"runner_source"`
 	}{prepared.Index, request.RunnerSource})
 	if err != nil {
-		return CorrectnessCandidates{}, err
+		return CorrectnessCandidates{}, handle, err
 	}
 	prompt := correctnessPrompt + string(input)
 	workspace, err := prepareModelWorkspace(request)
 	if err != nil {
-		return CorrectnessCandidates{}, err
+		return CorrectnessCandidates{}, handle, err
 	}
 	args, err := cli.BuildInvocationArgs(adapter, &cli.BuildArgsInput{Prompt: prompt, Model: request.Auditor.Model, Effort: request.Auditor.Effort, Context: cli.ContextAutonomousHeadless, Workdir: workspace, DisallowedTools: []string{"AskUserQuestion"}})
 	if err != nil || len(args) == 0 {
 		if err == nil {
 			err = fmt.Errorf("crosscheck adapter produced no command")
 		}
-		return CorrectnessCandidates{}, err
+		return CorrectnessCandidates{}, handle, err
 	}
 	args, finalResponsePath, removeStructuredFiles, err := withAuditEvidenceAndOutputSchema(request, args, "correctness", correctnessOutputSchema(allEvidenceReferences(&prepared.Index)))
 	if err != nil {
-		return CorrectnessCandidates{}, err
+		return CorrectnessCandidates{}, handle, err
 	}
 	defer removeStructuredFiles()
 	args, stdinPrompt := crosscheckPromptOnStdin(request.Auditor.CLI, args)
 	command, err := crosscheckCommand(args, workspace, filepath.Join(request.AuditSessionDir, "model-output"))
 	if err != nil {
-		return CorrectnessCandidates{}, err
+		return CorrectnessCandidates{}, handle, err
 	}
 	if stdinPrompt != "" {
 		command.Stdin = strings.NewReader(stdinPrompt)
 	}
 	env, cleanup, err := cliEnvironment(adapter, request, input, workspace, filepath.Join(request.AuditSessionDir, "model-output"))
 	if err != nil {
-		return CorrectnessCandidates{}, err
+		return CorrectnessCandidates{}, handle, err
 	}
 	defer cleanup()
 	command.Env = env
-	data, spawnTime, runErr := runCrosscheckOutput(command, adapter)
-	if after, err := trustedAuditInputsFingerprint(request); err != nil {
-		return CorrectnessCandidates{}, err
-	} else if after != trusted {
-		return CorrectnessCandidates{}, fmt.Errorf("trusted audit inputs changed during crosscheck")
+	data, spawnTime, started, runErr := runCrosscheckOutputWithStart(command, adapter)
+	if started {
+		handle, err = recordJudgeExit(request, adapter, "correctness", "", data, workspace, spawnTime)
+		if err != nil {
+			return CorrectnessCandidates{}, handle, err
+		}
 	}
 	if runErr != nil {
-		return CorrectnessCandidates{}, fmt.Errorf("run crosscheck: %w", runErr)
+		failureCategory = crosscheckFailureCategory(runErr)
+	}
+	if after, err := trustedAuditInputsFingerprint(request); err != nil {
+		failureCategory = "trusted_inputs_changed"
+		return CorrectnessCandidates{}, handle, err
+	} else if after != trusted {
+		failureCategory = "trusted_inputs_changed"
+		return CorrectnessCandidates{}, handle, fmt.Errorf("trusted audit inputs changed during crosscheck")
+	}
+	if runErr != nil {
+		return CorrectnessCandidates{}, handle, fmt.Errorf("run crosscheck: %w", runErr)
 	}
 	rawOutput := data
 	if finalResponsePath != "" {
 		data, err = os.ReadFile(finalResponsePath) // #nosec G304 -- path is created below the audit-owned output directory.
 		if err != nil {
-			return CorrectnessCandidates{}, fmt.Errorf("read structured crosscheck response: %w", err)
+			return CorrectnessCandidates{}, handle, fmt.Errorf("read structured crosscheck response: %w", err)
 		}
 	}
 	response, err := crosscheckResponse(adapter, data, finalResponsePath != "")
 	if err != nil {
-		return CorrectnessCandidates{}, err
+		return CorrectnessCandidates{}, handle, err
 	}
 	decoder := json.NewDecoder(strings.NewReader(response))
 	decoder.DisallowUnknownFields()
-	var output CorrectnessCandidates
 	if err := decoder.Decode(&output); err != nil {
-		return CorrectnessCandidates{}, fmt.Errorf("decode crosscheck result: %w; response: %s", err, crosscheckDiagnostic(response))
+		return CorrectnessCandidates{}, handle, fmt.Errorf("decode crosscheck result: %w; response: %s", err, crosscheckDiagnostic(response))
 	}
 	var extra any
 	if decoder.Decode(&extra) != io.EOF {
-		return CorrectnessCandidates{}, fmt.Errorf("crosscheck result contains multiple JSON values")
+		return CorrectnessCandidates{}, handle, fmt.Errorf("crosscheck result contains multiple JSON values")
 	}
 	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: auditSessionID(adapter, rawOutput, workspace, spawnTime)}
-	return output, nil
+	return output, handle, nil
 }
 
 func correctnessOutputSchema(references []EvidenceReference) map[string]any {
@@ -275,27 +307,32 @@ func correctnessOutputSchema(references []EvidenceReference) map[string]any {
 }
 
 func runBoundedOutput(command *exec.Cmd, maximum int64) ([]byte, error) {
+	data, _, err := runBoundedOutputWithStart(command, maximum)
+	return data, err
+}
+
+func runBoundedOutputWithStart(command *exec.Cmd, maximum int64) (raw []byte, started bool, runErr error) {
 	stdout, err := command.StdoutPipe()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := command.Start(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	data, readErr := io.ReadAll(io.LimitReader(stdout, maximum+1))
 	if int64(len(data)) > maximum {
 		_ = command.Process.Kill()
 		_ = command.Wait()
-		return nil, fmt.Errorf("crosscheck output exceeds maximum size of %d bytes", maximum)
+		return nil, true, fmt.Errorf("crosscheck output exceeds maximum size of %d bytes", maximum)
 	}
 	waitErr := command.Wait()
 	if readErr != nil {
-		return nil, readErr
+		return nil, true, readErr
 	}
 	if waitErr != nil {
-		return data, waitErr
+		return data, true, waitErr
 	}
-	return data, nil
+	return data, true, nil
 }
 
 func validatePublishCorrectnessStage(request *Request) error {
@@ -904,6 +941,7 @@ type LocalReport struct {
 	ValueConsultations      []consultationLedgerEntry `json:"value_consultations"`
 	Correctness             CorrectnessResult         `json:"correctness"`
 	CorrectnessConsultation []correctnessConsultation `json:"correctness_consultations"`
+	JudgeUsage              *JudgeUsageSummary        `json:"judge_usage,omitempty"`
 	Destination             DestinationState          `json:"destination"`
 	DeliveryState           string                    `json:"delivery_state"`
 	DeliveryError           string                    `json:"delivery_error,omitempty"`
@@ -949,7 +987,11 @@ func assembleLocalReportStage(request *Request) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	report := LocalReport{SchemaVersion: valueSchemaVersion, AuditRunID: request.AuditRunID, SourceRunID: request.SourceRunID, ExecutionSessionID: request.ExecutionSessionID, Trigger: request.Trigger, Evidence: prepared.Index, Values: values, ValueConsultations: valueConsultations, Correctness: correctness, CorrectnessConsultation: correctnessConsultationLedger(correctness.Findings, allEvidenceReferences(&prepared.Index)), Destination: destinationResolver.ResolveDestination(), DeliveryState: "pending", RunnerSource: request.RunnerSource}
+	judgeUsage, err := summarizeJudgeUsage(request)
+	if err != nil {
+		return err
+	}
+	report := LocalReport{SchemaVersion: valueSchemaVersion, AuditRunID: request.AuditRunID, SourceRunID: request.SourceRunID, ExecutionSessionID: request.ExecutionSessionID, Trigger: request.Trigger, Evidence: prepared.Index, Values: values, ValueConsultations: valueConsultations, Correctness: correctness, CorrectnessConsultation: correctnessConsultationLedger(correctness.Findings, allEvidenceReferences(&prepared.Index)), JudgeUsage: judgeUsage, Destination: destinationResolver.ResolveDestination(), DeliveryState: "pending", RunnerSource: request.RunnerSource}
 	return stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "local-report.json"), report)
 }
 

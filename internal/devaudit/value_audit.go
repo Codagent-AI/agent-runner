@@ -1212,16 +1212,21 @@ func ensureValueOutputs(request *Request) error {
 		} else if !os.IsNotExist(err) {
 			return err
 		}
-		output, err := invokeCrosscheckValueBatch(request, pkg)
+		output, handle, err := invokeCrosscheckValueBatchWithAttempt(request, pkg)
 		if err != nil {
 			_ = stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "value-model-diagnostics.json"), map[string]string{"batch_id": pkg.BatchID, "error": err.Error()})
 			return fmt.Errorf("value model session for %s: %w", pkg.BatchID, err)
 		}
 		if output.BatchID != pkg.BatchID {
+			_ = handle.finish("failed", "response_invalid")
 			return fmt.Errorf("value model session returned batch %q, want %q", output.BatchID, pkg.BatchID)
 		}
 		provenance[pkg.BatchID] = output.Provenance
-		if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "model-output", output.BatchID+".json"), output); err != nil {
+		if err := writeJudgeOutput(filepath.Join(request.AuditSessionDir, "model-output", output.BatchID+".json"), output); err != nil {
+			_ = handle.finish("failed", "output_write_failed")
+			return err
+		}
+		if err := handle.finish("succeeded", ""); err != nil {
 			return err
 		}
 	}
@@ -1245,28 +1250,46 @@ func loadValueBatchProvenance(auditSessionDir string) (map[string]BatchProvenanc
 }
 
 func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueBatch, error) {
+	output, handle, err := invokeCrosscheckValueBatchWithAttempt(request, pkg)
+	if handle != nil && err == nil {
+		err = handle.finish("succeeded", "")
+	}
+	return output, err
+}
+
+//nolint:funlen // The ordered launch, persistence, and response checks form one invocation boundary.
+func invokeCrosscheckValueBatchWithAttempt(request *Request, pkg ValuePackage) (output ModelValueBatch, handle *judgeAttemptHandle, err error) {
+	failureCategory := "response_invalid"
+	defer func() {
+		if err != nil && handle != nil {
+			if finishErr := handle.finish("failed", failureCategory); finishErr != nil {
+				err = fmt.Errorf("%w; record judge failure: %v", err, finishErr)
+			}
+		}
+	}()
+
 	trustedInputs, err := trustedAuditInputsFingerprint(request)
 	if err != nil {
-		return ModelValueBatch{}, err
+		return ModelValueBatch{}, handle, err
 	}
 	if request.Auditor.CLI == "" {
-		return ModelValueBatch{}, fmt.Errorf("frozen auditor CLI is unavailable")
+		return ModelValueBatch{}, handle, fmt.Errorf("frozen auditor CLI is unavailable")
 	}
 	adapter, err := cli.Get(request.Auditor.CLI)
 	if err != nil {
-		return ModelValueBatch{}, err
+		return ModelValueBatch{}, handle, err
 	}
 	input, err := json.Marshal(pkg)
 	if err != nil {
-		return ModelValueBatch{}, err
+		return ModelValueBatch{}, handle, err
 	}
 	prompt, err := valueAuditPrompt(pkg)
 	if err != nil {
-		return ModelValueBatch{}, err
+		return ModelValueBatch{}, handle, err
 	}
 	workspace, err := prepareModelWorkspace(request)
 	if err != nil {
-		return ModelValueBatch{}, err
+		return ModelValueBatch{}, handle, err
 	}
 	args, err := cli.BuildInvocationArgs(adapter, &cli.BuildArgsInput{
 		Prompt: prompt, Model: request.Auditor.Model, Effort: request.Auditor.Effort,
@@ -1274,59 +1297,70 @@ func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueB
 		DisallowedTools: []string{"AskUserQuestion"},
 	})
 	if err != nil {
-		return ModelValueBatch{}, err
+		return ModelValueBatch{}, handle, err
 	}
 	if len(args) == 0 {
-		return ModelValueBatch{}, fmt.Errorf("crosscheck adapter produced no command")
+		return ModelValueBatch{}, handle, fmt.Errorf("crosscheck adapter produced no command")
 	}
 	args, finalResponsePath, removeStructuredFiles, err := withAuditEvidenceAndOutputSchema(request, args, "value", valueOutputSchema(pkg))
 	if err != nil {
-		return ModelValueBatch{}, err
+		return ModelValueBatch{}, handle, err
 	}
 	defer removeStructuredFiles()
 	args, stdinPrompt := crosscheckPromptOnStdin(request.Auditor.CLI, args)
 	command, err := crosscheckCommand(args, workspace, filepath.Join(request.AuditSessionDir, "model-output"))
 	if err != nil {
-		return ModelValueBatch{}, err
+		return ModelValueBatch{}, handle, err
 	}
 	if stdinPrompt != "" {
 		command.Stdin = strings.NewReader(stdinPrompt)
 	}
 	env, cleanup, err := cliEnvironment(adapter, request, input, workspace, filepath.Join(request.AuditSessionDir, "model-output"))
 	if err != nil {
-		return ModelValueBatch{}, err
+		return ModelValueBatch{}, handle, err
 	}
 	defer cleanup()
 	command.Env = env
-	result, spawnTime, runErr := runCrosscheckOutput(command, adapter)
-	if after, err := trustedAuditInputsFingerprint(request); err != nil {
-		return ModelValueBatch{}, err
-	} else if after != trustedInputs {
-		return ModelValueBatch{}, fmt.Errorf("trusted audit inputs changed during crosscheck")
+	result, spawnTime, started, runErr := runCrosscheckOutputWithStart(command, adapter)
+	if started {
+		handle, err = recordJudgeExit(request, adapter, "value", pkg.BatchID, result, workspace, spawnTime)
+		if err != nil {
+			return ModelValueBatch{}, handle, err
+		}
 	}
 	if runErr != nil {
-		return ModelValueBatch{}, fmt.Errorf("run crosscheck: %w", runErr)
+		failureCategory = crosscheckFailureCategory(runErr)
+	}
+	if after, err := trustedAuditInputsFingerprint(request); err != nil {
+		failureCategory = "trusted_inputs_changed"
+		return ModelValueBatch{}, handle, err
+	} else if after != trustedInputs {
+		failureCategory = "trusted_inputs_changed"
+		return ModelValueBatch{}, handle, fmt.Errorf("trusted audit inputs changed during crosscheck")
+	}
+	if runErr != nil {
+		return ModelValueBatch{}, handle, fmt.Errorf("run crosscheck: %w", runErr)
 	}
 	rawOutput := result
 	if finalResponsePath != "" {
 		result, err = os.ReadFile(finalResponsePath) // #nosec G304 -- path is created below the audit-owned output directory.
 		if err != nil {
-			return ModelValueBatch{}, fmt.Errorf("read structured crosscheck response: %w", err)
+			return ModelValueBatch{}, handle, fmt.Errorf("read structured crosscheck response: %w", err)
 		}
 	}
 	response, err := crosscheckResponse(adapter, result, finalResponsePath != "")
 	if err != nil {
-		return ModelValueBatch{}, err
+		return ModelValueBatch{}, handle, err
 	}
-	output, err := decodeModelValueBatch(response, pkg)
+	output, err = decodeModelValueBatch(response, pkg)
 	if err != nil {
-		return ModelValueBatch{}, fmt.Errorf("decode crosscheck result: %w; response: %s", err, crosscheckDiagnostic(response))
+		return ModelValueBatch{}, handle, fmt.Errorf("decode crosscheck result: %w; response: %s", err, crosscheckDiagnostic(response))
 	}
 	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: auditSessionID(adapter, rawOutput, workspace, spawnTime)}
 	if output.Provenance.SessionID == "" {
 		output.Provenance.SessionID = "unknown"
 	}
-	return output, nil
+	return output, handle, nil
 }
 
 type modelValueBatchEnvelope struct {

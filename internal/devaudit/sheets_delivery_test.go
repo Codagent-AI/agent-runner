@@ -214,13 +214,12 @@ func TestSheetsReporterDoesNotFollowCredentialedRedirects(t *testing.T) {
 // ambiguous append idempotency against an in-memory HTTP boundary.
 func TestINT006DeliverReportUsesExactAllowlistAndDeduplicatesAmbiguousAppend(t *testing.T) {
 	var writes [][]string
-	const sheetHeader = "schema_version,observation_id,observed_at_utc,project,workflow,source_run_id,execution_session_id,audit_run_id,trigger,source_outcome,step_id,step_outcome,lineage,duration_ms,cost_usd,total_tokens,source_models,git_attribution,commit_shas,files_changed,lines_added,lines_deleted,overall_value,change_effect,unique_contribution,downstream_evidence,confidence,evidence_coverage,judge_model,rubric_version,note"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/token":
 			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "access", "token_type": "Bearer"})
 		case r.Method == http.MethodGet && r.URL.Path == "/v4/spreadsheets/sheet/values/'audit'!1:1":
-			_ = json.NewEncoder(w).Encode(map[string]any{"values": [][]string{strings.Split(sheetHeader, ",")}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"values": [][]string{stepValueHeaderV2}})
 		case r.Method == http.MethodGet && r.URL.Path == "/v4/spreadsheets/sheet/values/'audit'!B:B":
 			ids := [][]string{{"observation_id"}}
 			for _, row := range writes {
@@ -285,7 +284,7 @@ func TestProjectFromRemoteStripsHostProtocolCredentialsAndLocalPaths(t *testing.
 }
 
 func expectedDeliveryRow() []string {
-	return []string{"step_value_v1", "obs-1", "2026-09-01T00:00:00Z", "Codagent-AI/agent-runner", "core:example", "source", "session", "audit", "automatic", "success", "build", "success", "new", "", "", "", "a,z", "no_change", "", "", "", "", "high", "intended", "unique", "confirmed", "high", "complete", "judge", "value-rubric-v2", "High-level result."}
+	return []string{"step_value_v2", "obs-1", "2026-09-01T00:00:00Z", "Codagent-AI/agent-runner", "core:example", "source", "session", "audit", "automatic", "success", "build", "success", "new", "", "", "", "a,z", "no_change", "", "", "", "", "high", "intended", "unique", "confirmed", "high", "complete", "judge", "value-rubric-v2", "High-level result.", "", "", "", "", "", "", ""}
 }
 
 func writeJSON(t *testing.T, path string, value any) {
@@ -324,14 +323,13 @@ func contains(value, needle string) bool {
 }
 
 func TestRetryReportAdoptsLocalDestinationForUnconfiguredSandboxReport(t *testing.T) {
-	const sheetHeader = "schema_version,observation_id,observed_at_utc,project,workflow,source_run_id,execution_session_id,audit_run_id,trigger,source_outcome,step_id,step_outcome,lineage,duration_ms,cost_usd,total_tokens,source_models,git_attribution,commit_shas,files_changed,lines_added,lines_deleted,overall_value,change_effect,unique_contribution,downstream_evidence,confidence,evidence_coverage,judge_model,rubric_version,note"
 	appended := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/token":
 			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "access", "token_type": "Bearer"})
 		case r.Method == http.MethodGet && r.URL.Path == "/v4/spreadsheets/sheet/values/'audit'!1:1":
-			_ = json.NewEncoder(w).Encode(map[string]any{"values": [][]string{strings.Split(sheetHeader, ",")}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"values": [][]string{stepValueHeaderV2}})
 		case r.Method == http.MethodGet && r.URL.Path == "/v4/spreadsheets/sheet/values/'audit'!B:B":
 			_ = json.NewEncoder(w).Encode(map[string]any{"values": [][]string{{"observation_id"}}})
 		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v4/spreadsheets/sheet/"):

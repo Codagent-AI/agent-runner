@@ -1,4 +1,4 @@
-- [ ] Implement the change described by these files, using TDD per `CLAUDE.md`, satisfying every spec scenario and every `INT-*`/`E2E-*` obligation in the test plan, updating `docs/usage-and-cost-tracking.md` and `docs/development.md` as the design's migration plan describes, and finishing with `make fmt`, `make test`, and `make lint` passing:
+- [x] Implement the change described by these files, using TDD per `CLAUDE.md`, satisfying every spec scenario and every `INT-*`/`E2E-*` obligation in the test plan, updating `docs/usage-and-cost-tracking.md` and `docs/development.md` as the design's migration plan describes, and finishing with `make fmt`, `make test`, and `make lint` passing:
   - [proposal.md](proposal.md)
   - [specs/audit-judge-usage/spec.md](specs/audit-judge-usage/spec.md)
   - [specs/lightweight-audit-reporting/spec.md](specs/lightweight-audit-reporting/spec.md)

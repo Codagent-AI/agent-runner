@@ -154,3 +154,11 @@ steps:
 The `capture:` field forces this autonomous step onto the headless path. Run the workflow with your normally authenticated CLI, then open the completed run or inspect `run-metrics.json`. Claude or OpenCode must include a USD cost in its structured result for the Cost column to contain a number.
 
 If usage shows `?`, check whether the step used an interactive mode, whether the CLI emitted its final usage event, and whether a resumed cumulative session had a trusted baseline. If cost alone shows `?`, the CLI probably did not report a USD cost for that invocation.
+
+## Development audit judge usage
+
+A development audit records each launched value-batch and correctness judge attempt in its own audit run under `judge-usage/`. The record includes the frozen CLI, model, effort, session ID, canonical token categories, and any USD cost reported by the CLI. Failed attempts and retries count. An unavailable usage result has a reason and a null cost; Codex reports tokens but no USD cost. Judge usage does not change the audited source run's `run-metrics.json` or any source step's cost and token fields.
+
+`local-report.json` contains one `judge_usage` summary per audit. Its total tokens and cost sum the attempts that reported them, with separate `complete`, `partial`, or `none` coverage. A `none` total is null. A resumed output from an older audit with no usage record counts as an unavailable attempt.
+
+The external value worksheet uses `step_value_v2` rows. Seven columns follow the original `step_value_v1` columns: `judge_cli`, `judge_effort`, `audit_judge_attempts`, `audit_judge_total_tokens`, `audit_judge_token_coverage`, `audit_judge_cost_usd`, and `audit_judge_cost_coverage`. These are totals for the whole audit and appear on every step observation row. Count them **once per `audit_run_id`** when aggregating audits; summing them across step rows duplicates the cost. Older pending reports can still deliver, with unknown judge totals left empty.
