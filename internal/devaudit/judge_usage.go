@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -96,24 +97,27 @@ func recordJudgeExit(request *Request, adapter cli.Adapter, stage, batchID strin
 	if _, err := rand.Read(idBytes); err != nil {
 		return nil, err
 	}
-	stem := fmt.Sprintf("%d-%s", time.Now().UTC().UnixNano(), hex.EncodeToString(idBytes))
-	parts := []string{request.AuditSessionDir, "judge-usage", stage}
-	if stage == "value" {
-		parts = append(parts, batchID)
-	}
-	path := filepath.Join(append(parts, stem+".json")...)
-	usage, cost := judgeAttemptUsage(adapter, raw)
-	id := stage + "/"
-	if stage == "value" {
-		id += batchID + "/"
-	}
-	id += stem
-	record := JudgeAttempt{AttemptID: id, AuditRunID: request.AuditRunID, Stage: stage, BatchID: batchID, CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: auditSessionID(adapter, raw, workspace, spawnTime), LaunchedAt: spawnTime.UTC().Format(time.RFC3339Nano), Outcome: "exited", Usage: usage, CostUSD: cost}
-	if err := stateio.WriteJSONDurable(path, record); err != nil {
+	// Correctness has no batch, so its empty segment drops out of the path.
+	id := path.Join(stage, batchID, fmt.Sprintf("%d-%s", time.Now().UTC().UnixNano(), hex.EncodeToString(idBytes)))
+	recordPath := filepath.Join(request.AuditSessionDir, "judge-usage", filepath.FromSlash(id)+".json")
+	record := baseJudgeAttempt(request, stage, batchID)
+	record.AttemptID, record.Outcome = id, "exited"
+	record.SessionID = auditSessionID(adapter, raw, workspace, spawnTime)
+	record.LaunchedAt = spawnTime.UTC().Format(time.RFC3339Nano)
+	record.Usage, record.CostUSD = judgeAttemptUsage(adapter, raw)
+	if err := stateio.WriteJSONDurable(recordPath, record); err != nil {
 		return nil, err
 	}
-	return &judgeAttemptHandle{path: path, record: record}, nil
+	return &judgeAttemptHandle{path: recordPath, record: record}, nil
 }
+
+// baseJudgeAttempt carries the frozen judge identity shared by recorded,
+// recovered, and synthesized attempts.
+func baseJudgeAttempt(request *Request, stage, batchID string) JudgeAttempt {
+	return JudgeAttempt{AuditRunID: request.AuditRunID, Stage: stage, BatchID: batchID, CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort}
+}
+
+func judgeGroupKey(stage, batchID string) string { return stage + "/" + batchID }
 
 func (h *judgeAttemptHandle) finish(outcome, category string) error {
 	if h == nil {
@@ -160,16 +164,17 @@ func loadJudgeAttempts(request *Request, summary *JudgeUsageSummary) (map[string
 			return nil
 		}
 		parts := strings.Split(path, "/")
-		if len(parts) != 2 && len(parts) != 3 {
+		var stage, batch string
+		switch {
+		case len(parts) == 2 && parts[0] == "correctness":
+			stage = "correctness"
+		case len(parts) == 3 && parts[0] == "value":
+			stage, batch = "value", parts[1]
+		default:
 			return nil
 		}
-		stage, batch := parts[0], ""
-		if stage == "value" && len(parts) == 3 {
-			batch = parts[1]
-		} else if stage != "correctness" || len(parts) != 2 {
-			return nil
-		}
-		attempt := JudgeAttempt{AttemptID: strings.TrimSuffix(path, ".json"), AuditRunID: request.AuditRunID, Stage: stage, BatchID: batch, CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, Outcome: "unknown", Usage: unavailableJudgeUsage(model.UnavailableParseFailure)}
+		attempt := baseJudgeAttempt(request, stage, batch)
+		attempt.Outcome, attempt.Usage = "unknown", unavailableJudgeUsage(model.UnavailableParseFailure)
 		data, err := root.ReadFile(path)
 		if err == nil {
 			var stored JudgeAttempt
@@ -179,7 +184,8 @@ func loadJudgeAttempts(request *Request, summary *JudgeUsageSummary) (map[string
 		}
 		// The path is authoritative even if the file is corrupt or contains mismatched fields.
 		attempt.AttemptID, attempt.Stage, attempt.BatchID = strings.TrimSuffix(path, ".json"), stage, batch
-		groups[stage+"/"+batch] = append(groups[stage+"/"+batch], len(summary.Attempts))
+		key := judgeGroupKey(stage, batch)
+		groups[key] = append(groups[key], len(summary.Attempts))
 		summary.Attempts = append(summary.Attempts, attempt)
 		return nil
 	})
@@ -214,32 +220,33 @@ func reconcileJudgeOutputs(request *Request, summary *JudgeUsageSummary, groups 
 		} else if !knownBatches[name] {
 			continue
 		}
-		key := stage + "/" + batch
+		key := judgeGroupKey(stage, batch)
 		indices := groups[key]
 		if len(indices) == 0 {
-			summary.Attempts = append(summary.Attempts, JudgeAttempt{AttemptID: "legacy/" + key, AuditRunID: request.AuditRunID, Stage: stage, BatchID: batch, CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, Outcome: "succeeded", Usage: unavailableJudgeUsage(model.UnavailableNoUsageEvent), Legacy: true})
+			legacy := baseJudgeAttempt(request, stage, batch)
+			legacy.AttemptID, legacy.Outcome, legacy.Usage, legacy.Legacy = "legacy/"+key, "succeeded", unavailableJudgeUsage(model.UnavailableNoUsageEvent), true
+			summary.Attempts = append(summary.Attempts, legacy)
 			continue
 		}
-		found := false
-		for _, index := range indices {
-			if summary.Attempts[index].Outcome == "succeeded" {
-				found = true
-				break
-			}
-		}
-		if !found {
-			latest := indices[len(indices)-1]
-			for _, index := range indices {
-				if summary.Attempts[index].Outcome == "exited" || summary.Attempts[index].Outcome == "unknown" {
-					latest = index
-				}
-			}
-			if summary.Attempts[latest].Outcome == "exited" || summary.Attempts[latest].Outcome == "unknown" {
-				summary.Attempts[latest].Outcome = "succeeded (recovered)"
-			}
-		}
+		recoverJudgeOutputAttempt(summary.Attempts, indices)
 	}
 	return nil
+}
+
+// recoverJudgeOutputAttempt attributes a completed output with no succeeded
+// record to the latest attempt whose final outcome was never recorded.
+func recoverJudgeOutputAttempt(attempts []JudgeAttempt, indices []int) {
+	for _, index := range indices {
+		if attempts[index].Outcome == "succeeded" {
+			return
+		}
+	}
+	for i := len(indices) - 1; i >= 0; i-- {
+		if attempt := &attempts[indices[i]]; attempt.Outcome == "exited" || attempt.Outcome == "unknown" {
+			attempt.Outcome = "succeeded (recovered)"
+			return
+		}
+	}
 }
 
 func aggregateJudgeAttempts(summary *JudgeUsageSummary) {

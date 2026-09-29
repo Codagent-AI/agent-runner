@@ -152,7 +152,7 @@ Return exactly one JSON object with candidates. A candidate has status (confirme
 
 func invokeCrosscheckCorrectness(request *Request) (CorrectnessCandidates, error) {
 	output, handle, err := invokeCrosscheckCorrectnessWithAttempt(request)
-	if handle != nil && err == nil {
+	if err == nil {
 		err = handle.finish("succeeded", "")
 	}
 	return output, err
@@ -219,7 +219,7 @@ func invokeCrosscheckCorrectnessWithAttempt(request *Request) (output Correctnes
 	}
 	defer cleanup()
 	command.Env = env
-	data, spawnTime, started, runErr := runCrosscheckOutputWithStart(command, adapter)
+	data, spawnTime, started, runErr := runCrosscheckOutput(command, adapter)
 	if started {
 		handle, err = recordJudgeExit(request, adapter, "correctness", "", data, workspace, spawnTime)
 		if err != nil {
@@ -239,7 +239,6 @@ func invokeCrosscheckCorrectnessWithAttempt(request *Request) (output Correctnes
 	if runErr != nil {
 		return CorrectnessCandidates{}, handle, fmt.Errorf("run crosscheck: %w", runErr)
 	}
-	rawOutput := data
 	if finalResponsePath != "" {
 		data, err = os.ReadFile(finalResponsePath) // #nosec G304 -- path is created below the audit-owned output directory.
 		if err != nil {
@@ -259,7 +258,7 @@ func invokeCrosscheckCorrectnessWithAttempt(request *Request) (output Correctnes
 	if decoder.Decode(&extra) != io.EOF {
 		return CorrectnessCandidates{}, handle, fmt.Errorf("crosscheck result contains multiple JSON values")
 	}
-	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: auditSessionID(adapter, rawOutput, workspace, spawnTime)}
+	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: handle.record.SessionID}
 	return output, handle, nil
 }
 
@@ -306,12 +305,9 @@ func correctnessOutputSchema(references []EvidenceReference) map[string]any {
 	}
 }
 
-func runBoundedOutput(command *exec.Cmd, maximum int64) ([]byte, error) {
-	data, _, err := runBoundedOutputWithStart(command, maximum)
-	return data, err
-}
-
-func runBoundedOutputWithStart(command *exec.Cmd, maximum int64) (raw []byte, started bool, runErr error) {
+// runBoundedOutput reports started once the process launches, so callers can
+// account for attempts that ran even when they fail.
+func runBoundedOutput(command *exec.Cmd, maximum int64) (raw []byte, started bool, runErr error) {
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return nil, false, err

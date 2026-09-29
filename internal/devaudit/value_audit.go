@@ -1251,7 +1251,7 @@ func loadValueBatchProvenance(auditSessionDir string) (map[string]BatchProvenanc
 
 func invokeCrosscheckValueBatch(request *Request, pkg ValuePackage) (ModelValueBatch, error) {
 	output, handle, err := invokeCrosscheckValueBatchWithAttempt(request, pkg)
-	if handle != nil && err == nil {
+	if err == nil {
 		err = handle.finish("succeeded", "")
 	}
 	return output, err
@@ -1321,7 +1321,7 @@ func invokeCrosscheckValueBatchWithAttempt(request *Request, pkg ValuePackage) (
 	}
 	defer cleanup()
 	command.Env = env
-	result, spawnTime, started, runErr := runCrosscheckOutputWithStart(command, adapter)
+	result, spawnTime, started, runErr := runCrosscheckOutput(command, adapter)
 	if started {
 		handle, err = recordJudgeExit(request, adapter, "value", pkg.BatchID, result, workspace, spawnTime)
 		if err != nil {
@@ -1341,7 +1341,6 @@ func invokeCrosscheckValueBatchWithAttempt(request *Request, pkg ValuePackage) (
 	if runErr != nil {
 		return ModelValueBatch{}, handle, fmt.Errorf("run crosscheck: %w", runErr)
 	}
-	rawOutput := result
 	if finalResponsePath != "" {
 		result, err = os.ReadFile(finalResponsePath) // #nosec G304 -- path is created below the audit-owned output directory.
 		if err != nil {
@@ -1356,10 +1355,7 @@ func invokeCrosscheckValueBatchWithAttempt(request *Request, pkg ValuePackage) (
 	if err != nil {
 		return ModelValueBatch{}, handle, fmt.Errorf("decode crosscheck result: %w; response: %s", err, crosscheckDiagnostic(response))
 	}
-	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: auditSessionID(adapter, rawOutput, workspace, spawnTime)}
-	if output.Provenance.SessionID == "" {
-		output.Provenance.SessionID = "unknown"
-	}
+	output.Provenance = BatchProvenance{CLI: request.Auditor.CLI, Model: request.Auditor.Model, Effort: request.Auditor.Effort, SessionID: handle.record.SessionID}
 	return output, handle, nil
 }
 

@@ -43,11 +43,11 @@ func crosscheckDiagnostic(text string) string {
 	return text
 }
 
-func runCrosscheckOutputWithStart(command *exec.Cmd, adapter cli.Adapter) (raw []byte, at time.Time, started bool, runErr error) {
+func runCrosscheckOutput(command *exec.Cmd, adapter cli.Adapter) (raw []byte, at time.Time, started bool, runErr error) {
 	var stderr diagnosticBuffer
 	command.Stderr = &stderr
 	spawnTime := time.Now()
-	data, started, err := runBoundedOutputWithStart(command, maxCrosscheckOutput)
+	data, started, err := runBoundedOutput(command, maxCrosscheckOutput)
 	if err != nil {
 		detail := string(data)
 		switch adapter := adapter.(type) {
