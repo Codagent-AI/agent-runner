@@ -319,3 +319,44 @@ func TestClaudeParentInvalidLineAfterSpanFollowedByValidLine(t *testing.T) {
 		t.Fatalf("usage=%+v", got.Usage)
 	}
 }
+
+func TestClaudeTranscriptFallbackToleratesGlobMetacharactersInConfigRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cfg[1]")
+	session := "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	project := filepath.Join(root, "projects", "shortened-project")
+	sub := filepath.Join(project, session, "subagents")
+	writeClaudeFixture(t, filepath.Join(project, session+".jsonl"), `{"uuid":"first","type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent","id":"tool"}]}}`+"\n"+`{"uuid":"last","type":"assistant","message":{"content":[]}}`+"\n")
+	writeClaudeFixture(t, filepath.Join(sub, "agent-a.meta.json"), `{"toolUseId":"tool"}`)
+	writeClaudeFixture(t, filepath.Join(sub, "agent-a.jsonl"), `{"type":"assistant","message":{"id":"m","model":"haiku","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":2}}}`+"\n")
+	stdout := `{"uuid":"first","type":"system","session_id":"` + session + `","model":"opus"}` + "\n" + `{"uuid":"last","type":"assistant","message":{"model":"opus"}}` + "\n" + `{"type":"result","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}` + "\n"
+	got, err := (&ClaudeAdapter{}).ExtractUsageWithContext(stdout, UsageContext{Workdir: t.TempDir(), Env: []string{"CLAUDE_CONFIG_DIR=" + root}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage.SubagentCollection != model.CompletenessComplete || len(got.Usage.Allocations) != 2 {
+		t.Fatalf("usage=%+v", got.Usage)
+	}
+}
+
+func TestClaudeSidecarIndexToleratesGlobMetacharactersInProjectDir(t *testing.T) {
+	root := t.TempDir()
+	work := filepath.Join(t.TempDir(), "w[1]")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	session := "dddddddd-dddd-dddd-dddd-dddddddddddd"
+	encoded := claudePathUnsafeRe.ReplaceAllString(work, "-")
+	project := filepath.Join(root, "projects", encoded)
+	sub := filepath.Join(project, session, "subagents")
+	writeClaudeFixture(t, filepath.Join(project, session+".jsonl"), `{"uuid":"first","type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent","id":"tool"}]}}`+"\n"+`{"uuid":"last","type":"assistant","message":{"content":[]}}`+"\n")
+	writeClaudeFixture(t, filepath.Join(sub, "agent-a.meta.json"), `{"toolUseId":"tool"}`)
+	writeClaudeFixture(t, filepath.Join(sub, "agent-a.jsonl"), `{"type":"assistant","message":{"id":"m","model":"haiku","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":2}}}`+"\n")
+	stdout := `{"uuid":"first","type":"system","session_id":"` + session + `","model":"opus"}` + "\n" + `{"uuid":"last","type":"assistant","message":{"model":"opus"}}` + "\n" + `{"type":"result","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}` + "\n"
+	got, err := (&ClaudeAdapter{}).ExtractUsageWithContext(stdout, UsageContext{Workdir: work, Env: []string{"CLAUDE_CONFIG_DIR=" + root}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage.SubagentCollection != model.CompletenessComplete || len(got.Usage.Allocations) != 2 {
+		t.Fatalf("usage=%+v", got.Usage)
+	}
+}

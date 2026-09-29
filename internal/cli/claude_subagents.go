@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -295,8 +294,16 @@ func indexClaudeSidecars(root *os.Root, subagentsRel string) map[string]claudeSi
 	if root == nil || subagentsRel == "" {
 		return index
 	}
-	sidecars, _ := fs.Glob(root.FS(), path.Join(filepath.ToSlash(subagentsRel), "agent-*.meta.json"))
-	for _, sidecar := range sidecars {
+	// List the directory rather than globbing: the project directory name can
+	// contain glob metacharacters.
+	dir := filepath.ToSlash(subagentsRel)
+	entries, _ := fs.ReadDir(root.FS(), dir)
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, "agent-") || !strings.HasSuffix(name, ".meta.json") {
+			continue
+		}
+		sidecar := dir + "/" + name
 		var m claudeSidecar
 		raw, err := fs.ReadFile(root.FS(), sidecar)
 		if err == nil && json.Unmarshal(raw, &m) == nil && m.ToolUseID != "" {
@@ -541,15 +548,23 @@ func claudeTranscriptPaths(session string, uc UsageContext) (configRoot, parentR
 	}
 	project := claudePathUnsafeRe.ReplaceAllString(abs, "-")
 	if _, err := os.Stat(filepath.Join(root, "projects", project, session+".jsonl")); err != nil {
-		// Claude shortens and hashes long project directory names.
-		matches, globErr := filepath.Glob(filepath.Join(root, "projects", "*", session+".jsonl"))
+		// Claude shortens and hashes long project directory names. List the
+		// projects directory rather than globbing, since root can contain glob
+		// metacharacters.
+		entries, readErr := os.ReadDir(filepath.Join(root, "projects"))
+		var matches []string
+		for _, entry := range entries {
+			if _, err := os.Stat(filepath.Join(root, "projects", entry.Name(), session+".jsonl")); err == nil {
+				matches = append(matches, entry.Name())
+			}
+		}
 		switch {
-		case globErr != nil || len(matches) == 0:
+		case readErr != nil || len(matches) == 0:
 			return "", "", "", model.UnavailableSubagentSpanUnavailable
 		case len(matches) > 1:
 			return "", "", "", model.UnavailableTranscriptAmbiguous
 		}
-		project = filepath.Base(filepath.Dir(matches[0]))
+		project = matches[0]
 	}
 	projectRel := filepath.Join("projects", project)
 	return root, filepath.Join(projectRel, session+".jsonl"), filepath.Join(projectRel, session, "subagents"), ""
