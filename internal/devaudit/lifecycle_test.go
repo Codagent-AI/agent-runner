@@ -223,6 +223,26 @@ func TestSnapshotWorkflowDefinitionIncludesSiblingFiles(t *testing.T) {
 	}
 }
 
+func TestSnapshotWorkflowDefinitionIgnoresCommandsWithoutSiblingFiles(t *testing.T) {
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "main.yaml"), []byte("name: main\nsteps:\n  - id: tools\n    command: git status && jq . out.json && sh helper.sh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "helper.sh"), []byte("echo helper\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := t.TempDir()
+	if err := snapshotWorkflowDefinition("main.yaml", project, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.ReadFile(filepath.Join(snapshot, "source-workflow", "helper.sh")); err != nil {
+		t.Fatalf("helper.sh not copied: %v", err)
+	}
+	if note, err := os.ReadFile(filepath.Join(snapshot, "source-workflow", "SKIPPED.txt")); !os.IsNotExist(err) {
+		t.Fatalf("SKIPPED.txt written for command words: %q, %v", note, err)
+	}
+}
+
 func TestSnapshotWorkflowDefinitionSkipsOversizedDirectory(t *testing.T) {
 	project := t.TempDir()
 	if err := os.WriteFile(filepath.Join(project, "main.yaml"), []byte("name: main\nsteps:\n  - id: large\n    script: large.sh\n  - id: small\n    script: small.sh\n"), 0o600); err != nil {

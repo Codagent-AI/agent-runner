@@ -436,6 +436,10 @@ func snapshotReferencedWorkflowFiles(sourcePath, projectRoot string, sourceData 
 	for _, name := range files {
 		path := filepath.Join(baseDir, name)
 		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			// Command words such as git or jq resolve to no sibling file; they are not omitted evidence.
+			continue
+		}
 		if err != nil || !info.Mode().IsRegular() {
 			omitted = append(omitted, name)
 			continue
