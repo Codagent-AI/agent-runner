@@ -1120,7 +1120,7 @@ func emitAgentEnd(
 	emitStepEnd(ctx, prefix, startTime, string(outcome), data, step)
 }
 
-func extractAgentUsage(adapter cli.Adapter, cliName string, invocationContext cli.InvocationContext, rawStdout string) (cli.UsageExtraction, error) {
+func extractAgentUsage(adapter cli.Adapter, cliName string, invocationContext cli.InvocationContext, rawStdout string, usageContext ...cli.UsageContext) (cli.UsageExtraction, error) {
 	if !invocationContext.IsHeadless() {
 		return cli.UsageExtraction{Usage: defaultAgentUsage(cliName, false)}, nil
 	}
@@ -1128,7 +1128,13 @@ func extractAgentUsage(adapter cli.Adapter, cliName string, invocationContext cl
 	if !ok {
 		return cli.UsageExtraction{Usage: defaultAgentUsage(cliName, true)}, nil
 	}
-	extraction, err := extractor.ExtractUsage(rawStdout)
+	var extraction cli.UsageExtraction
+	var err error
+	if contextual, ok := adapter.(cli.ContextualUsageExtractor); ok && len(usageContext) > 0 {
+		extraction, err = contextual.ExtractUsageWithContext(rawStdout, usageContext[0])
+	} else {
+		extraction, err = extractor.ExtractUsage(rawStdout)
+	}
 	if err != nil {
 		return cli.UsageExtraction{Usage: model.UsageRecord{
 			Status: model.UsageUnavailable, Reason: model.UnavailableParseFailure,

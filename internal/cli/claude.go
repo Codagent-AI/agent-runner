@@ -264,23 +264,24 @@ func (a *ClaudeAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) 
 			continue
 		}
 		var event struct {
-			Type         string          `json:"type"`
-			Model        string          `json:"model"`
-			Message      json.RawMessage `json:"message"`
-			Usage        json.RawMessage `json:"usage"`
-			TotalCostUSD *float64        `json:"total_cost_usd"`
+			Type            string          `json:"type"`
+			ParentToolUseID string          `json:"parent_tool_use_id"`
+			Model           string          `json:"model"`
+			Message         json.RawMessage `json:"message"`
+			Usage           json.RawMessage `json:"usage"`
+			TotalCostUSD    *float64        `json:"total_cost_usd"`
 		}
 		if err := json.Unmarshal(line, &event); err != nil {
 			return UsageExtraction{}, fmt.Errorf("claude: parse stream-json: %w", err)
 		}
-		if event.Model != "" {
+		if event.ParentToolUseID == "" && event.Model != "" {
 			modelName = event.Model
 		}
 		if len(event.Message) > 0 {
 			var message struct {
 				Model string `json:"model"`
 			}
-			if json.Unmarshal(event.Message, &message) == nil && message.Model != "" {
+			if event.ParentToolUseID == "" && json.Unmarshal(event.Message, &message) == nil && message.Model != "" {
 				modelName = message.Model
 			}
 		}
@@ -293,8 +294,11 @@ func (a *ClaudeAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) 
 		return UsageExtraction{}, fmt.Errorf("claude: scan stream-json: %w", err)
 	}
 	if len(lastUsage) == 0 || string(lastUsage) == "null" {
+		usage := unavailableUsage("claude", "claude:result-event", model.UnavailableNoUsageEvent)
+		usage.Model = modelName
+		usage.RawCumulativeCostUSD = lastCost
 		return UsageExtraction{
-			Usage: unavailableUsage("claude", "claude:result-event", model.UnavailableNoUsageEvent),
+			Usage: usage,
 		}, nil
 	}
 

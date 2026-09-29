@@ -539,7 +539,9 @@ func totalsForRecords(records []StepRecord, activeDuration int64) model.RunTotal
 	totals.ActiveDurationMS = activeDuration
 	agents := 0
 	usageReported := 0
+	usagePartial := 0
 	tokenTotalsReported := 0
+	tokenTotalsPartial := 0
 	costReported := 0
 	var cost float64
 	canonicalTotals := model.TokenTotals{}
@@ -555,9 +557,17 @@ func totalsForRecords(records []StepRecord, activeDuration int64) model.RunTotal
 		}
 		agents++
 		if step.Usage != nil && step.Usage.Status == model.UsageCollected {
-			usageReported++
+			if step.Usage.SubagentCollection == model.CompletenessPartial {
+				usagePartial++
+			} else {
+				usageReported++
+			}
 			if step.Usage.TokenTotals != nil {
-				tokenTotalsReported++
+				if step.Usage.SubagentCollection == model.CompletenessPartial {
+					tokenTotalsPartial++
+				} else {
+					tokenTotalsReported++
+				}
 				canonicalTotals.Input += step.Usage.TokenTotals.Input
 				canonicalTotals.Output += step.Usage.TokenTotals.Output
 				canonicalTotals.Total += step.Usage.TokenTotals.Total
@@ -568,9 +578,9 @@ func totalsForRecords(records []StepRecord, activeDuration int64) model.RunTotal
 			cost += *step.EstimatedAPICostUSD
 		}
 	}
-	totals.UsageCoverage = coverage(agents, usageReported)
-	totals.TokenTotalCoverage = coverage(agents, tokenTotalsReported)
-	if tokenTotalsReported > 0 {
+	totals.UsageCoverage = coverageWithPartial(agents, usageReported, usagePartial)
+	totals.TokenTotalCoverage = coverageWithPartial(agents, tokenTotalsReported, tokenTotalsPartial)
+	if tokenTotalsReported+tokenTotalsPartial > 0 {
 		totals.TokenTotals = &canonicalTotals
 	}
 	totals.CostCoverage = coverage(agents, costReported)
@@ -866,6 +876,16 @@ func coverage(eligible, reported int) model.Coverage {
 	return model.CoveragePartial
 }
 
+func coverageWithPartial(eligible, full, partial int) model.Coverage {
+	if full+partial == 0 {
+		return model.CoverageNone
+	}
+	if full == eligible && partial == 0 {
+		return model.CoverageComplete
+	}
+	return model.CoveragePartial
+}
+
 func attemptKey(prefix, id, kind string, iteration int) executionKey {
 	return executionKey{Prefix: prefix, ID: id, Kind: kind, Iteration: iteration}
 }
@@ -957,6 +977,11 @@ func cloneCounts(counts model.TokenCounts) model.TokenCounts {
 
 func cloneUsage(usage *model.UsageRecord) model.UsageRecord {
 	cloned := *usage
+	cloned.Allocations = append([]model.UsageAllocation(nil), usage.Allocations...)
+	for i := range cloned.Allocations {
+		cloned.Allocations[i].Tokens = cloneCounts(usage.Allocations[i].Tokens)
+		cloned.Allocations[i].TokenTotals = cloneTokenTotals(usage.Allocations[i].TokenTotals)
+	}
 	cloned.Tokens = cloneCounts(usage.Tokens)
 	cloned.RawCumulative = cloneCounts(usage.RawCumulative)
 	cloned.TokenTotals = cloneTokenTotals(usage.TokenTotals)
