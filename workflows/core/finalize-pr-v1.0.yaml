@@ -6,6 +6,9 @@ params:
   - name: ci_fix_cycles
     required: false
     default: "3"
+  - name: review_bots
+    required: false
+    default: ""
 
 sessions:
   - name: lead-agent
@@ -37,25 +40,11 @@ steps:
       max_param: ci_fix_cycles
     steps:
       - id: wait-ci
-        session: lead-agent
-        mode: autonomous
+        script: ci-wait.sh
         capture: ci_report
         continue_on_failure: true
-        prompt: |
-          Invoke codagent:wait-ci to poll CI status and gather review comments. Treat top-level bot summaries, rate-limit notices, and already-resolved reports as informational. Report comments only when actionable unresolved review feedback remains.
-
-          After the human-readable report, end your response with exactly one of these terminal markers as the final non-empty line:
-          - `CI_PASSED` when CI is green and no actionable unresolved feedback or unfinished bot review remains;
-          - `CI_FAILED` when a check failed or a blocking review remains;
-          - `CI_COMMENTS` when CI is green but actionable unresolved feedback remains;
-          - `CI_PENDING` when real CI checks (such as tests, specs, or builds) are still running;
-          - `CI_REVIEW_INCOMPLETE` when CI is otherwise green with no actionable feedback, but a review bot did not complete its review.
-
-          When more than one condition applies, use this precedence: `CI_FAILED`, `CI_COMMENTS`, `CI_PENDING`, `CI_REVIEW_INCOMPLETE`, `CI_PASSED`. In particular, actionable unresolved feedback produces `CI_COMMENTS` even when other review automation is still running.
-
-          Distinguish running required CI checks from a running review bot such as CodeRabbit. A "draft not reviewed" notice, or bot status or comments dated before the PR left draft or before the latest push, is stale and must not count as a pass. If the PR recently left draft or received a push and the bot has not started, keep polling for a reasonable bounded time (a few minutes) to let it start. If the bot is actively reviewing, wait a reasonable bounded time for it to finish. If it never starts, says it is rate-limited or skipped, or does not finish within that wait, report `CI_REVIEW_INCOMPLETE` when CI is otherwise green and no actionable feedback remains. Use `CI_PENDING` only for real CI checks still running.
-
-          Do not write anything after the marker. The workflow reads this marker as its control result.
+        script_inputs:
+          review_bots: "{{review_bots}}"
 
       - id: ci-status-gate
         script: ci-status-gate.sh
@@ -75,29 +64,22 @@ steps:
         mode: autonomous
         skip_if: previous_success
         prompt: |
+          The workflow's CI wait for this cycle produced the report below. Start from it; do not poll CI again before fixing.
+
+          <ci-report>
+          {{ci_report}}
+          </ci-report>
+
           CI has failures or unresolved review comments. Invoke codagent:fix-pr to address only issues that stay within the approved requirements, design, and implementation scope. Follow the project's commit message conventions and prepend [{{step_id}}].
 
           This workflow boundary overrides any more permissive default in the skill: do not silently treat a requirement, design, or scope change as ordinary review feedback. If a requested fix would change approved product behavior, requirements, design decisions, or materially expand scope, do not make it. Leave the finding unresolved and report that the change must return to its acceptance or planning workflow before finalization can continue.
 
   - id: verify-final
-    session: resume
-    mode: autonomous
+    script: ci-wait.sh
     capture: final_ci_report
-    prompt: |
-      Invoke codagent:wait-ci to verify the final fix cycle made CI green. Treat top-level bot summaries, rate-limit notices, and already-resolved reports as informational. Report comments only when actionable unresolved review feedback remains. Report the final status to the user.
-
-      After the human-readable report, end your response with exactly one of these terminal markers as the final non-empty line:
-      - `CI_PASSED` when CI is green and no actionable unresolved feedback or unfinished bot review remains;
-      - `CI_FAILED` when a check failed or a blocking review remains;
-      - `CI_COMMENTS` when CI is green but actionable unresolved feedback remains;
-      - `CI_PENDING` when real CI checks (such as tests, specs, or builds) are still running;
-      - `CI_REVIEW_INCOMPLETE` when CI is otherwise green with no actionable feedback, but a review bot did not complete its review.
-
-      When more than one condition applies, use this precedence: `CI_FAILED`, `CI_COMMENTS`, `CI_PENDING`, `CI_REVIEW_INCOMPLETE`, `CI_PASSED`. In particular, actionable unresolved feedback produces `CI_COMMENTS` even when other review automation is still running.
-
-      Distinguish running required CI checks from a running review bot such as CodeRabbit. A "draft not reviewed" notice, or bot status or comments dated before the PR left draft or before the latest push, is stale and must not count as a pass. If the PR recently left draft or received a push and the bot has not started, keep polling for a reasonable bounded time (a few minutes) to let it start. If the bot is actively reviewing, wait a reasonable bounded time for it to finish. If it never starts, says it is rate-limited or skipped, or does not finish within that wait, report `CI_REVIEW_INCOMPLETE` when CI is otherwise green and no actionable feedback remains. Use `CI_PENDING` only for real CI checks still running.
-
-      Do not write anything after the marker. The workflow reads this marker as its control result.
+    continue_on_failure: true
+    script_inputs:
+      review_bots: "{{review_bots}}"
 
   - id: final-ci-status-gate
     script: ci-status-gate.sh
