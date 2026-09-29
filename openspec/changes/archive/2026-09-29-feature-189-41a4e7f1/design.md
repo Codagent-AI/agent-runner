@@ -44,8 +44,9 @@ Observation rows and `LocalReport` carry `SchemaVersion = valueSchemaVersion = "
 ## Goals / Non-Goals
 
 **Goals:**
-- One durable usage record per launched judge attempt, written before any exit or response
-  validation and before the output is treated as complete.
+- One durable usage record per launched judge attempt that reaches its exit record, written before
+  any exit or response validation and before the output is treated as complete. A crash after launch
+  but before the exit record is written leaves that attempt out of the summary (see Risks).
 - An audit-level summary in `local-report.json`, and seven trailing judge columns in a
   `step_value_v2` worksheet, including a safe in-place upgrade from `step_value_v1`.
 - Reuse the existing adapters' extraction. No new parsers and no pricing.
@@ -124,8 +125,8 @@ For the third state, the summary resolves the record as described in §3. Resume
 
 If the exit record cannot be persisted, the invoker records nothing further, returns an error, and
 the caller does not write an output. This keeps the invariant "no completed output without a usage
-record". Such a disk failure would also have failed the output write. Extraction failures, by
-contrast, only yield an unavailable `UsageRecord`, and the audit goes on.
+record". Extraction failures, by contrast, only yield an unavailable `UsageRecord`, and the audit
+goes on.
 
 ### 2. Launch detection and extraction
 
