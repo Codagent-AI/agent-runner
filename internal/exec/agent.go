@@ -343,7 +343,7 @@ func buildWorkflowAgentInvocation(
 		InvocationContext: invocationContext, CLI: cliName, Model: resolvedModel,
 		Effort:    resolvedEffort,
 		SessionID: sessionID, SessionResumed: isResume,
-		RunID: filepath.Base(filepath.Clean(ctx.SessionDir)),
+		RunID: runIDFromSessionDir(ctx.SessionDir),
 		Log:   log, SuspendHook: ctx.SuspendHook, ResumeHook: ctx.ResumeHook,
 		OnStarted: onStarted, direct: direct,
 	}
@@ -707,9 +707,7 @@ func buildAdapterInput(
 		PermissionMode: usersettings.AutonomousPermissionMode(ctx.AutonomousPermissionMode),
 		Workdir:        step.Workdir,
 	}
-	if ctx.SessionDir != "" {
-		input.RunID = filepath.Base(filepath.Clean(ctx.SessionDir))
-	}
+	input.RunID = runIDFromSessionDir(ctx.SessionDir)
 
 	// Block AskUserQuestion in autonomous mode so the agent cannot stall
 	// waiting for input. Applies to fresh and resumed autonomous sessions alike.

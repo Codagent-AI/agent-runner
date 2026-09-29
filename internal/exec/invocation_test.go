@@ -541,3 +541,12 @@ func TestBuildAgentEnvironmentRemovesAndOverridesByName(t *testing.T) {
 		t.Fatalf("BuildAgentEnvironment() mismatch (-want +got):\n%s", diff)
 	}
 }
+
+func TestRunIDFromSessionDir(t *testing.T) {
+	if got := runIDFromSessionDir(""); got != "" {
+		t.Fatalf("empty session dir produced run ID %q", got)
+	}
+	if got := runIDFromSessionDir("/runs/run-1/"); got != "run-1" {
+		t.Fatalf("run ID = %q, want run-1", got)
+	}
+}

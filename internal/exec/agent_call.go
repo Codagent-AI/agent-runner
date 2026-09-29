@@ -807,9 +807,7 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 		PermissionMode:  usersettings.AutonomousPermissionMode(h.options.Context.AutonomousPermissionMode),
 		DisallowedTools: []string{"AskUserQuestion"}, Workdir: call.workdir,
 	}
-	if h.options.Context.SessionDir != "" {
-		input.RunID = filepath.Base(filepath.Clean(h.options.Context.SessionDir))
-	}
+	input.RunID = runIDFromSessionDir(h.options.Context.SessionDir)
 	args, err := cli.BuildInvocationArgs(call.adapter, &input)
 	if err != nil {
 		return h.preLaunchFailure(record, call, "prepare called agent: "+err.Error())

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -246,4 +247,13 @@ func invocationProvider(cliName, modelName string) string {
 		}
 	}
 	return ""
+}
+
+// runIDFromSessionDir derives the run ID from a run's session directory; an
+// empty directory has no run ID.
+func runIDFromSessionDir(sessionDir string) string {
+	if sessionDir == "" {
+		return ""
+	}
+	return filepath.Base(filepath.Clean(sessionDir))
 }
