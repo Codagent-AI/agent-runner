@@ -144,7 +144,7 @@ func TestResolveStepProfile_RunAgentOverrideAppliesWithoutProfileStore(t *testin
 
 func TestExecuteAgentStep(t *testing.T) {
 	t.Run("adapter without extraction keeps unsupported usage unavailable", func(t *testing.T) {
-		got, err := extractAgentUsage(&spawnEnvAdapter{}, "fake", cli.ContextAutonomousHeadless, `{"type":"result"}`+"\n")
+		got, err := extractAgentUsage(&spawnEnvAdapter{}, "fake", cli.ContextAutonomousHeadless, `{"type":"result"}`+"\n", cli.UsageContext{})
 		if err != nil {
 			t.Fatalf("extractAgentUsage() error = %v", err)
 		}

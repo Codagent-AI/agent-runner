@@ -52,10 +52,31 @@ const (
 	// UnavailableNotInvoked means the step's agent CLI was never launched.
 	UnavailableNotInvoked UnavailableReason = "not-invoked"
 
-	UnavailableUnsupportedAdapter   UnavailableReason = "unsupported-adapter"
-	UnavailableNestedMetricsMissing UnavailableReason = "nested-metrics-missing"
-	UnavailableNestedMetricsInvalid UnavailableReason = "nested-metrics-invalid"
+	UnavailableUnsupportedAdapter        UnavailableReason = "unsupported-adapter"
+	UnavailableNestedMetricsMissing      UnavailableReason = "nested-metrics-missing"
+	UnavailableNestedMetricsInvalid      UnavailableReason = "nested-metrics-invalid"
+	UnavailableSubagentTranscriptMissing UnavailableReason = "subagent-transcript-missing"
+	UnavailableSubagentTranscriptInvalid UnavailableReason = "subagent-transcript-invalid"
+	UnavailableSubagentStillRunning      UnavailableReason = "subagent-still-running"
+	UnavailableSubagentSpanUnavailable   UnavailableReason = "subagent-span-unavailable"
+	UnavailableSubagentParentInvalid     UnavailableReason = "subagent-parent-transcript-invalid"
+	UnavailableTranscriptAmbiguous       UnavailableReason = "transcript-ambiguous"
 )
+
+type UsageAllocation struct {
+	ID              string            `json:"allocation_id"`
+	Kind            string            `json:"kind"`
+	Status          UsageStatus       `json:"status"`
+	Reason          UnavailableReason `json:"reason,omitempty"`
+	Model           string            `json:"model,omitempty"`
+	Tokens          TokenCounts       `json:"tokens,omitempty"`
+	TokenTotals     *TokenTotals      `json:"token_totals,omitempty"`
+	Completeness    Completeness      `json:"completeness,omitempty"`
+	AgentType       string            `json:"agent_type,omitempty"`
+	ToolUseID       string            `json:"tool_use_id,omitempty"`
+	ParentToolUseID string            `json:"parent_tool_use_id,omitempty"`
+	SpawnDepth      int               `json:"spawn_depth,omitempty"`
+}
 
 // IdentitySource identifies where an effective invocation identity field came
 // from. Telemetry is preferred; invocation means Runner filled a field from
@@ -87,6 +108,9 @@ type InvocationIdentity struct {
 // UsageRecord is the typed usage value passed through audit events and stored
 // in the metrics artifact.
 type UsageRecord struct {
+	Allocations              []UsageAllocation  `json:"allocations,omitempty"`
+	SubagentCollection       Completeness       `json:"subagent_collection,omitempty"`
+	SubagentCollectionReason UnavailableReason  `json:"subagent_collection_reason,omitempty"`
 	Status                   UsageStatus        `json:"status"`
 	Reason                   UnavailableReason  `json:"reason,omitempty"`
 	CLI                      string             `json:"cli"`

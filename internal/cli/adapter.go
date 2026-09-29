@@ -397,6 +397,15 @@ type UsageExtractor interface {
 	ExtractUsage(rawStdout string) (UsageExtraction, error)
 }
 
+type UsageContext struct {
+	Workdir string
+	Env     []string
+}
+
+type ContextualUsageExtractor interface {
+	ExtractUsageWithContext(rawStdout string, context UsageContext) (UsageExtraction, error)
+}
+
 // HeadlessResultFilter is an optional interface adapters may implement when a
 // CLI can report a non-zero exit after a completed headless turn for a known
 // non-fatal bookkeeping error.
