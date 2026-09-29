@@ -470,6 +470,23 @@ func TestCoreVerifyChangeAcceptanceRoundsAreWorkflowSteps(t *testing.T) {
 	}
 }
 
+func TestCoreVerifyChangeAcceptanceScratchDirectory(t *testing.T) {
+	workflow := readBuiltinWorkflowForTest(t, verifyChangeRef)
+	reset := findStep(workflow.Steps, "reset-round-evidence")
+	if reset == nil || !strings.Contains(reset.Command, `mkdir -p "{{session_dir}}/scratch/acceptance-test"`) {
+		t.Fatalf("reset-round-evidence must create acceptance scratch directory: %+v", reset)
+	}
+	tester := findStep(workflow.Steps, "acceptance-test")
+	if tester == nil {
+		t.Fatal("acceptance-test step not found")
+	}
+	requirePromptContains(t, tester.ID, tester.Prompt,
+		"scratch_dir: `{{session_dir}}/scratch/acceptance-test`",
+		"All temporary files, clones, build outputs, and servers' working directories must go under `scratch_dir`",
+		"Never use `/tmp`, `/private/tmp`, or `$TMPDIR`",
+	)
+}
+
 func TestCoreVerifyChangeOpenDraftPRPushesDirectly(t *testing.T) {
 	workflow := readBuiltinWorkflowForTest(t, verifyChangeRef)
 	step := findStep(workflow.Steps, "open-draft-pr")
