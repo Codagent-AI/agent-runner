@@ -104,15 +104,7 @@ func TestCoreVerifyChangeSimplifyPass(t *testing.T) {
 	if step == nil {
 		t.Fatal("simplify step not found")
 	}
-	if step.Agent != "implementor" {
-		t.Errorf("simplify agent = %q, want implementor", step.Agent)
-	}
-	if step.Session != "new" {
-		t.Errorf("simplify session = %q, want new", step.Session)
-	}
-	if step.Mode != "autonomous" {
-		t.Errorf("simplify mode = %q, want autonomous", step.Mode)
-	}
+	assertAgentStep(t, step, "implementor", "new", model.ModeAutonomous)
 	requirePromptContains(t, step.ID, step.Prompt,
 		"do not use a /simplify skill or reviewer subagents",
 		"{{session_dir}}/output/acceptance-assumptions.md",
