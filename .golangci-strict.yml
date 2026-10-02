@@ -1,6 +1,9 @@
 version: "2"
 
 run:
+  # The validator runs both lint tiers concurrently; wait for the shared
+  # golangci-lint lock instead of failing.
+  allow-serial-runners: true
   build-tags:
     - dev_audit
 
