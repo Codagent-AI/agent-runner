@@ -37,10 +37,30 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
+      # Validator delivery tests run against agent-validator built from main.
+      - uses: actions/checkout@v4
+        with:
+          repository: Codagent-AI/agent-validator
+          ref: main
+          path: .ci/agent-validator
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: oven-sh/setup-bun@v2
+      - name: Build agent-validator
+        working-directory: .ci/agent-validator
+        run: |
+          bun install --frozen-lockfile
+          bun run build:npm
       - run: go test -tags dev_audit -timeout 300s ./...
+        env:
+          AGENT_RUNNER_TEST_VALIDATOR_ENTRYPOINT: ${{ github.workspace }}/.ci/agent-validator/dist/index.js
 
   security-code:
     name: security-code

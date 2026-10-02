@@ -16,11 +16,16 @@ import (
 	"github.com/codagent/agent-runner/internal/textfmt"
 )
 
-// This opt-in test must be run for acceptance with the explicitly selected
-// local feature build. All provider processes are deterministic local fakes.
+// This test runs a real Validator build; all provider processes are
+// deterministic local fakes. CI builds agent-validator from main and must run
+// it, so a Validator change that breaks delivery fails Runner CI. Locally it
+// is opt-in.
 func TestLocalValidatorDeliveryIntegration(t *testing.T) {
 	entry := os.Getenv("AGENT_RUNNER_TEST_VALIDATOR_ENTRYPOINT")
 	if entry == "" {
+		if os.Getenv("CI") != "" {
+			t.Fatal("CI must set AGENT_RUNNER_TEST_VALIDATOR_ENTRYPOINT to a Validator dist/index.js built from main")
+		}
 		t.Skip("set AGENT_RUNNER_TEST_VALIDATOR_ENTRYPOINT to the local Validator dist/index.js for acceptance")
 	}
 	build, err := os.ReadFile(entry)

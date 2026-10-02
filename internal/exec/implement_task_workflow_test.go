@@ -275,6 +275,8 @@ type taskDeliveryFixture struct {
 func newTaskDeliveryFixture(t *testing.T) *taskDeliveryFixture {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
+	// This process fake exercises workflow routing, not Validator telemetry.
+	t.Setenv("AGENT_RUNNER_VALIDATOR_EXECUTABLE", filepath.Join(t.TempDir(), "missing-validator"))
 	f := &taskDeliveryFixture{run: t.TempDir(), sessionDir: t.TempDir()}
 	if activePID, err := runlock.Acquire(f.sessionDir); err != nil || activePID != 0 {
 		t.Fatalf("acquire run lock: active=%d err=%v", activePID, err)

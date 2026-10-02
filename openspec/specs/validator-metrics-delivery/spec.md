@@ -27,6 +27,8 @@ For each launched shell or script step with `metrics_source: agent-validator`, R
 
 Runner SHALL use Validator's capabilities/export/acknowledge CLI protocol, initially supporting capabilities v1, protocol v1, and measurement v1 only. It SHALL select the original project/configuration, consumer, and context explicitly, honor advertised count/byte limits, validate the response scope/store and complete closed record schemas, reject duplicate keys and unsupported fields/versions, and verify SHA-256 over RFC 8785 canonical bytes excluding only top-level record `digest`. All accepted fields SHALL survive incorporation unchanged in the raw record. An unacknowledgeable batch SHALL stop draining its context for that pass and leave later pending revisions explicitly undelivered. Runner SHALL retain blocked delivery and report safe actionable diagnostics, including the blocking record identity when safely established, without skipping or automatically discarding evidence.
 
+The capabilities reply is additive: Runner SHALL ignore unknown capabilities fields. Export and acknowledge replies remain closed and SHALL reject unknown fields.
+
 #### Scenario: Supported bounded export
 - **WHEN** compatible pending revisions exceed one batch
 - **THEN** Runner durably saves and acknowledges each valid batch and repeats export until drained, an unacknowledgeable batch blocks the context, or its bounded delivery budget expires
@@ -133,4 +135,3 @@ Runner SHALL export only allowlisted measurement evidence and safe diagnostics, 
 #### Scenario: Local feature is unavailable
 - **WHEN** the selected local CLI cannot provide the supported protocol or any producer operation resolves to an unexpected build
 - **THEN** integration acceptance reports that limitation as a failure instead of silently skipping or selecting the global installation
-

@@ -241,18 +241,32 @@ func validateReferences(raw map[string]any, record *Record) error {
 }
 
 func containsProhibitedEvidence(value any) bool {
+	return containsProhibitedEvidenceAt(value, "")
+}
+
+func containsProhibitedEvidenceAt(value any, path string) bool {
 	switch v := value.(type) {
 	case string:
 		return prohibitedEvidence.MatchString(v)
 	case map[string]any:
-		for _, child := range v {
-			if containsProhibitedEvidence(child) {
+		for key, child := range v {
+			childPath := key
+			if path != "" {
+				childPath = path + "." + key
+			}
+			// This producer mapping label is public metadata, not an account ID.
+			if childPath == "payload.provenance.adapter_mapping_version" {
+				if label, ok := child.(string); ok && label == "claude-otel-accounting-v3" {
+					continue
+				}
+			}
+			if containsProhibitedEvidenceAt(child, childPath) {
 				return true
 			}
 		}
 	case []any:
 		for _, child := range v {
-			if containsProhibitedEvidence(child) {
+			if containsProhibitedEvidenceAt(child, path) {
 				return true
 			}
 		}
