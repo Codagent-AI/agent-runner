@@ -23,16 +23,17 @@ go install golang.org/x/tools/cmd/deadcode@v0.50.0
 npm install -g jscpd@4.3.0
 ```
 
-These install to `~/go/bin/`. To make them available system-wide (including to non-interactive shells like those used by Agent Validator), add the path via `/etc/paths.d/`:
+The Go tools install to `~/go/bin/`, and `jscpd` installs to npm's global bin directory (`$(npm prefix -g)/bin`). To make both available system-wide (including to non-interactive shells like those used by Agent Validator), add the paths via `/etc/paths.d/`:
 
 ```bash
 echo "$HOME/go/bin" | sudo tee /etc/paths.d/go
+echo "$(npm prefix -g)/bin" | sudo tee /etc/paths.d/npm-global
 ```
 
 Open a new terminal afterwards. Verify with:
 
 ```bash
-/bin/sh -c 'which golangci-lint'
+/bin/sh -c 'which golangci-lint jscpd'
 ```
 
 If you only add `~/go/bin` to `.zshrc`, it will work in your terminal but **not** in tools that spawn `/bin/sh` subprocesses.
