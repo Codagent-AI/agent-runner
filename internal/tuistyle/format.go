@@ -1,7 +1,6 @@
 package tuistyle
 
 import (
-	"fmt"
 	"math"
 	"os"
 	"regexp"
@@ -187,17 +186,14 @@ func FormatTime(t time.Time) string {
 
 var spinnerGlyphFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-func spinnerFrameIndex(phase float64, count int) int {
+// SpinnerGlyph returns the single-cell braille spinner glyph for the current phase.
+func SpinnerGlyph(phase float64) string {
+	count := len(spinnerGlyphFrames)
 	idx := int(math.Floor(phase*1.5)) % count
 	if idx < 0 {
 		idx += count
 	}
-	return idx
-}
-
-// SpinnerGlyph returns the single-cell braille spinner glyph for the current phase.
-func SpinnerGlyph(phase float64) string {
-	return spinnerGlyphFrames[spinnerFrameIndex(phase, len(spinnerGlyphFrames))]
+	return spinnerGlyphFrames[idx]
 }
 
 // BlinkOn returns true during the "on" half of each pulse cycle and false
@@ -207,13 +203,6 @@ func SpinnerGlyph(phase float64) string {
 // visible regardless of the terminal's background theme.
 func BlinkOn(phase float64) bool {
 	return math.Sin(phase) >= 0
-}
-
-// ParseHex parses a #RRGGBB or RRGGBB hex color string into its components.
-func ParseHex(hex string) (r, g, b uint8) {
-	hex = strings.TrimPrefix(hex, "#")
-	_, _ = fmt.Sscanf(hex, "%02x%02x%02x", &r, &g, &b)
-	return r, g, b
 }
 
 var ansiEscapeRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b\][^\x1b]*\x1b\\`)
