@@ -142,10 +142,6 @@ func IsTerminalStatus(status string) bool {
 	}
 }
 
-func ToolNames() []string {
-	return []string{ToolName, GetToolName, CancelToolName}
-}
-
 func (r Request) Target() Target {
 	if r.Agent != nil {
 		return Target{Kind: TargetAgent, Name: strings.TrimSpace(*r.Agent)}

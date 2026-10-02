@@ -55,9 +55,6 @@ func RenderLogoCompact() string {
 	return strings.Join(lines[:], "\n")
 }
 
-// LogoBlockHeight returns the number of lines in the block logo.
-func LogoBlockHeight() int { return 5 }
-
 // LogoBlockWidth returns the visual width of one line of the block logo.
 func LogoBlockWidth() int {
 	return runewidth.StringWidth(logoBlockAgent[0]) + runewidth.StringWidth(logoBlockRunner[0])

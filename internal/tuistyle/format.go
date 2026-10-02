@@ -185,37 +185,6 @@ func FormatTime(t time.Time) string {
 	return local.Format("Jan 02 2006")
 }
 
-// LerpColor linearly interpolates between two hex color strings.
-func LerpColor(hex1, hex2 string, t float64) string {
-	r1, g1, b1 := ParseHex(hex1)
-	r2, g2, b2 := ParseHex(hex2)
-
-	r := uint8(float64(r1) + t*(float64(r2)-float64(r1)))
-	g := uint8(float64(g1) + t*(float64(g2)-float64(g1)))
-	b := uint8(float64(b1) + t*(float64(b2)-float64(b1)))
-
-	return fmt.Sprintf("#%02x%02x%02x", r, g, b)
-}
-
-// spinnerFrames is the classic 10-frame rotating braille spinner rendered
-// at a larger scale: each frame occupies 3 rows × 2 dot-columns of real
-// terminal cells, where a lit dot is "●" and an empty dot is a space.
-// The lit dots trace clockwise around the border of a 3-row, 2-column
-// grid — the same motion as the U+280B..U+280F braille cells, just drawn
-// one character per dot so the animation is visible at normal font size.
-var spinnerFrames = [][]string{
-	{"● ●", "●  ", "   "}, // ⠋ dots 1,2,4
-	{"● ●", "  ●", "   "}, // ⠙ dots 1,4,5
-	{"● ●", "  ●", "  ●"}, // ⠹ dots 1,4,5,6
-	{"  ●", "  ●", "  ●"}, // ⠸ dots 4,5,6
-	{"  ●", "  ●", "● ●"}, // ⠼ dots 3,4,5,6
-	{"   ", "  ●", "● ●"}, // ⠴ dots 3,5,6
-	{"   ", "●  ", "● ●"}, // ⠦ dots 2,3,6
-	{"●  ", "●  ", "● ●"}, // ⠧ dots 1,2,3,6
-	{"●  ", "●  ", "●  "}, // ⠇ dots 1,2,3
-	{"● ●", "●  ", "●  "}, // ⠏ dots 1,2,3,4
-}
-
 var spinnerGlyphFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 func spinnerFrameIndex(phase float64, count int) int {
@@ -224,13 +193,6 @@ func spinnerFrameIndex(phase float64, count int) int {
 		idx += count
 	}
 	return idx
-}
-
-// SpinnerFrame returns the three lines of the current spinner frame.
-// Each line is 3 columns wide and each frame is 3 lines tall, so callers
-// should print them on consecutive rows.
-func SpinnerFrame(phase float64) []string {
-	return spinnerFrames[spinnerFrameIndex(phase, len(spinnerFrames))]
 }
 
 // SpinnerGlyph returns the single-cell braille spinner glyph for the current phase.

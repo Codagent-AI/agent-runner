@@ -1,0 +1,16 @@
+{
+  "format": ["yaml", "bash"],
+  "minTokens": 70,
+  "threshold": 3.5,
+  "ignore": [
+    "worktrees/**",
+    "testdata/**",
+    "openspec/**",
+    ".validator/cache/**",
+    "validator_logs/**",
+    "**/node_modules/**",
+    ".git/**"
+  ],
+  "reporters": ["console"],
+  "gitignore": true
+}

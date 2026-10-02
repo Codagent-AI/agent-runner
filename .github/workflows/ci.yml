@@ -30,6 +30,16 @@ jobs:
         with:
           go-version: "1.26"
       - uses: golangci/golangci-lint-action@v7
+      - name: golangci-lint (strict, new issues only)
+        uses: golangci/golangci-lint-action@v7
+        with:
+          args: -c .golangci-strict.yml
+          only-new-issues: true
+      - run: go install golang.org/x/tools/cmd/deadcode@v0.50.0
+      - run: ./.validator/deadcode.sh
+      - uses: actions/setup-node@v4
+      - run: npm install -g jscpd@4.3.0
+      - run: ./.validator/duplication.sh
 
   test:
     name: test
@@ -69,4 +79,3 @@ jobs:
       - name: Run govulncheck
         run: govulncheck -tags dev_audit ./...
         timeout-minutes: 2
-

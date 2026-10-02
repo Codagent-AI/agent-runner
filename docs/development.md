@@ -19,6 +19,8 @@ Install required development tools:
 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 go install github.com/securego/gosec/v2/cmd/gosec@latest
 go install golang.org/x/vuln/cmd/govulncheck@latest
+go install golang.org/x/tools/cmd/deadcode@v0.50.0
+npm install -g jscpd@4.3.0
 ```
 
 These install to `~/go/bin/`. To make them available system-wide (including to non-interactive shells like those used by Agent Validator), add the path via `/etc/paths.d/`:
@@ -42,7 +44,7 @@ To build from source, use the Go version declared in [../go.mod](../go.mod):
 ```bash
 make build       # compiles to bin/agent-runner
 make test        # run tests
-make lint        # run golangci-lint
+make lint        # run maintainability gates
 ```
 
 ### Build and quality
@@ -53,7 +55,7 @@ make lint        # run golangci-lint
 | `make test` | `go test -tags dev_audit ./...` | Run all tests, including development audit code |
 | `make test-verbose` | `go test -v ./...` | Run tests with output |
 | `make test-cover` | `go test -coverprofile=...` | Run tests with coverage report |
-| `make lint` | `golangci-lint run ./...` | Run linter (strict config) |
+| `make lint` | `golangci-lint`, `deadcode`, `jscpd` | Run ceiling lint, changed-line strict lint, dead-code and duplication gates |
 | `make fmt` | `goimports -w .` | Format code |
 
 ### Running without building (`./dev.sh`)
@@ -70,7 +72,7 @@ make lint        # run golangci-lint
 
 ## Linting
 
-The project uses golangci-lint v2 with strict rules configured in `.golangci.yml`. Key settings:
+The project uses two golangci-lint v2 tiers. `.golangci.yml` is the repository-wide ceiling. Key settings:
 
 - **gocognit**: max complexity 35
 - **funlen**: max 100 lines / 60 statements
@@ -79,6 +81,10 @@ The project uses golangci-lint v2 with strict rules configured in `.golangci.yml
 - **nolintlint**: all `//nolint` directives must have an explanation and be linter-specific
 
 Test files have relaxed rules (see `.golangci.yml` exclusions).
+
+`.golangci-strict.yml` applies tighter complexity limits, duplication, nesting, and maintainability checks only to changed lines relative to `origin/main` locally or to the pull request in CI. A justified suppression uses `//nolint:<linter> // <reason>`.
+
+`./.validator/deadcode.sh` reports functions unreachable in both regular and `dev_audit` test builds. `./.validator/duplication.sh` enforces a 3.5% duplication ceiling for YAML and shell files. Both scripts require their tools to be installed beforehand.
 
 ## Testing
 

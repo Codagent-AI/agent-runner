@@ -32,6 +32,9 @@ test-e2e-interactive-agents:
 
 lint:
 	golangci-lint run ./...
+	golangci-lint run -c .golangci-strict.yml --new-from-merge-base=origin/main ./...
+	./.validator/deadcode.sh
+	./.validator/duplication.sh
 
 fmt:
 	goimports -w $(GO_FILES)
