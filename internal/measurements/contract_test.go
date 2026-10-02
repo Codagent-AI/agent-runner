@@ -137,12 +137,16 @@ func TestRecordRejectsProhibitedFreeFormEvidence(t *testing.T) {
 }
 
 func TestProhibitedEvidenceAllowsAccountingVersion(t *testing.T) {
-	if containsProhibitedEvidence("claude-otel-accounting-v3") {
+	value := map[string]any{"payload": map[string]any{"provenance": map[string]any{"adapter_mapping_version": "claude-otel-accounting-v3"}}}
+	if containsProhibitedEvidence(value) {
 		t.Fatal("accounting mapping version rejected as private account data")
 	}
-	for _, value := range []string{"account", "account_id=private", "credential=private"} {
-		if !containsProhibitedEvidence(value) {
-			t.Fatalf("sensitive evidence accepted: %q", value)
+	if !containsProhibitedEvidence("claude-otel-accounting-v3") {
+		t.Fatal("accounting label accepted outside its allowlisted mapping field")
+	}
+	for _, sensitive := range []string{"account", "account_id=private", "accountId=12345", "accountNumber=12345", "credential=private"} {
+		if !containsProhibitedEvidence(sensitive) {
+			t.Fatalf("sensitive evidence accepted: %q", sensitive)
 		}
 	}
 }
