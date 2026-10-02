@@ -1,6 +1,7 @@
 package builtinworkflows
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -8,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCIStatusGatesHandleIncompleteReview(t *testing.T) {
@@ -98,9 +100,11 @@ func TestCIReuseReportRequiresPassingMarkerAndCurrentFullHead(t *testing.T) {
 	stubBody := `#!/bin/sh
 [ "$CI_GH_FAIL" = 1 ] && exit 1
 case "$*" in
-  "pr view --json headRefOid -q .headRefOid") echo "$CI_HEAD" ;;
+  "pr view --json number,url,headRefOid")
+    [ "$CI_GH_HANG" = head ] && exec sleep 10
+    echo "{\"number\":12,\"url\":\"https://github.com/example/project/pull/12\",\"headRefOid\":\"$CI_HEAD\"}" ;;
   "pr view --json number,url") echo '{"number":12,"url":"https://github.com/example/project/pull/12"}' ;;
-  "api graphql"*) cat "$CI_SNAPSHOT" ;;
+  "api graphql"*) [ "$CI_GH_HANG" = snapshot ] && exec sleep 10; cat "$CI_SNAPSHOT" ;;
   *) exit 2 ;;
 esac
 `
@@ -161,6 +165,22 @@ esac
 			}
 			if code == 0 && string(out) != tt.report {
 				t.Fatalf("reused report=%q want=%q", out, tt.report)
+			}
+		})
+	}
+	for _, hang := range []string{"head", "snapshot"} {
+		t.Run("stalled "+hang+" lookup is bounded", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "sh", path)
+			cmd.WaitDelay = 100 * time.Millisecond
+			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"),
+				"CI_HEAD="+head, "CI_SNAPSHOT="+filepath.Join(dir, "snapshot.json"), "CI_GH_HANG="+hang)
+			cmd.Stdin = strings.NewReader(`{"report":` + strconv.Quote("**Head:** "+head+"\nCI_PASSED\n") + `,"deadline_seconds":0.5,"call_timeout_seconds":0.2}`)
+			start := time.Now()
+			out, err := cmd.CombinedOutput()
+			if ctx.Err() != nil || time.Since(start) > time.Second || err == nil {
+				t.Fatalf("verification was not bounded: elapsed=%s err=%v output=%s", time.Since(start), err, out)
 			}
 		})
 	}

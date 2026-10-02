@@ -19,7 +19,7 @@ The `core:finalize-pr` workflow SHALL wait for pull-request CI and review state 
 - **WHEN** `ci-fix-loop` ends, whether by a passing gate or an exhausted budget
 - **THEN** the final CI status is captured as `final_ci_report` by a non-agent step, and no agent is resumed to produce it
 
-The final wait SHALL be skipped when the loop's last `ci_report` ends with `CI_PASSED` or `CI_REVIEW_INCOMPLETE`, its full head SHA equals the PR's current head SHA, and a fresh complete read of checks, reviews, and comments produces the same terminal marker. In that case, `final_ci_report` SHALL reuse `ci_report`, and the final gates SHALL inspect it. If the report is missing, has another marker, names a different head, the fresh read fails, or the fresh marker differs, the final wait SHALL run.
+The final wait SHALL be skipped when the loop's last `ci_report` ends with `CI_PASSED` or `CI_REVIEW_INCOMPLETE`, its full head SHA equals the PR's current head SHA, and a fresh complete read of checks, reviews, and comments produces the same terminal marker. The head lookup and fresh read SHALL run within one bounded reuse-verification deadline. In that case, `final_ci_report` SHALL reuse `ci_report`, and the final gates SHALL inspect it. If the report is missing, has another marker, names a different head, the fresh read fails or times out, or the fresh marker differs, the final wait SHALL run.
 
 #### Scenario: Passing report on unchanged head skips final wait
 - **WHEN** the loop's last report passes, its full head SHA still equals the PR head, and a fresh complete snapshot has the same terminal marker
@@ -28,6 +28,10 @@ The final wait SHALL be skipped when the loop's last `ci_report` ends with `CI_P
 #### Scenario: Changed head requires final wait
 - **WHEN** the loop's last report passes but the PR head has changed
 - **THEN** `verify-final` runs and its report becomes `final_ci_report`
+
+#### Scenario: Reuse verification times out
+- **WHEN** the PR head lookup or fresh CI snapshot stalls during reuse verification
+- **THEN** reuse verification stops within its deadline and `verify-final` runs
 
 #### Scenario: New failure or feedback on unchanged head requires final wait
 - **WHEN** the loop's last report passes but a fresh snapshot on the same head contains a failed check or actionable feedback

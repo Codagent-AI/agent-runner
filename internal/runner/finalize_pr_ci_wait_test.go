@@ -23,7 +23,7 @@ if [ "$CI_GH_MODE" = no_pr ] && [ "$1" = pr ]; then echo 'no pull requests found
 if [ "$CI_GH_MODE" = auth ] && [ "$1" = api ]; then echo 'HTTP 401 Bad credentials' >&2; exit 1; fi
 case "$*" in
   "pr view --json number,url") echo '{"number":12,"url":"https://github.com/example/project/pull/12"}' ;;
-  "pr view --json headRefOid -q .headRefOid") echo "${CI_HEAD_OID:-abcdef1234567890abcdef1234567890abcdef12}" ;;
+  "pr view --json number,url,headRefOid") echo "{\"number\":12,\"url\":\"https://github.com/example/project/pull/12\",\"headRefOid\":\"${CI_HEAD_OID:-abcdef1234567890abcdef1234567890abcdef12}\"}" ;;
   "api graphql"*) cat "$CI_SNAPSHOT" ;;
   "run view"*) echo 'failed job log excerpt' ;;
   *) exit 2 ;;

@@ -105,8 +105,11 @@ class Collector:
         if remaining <= 0:
             raise Transient("deadline reached")
         timeout = min(self.call_timeout, remaining)
-        process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   text=True, start_new_session=True)
+        try:
+            process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       text=True, start_new_session=True)
+        except OSError as exc:
+            raise Transient("command unavailable: " + args[0]) from exc
         try:
             stdout, stderr = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -157,6 +160,14 @@ class Collector:
                 print("ci-wait: PR lookup: " + str(exc), file=sys.stderr)
                 time.sleep(min(self.interval, max(0, self.deadline - now())))
         raise Transient("PR lookup deadline reached")
+
+    def resolve_reuse(self):
+        result = json.loads(self.run(["gh", "pr", "view", "--json", "number,url,headRefOid"]))
+        self.number = result["number"]
+        self.url = result["url"]
+        parts = urlparse(self.url).path.strip("/").split("/")
+        self.owner, self.repo = parts[0], parts[1]
+        return result["headRefOid"]
 
     def more(self, pr, field, query, path, reverse=False, extra=None):
         connection = pr.get(field) or {"nodes": [], "pageInfo": {}}
@@ -453,13 +464,23 @@ class Collector:
 def main():
     try:
         inputs = json.load(sys.stdin)
-        if len(sys.argv) == 4 and sys.argv[1] == "--verify-reuse":
-            inputs.update({"deadline_seconds": 30, "call_timeout_seconds": 10, "poll_interval_seconds": 0.1})
-            collector = Collector(inputs)
-            collector.resolve()
-            state = collector.classify(collector.read_snapshot())
-            if collector.head != sys.argv[2] or collector.marker(state) != sys.argv[3]:
+        if len(sys.argv) == 2 and sys.argv[1] == "--verify-reuse":
+            report = inputs.get("report") or ""
+            lines = [line.strip() for line in report.splitlines() if line.strip()]
+            if not lines or lines[-1] not in ("CI_PASSED", "CI_REVIEW_INCOMPLETE"):
                 return 1
+            match = re.search(r"(?m)^\*\*Head:\*\* ([0-9a-f]{40})$", report)
+            if not match:
+                return 1
+            inputs["deadline_seconds"] = min(float(inputs.get("deadline_seconds", 30)), 30)
+            inputs["call_timeout_seconds"] = min(float(inputs.get("call_timeout_seconds", 10)), 10)
+            collector = Collector(inputs)
+            if collector.resolve_reuse() != match.group(1):
+                return 1
+            state = collector.classify(collector.read_snapshot())
+            if collector.head != match.group(1) or collector.marker(state) != lines[-1]:
+                return 1
+            sys.stdout.write(report)
             return 0
         collector = Collector(inputs)
         sys.stdout.write(collector.wait())
@@ -468,7 +489,7 @@ def main():
         return 1
     except (Transient, ValueError, TypeError, KeyError) as exc:
         print("ci-wait: " + str(exc), file=sys.stderr)
-        return 2
+        return 1 if len(sys.argv) == 2 and sys.argv[1] == "--verify-reuse" else 2
     return 0
 
 if __name__ == "__main__":
