@@ -42,6 +42,34 @@ jobs:
           go-version: "1.26"
       - run: go test -tags dev_audit -timeout 300s ./...
 
+  validator-contract:
+    name: validator contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Codagent-AI/agent-validator
+          ref: main
+          path: agent-validator
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+        working-directory: agent-validator
+      - run: bun run build:npm
+        working-directory: agent-validator
+      - name: Probe built validator
+        run: |
+          printf '#!/bin/sh\nexec node "%s/agent-validator/dist/index.js" "$@"\n' "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/agent-validator"
+          chmod +x "$RUNNER_TEMP/agent-validator"
+          AGENT_RUNNER_VALIDATOR_EXECUTABLE="$RUNNER_TEMP/agent-validator" go test -tags validator_contract ./internal/exec -run Contract -count=1
+
   security-code:
     name: security-code
     runs-on: ubuntu-latest
@@ -69,4 +97,3 @@ jobs:
       - name: Run govulncheck
         run: govulncheck -tags dev_audit ./...
         timeout-minutes: 2
-

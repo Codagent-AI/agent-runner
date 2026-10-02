@@ -94,14 +94,28 @@ func prepareNestedMetrics(step *model.Step, ctx *model.ExecutionContext, command
 func prepareNestedMetricsEnvironment(step *model.Step, ctx *model.ExecutionContext) (*nestedMetricsCapture, []string, error) {
 	capture, environment, err := prepareValidatorLaunch(step, ctx)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "agent-runner: warning: validator metrics instrumentation unavailable; validation will proceed")
+		code := validatorLaunchErrorCode(err)
+		contextID, idErr := newMetricsContextID()
+		if idErr != nil {
+			code = "context_id_generation_failed"
+		}
+		fmt.Fprintf(os.Stderr, "agent-runner: warning: validator metrics instrumentation unavailable (%s); validation will proceed\n", code)
 		if sink, ok := ctx.AuditLogger.(validatorMetricsSink); ok {
-			attr := metrics.Attribution{RunID: filepath.Base(ctx.SessionDir), ExecutionSessionID: ctx.ExecutionSessionID, StepID: step.ID, Prefix: executionIdentityPrefix(ctx)}
-			_ = sink.IncorporateValidator(attr, "", nil, metrics.DeliveryContext{Attribution: attr, Delivery: "blocked", History: "partial", Gaps: []string{"instrumentation_unavailable"}})
+			attr := metrics.Attribution{RunID: filepath.Base(ctx.SessionDir), ExecutionSessionID: ctx.ExecutionSessionID, StepID: step.ID, Prefix: executionIdentityPrefix(ctx), ContextID: contextID}
+			_ = sink.IncorporateValidator(attr, "", nil, metrics.DeliveryContext{Attribution: attr, Delivery: "blocked", History: "partial", Gaps: []string{"instrumentation_unavailable", code}})
 		}
 		return &nestedMetricsCapture{}, nil, nil
 	}
 	return capture, environment, nil
+}
+
+func validatorLaunchErrorCode(err error) string {
+	switch err.Error() {
+	case "validator_executable_unavailable", "capabilities_unavailable", "capabilities_unsupported", "capabilities_limits_unsupported":
+		return err.Error()
+	default:
+		return "launch_preparation_failed"
+	}
 }
 func prepareValidatorLaunch(step *model.Step, ctx *model.ExecutionContext) (*nestedMetricsCapture, []string, error) {
 	if step.MetricsSource == "" {

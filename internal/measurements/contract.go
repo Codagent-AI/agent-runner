@@ -129,7 +129,7 @@ type Payload struct {
 	Context      *Context           `json:"consumer_context"`
 }
 
-var prohibitedEvidence = regexp.MustCompile(`(?i)(prompt|response|credential|password|api[_ -]?key|account|user|organization|email|host|machine)`)
+var prohibitedEvidence = regexp.MustCompile(`(?i)(prompt|response|credential|password|api[_ -]?key|account([_ .:/=-]|$)|user|organization|email|host|machine)`)
 var nativeNames = strings.Fields("input_tokens cached_input_tokens output_tokens cache_read_tokens cache_write_tokens reasoning_tokens total_tokens request_count provider_session_id reported_cost claude_otel_input claude_otel_output claude_otel_cacheRead claude_otel_cacheCreation opencode_inputTokens opencode_outputTokens opencode_reasoningTokens opencode_cacheReadTokens opencode_cacheWriteTokens gemini_inputTokens gemini_outputTokens gemini_thoughtTokens gemini_cacheTokens copilot_in copilot_out copilot_cache")
 
 func ValidateRecord(raw []byte, consumer, contextID string) (Record, error) {

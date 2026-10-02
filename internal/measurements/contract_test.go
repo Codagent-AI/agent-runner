@@ -135,3 +135,14 @@ func TestRecordRejectsProhibitedFreeFormEvidence(t *testing.T) {
 		t.Fatal("prohibited free-form evidence retained")
 	}
 }
+
+func TestProhibitedEvidenceAllowsAccountingVersion(t *testing.T) {
+	if containsProhibitedEvidence("claude-otel-accounting-v3") {
+		t.Fatal("accounting mapping version rejected as private account data")
+	}
+	for _, value := range []string{"account", "account_id=private", "credential=private"} {
+		if !containsProhibitedEvidence(value) {
+			t.Fatalf("sensitive evidence accepted: %q", value)
+		}
+	}
+}
