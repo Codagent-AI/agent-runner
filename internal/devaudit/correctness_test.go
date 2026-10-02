@@ -185,7 +185,7 @@ func (r refusingGH) Run(context.Context, string, []string, []byte) (string, erro
 
 func TestRunBoundedOutputRejectsOversizedCrosscheckResponse(t *testing.T) {
 	command := exec.Command("sh", "-c", "head -c 1025 /dev/zero")
-	if _, err := runBoundedOutput(command, 1024); err == nil || !strings.Contains(err.Error(), "exceeds maximum size") {
+	if _, _, err := runBoundedOutput(command, 1024); err == nil || !strings.Contains(err.Error(), "exceeds maximum size") {
 		t.Fatalf("oversized response error = %v", err)
 	}
 }
