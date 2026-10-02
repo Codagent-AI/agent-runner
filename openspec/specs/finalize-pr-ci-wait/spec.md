@@ -98,7 +98,7 @@ The CI wait SHALL poll the PR's checks for the current head commit until every c
 
 The CI wait SHALL classify review feedback deterministically:
 - **Blocking review:** a reviewer whose latest review state is `CHANGES_REQUESTED`. It SHALL produce `CI_FAILED`.
-- **Actionable:** an unresolved review thread that is not deferred, or a top-level comment from a human other than the PR author that is newer than the latest observable push and has not been followed by a top-level author reply. It SHALL produce `CI_COMMENTS` unless `CI_FAILED` applies. If no push timestamp or comment timestamp is available, the comment SHALL remain actionable unless a later author reply can be established.
+- **Actionable:** an unresolved review thread that is not deferred, or a top-level comment from a human other than the PR author that is newer than the latest observable push. It SHALL produce `CI_COMMENTS` unless `CI_FAILED` applies. A top-level reply from the PR author SHALL NOT make an earlier human comment non-actionable; only a later push does. If no push timestamp or comment timestamp is available, the comment SHALL remain actionable.
 - **Deferred thread:** an unresolved thread where the latest significant comment is from the PR author or from a bot other than the one that raised the finding, after trailing acknowledgments from the reviewing bot are ignored. A deferred thread SHALL be listed and SHALL NOT be actionable. A later human reply SHALL make the thread actionable again.
 - **Informational:** top-level bot summaries, rate-limit notices, "draft not reviewed" notices, and resolved threads. These SHALL NOT be actionable.
 
@@ -122,9 +122,13 @@ The CI wait SHALL classify review feedback deterministically:
 - **WHEN** a human top-level comment predates the current head's observable push and there is no newer feedback
 - **THEN** that comment does not keep the new head in `CI_COMMENTS`
 
-#### Scenario: Author reply addresses top-level feedback
-- **WHEN** the PR author posts a top-level reply after a human top-level comment and there is no newer feedback
-- **THEN** that earlier comment does not keep the PR in `CI_COMMENTS`
+#### Scenario: Author reply does not clear top-level feedback
+- **WHEN** the PR author posts a top-level reply after a human top-level comment and no later push is observable
+- **THEN** the comment remains actionable and the report ends with `CI_COMMENTS`
+
+#### Scenario: Later push clears top-level feedback after author reply
+- **WHEN** the PR author replies to a human top-level comment and a later push lands with no newer feedback
+- **THEN** the comment does not keep the new head in `CI_COMMENTS`
 
 ### Requirement: Expected review bots and freshness
 

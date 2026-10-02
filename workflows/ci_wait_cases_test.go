@@ -389,6 +389,7 @@ func TestCIWaitDiscoveredBotFailureIsCI(t *testing.T) {
 func TestCIWaitAddressedFeedbackAndLatestBotEvidence(t *testing.T) {
 	push := time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339)
 	old := time.Now().Add(-3 * time.Minute).UTC().Format(time.RFC3339)
+	replied := time.Now().Add(-150 * time.Second).UTC().Format(time.RFC3339)
 	success := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
 	pending := time.Now().Add(-30 * time.Second).UTC().Format(time.RFC3339)
 	bot := map[string]any{"login": "coderabbitai[bot]"}
@@ -404,10 +405,17 @@ func TestCIWaitAddressedFeedbackAndLatestBotEvidence(t *testing.T) {
 			ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": push}}
 			ciConn(pr, "comments")["nodes"] = []any{map[string]any{"author": map[string]any{"login": "reviewer", "__typename": "User"}, "body": "fixed already", "updatedAt": old}}
 		}, "", "CI_PASSED"},
-		{"human comment addressed by author reply", func(pr map[string]any) {
+		{"author reply does not clear human comment", func(pr map[string]any) {
 			ciConn(pr, "comments")["nodes"] = []any{
 				map[string]any{"author": map[string]any{"login": "reviewer", "__typename": "User"}, "body": "please fix", "updatedAt": old},
 				map[string]any{"author": map[string]any{"login": "alice", "__typename": "User"}, "body": "fixed", "updatedAt": success},
+			}
+		}, "", "CI_COMMENTS"},
+		{"author reply then push clears human comment", func(pr map[string]any) {
+			ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": push}}
+			ciConn(pr, "comments")["nodes"] = []any{
+				map[string]any{"author": map[string]any{"login": "reviewer", "__typename": "User"}, "body": "please fix", "updatedAt": old},
+				map[string]any{"author": map[string]any{"login": "alice", "__typename": "User"}, "body": "fixed", "updatedAt": replied},
 			}
 		}, "", "CI_PASSED"},
 		{"newer pending status supersedes success", func(pr map[string]any) {

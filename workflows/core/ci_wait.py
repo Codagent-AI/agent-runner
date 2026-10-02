@@ -322,8 +322,6 @@ class Collector:
                                and last.get("login") != finding.get("login")))
             (deferred if is_deferred else actionable).append(item)
         human_comments, bot_comments = [], []
-        author_reply_at = max((stamp(c.get("updatedAt")) for c in comments
-                               if actor(c).get("login") == author_login), default=0)
         for comment in comments:
             who = actor(comment)
             if author_login and who.get("login") == author_login:
@@ -333,8 +331,7 @@ class Collector:
                 bot_comments.append(item)
                 continue
             comment_time = stamp(comment.get("updatedAt"))
-            if comment_time and ((observed_push and comment_time < observed_push)
-                                 or (author_reply_at and comment_time < author_reply_at)):
+            if comment_time and observed_push and comment_time < observed_push:
                 continue
             human_comments.append(item)
         return {"pr": pr, "failed": failed, "pending": pending, "passed": passed, "blocking": blocking,
