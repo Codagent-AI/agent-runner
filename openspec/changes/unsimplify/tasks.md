@@ -1,0 +1,2 @@
+- [ ] [Replace the verify-change simplify step with a diff-scoped implementor pass](tasks/01-replace-simplify-step.md)
+- [ ] [Add static maintainability gates to the validator and CI](tasks/02-static-maintainability-gates.md)
