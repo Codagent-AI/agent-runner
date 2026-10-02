@@ -40,6 +40,7 @@ For broader Codagent workspace context, read the workspace-level `AGENTS.md` whe
 - Keep tests next to the source package. Use local stubs and small fakes instead of adding a mocking framework.
 - Prefer `google/go-cmp` for structured comparisons in tests.
 - Run targeted tests while iterating, then broader checks before finishing.
+- Do not add new CI jobs or test suites. Add new tests to an existing suite, normally the `test` job's `go test ./...`. If a test needs an external tool such as agent-validator, install or build it in that job's setup steps. If tests get slow, parallelize them within the existing job instead of splitting them into a new one.
 - Do not run `make build` after making changes unless explicitly asked. Local changes are normally exercised with `./dev.sh`, which runs the CLI from source and picks them up without a build.
 - Format Go code with `goimports` through `make fmt`.
 - Use the Go version declared in `go.mod`.
