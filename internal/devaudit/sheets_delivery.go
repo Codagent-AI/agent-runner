@@ -24,9 +24,16 @@ import (
 
 const connectionFileName = "development-audit-connection.json"
 
+// stepValueHeader is the original step_value_v1 worksheet header. Local
+// observations keep valueSchemaVersion; only delivered rows use the v2 layout.
 var stepValueHeader = []string{
 	"schema_version", "observation_id", "observed_at_utc", "project", "workflow", "source_run_id", "execution_session_id", "audit_run_id", "trigger", "source_outcome", "step_id", "step_outcome", "lineage", "duration_ms", "cost_usd", "total_tokens", "source_models", "git_attribution", "commit_shas", "files_changed", "lines_added", "lines_deleted", "overall_value", "change_effect", "unique_contribution", "downstream_evidence", "confidence", "evidence_coverage", "judge_model", "rubric_version", "note",
 }
+
+const sheetRowSchemaVersion = "step_value_v2"
+
+var judgeHeader = []string{"judge_cli", "judge_effort", "audit_judge_attempts", "audit_judge_total_tokens", "audit_judge_token_coverage", "audit_judge_cost_usd", "audit_judge_cost_coverage"}
+var stepValueHeaderV2 = append(append([]string{}, stepValueHeader...), judgeHeader...)
 
 var allowInsecureDevelopmentAuditTestURI bool
 
@@ -280,7 +287,7 @@ func (r SheetsReporter) Deliver(ctx context.Context, report *LocalReport) error 
 		if _, found := existing[observation.ObservationID]; found {
 			continue
 		}
-		row, err := projectObservation(observation)
+		row, err := projectObservation(observation, report.JudgeUsage)
 		if err != nil {
 			return fmt.Errorf("project observation %q: %w", observation.ObservationID, err)
 		}
@@ -357,10 +364,20 @@ func (r SheetsReporter) validateHeader(ctx context.Context, token string, destin
 	if err := r.getJSON(ctx, token, destination, a1Range(destination.Tab, "1:1"), &response); err != nil {
 		return err
 	}
-	if len(response.Values) != 1 || !equalStrings(response.Values[0], stepValueHeader) {
-		return fmt.Errorf("worksheet header does not match step_value_v1")
+	if len(response.Values) == 1 {
+		if equalStrings(response.Values[0], stepValueHeaderV2) {
+			return nil
+		}
+		if equalStrings(response.Values[0], stepValueHeader) {
+			return r.upgradeHeader(ctx, token, destination)
+		}
 	}
-	return nil
+	return fmt.Errorf("worksheet header does not match step_value_v2")
+}
+
+func (r SheetsReporter) upgradeHeader(ctx context.Context, token string, destination DestinationState) error {
+	first, last := sheetColumn(len(stepValueHeader)+1), sheetColumn(len(stepValueHeaderV2))
+	return r.writeValues(ctx, token, destination, http.MethodPut, a1Range(destination.Tab, first+"1:"+last+"1"), "?valueInputOption=RAW", [][]string{judgeHeader}, "upgrade worksheet header")
 }
 
 func (r SheetsReporter) existingObservationIDs(ctx context.Context, token string, destination DestinationState) (map[string]struct{}, error) {
@@ -401,14 +418,20 @@ func (r SheetsReporter) getJSON(ctx context.Context, token string, destination D
 }
 
 func (r SheetsReporter) append(ctx context.Context, token string, destination DestinationState, rows [][]string) error {
+	return r.writeValues(ctx, token, destination, http.MethodPost, a1Range(destination.Tab, "A:"+sheetColumn(len(stepValueHeaderV2))), ":append?valueInputOption=RAW&insertDataOption=INSERT_ROWS", rows, "append worksheet rows")
+}
+
+// writeValues sends rows to a worksheet values endpoint; suffix carries the
+// operation and query string that follow the escaped A1 range.
+func (r SheetsReporter) writeValues(ctx context.Context, token string, destination DestinationState, method, cellRange, suffix string, rows [][]string, operation string) error {
 	body, err := json.Marshal(struct {
 		Values [][]string `json:"values"`
 	}{Values: rows})
 	if err != nil {
 		return err
 	}
-	endpoint := r.baseURL() + "/spreadsheets/" + url.PathEscape(destination.SpreadsheetID) + "/values/" + url.PathEscape(a1Range(destination.Tab, "A:AE")) + ":append?valueInputOption=RAW&insertDataOption=INSERT_ROWS"
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))
+	endpoint := r.baseURL() + "/spreadsheets/" + url.PathEscape(destination.SpreadsheetID) + "/values/" + url.PathEscape(cellRange) + suffix
+	request, err := http.NewRequestWithContext(ctx, method, endpoint, strings.NewReader(string(body)))
 	if err != nil {
 		return err
 	}
@@ -416,13 +439,22 @@ func (r SheetsReporter) append(ctx context.Context, token string, destination De
 	request.Header.Set("Content-Type", "application/json")
 	response, err := r.client().Do(request)
 	if err != nil {
-		return fmt.Errorf("append worksheet rows: %w", err)
+		return fmt.Errorf("%s: %w", operation, err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("append worksheet rows: HTTP %d", response.StatusCode)
+		return fmt.Errorf("%s: HTTP %d", operation, response.StatusCode)
 	}
 	return nil
+}
+
+// sheetColumn returns the A1 column letters for a 1-based column index.
+func sheetColumn(index int) string {
+	name := ""
+	for ; index > 0; index = (index - 1) / 26 {
+		name = string(rune('A'+(index-1)%26)) + name
+	}
+	return name
 }
 
 func (r SheetsReporter) lock(ctx context.Context, destination DestinationState) (func(), error) {
@@ -446,7 +478,7 @@ func a1Range(tab, cells string) string {
 	return "'" + strings.ReplaceAll(tab, "'", "''") + "'!" + cells
 }
 
-func projectObservation(observation *ValueObservation) ([]string, error) {
+func projectObservation(observation *ValueObservation, summary *JudgeUsageSummary) ([]string, error) {
 	if err := safeValueNote(observation.Note); err != nil {
 		return nil, err
 	}
@@ -454,11 +486,15 @@ func projectObservation(observation *ValueObservation) ([]string, error) {
 		return nil, fmt.Errorf("unsupported schema %q", observation.SchemaVersion)
 	}
 	models, commits := sortedJoined(observation.Cost.SourceModels), sortedJoined(observation.Git.CommitSHAs)
-	return []string{
-		observation.SchemaVersion, observation.ObservationID, observation.ObservedAtUTC, sanitizeProject(observation.Project), observation.Workflow, observation.SourceRunID, observation.ExecutionSessionID, observation.AuditRunID, observation.Trigger, observation.SourceOutcome, observation.StepID, observation.StepOutcome, observation.Lineage,
+	row := []string{
+		sheetRowSchemaVersion, observation.ObservationID, observation.ObservedAtUTC, sanitizeProject(observation.Project), observation.Workflow, observation.SourceRunID, observation.ExecutionSessionID, observation.AuditRunID, observation.Trigger, observation.SourceOutcome, observation.StepID, observation.StepOutcome, observation.Lineage,
 		intString(observation.Cost.DurationMS), floatString(observation.Cost.CostUSD), intString(observation.Cost.TotalTokens), models, observation.Git.Attribution, commits, intString(observation.Git.FilesChanged), intString(observation.Git.LinesAdded), intString(observation.Git.LinesDeleted),
 		observation.OverallValue, observation.ChangeEffect, observation.UniqueContribution, observation.DownstreamEvidence, observation.Confidence, observation.EvidenceCoverage, observation.JudgeModel, observation.RubricVersion, observation.Note,
-	}, nil
+	}
+	if summary == nil {
+		return append(row, observation.JudgeCLI, observation.JudgeEffort, "", "", "", "", ""), nil
+	}
+	return append(row, summary.CLI, summary.Effort, strconv.Itoa(summary.AttemptCount), intString(summary.TotalTokens), string(summary.TokenCoverage), floatString(summary.CostUSD), string(summary.CostCoverage)), nil
 }
 
 func sanitizeProject(project string) string {

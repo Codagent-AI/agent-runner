@@ -1,5 +1,52 @@
 # agent-runner
 
+## 0.4.0
+
+Agent Runner 0.4.0 ships the v2 change workflows, experimental interactive intake, exploratory acceptance, and automatic failure recovery, plus a long run of reliability fixes found in real workflow runs.
+
+### Highlights
+
+- **v2 change workflows.** Full and simple workflows for OpenSpec and spec-driven changes run proposal, specs, design, test plan, tasks, implementation, acceptance, archive, and PR finalization, with dedicated Lead, Crosscheck, Implementor, and Tester roles. Spec-driven keeps its artifacts outside the repository. ([#58](https://github.com/Codagent-AI/agent-runner/pull/58), [#155](https://github.com/Codagent-AI/agent-runner/pull/155))
+- **Interactive intake (experimental).** `agent-runner -i` opens a conversation with an agent that clarifies what you want, then routes it into the right workflow with that context carried along. ([#59](https://github.com/Codagent-AI/agent-runner/pull/59), [#58](https://github.com/Codagent-AI/agent-runner/pull/58))
+- **Exploratory acceptance.** Acceptance reads the change to decide where to look and probes it like a user would, instead of replaying a checklist written before the code existed. Acceptance and flow-testing steps get their own scratch folder. ([#82](https://github.com/Codagent-AI/agent-runner/pull/82), [#183](https://github.com/Codagent-AI/agent-runner/pull/183))
+- **Automatic failure recovery.** When a deterministic check fails, such as an archive commit rejected by a hook or a task left uncommitted, Agent Runner runs a bounded repair cycle with an agent, re-verifies, and shows the repair attempts and failure evidence in the run view. ([#114](https://github.com/Codagent-AI/agent-runner/pull/114))
+- **Role-based setup.** Setup recommends Lead, Crosscheck, Implementor, and Tester agents from your installed CLIs, favoring model-family diversity, with accept-all or per-role customization. `planner` and `reviewer` still work as deprecated aliases. ([#57](https://github.com/Codagent-AI/agent-runner/pull/57))
+- **Redesigned run view.** New navigation and step detail pane, pull-request links in the breadcrumb, and lower CPU use. ([#61](https://github.com/Codagent-AI/agent-runner/pull/61), [#58](https://github.com/Codagent-AI/agent-runner/pull/58))
+
+### Workflows
+
+- `finalize-pr` keeps one lead session across its CI fix loop, re-verifies CI after the last fix, treats an incomplete review-bot review as a warning, and takes a configurable `ci_fix_cycles` budget. ([#113](https://github.com/Codagent-AI/agent-runner/pull/113), [#122](https://github.com/Codagent-AI/agent-runner/pull/122), [#130](https://github.com/Codagent-AI/agent-runner/pull/130), [#89](https://github.com/Codagent-AI/agent-runner/pull/89))
+- `verify-change` stops before opening a PR when the validator stays red, records the acceptance-round validator result, and refreshes an existing draft PR's body while leaving hand-written bodies alone. ([#156](https://github.com/Codagent-AI/agent-runner/pull/156), [#158](https://github.com/Codagent-AI/agent-runner/pull/158), [#171](https://github.com/Codagent-AI/agent-runner/pull/171), [#176](https://github.com/Codagent-AI/agent-runner/pull/176))
+- Defects found by the simplify step are routed into fixes instead of being dropped. ([#182](https://github.com/Codagent-AI/agent-runner/pull/182))
+- `verify-task-commit` accepts a task verifiably delivered outside the repository, and each task delivery gets a unique record path. ([#160](https://github.com/Codagent-AI/agent-runner/pull/160), [#170](https://github.com/Codagent-AI/agent-runner/pull/170))
+- Built-in workflow prompts no longer mandate the TDD skill. ([#83](https://github.com/Codagent-AI/agent-runner/pull/83))
+
+### Writing workflows
+
+- Project workflows can call built-in sub-workflows with `builtin:` references, and counted loops accept `max_param`. ([#89](https://github.com/Codagent-AI/agent-runner/pull/89))
+- Built-in script steps bundle their sibling helper scripts, fixing failures such as an OpenSpec archive that could not find `validate-change-name.sh`. ([#159](https://github.com/Codagent-AI/agent-runner/pull/159), [#164](https://github.com/Codagent-AI/agent-runner/pull/164))
+- `skip_if` works on steps inside a group. ([#102](https://github.com/Codagent-AI/agent-runner/pull/102))
+- `agent-runner run --session-dir <path>` places a run's session directory where you choose. ([#90](https://github.com/Codagent-AI/agent-runner/pull/90))
+- Agents can start, poll, and cancel runner-owned agent calls asynchronously. ([#114](https://github.com/Codagent-AI/agent-runner/pull/114))
+
+### Runs and resume
+
+- Old run directories are cleaned up automatically, configurable with `run_retention` in settings. ([#175](https://github.com/Codagent-AI/agent-runner/pull/175))
+- Resume restarts a loop iteration when its loop variable changed, and resuming nested or failed workflows is more robust. ([#133](https://github.com/Codagent-AI/agent-runner/pull/133), [#58](https://github.com/Codagent-AI/agent-runner/pull/58))
+- Resumed Claude sessions receive the step prompt as a user message, headless Claude tasks stay in the foreground, and step completion from headless attempts is rejected. ([#149](https://github.com/Codagent-AI/agent-runner/pull/149), [#154](https://github.com/Codagent-AI/agent-runner/pull/154), [#162](https://github.com/Codagent-AI/agent-runner/pull/162))
+
+### Usage and cost tracking
+
+- Run metrics include Claude subagent usage, per-step attribution of cumulative Codex and Claude session usage and cost, uncached input tokens for Codex, and a reason for skipped agent steps that were never invoked. ([#194](https://github.com/Codagent-AI/agent-runner/pull/194), [#143](https://github.com/Codagent-AI/agent-runner/pull/143), [#146](https://github.com/Codagent-AI/agent-runner/pull/146), [#169](https://github.com/Codagent-AI/agent-runner/pull/169), [#145](https://github.com/Codagent-AI/agent-runner/pull/145))
+- Validator runs are instrumented and correlated with run metrics. ([#114](https://github.com/Codagent-AI/agent-runner/pull/114))
+- Per-step changed paths and git attribution are accurate: preexisting dirty or unchanged paths are excluded and committed renames are handled. ([#131](https://github.com/Codagent-AI/agent-runner/pull/131), [#132](https://github.com/Codagent-AI/agent-runner/pull/132), [#134](https://github.com/Codagent-AI/agent-runner/pull/134), [#135](https://github.com/Codagent-AI/agent-runner/pull/135))
+
+### Internal and development
+
+- Development-build-only automatic run audits, with sandboxing and hardening. Not included in release builds. ([#63](https://github.com/Codagent-AI/agent-runner/pull/63), [#110](https://github.com/Codagent-AI/agent-runner/pull/110), [#127](https://github.com/Codagent-AI/agent-runner/pull/127), [#129](https://github.com/Codagent-AI/agent-runner/pull/129), [#141](https://github.com/Codagent-AI/agent-runner/pull/141), [#144](https://github.com/Codagent-AI/agent-runner/pull/144), [#146](https://github.com/Codagent-AI/agent-runner/pull/146), [#147](https://github.com/Codagent-AI/agent-runner/pull/147), [#152](https://github.com/Codagent-AI/agent-runner/pull/152), [#180](https://github.com/Codagent-AI/agent-runner/pull/180), [#184](https://github.com/Codagent-AI/agent-runner/pull/184))
+- Agent-factory routing and fix-workflow support. ([#66](https://github.com/Codagent-AI/agent-runner/pull/66), [#67](https://github.com/Codagent-AI/agent-runner/pull/67), [#89](https://github.com/Codagent-AI/agent-runner/pull/89), [#112](https://github.com/Codagent-AI/agent-runner/pull/112))
+- Development and sandbox images, hermetic tests, and smoke-test cleanup. ([#98](https://github.com/Codagent-AI/agent-runner/pull/98), [#117](https://github.com/Codagent-AI/agent-runner/pull/117), [#167](https://github.com/Codagent-AI/agent-runner/pull/167), [#173](https://github.com/Codagent-AI/agent-runner/pull/173))
+
 ## 0.3.0
 
 ### Minor Changes

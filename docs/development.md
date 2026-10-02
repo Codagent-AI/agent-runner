@@ -105,3 +105,9 @@ Both are also run by the validator checks (see `.validator/checks/`).
 ## Validating changes
 
 Use the `/validator-run` skill to run the full quality gate suite before committing. This runs all validator checks (build, test, lint, security) and code quality reviews, then fixes any issues found.
+
+## Development audit worksheet version
+
+The reporter writes `step_value_v2` rows with audit-level judge usage after the original v1 columns. On its first delivery to a tab with the exact `step_value_v1` header and no trailing header content, it writes only the seven new header cells (`AF1:AL1`) and then appends the row. Existing data rows remain unchanged. Any other header mismatch leaves the report pending for retry.
+
+After a tab upgrades, an older Runner binary still expecting v1 will leave its deliveries pending until it is updated. Judge columns are repeated on each observation row, so downstream totals must de-duplicate by `audit_run_id`. The detailed per-attempt records and coverage are in the audit run's `judge-usage/` and `local-report.json` artifacts.

@@ -41,11 +41,17 @@ func TestE2E001TaggedCLIAutomaticAuditCompletesAndRetriesWithoutDuplicate(t *tes
 	if request.Auditor.CLI != "codex" || request.Auditor.Model != "gpt-5.6-sol" {
 		t.Fatalf("auditor provenance = %#v", request.Auditor)
 	}
+	if usage := report.JudgeUsage; usage == nil || usage.AttemptCount != fixture.modelCallCount() || usage.TokenCoverage != model.CoverageComplete || usage.TotalTokens == nil || usage.CostCoverage != model.CoverageNone || usage.CostUSD != nil {
+		t.Fatalf("Codex judge usage = %+v", usage)
+	}
 	if _, err := os.Stat(filepath.Join(auditDir, metrics.FileName)); err != nil {
 		t.Fatalf("audit metrics unavailable: %v", err)
 	}
 	if got := fixture.server.rowCount(); got != 1 {
 		t.Fatalf("sheet row count = %d, want 1", got)
+	}
+	if fixture.server.headerPuts != 1 || len(fixture.server.rows[0]) != 38 || fixture.server.rows[0][0] != sheetRowSchemaVersion || fixture.server.rows[0][36] != "" {
+		t.Fatalf("Codex sheet projection = %+v", fixture.server.rows)
 	}
 	calls := fixture.modelCallCount()
 	fixture.run(true, "audit", "retry", auditDir)
@@ -143,6 +149,12 @@ func TestTaggedClaudeAuditCompletesAllStages(t *testing.T) {
 	}
 	if fixture.modelCallCount() != 2 {
 		t.Fatalf("expected value and correctness calls, got %d", fixture.modelCallCount())
+	}
+	if usage := report.JudgeUsage; usage == nil || usage.AttemptCount != 2 || usage.TotalTokens == nil || usage.TokenCoverage != model.CoverageComplete || usage.CostUSD == nil || *usage.CostUSD != 0.5 || usage.CostCoverage != model.CoverageComplete {
+		t.Fatalf("Claude judge usage = %+v", usage)
+	}
+	if fixture.server.headerPuts != 1 || len(fixture.server.rows[0]) != 38 || fixture.server.rows[0][36] != "0.5" {
+		t.Fatalf("Claude sheet projection = %+v", fixture.server.rows)
 	}
 	if got := fixture.server.rowCount(); got != 1 {
 		t.Fatalf("delivered rows=%d", got)
@@ -484,11 +496,11 @@ if os.environ.get("AUDIT_E2E_CLAUDE"):
     if "batch_id" in result:
         assert schema["properties"]["batch_id"]["enum"] == [result["batch_id"]]
         result["observations"] = {row["observation_id"]: row for row in result["observations"]}
-    print(json.dumps({"type":"result","subtype":"success","is_error":False,"session_id":"audit-e2e", "result":"The audit is complete", "structured_output":result}))
+    print(json.dumps({"type":"result","subtype":"success","is_error":False,"session_id":"audit-e2e", "result":"The audit is complete", "structured_output":result, "usage":{"input_tokens":10,"cache_read_input_tokens":2,"cache_creation_input_tokens":1,"output_tokens":4},"total_cost_usd":0.25}))
     sys.exit(0)
 print(json.dumps({"type":"thread.started","thread_id":"audit-e2e"}))
 print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":text}}))
-print(json.dumps({"type":"turn.completed"}))
+print(json.dumps({"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":4,"reasoning_output_tokens":1}}))
 PY
 `
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
@@ -525,6 +537,8 @@ type auditSheetsServer struct {
 	mu         sync.Mutex
 	rows       [][]string
 	failAppend bool
+	upgraded   bool
+	headerPuts int
 }
 
 func newAuditSheetsServer(t *testing.T) *auditSheetsServer {
@@ -543,7 +557,15 @@ func (s *auditSheetsServer) serveHTTP(writer http.ResponseWriter, request *http.
 	case request.URL.Path == "/token":
 		_, _ = writer.Write([]byte(`{"access_token":"test-access"}`))
 	case request.Method == http.MethodGet && strings.Contains(request.URL.Path, "1:1"):
-		_ = json.NewEncoder(writer).Encode(map[string]any{"values": [][]string{stepValueHeader}})
+		header := stepValueHeader
+		if s.upgraded {
+			header = stepValueHeaderV2
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{"values": [][]string{header}})
+	case request.Method == http.MethodPut && strings.Contains(request.URL.Path, "AF1:AL1"):
+		s.upgraded = true
+		s.headerPuts++
+		_, _ = writer.Write([]byte(`{}`))
 	case request.Method == http.MethodGet && strings.Contains(request.URL.Path, "B:B"):
 		values := [][]string{{"observation_id"}}
 		for _, row := range s.rows {
