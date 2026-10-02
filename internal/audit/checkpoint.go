@@ -518,8 +518,3 @@ func countGitStats(stats map[string]gitCounts) GitChangeCounts {
 	}
 	return result
 }
-
-// SortGitFileStats is useful to deterministic consumers of persisted evidence.
-func SortGitFileStats(stats []GitFileStat) {
-	sort.Slice(stats, func(i, j int) bool { return stats[i].Path < stats[j].Path })
-}

@@ -19,6 +19,12 @@ entry_points:
           command: ./.validator/go-offline.sh sh -c "go build ./... && go build -tags dev_audit ./..."
       - lint:
           command: ./.validator/go-offline.sh golangci-lint run ./...
+      - lint-strict:
+          command: ./.validator/go-offline.sh golangci-lint run -c .golangci-strict.yml --new-from-merge-base=origin/main ./...
+      - deadcode:
+          command: ./.validator/go-offline.sh ./.validator/deadcode.sh
+      - duplication:
+          command: ./.validator/duplication.sh
       - test:
           command: ./.validator/go-offline.sh go test -tags dev_audit ./...
       - security-code:
