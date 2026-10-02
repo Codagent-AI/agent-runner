@@ -1,6 +1,7 @@
 package scripts_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -725,7 +726,7 @@ func TestSandboxSyncHomeRecoversStaleLock(t *testing.T) {
 	}
 
 	cmd := exec.Command("bash", "./sandbox-sync-home.sh")
-	cmd.Env = append(os.Environ(),
+	cmd.Env = sandboxSyncHomeTestEnv(
 		"HOME="+containerHome,
 		"SANDBOX_HOST_HOME_ROOT="+hostHome,
 		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
@@ -738,6 +739,54 @@ func TestSandboxSyncHomeRecoversStaleLock(t *testing.T) {
 	}
 	if _, err := os.Stat(lockDir); !os.IsNotExist(err) {
 		t.Fatalf("lock dir should be removed after sync, stat err=%v", err)
+	}
+}
+
+func TestSandboxSyncHomeLockDoesNotChangeLauncherGitConfig(t *testing.T) {
+	dir := t.TempDir()
+	hostHome := filepath.Join(dir, "host-home")
+	containerHome := filepath.Join(dir, "container-home")
+	lockDir := filepath.Join(dir, "stale.lock.d")
+	for _, path := range []string{hostHome, containerHome, lockDir} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(lockDir, "pid"), []byte("999999\n"), 0o600); err != nil {
+		t.Fatalf("write stale lock pid: %v", err)
+	}
+
+	launcherGitConfig := filepath.Join(t.TempDir(), "gitconfig")
+	wantLauncherConfig := []byte("[user]\n\tname = Launcher\n")
+	if err := os.WriteFile(launcherGitConfig, wantLauncherConfig, 0o600); err != nil {
+		t.Fatalf("write launcher git config: %v", err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", launcherGitConfig)
+
+	cmd := exec.Command("bash", "./sandbox-sync-home.sh")
+	cmd.Env = sandboxSyncHomeTestEnv(
+		"HOME="+containerHome,
+		"SANDBOX_HOST_HOME_ROOT="+hostHome,
+		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
+		"SANDBOX_SYNC_HOME_LOCK="+lockDir,
+		"SANDBOX_SYNC_HOME_LOCK_TIMEOUT=2",
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("sandbox-sync-home failed: %v\n%s", err, output)
+	}
+	gotLauncherConfig, err := os.ReadFile(launcherGitConfig)
+	if err != nil {
+		t.Fatalf("read launcher git config: %v", err)
+	}
+	if !bytes.Equal(gotLauncherConfig, wantLauncherConfig) {
+		t.Fatalf("launcher git config changed: got %q, want %q", gotLauncherConfig, wantLauncherConfig)
+	}
+	containerGitConfig, err := os.ReadFile(filepath.Join(containerHome, ".gitconfig"))
+	if err != nil {
+		t.Fatalf("read container git config: %v", err)
+	}
+	if !strings.Contains(string(containerGitConfig), "github-credential-helper") {
+		t.Fatalf("container git config missing credential helper:\n%s", containerGitConfig)
 	}
 }
 
@@ -761,7 +810,7 @@ func TestSandboxSyncHomeRecoversOwnerlessLock(t *testing.T) {
 	}
 
 	cmd := exec.Command("bash", "./sandbox-sync-home.sh")
-	cmd.Env = append(os.Environ(),
+	cmd.Env = sandboxSyncHomeTestEnv(
 		"HOME="+containerHome,
 		"SANDBOX_HOST_HOME_ROOT="+hostHome,
 		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
@@ -837,7 +886,7 @@ exec "$REAL_CP" "$@"
 		t.Fatalf("write cp wrapper: %v", err)
 	}
 
-	baseEnv := append(os.Environ(),
+	baseEnv := sandboxSyncHomeTestEnv(
 		"HOME="+containerHome,
 		"SANDBOX_HOST_HOME_ROOT="+hostHome,
 		"SANDBOX_WORKSPACE_BIN="+workspaceBin,
@@ -910,7 +959,7 @@ func TestSandboxSyncHomeDoesNotReclaimWhenFlockFails(t *testing.T) {
 	}
 
 	cmd := exec.Command("bash", "./sandbox-sync-home.sh")
-	cmd.Env = append(os.Environ(),
+	cmd.Env = sandboxSyncHomeTestEnv(
 		"HOME="+containerHome,
 		"SANDBOX_HOST_HOME_ROOT="+hostHome,
 		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
@@ -954,7 +1003,7 @@ set -euo pipefail
 	}
 
 	cmd := exec.Command("bash", "./sandbox-sync-home.sh")
-	cmd.Env = append(os.Environ(),
+	cmd.Env = sandboxSyncHomeTestEnv(
 		"HOME="+containerHome,
 		"SANDBOX_HOST_HOME_ROOT="+hostHome,
 		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
@@ -1283,16 +1332,20 @@ func sliceContainsSubstring(items []string, want string) bool {
 	return false
 }
 
+func sandboxSyncHomeTestEnv(extra ...string) []string {
+	return append(withoutHostLauncherEnv(os.Environ()), extra...)
+}
+
 // withoutHostLauncherEnv drops variables a host launcher (such as the agent factory's
-// fix wrapper) exports for its own processes. Inherited, they override the isolated
-// HOME a test sets up: a private GIT_CONFIG_GLOBAL replaces $HOME/.gitconfig, and
-// AGENT_RUNNER_NO_TUI switches a spawned runner onto its headless path.
+// fix wrapper) exports for its own processes. Inherited Git config paths and settings
+// can override the isolated HOME a test sets up, while AGENT_RUNNER_NO_TUI switches a
+// spawned runner onto its headless path.
 func withoutHostLauncherEnv(base []string) []string {
 	result := make([]string, 0, len(base))
 	for _, entry := range base {
 		name, _, _ := strings.Cut(entry, "=")
 		switch name {
-		case "AGENT_RUNNER_NO_TUI", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM":
+		case "AGENT_RUNNER_NO_TUI", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_SYSTEM":
 			continue
 		}
 		result = append(result, entry)
