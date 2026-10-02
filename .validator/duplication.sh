@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if ! command -v jscpd >/dev/null 2>&1 || [ "$(jscpd --version)" != "4.3.0" ]; then
-  echo "jscpd 4.3.0 is required: npm install -g jscpd@4.3.0" >&2
+jscpd_version=4.3.0
+if ! command -v jscpd >/dev/null 2>&1 || [ "$(jscpd --version)" != "$jscpd_version" ]; then
+  echo "jscpd $jscpd_version is required: npm install -g jscpd@$jscpd_version" >&2
   exit 1
 fi
 
