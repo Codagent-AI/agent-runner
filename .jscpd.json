@@ -12,5 +12,6 @@
     ".git/**"
   ],
   "reporters": ["console"],
-  "gitignore": true
+  "gitignore": true,
+  "noSymlinks": true
 }

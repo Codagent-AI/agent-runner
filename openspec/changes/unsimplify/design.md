@@ -122,6 +122,7 @@ New config `.jscpd.json` at the repository root:
 - `threshold`: 3.5
 - `ignore`: `worktrees/**`, `testdata/**`, `openspec/**`, `.validator/cache/**`, `validator_logs/**`, `**/node_modules/**`, `.git/**` (root-anchored; a `**/openspec/**` pattern would wrongly exclude `workflows/openspec/`)
 - `reporters`: `["console"]`, `gitignore: true`
+- `noSymlinks`: `true`. The tracked `.agents/skills` symlink points at `.claude/skills`; jscpd on Linux (CI) follows it and counts every skill script twice (5.88% measured), while on macOS it does not. Skipping symlinks gives the same 3.1% on both.
 
 New script `.validator/duplication.sh`:
 
