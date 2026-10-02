@@ -54,13 +54,18 @@ func injectedBuildRoot() string {
 //go:embed workflows/audit/run-audit-v1.0.yaml
 var auditWorkflow []byte
 
+// automaticAuditEnabled temporarily pauses the post-run hook while audit cost
+// and value are evaluated: https://github.com/Codagent-AI/agent-runner/issues/191
+// Set it to true to resume automatic auditing. Explicit commands remain active.
+const automaticAuditEnabled = false
+
 func init() {
 	builtinworkflows.RegisterBuiltinAsset("audit/run-audit-v1.0.yaml", auditWorkflow)
 	// Package tests exercise the coordinator directly. Registering the default
 	// self-exec hook in a test binary would recursively execute that test binary
 	// for any eligible fixture, which is neither a production path nor useful
 	// lifecycle coverage.
-	if strings.HasSuffix(os.Args[0], ".test") {
+	if !automaticAuditEnabled || strings.HasSuffix(os.Args[0], ".test") {
 		return
 	}
 	runner.SetDefaultPostFinalizationHook(Coordinator{Launcher: launchDetached}.AfterFinalization)
