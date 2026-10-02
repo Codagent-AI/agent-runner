@@ -763,6 +763,22 @@ func TestSandboxSyncHomeLockDoesNotChangeLauncherGitConfig(t *testing.T) {
 	}
 	t.Setenv("GIT_CONFIG_GLOBAL", launcherGitConfig)
 
+	// The launcher's XDG git/config already holds the GitHub rewrites. The sync must
+	// still write its own copies into the container .gitconfig rather than treating
+	// the launcher's entries as present.
+	launcherXDGConfigHome := t.TempDir()
+	launcherXDGGitConfig := filepath.Join(launcherXDGConfigHome, "git", "config")
+	wantLauncherXDGConfig := []byte("[url \"https://github.com/\"]\n" +
+		"\tinsteadOf = git@github.com:\n" +
+		"\tinsteadOf = ssh://git@github.com/\n")
+	if err := os.MkdirAll(filepath.Dir(launcherXDGGitConfig), 0o700); err != nil {
+		t.Fatalf("mkdir launcher XDG git config dir: %v", err)
+	}
+	if err := os.WriteFile(launcherXDGGitConfig, wantLauncherXDGConfig, 0o600); err != nil {
+		t.Fatalf("write launcher XDG git config: %v", err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", launcherXDGConfigHome)
+
 	cmd := exec.Command("bash", "./sandbox-sync-home.sh")
 	cmd.Env = sandboxSyncHomeTestEnv(
 		"HOME="+containerHome,
@@ -785,8 +801,21 @@ func TestSandboxSyncHomeLockDoesNotChangeLauncherGitConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read container git config: %v", err)
 	}
-	if !strings.Contains(string(containerGitConfig), "github-credential-helper") {
-		t.Fatalf("container git config missing credential helper:\n%s", containerGitConfig)
+	for _, want := range []string{
+		"github-credential-helper",
+		"insteadOf = git@github.com:",
+		"insteadOf = ssh://git@github.com/",
+	} {
+		if !strings.Contains(string(containerGitConfig), want) {
+			t.Fatalf("container git config missing %q:\n%s", want, containerGitConfig)
+		}
+	}
+	gotLauncherXDGConfig, err := os.ReadFile(launcherXDGGitConfig)
+	if err != nil {
+		t.Fatalf("read launcher XDG git config: %v", err)
+	}
+	if !bytes.Equal(gotLauncherXDGConfig, wantLauncherXDGConfig) {
+		t.Fatalf("launcher XDG git config changed: got %q, want %q", gotLauncherXDGConfig, wantLauncherXDGConfig)
 	}
 }
 
@@ -1332,8 +1361,20 @@ func sliceContainsSubstring(items []string, want string) bool {
 	return false
 }
 
+// sandboxSyncHomeTestEnv builds the environment for running sandbox-sync-home.sh
+// against a temporary HOME. Besides the host launcher variables, it drops an
+// inherited XDG_CONFIG_HOME so Git cannot treat the launcher's XDG git/config as
+// global config for the container home.
 func sandboxSyncHomeTestEnv(extra ...string) []string {
-	return append(withoutHostLauncherEnv(os.Environ()), extra...)
+	base := withoutHostLauncherEnv(os.Environ())
+	env := make([]string, 0, len(base)+len(extra))
+	for _, entry := range base {
+		if name, _, _ := strings.Cut(entry, "="); name == "XDG_CONFIG_HOME" {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return append(env, extra...)
 }
 
 // withoutHostLauncherEnv drops variables a host launcher (such as the agent factory's
