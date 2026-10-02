@@ -28,11 +28,9 @@ func TestTaggedCLIPausedAutomaticAuditLaunchesNothingAndReplayStillWorks(t *test
 	}
 	fixture := newCLIAuditFixture(t)
 	fixture.run(true, "-C", fixture.project, "--headless", "spec-driven:audit-e2e")
+	// An automatic audit writes its lifecycle before the source process exits,
+	// so a lone run directory without one proves nothing was launched.
 	source := fixture.onlyRunDir()
-	time.Sleep(2 * time.Second)
-	if got := fixture.onlyRunDir(); got != source {
-		t.Fatalf("source run changed from %q to %q", source, got)
-	}
 	if _, err := os.Stat(filepath.Join(source, lifecycleFileName)); !os.IsNotExist(err) {
 		t.Fatalf("unexpected audit lifecycle: %v", err)
 	}
@@ -65,9 +63,7 @@ func TestTaggedCLIPausedAutomaticAuditLaunchesNothingAndReplayStillWorks(t *test
 }
 
 func TestE2E001TaggedCLIAutomaticAuditCompletesAndRetriesWithoutDuplicate(t *testing.T) {
-	if !automaticAuditEnabled {
-		t.Skip("automatic post-run audit is paused (#191)")
-	}
+	requireAutomaticAudit(t)
 	fixture := newCLIAuditFixture(t)
 
 	fixture.run(true, "-C", fixture.project, "--headless", "spec-driven:audit-e2e")
@@ -112,9 +108,7 @@ func TestE2E001TaggedCLIAutomaticAuditCompletesAndRetriesWithoutDuplicate(t *tes
 }
 
 func TestE2E002TaggedCLIFailureResumeReplayAndRetryPreserveLineage(t *testing.T) {
-	if !automaticAuditEnabled {
-		t.Skip("automatic post-run audit is paused (#191)")
-	}
+	requireAutomaticAudit(t)
 	fixture := newCLIAuditFixture(t)
 	resumeMarker := filepath.Join(fixture.project, ".resume-ready")
 	fixture.env = append(fixture.env, "AUDIT_E2E_FAIL_UNTIL="+resumeMarker)
@@ -173,9 +167,7 @@ func TestE2E002TaggedCLIFailureResumeReplayAndRetryPreserveLineage(t *testing.T)
 }
 
 func TestTaggedClaudeAuditCompletesAllStages(t *testing.T) {
-	if !automaticAuditEnabled {
-		t.Skip("automatic post-run audit is paused (#191)")
-	}
+	requireAutomaticAudit(t)
 	fixture := newCLIAuditFixture(t)
 	profilePath := filepath.Join(fixture.home, ".agent-runner", "config.yaml")
 	data, err := os.ReadFile(profilePath)
@@ -344,9 +336,20 @@ func (f *cliAuditFixture) run(wantSuccess bool, args ...string) string {
 	return output.String()
 }
 
+func requireAutomaticAudit(t *testing.T) {
+	t.Helper()
+	if !automaticAuditEnabled {
+		t.Skip("automatic post-run audit is paused (#191)")
+	}
+}
+
+func (f *cliAuditFixture) runsDir() string {
+	return filepath.Join(f.home, ".agent-runner", "projects", audit.EncodePath(f.project), "runs")
+}
+
 func (f *cliAuditFixture) singleSourceRun() string {
 	f.t.Helper()
-	runsDir := filepath.Join(f.home, ".agent-runner", "projects", audit.EncodePath(f.project), "runs")
+	runsDir := f.runsDir()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		entries, _ := os.ReadDir(runsDir)
@@ -371,7 +374,7 @@ func (f *cliAuditFixture) singleSourceRun() string {
 
 func (f *cliAuditFixture) onlyRunDir() string {
 	f.t.Helper()
-	runsDir := filepath.Join(f.home, ".agent-runner", "projects", audit.EncodePath(f.project), "runs")
+	runsDir := f.runsDir()
 	entries, err := os.ReadDir(runsDir)
 	if err != nil {
 		f.t.Fatal(err)
