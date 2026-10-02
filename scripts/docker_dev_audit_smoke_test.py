@@ -53,9 +53,13 @@ class SmokeTest(unittest.TestCase):
                            destination={"state": "unusable"}, delivery_state="pending")
         self.write(self.audit / "local-report.json", self.report)
         self.bin = Path(self.temp.name) / "bin"
+        self.extra_env = {}
         self.bin.mkdir()
         for name, body in {"mktemp": 'printf "%s\\n" "$SMOKE_TEST_ROOT"',
-                           "agent-runner": "exit 0"}.items():
+                           "agent-runner": '''if [ "${1:-}" = audit ] && [ "${2:-}" = replay ]; then
+    touch "$SMOKE_TEST_ROOT/replay-args"
+fi
+exit 0'''}.items():
             path = self.bin / name
             path.write_text("#!/bin/sh\n" + body + "\n")
             path.chmod(0o755)
@@ -82,11 +86,13 @@ class SmokeTest(unittest.TestCase):
         thread = threading.Thread(target=updater)
         thread.start()
         env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
-                   SMOKE_TEST_ROOT=str(self.root), AUDIT_SMOKE_TIMEOUT_SECONDS="1")
+                   SMOKE_TEST_ROOT=str(self.root), AUDIT_SMOKE_TIMEOUT_SECONDS="1",
+                   **self.extra_env)
         try:
             result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True,
                                     text=True, timeout=8)
-            state_at_return = json.loads((self.audit / "state.json").read_text())
+            state_at_return = (json.loads((self.audit / "state.json").read_text())
+                               if (self.audit / "state.json").exists() else None)
             return result, state_at_return
         finally:
             stop.set()
@@ -95,6 +101,50 @@ class SmokeTest(unittest.TestCase):
     def test_valid_completed_audit_passes(self):
         result, _ = self.run_smoke()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.root / "replay-args").exists())
+
+    def prepare_replay(self, fail=False):
+        staged = Path(self.temp.name) / "staged-audit"
+        self.audit.rename(staged)
+        (self.source / "audit-lifecycle.json").unlink()
+        self.write(self.source / "run-metrics.json", {"sessions": [
+            {"execution_session_id": "session"}]})
+        script = '''#!/bin/sh
+set -eu
+if [ "${1:-}" = audit ] && [ "${2:-}" = replay ]; then
+    printf '%s\\n' "$@" > "$SMOKE_TEST_ROOT/replay-args"
+    count=$(find "$SMOKE_TEST_ROOT/home/.agent-runner/projects" -mindepth 3 -maxdepth 3 -path '*/runs/*' -type d | wc -l | tr -d ' ')
+    [ "$count" = 1 ] && touch "$SMOKE_TEST_ROOT/one-run-before-replay"
+    if [ "${SMOKE_TEST_FAIL_REPLAY:-}" = 1 ]; then exit 42; fi
+    mv "$SMOKE_TEST_STAGED_AUDIT" "$SMOKE_TEST_ROOT/home/.agent-runner/projects/fixture/runs/audit"
+    printf '%s\\n' '{"source_run_id":"source","links":[{"audit_run_id":"audit","execution_session_id":"session","state":"started"}]}' > "$SMOKE_TEST_ROOT/home/.agent-runner/projects/fixture/runs/source/audit-lifecycle.json"
+fi
+exit 0
+'''
+        fake_runner = self.bin / "agent-runner"
+        fake_runner.write_text(script)
+        fake_runner.chmod(0o755)
+        self.extra_env["SMOKE_TEST_STAGED_AUDIT"] = str(staged)
+        if fail:
+            self.extra_env["SMOKE_TEST_FAIL_REPLAY"] = "1"
+
+    def test_replays_source_when_automatic_audit_is_paused(self):
+        self.prepare_replay()
+        result, _ = self.run_smoke()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("automatic audit is paused (#191)", result.stderr)
+        self.assertTrue((self.root / "one-run-before-replay").exists())
+        self.assertEqual((self.root / "replay-args").read_text().splitlines(), [
+            "audit", "replay", str(self.source), "--session", "session", "--project",
+            str(self.root / "project")])
+        self.assertIn("development-audit smoke passed", result.stdout)
+
+    def test_replay_failure_fails_smoke(self):
+        self.prepare_replay(fail=True)
+        result, _ = self.run_smoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("smoke: explicit audit replay failed", result.stderr)
+        self.assertNotIn("smoke passed", result.stdout)
 
     def test_rejects_non_fixture_auditor(self):
         request = json.loads((self.audit / "request.json").read_text())

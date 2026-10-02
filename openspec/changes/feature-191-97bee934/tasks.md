@@ -1,4 +1,4 @@
-- [ ] Implement the change described by these files, using TDD per `CLAUDE.md`. Satisfy every spec scenario and every `INT-*`/`E2E-*` obligation in the test plan:
+- [x] Implement the change described by these files, using TDD per `CLAUDE.md`. Satisfy every spec scenario and every `INT-*`/`E2E-*` obligation in the test plan:
   - add `const automaticAuditEnabled = false` and gate the hook registration in `internal/devaudit/provider_enabled.go`;
   - add the mirrored skip guards and the paused-mode CLI E2E test in `internal/devaudit/cli_e2e_test.go`;
   - add the replay fallback to `scripts/docker-dev-audit-smoke-container.sh`, with its cases in `scripts/docker_dev_audit_smoke_test.py`;

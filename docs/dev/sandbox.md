@@ -36,8 +36,10 @@ scripts/sandbox-run.sh --dry-run --dev-audit -- agent-runner --version
 
 `--dev-audit` builds with the `dev_audit` tag and injects
 `/agent-runner-source` as the authoritative Agent Runner source root. The
-source mount is distinct from the disposable copy used for compilation and
-from `/eval-input`. At audit launch, Runner snapshots and verifies that mounted
+automatic post-run audit hook is currently paused (#191); explicit audit
+commands remain available in these builds. The source mount is distinct from
+the disposable copy used for compilation and from `/eval-input`. At audit
+launch, Runner snapshots and verifies that mounted
 tree before source-verified correctness publication. A worktree can have a
 complete source tree while its host Git indirection is unavailable in the
 container; that condition is recorded as unavailable launch-time Git metadata,
@@ -78,6 +80,11 @@ The smoke adds the separate `devaudit_smoke` build tag through
 `--dev-audit --dev-audit-smoke`; ordinary `dev_audit` builds contain no smoke
 workflow. The fixture tag only registers a hidden workflow and retains the
 production sandbox and lifecycle code.
+
+While automatic post-run audits are paused (#191), the smoke starts the audit
+with `agent-runner audit replay` for the source execution session and reports
+that fallback. When an automatic lifecycle is present, it uses that lifecycle.
+The remaining journey checks are the same in either case.
 
 It uses a temporary project and pins both `crosscheck` (source step) and `lead`
 (auditor) to a fake Codex CLI with no host credentials. It writes artifacts to

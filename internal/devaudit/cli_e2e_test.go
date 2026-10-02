@@ -22,7 +22,52 @@ import (
 	"github.com/codagent/agent-runner/internal/stateio"
 )
 
+func TestTaggedCLIPausedAutomaticAuditLaunchesNothingAndReplayStillWorks(t *testing.T) {
+	if automaticAuditEnabled {
+		t.Skip("automatic post-run audit is resumed (#191)")
+	}
+	fixture := newCLIAuditFixture(t)
+	fixture.run(true, "-C", fixture.project, "--headless", "spec-driven:audit-e2e")
+	source := fixture.onlyRunDir()
+	time.Sleep(2 * time.Second)
+	if got := fixture.onlyRunDir(); got != source {
+		t.Fatalf("source run changed from %q to %q", source, got)
+	}
+	if _, err := os.Stat(filepath.Join(source, lifecycleFileName)); !os.IsNotExist(err) {
+		t.Fatalf("unexpected audit lifecycle: %v", err)
+	}
+	state := readE2EState(t, source)
+	if !state.Completed || state.WarningCount != 0 || state.Audit != nil && len(state.Audit.Links) != 0 {
+		t.Fatalf("source state = %+v, want completed without audit links", state)
+	}
+	log, err := os.ReadFile(filepath.Join(source, "audit.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(log, []byte("audit_launch_")) || bytes.Contains(log, []byte("audit_completed")) {
+		t.Fatalf("unexpected audit lifecycle event in source log: %s", log)
+	}
+	if calls := fixture.modelCallCount(); calls != 0 {
+		t.Fatalf("model calls = %d, want no judge calls", calls)
+	}
+	if output := fixture.run(true, "audit"); !strings.Contains(output, "Usage: agent-runner audit") {
+		t.Fatalf("audit usage missing: %s", output)
+	}
+	sessions := readE2EMetrics(t, source).Sessions
+	if len(sessions) != 1 || sessions[0].ExecutionSessionID == "" {
+		t.Fatalf("source sessions = %+v", sessions)
+	}
+	fixture.run(true, "audit", "replay", source, "--session", sessions[0].ExecutionSessionID)
+	links := fixture.waitForLinks(source, 1, true)
+	if len(links) != 1 || links[0].Trigger != "replay" {
+		t.Fatalf("replay links = %+v", links)
+	}
+}
+
 func TestE2E001TaggedCLIAutomaticAuditCompletesAndRetriesWithoutDuplicate(t *testing.T) {
+	if !automaticAuditEnabled {
+		t.Skip("automatic post-run audit is paused (#191)")
+	}
 	fixture := newCLIAuditFixture(t)
 
 	fixture.run(true, "-C", fixture.project, "--headless", "spec-driven:audit-e2e")
@@ -67,6 +112,9 @@ func TestE2E001TaggedCLIAutomaticAuditCompletesAndRetriesWithoutDuplicate(t *tes
 }
 
 func TestE2E002TaggedCLIFailureResumeReplayAndRetryPreserveLineage(t *testing.T) {
+	if !automaticAuditEnabled {
+		t.Skip("automatic post-run audit is paused (#191)")
+	}
 	fixture := newCLIAuditFixture(t)
 	resumeMarker := filepath.Join(fixture.project, ".resume-ready")
 	fixture.env = append(fixture.env, "AUDIT_E2E_FAIL_UNTIL="+resumeMarker)
@@ -125,6 +173,9 @@ func TestE2E002TaggedCLIFailureResumeReplayAndRetryPreserveLineage(t *testing.T)
 }
 
 func TestTaggedClaudeAuditCompletesAllStages(t *testing.T) {
+	if !automaticAuditEnabled {
+		t.Skip("automatic post-run audit is paused (#191)")
+	}
 	fixture := newCLIAuditFixture(t)
 	profilePath := filepath.Join(fixture.home, ".agent-runner", "config.yaml")
 	data, err := os.ReadFile(profilePath)
@@ -316,6 +367,19 @@ func (f *cliAuditFixture) singleSourceRun() string {
 	}
 	f.t.Fatalf("did not find one source run under %s", runsDir)
 	return ""
+}
+
+func (f *cliAuditFixture) onlyRunDir() string {
+	f.t.Helper()
+	runsDir := filepath.Join(f.home, ".agent-runner", "projects", audit.EncodePath(f.project), "runs")
+	entries, err := os.ReadDir(runsDir)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if len(entries) != 1 || !entries[0].IsDir() {
+		f.t.Fatalf("run directories under %s = %+v, want one", runsDir, entries)
+	}
+	return filepath.Join(runsDir, entries[0].Name())
 }
 
 func (f *cliAuditFixture) waitForLinks(source string, count int, completed bool) []Link {
