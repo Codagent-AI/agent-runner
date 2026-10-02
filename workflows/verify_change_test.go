@@ -98,19 +98,27 @@ func TestCoreVerifyChangeShape(t *testing.T) {
 	}
 }
 
-func TestCoreVerifyChangeSimplifyFixesDefects(t *testing.T) {
+func TestCoreVerifyChangeSimplifyPass(t *testing.T) {
 	workflow := readBuiltinWorkflowForTest(t, verifyChangeRef)
 	step := findStep(workflow.Steps, "simplify")
 	if step == nil {
 		t.Fatal("simplify step not found")
 	}
+	if step.Agent != "implementor" {
+		t.Errorf("simplify agent = %q, want implementor", step.Agent)
+	}
+	if step.Session != "new" {
+		t.Errorf("simplify session = %q, want new", step.Session)
+	}
+	if step.Mode != "autonomous" {
+		t.Errorf("simplify mode = %q, want autonomous", step.Mode)
+	}
 	requirePromptContains(t, step.ID, step.Prompt,
-		"Fix clear-cut correctness or spec-conformance defects",
-		"Do not defer defects to /code-review or a later review",
-		"known follow-up",
+		"do not use a /simplify skill or reviewer subagents",
 		"{{session_dir}}/output/acceptance-assumptions.md",
-		"replace any existing `No unresolved assumptions or context gaps.` statement when adding the first entry",
+		"No unresolved assumptions or context gaps.",
 		"[{{step_id}}]",
+		"Do not run Agent Validator or push",
 	)
 
 	pr := findStep(workflow.Steps, "open-draft-pr")
