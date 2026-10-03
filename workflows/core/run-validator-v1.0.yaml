@@ -45,6 +45,8 @@ steps:
           If a task-compliance review violation says the task's work is missing here, but the task file directs that work to a different repository and it was delivered there, do not re-implement it in this repository and do not add commits for it. Skip it instead:
             agent-validator update-review skip <#> "delivered in <repository>; see task file"
 
+          For a CHECK failure not caused by this branch's changes (pre-existing or due to a newly published external advisory), verify the cause with git diff against the merge base or by confirming the affected dependency is unchanged on this branch. Also check whether the only remedy would replace or redirect a dependency source through git, URL, or fork overrides or resolutions, tarball overrides or resolutions, new registries, or unvetted packages. In either case, do not apply that remedy and do not commit anything for that failure; leave the check failing. In your summary, use a distinct heading, "Out-of-scope failures needing a human decision", and state what failed, why it is out of scope, and what remedy a human would need to approve so it can be filed as a separate issue. Continue fixing other failures as instructed above.
+
           If the output below lacks detail (e.g. just "Status: error"), first inspect captured STDERR (if present). If detail is still insufficient and validator_logs/.debug.log exists, read it for full error context before attempting fixes.
 
           When you are done fixing, commit your changes following the project's commit message conventions and prepend [{{step_id}}]. Then summarize to the user what you fixed, what you skipped, and why.

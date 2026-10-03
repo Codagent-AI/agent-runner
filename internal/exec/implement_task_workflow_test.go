@@ -113,6 +113,26 @@ func TestImplementTaskExternalDeliveryWiring(t *testing.T) {
 		)
 	})
 
+	t.Run("fix-violations does not remediate out-of-scope failures", func(t *testing.T) {
+		workflow := loadBuiltinWorkflow(t, "builtin:core/run-validator-v1.0.yaml")
+		step, _ := requireStep(t, &workflow, "fix-violations")
+		requireContains(t, "fix-violations prompt", step.Prompt,
+			"not caused by this branch's changes",
+			"pre-existing",
+			"newly published external advisory",
+			"git diff against the merge base",
+			"git, URL, or fork overrides or resolutions",
+			"tarball overrides or resolutions",
+			"new registries",
+			"unvetted packages",
+			"do not apply",
+			"do not commit",
+			"leave the check failing",
+			"Out-of-scope failures needing a human decision",
+			"what remedy a human would need to approve",
+		)
+	})
+
 	t.Run("complete-task-index allows external delivery", func(t *testing.T) {
 		workflow := loadBuiltinWorkflow(t, "builtin:core/implement-change-v1.0.yaml")
 		step, _ := requireStep(t, &workflow, "complete-task-index")
