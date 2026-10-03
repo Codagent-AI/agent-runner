@@ -187,10 +187,10 @@ func (a *ClaudeAdapter) ExtractUsageWithContext(stdout string, uc UsageContext) 
 	var reason claudeCollectionReason
 	spawns, failed := evidence.spawns, map[string]bool{}
 	var transcripts *os.Root
-	configRoot, parentRel, subagentsRel, pathReason := claudeTranscriptPaths(evidence.session, uc)
+	projectsRoot, parentRel, subagentsRel, pathReason := claudeTranscriptPaths(evidence.session, uc)
 	reason.note(pathReason)
-	if configRoot != "" {
-		transcripts, err = os.OpenRoot(configRoot)
+	if projectsRoot != "" {
+		transcripts, err = os.OpenRoot(projectsRoot)
 		if err != nil {
 			reason.note(model.UnavailableSubagentSpanUnavailable)
 		} else {
@@ -513,8 +513,11 @@ func readClaudeSubagent(root *os.Root, transcript string, base *model.UsageAlloc
 }
 
 // claudeTranscriptPaths locates the session's parent transcript and subagent
-// directory, returned relative to the Claude config root that holds them.
-func claudeTranscriptPaths(session string, uc UsageContext) (configRoot, parentRel, subagentsRel string, reason model.UnavailableReason) {
+// directory, returned relative to the Claude projects store that holds them.
+// The store itself may be a symlink, as in the eval sandbox, which links
+// ~/.claude/projects to persisted state; Claude follows it, so collection
+// resolves it once. Reads then stay inside the resolved store.
+func claudeTranscriptPaths(session string, uc UsageContext) (projectsRoot, parentRel, subagentsRel string, reason model.UnavailableReason) {
 	if validateSessionID(session) != nil || strings.Contains(session, `\`) {
 		return "", "", "", model.UnavailableSubagentSpanUnavailable
 	}
@@ -546,15 +549,19 @@ func claudeTranscriptPaths(session string, uc UsageContext) (configRoot, parentR
 	if err != nil {
 		return "", "", "", model.UnavailableSubagentSpanUnavailable
 	}
+	projects, err := filepath.EvalSymlinks(filepath.Join(root, "projects"))
+	if err != nil {
+		return "", "", "", model.UnavailableSubagentSpanUnavailable
+	}
 	project := claudePathUnsafeRe.ReplaceAllString(abs, "-")
-	if _, err := os.Stat(filepath.Join(root, "projects", project, session+".jsonl")); err != nil {
+	if _, err := os.Stat(filepath.Join(projects, project, session+".jsonl")); err != nil {
 		// Claude shortens and hashes long project directory names. List the
 		// projects directory rather than globbing, since root can contain glob
 		// metacharacters.
-		entries, readErr := os.ReadDir(filepath.Join(root, "projects"))
+		entries, readErr := os.ReadDir(projects)
 		var matches []string
 		for _, entry := range entries {
-			if _, err := os.Stat(filepath.Join(root, "projects", entry.Name(), session+".jsonl")); err == nil {
+			if _, err := os.Stat(filepath.Join(projects, entry.Name(), session+".jsonl")); err == nil {
 				matches = append(matches, entry.Name())
 			}
 		}
@@ -566,6 +573,5 @@ func claudeTranscriptPaths(session string, uc UsageContext) (configRoot, parentR
 		}
 		project = matches[0]
 	}
-	projectRel := filepath.Join("projects", project)
-	return root, filepath.Join(projectRel, session+".jsonl"), filepath.Join(projectRel, session, "subagents"), ""
+	return projects, filepath.Join(project, session+".jsonl"), filepath.Join(project, session, "subagents"), ""
 }

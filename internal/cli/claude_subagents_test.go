@@ -360,3 +360,36 @@ func TestClaudeSidecarIndexToleratesGlobMetacharactersInProjectDir(t *testing.T)
 		t.Fatalf("usage=%+v", got.Usage)
 	}
 }
+
+// The and-scene eval sandbox keeps Claude's transcripts in persisted state and
+// links ~/.claude/projects to them. Claude follows that link, so collection
+// must too, while a project directory linked out of the store stays refused.
+func TestClaudeTranscriptsFollowSymlinkedProjectsDir(t *testing.T) {
+	home := t.TempDir()
+	state := t.TempDir()
+	work := t.TempDir()
+	session := "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(state, filepath.Join(home, ".claude", "projects")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	project := filepath.Join(state, claudePathUnsafeRe.ReplaceAllString(work, "-"))
+	sub := filepath.Join(project, session, "subagents")
+	writeClaudeFixture(t, filepath.Join(project, session+".jsonl"), `{"uuid":"first","type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent","id":"tool"}]}}`+"\n"+`{"uuid":"last","type":"assistant","message":{"content":[]}}`+"\n")
+	writeClaudeFixture(t, filepath.Join(sub, "agent-a.meta.json"), `{"toolUseId":"tool"}`)
+	writeClaudeFixture(t, filepath.Join(sub, "agent-a.jsonl"), `{"type":"assistant","message":{"id":"m","model":"claude-haiku-4-5","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":2}}}`+"\n")
+	stdout := `{"uuid":"first","type":"system","session_id":"` + session + `","model":"claude-sonnet-5-5"}` + "\n" + `{"uuid":"last","type":"assistant","message":{"model":"claude-sonnet-5-5"}}` + "\n" + `{"type":"result","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}` + "\n"
+	got, err := (&ClaudeAdapter{}).ExtractUsageWithContext(stdout, UsageContext{Workdir: work, Env: []string{"HOME=" + home}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := got.Usage
+	if u.SubagentCollection != model.CompletenessComplete || u.SubagentCollectionReason != "" || len(u.Allocations) != 2 {
+		t.Fatalf("usage=%+v", u)
+	}
+	if u.Allocations[1].Model != "claude-haiku-4-5" || u.TokenTotals == nil || u.TokenTotals.Total != 5 {
+		t.Fatalf("usage=%+v", u)
+	}
+}
