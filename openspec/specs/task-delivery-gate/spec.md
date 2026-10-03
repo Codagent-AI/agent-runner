@@ -166,7 +166,7 @@ The per-task validator repair (`fix-violations` in `core/run-validator`) SHALL b
 
 ### Requirement: Validator repair reports out-of-scope CHECK failures
 
-`fix-violations` SHALL be instructed not to remediate a CHECK failure that the branch did not cause, or whose only remedy replaces or redirects a dependency source. Each condition SHALL apply independently. It SHALL leave that check failing and report the failure, the reason it is out of scope, and the proposed remedy for a human decision.
+`fix-violations` SHALL be instructed not to remediate a CHECK failure that the branch did not cause (neither the affected code or dependency nor the check's definition and configuration changed against the merge base), or whose only remedy replaces or redirects a dependency source. Each condition SHALL apply independently. It SHALL leave that check failing and report the failure, the reason it is out of scope, and the proposed remedy for a human decision.
 
 #### Scenario: Unrelated advisory requires an unvetted dependency source
 - **WHEN** a dependency audit fails on a newly published advisory affecting the unchanged base-branch dependency and the available remedy redirects it to an unvetted fork
