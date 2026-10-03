@@ -217,6 +217,7 @@ steps:
       - id: seed-ci-status-attempted
         command: printf passed
         capture: ci_status
+        skip_if: 'sh: test "{{validator_status}}" != passed || test "{{scope_status}}" != clean'
       - id: finalize-pr
         workflow: builtin:core/finalize-pr-v1.0.yaml
         params:
