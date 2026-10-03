@@ -117,6 +117,7 @@ func TestImplementTaskExternalDeliveryWiring(t *testing.T) {
 		workflow := loadBuiltinWorkflow(t, "builtin:core/run-validator-v1.0.yaml")
 		step, _ := requireStep(t, &workflow, "fix-violations")
 		requireContains(t, "fix-violations prompt", step.Prompt,
+			"either of these independent conditions",
 			"not caused by this branch's changes",
 			"pre-existing",
 			"newly published external advisory",
@@ -125,6 +126,7 @@ func TestImplementTaskExternalDeliveryWiring(t *testing.T) {
 			"tarball overrides or resolutions",
 			"new registries",
 			"unvetted packages",
+			"even if the branch caused the failure",
 			"do not apply",
 			"do not commit",
 			"leave the check failing",

@@ -166,11 +166,15 @@ The per-task validator repair (`fix-violations` in `core/run-validator`) SHALL b
 
 ### Requirement: Validator repair reports out-of-scope CHECK failures
 
-`fix-violations` SHALL be instructed not to remediate a CHECK failure that the branch did not cause, or whose only remedy replaces or redirects a dependency source. It SHALL leave that check failing and report the failure, the reason it is out of scope, and the proposed remedy for a human decision. Factory validator repair prompts SHALL carry the same guard so their gates continue to fail on such a finding.
+`fix-violations` SHALL be instructed not to remediate a CHECK failure that the branch did not cause, or whose only remedy replaces or redirects a dependency source. Each condition SHALL apply independently. It SHALL leave that check failing and report the failure, the reason it is out of scope, and the proposed remedy for a human decision.
 
 #### Scenario: Unrelated advisory requires an unvetted dependency source
 - **WHEN** a dependency audit fails on a newly published advisory affecting the unchanged base-branch dependency and the available remedy redirects it to an unvetted fork
 - **THEN** `fix-violations` is instructed not to apply or commit the override, to leave the check failing, and to report the failure and proposed remedy for a human decision
+
+#### Scenario: Branch-caused failure requires an unvetted dependency source
+- **WHEN** a CHECK failure is caused by this branch but the only available remedy redirects a dependency to an unvetted source
+- **THEN** `fix-violations` is instructed to leave the check failing and report the proposed remedy for a human decision
 
 ### Requirement: Downstream steps acknowledge external delivery
 
