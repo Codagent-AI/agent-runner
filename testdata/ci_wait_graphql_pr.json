@@ -1,0 +1,251 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "url": "https://github.com/Codagent-AI/agent-runner/pull/194",
+        "headRefOid": "4a4c144d8e8b7620da4eda018ab279435cc6e66e",
+        "baseRefOid": "639867f0a47bb2965ef482d6ded7a99cfe9e0672",
+        "mergeable": "MERGEABLE",
+        "isDraft": false,
+        "author": {
+          "login": "codagent-llc",
+          "__typename": "User"
+        },
+        "headRef": {
+          "target": {
+            "checkSuites": {
+              "nodes": [
+                {
+                  "createdAt": "2026-09-29T11:14:26Z"
+                },
+                {
+                  "createdAt": "2026-09-29T11:14:30Z"
+                },
+                {
+                  "createdAt": "2026-09-29T11:14:38Z"
+                },
+                {
+                  "createdAt": "2026-09-29T11:20:18Z"
+                }
+              ],
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "Y3Vyc29yOnYyOpHPAAAAFw0LA_Q=",
+                "hasPreviousPage": false,
+                "startCursor": "Y3Vyc29yOnYyOpHPAAAAFwzxYVM="
+              }
+            },
+            "statusCheckRollup": {
+              "contexts": {
+                "nodes": [
+                  {
+                    "name": "build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "startedAt": "2026-09-29T11:14:33Z",
+                    "completedAt": "2026-09-29T11:15:06Z",
+                    "detailsUrl": "https://github.com/Codagent-AI/agent-runner/actions/runs/36560512486/job/109379982026",
+                    "checkSuite": {
+                      "app": {
+                        "slug": "github-actions"
+                      }
+                    }
+                  },
+                  {
+                    "name": "route / route",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "startedAt": "2026-09-29T11:14:40Z",
+                    "completedAt": "2026-09-29T11:14:52Z",
+                    "detailsUrl": "https://github.com/Codagent-AI/agent-runner/actions/runs/36560524126/job/109380020384",
+                    "checkSuite": {
+                      "app": {
+                        "slug": "github-actions"
+                      }
+                    }
+                  },
+                  {
+                    "name": "route / route",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "startedAt": "2026-09-29T11:20:20Z",
+                    "completedAt": "2026-09-29T11:20:36Z",
+                    "detailsUrl": "https://github.com/Codagent-AI/agent-runner/actions/runs/36561108624/job/109381917817",
+                    "checkSuite": {
+                      "app": {
+                        "slug": "github-actions"
+                      }
+                    }
+                  },
+                  {
+                    "name": "lint",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "startedAt": "2026-09-29T11:14:33Z",
+                    "completedAt": "2026-09-29T11:15:24Z",
+                    "detailsUrl": "https://github.com/Codagent-AI/agent-runner/actions/runs/36560512486/job/109379982061",
+                    "checkSuite": {
+                      "app": {
+                        "slug": "github-actions"
+                      }
+                    }
+                  },
+                  {
+                    "name": "test",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "startedAt": "2026-09-29T11:14:33Z",
+                    "completedAt": "2026-09-29T11:15:49Z",
+                    "detailsUrl": "https://github.com/Codagent-AI/agent-runner/actions/runs/36560512486/job/109379982174",
+                    "checkSuite": {
+                      "app": {
+                        "slug": "github-actions"
+                      }
+                    }
+                  },
+                  {
+                    "name": "security-code",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "startedAt": "2026-09-29T11:14:40Z",
+                    "completedAt": "2026-09-29T11:16:02Z",
+                    "detailsUrl": "https://github.com/Codagent-AI/agent-runner/actions/runs/36560512486/job/109379981979",
+                    "checkSuite": {
+                      "app": {
+                        "slug": "github-actions"
+                      }
+                    }
+                  },
+                  {
+                    "name": "security-deps",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "startedAt": "2026-09-29T11:14:33Z",
+                    "completedAt": "2026-09-29T11:15:02Z",
+                    "detailsUrl": "https://github.com/Codagent-AI/agent-runner/actions/runs/36560512486/job/109379982225",
+                    "checkSuite": {
+                      "app": {
+                        "slug": "github-actions"
+                      }
+                    }
+                  },
+                  {
+                    "context": "CodeRabbit",
+                    "state": "SUCCESS",
+                    "targetUrl": null,
+                    "creator": {
+                      "login": "coderabbitai"
+                    },
+                    "createdAt": "2026-09-29T11:14:48Z"
+                  }
+                ],
+                "pageInfo": {
+                  "hasNextPage": false,
+                  "endCursor": "OA",
+                  "hasPreviousPage": false,
+                  "startCursor": "MQ"
+                }
+              }
+            }
+          }
+        },
+        "timelineItems": {
+          "nodes": [
+            {
+              "createdAt": "2026-09-29T11:02:26Z"
+            }
+          ],
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": "Y3Vyc29yOnYyOpPPAAABoOzUhdABqzMyMDcyODUwNjI1",
+            "hasPreviousPage": false,
+            "startCursor": "Y3Vyc29yOnYyOpPPAAABoOzUhdABqzMyMDcyODUwNjI1"
+          }
+        },
+        "reviews": {
+          "nodes": [
+            {
+              "author": {
+                "login": "coderabbitai",
+                "__typename": "Bot"
+              },
+              "state": "COMMENTED",
+              "submittedAt": "2026-09-29T11:06:35Z",
+              "commit": {
+                "oid": "99cbf2c9585f27351ba5f2991c7922e43730097d"
+              },
+              "body": "recorded review"
+            }
+          ],
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0wOS0yOVQxMTowNjozNVq0MjAyNi0wOS0yOVQxMTowNjozNFrPAAAAAT76Sgw=",
+            "hasPreviousPage": false,
+            "startCursor": "Y3Vyc29yOnYyOpO0MjAyNi0wOS0yOVQxMTowNjozNVq0MjAyNi0wOS0yOVQxMTowNjozNFrPAAAAAT76Sgw="
+          }
+        },
+        "reviewThreads": {
+          "nodes": [
+            {
+              "id": "PRRT_kwDORzUuBc6nE5Pq",
+              "isResolved": true,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "coderabbitai",
+                      "__typename": "Bot"
+                    },
+                    "body": "recorded thread comment",
+                    "updatedAt": "2026-09-29T11:14:46Z",
+                    "path": "internal/cli/claude_subagents.go",
+                    "line": null,
+                    "originalLine": 545
+                  }
+                ],
+                "pageInfo": {
+                  "hasNextPage": false,
+                  "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOS0yOVQxMTowNjozNFrO9lPJIw==",
+                  "hasPreviousPage": false,
+                  "startCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOS0yOVQxMTowNjozNFrO9lPJIw=="
+                }
+              }
+            }
+          ],
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOS0yOVQxMTowNjozNFrOpxOT6g==",
+            "hasPreviousPage": false,
+            "startCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOS0yOVQxMTowNjozNFrOpxOT6g=="
+          }
+        },
+        "comments": {
+          "nodes": [
+            {
+              "author": {
+                "login": "coderabbitai",
+                "__typename": "Bot"
+              },
+              "body": "recorded top-level comment",
+              "updatedAt": "2026-09-29T11:15:30Z"
+            },
+            {
+              "author": {
+                "login": "codagent-factory",
+                "__typename": "Bot"
+              },
+              "body": "recorded top-level comment",
+              "updatedAt": "2026-09-29T10:48:20Z"
+            }
+          ],
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": "Y3Vyc29yOnYyOpHPAAAAAV798Rg=",
+            "hasPreviousPage": false,
+            "startCursor": "Y3Vyc29yOnYyOpHPAAAAAV796NY="
+          }
+        }
+      }
+    }
+  }
+}

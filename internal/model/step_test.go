@@ -41,6 +41,20 @@ func TestStepSchema(t *testing.T) {
 		}
 	})
 
+	t.Run("accepts conservative agent permission override", func(t *testing.T) {
+		s := Step{ID: "fix", Mode: ModeAutonomous, Prompt: "Fix", PermissionMode: "conservative"}
+		if err := s.Validate(nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("rejects permission override on script", func(t *testing.T) {
+		s := Step{ID: "script", Script: "check.sh", PermissionMode: "conservative"}
+		if err := s.Validate(nil); err == nil {
+			t.Fatal("script accepted agent permission override")
+		}
+	})
+
 	t.Run("workflow defaults first agentic step to session new", func(t *testing.T) {
 		w := Workflow{
 			Name: "test",
