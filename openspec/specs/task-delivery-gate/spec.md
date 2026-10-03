@@ -154,7 +154,7 @@ The `verify-task-commit` repair agent SHALL be instructed to handle work it has 
 
 ### Requirement: Validator repair does not re-implement external work
 
-The per-task validator repair (`fix-violations` in `core/run-validator`) SHALL be instructed to handle task-compliance violations about work that the task directs to a different repository. It SHALL NOT re-implement that work in the run repository and SHALL NOT add commits to satisfy the violation. Instead it SHALL skip the violation, stating the repository where the work belongs. Validator repairs for all other failures SHALL be unchanged.
+The per-task validator repair (`fix-violations` in `core/run-validator`) SHALL be instructed to handle task-compliance violations about work that the task directs to a different repository. It SHALL NOT re-implement that work in the run repository and SHALL NOT add commits to satisfy the violation. Instead it SHALL skip the violation, stating the repository where the work belongs. Validator repairs for failures outside this exception and the out-of-scope CHECK failure exception below SHALL be unchanged.
 
 #### Scenario: Compliance violation for externally directed work is skipped
 - **WHEN** `run-validator` reports that a task directing its work to another repository is not implemented in the run repository
@@ -163,6 +163,18 @@ The per-task validator repair (`fix-violations` in `core/run-validator`) SHALL b
 #### Scenario: External task passes after validation without local filler
 - **WHEN** validation runs for an externally delivered task, the validator repair skips the external-work violation, and the repair then writes a valid record
 - **THEN** the run repository has no new commit, and `verify-task-commit` succeeds through external delivery
+
+### Requirement: Validator repair reports out-of-scope CHECK failures
+
+`fix-violations` SHALL be instructed not to remediate a CHECK failure that the branch did not cause (neither the affected code or dependency nor the check's definition and configuration changed against the merge base), or whose only remedy replaces or redirects a dependency source. Each condition SHALL apply independently. It SHALL leave that check failing and report the failure, the reason it is out of scope, and the proposed remedy for a human decision.
+
+#### Scenario: Unrelated advisory requires an unvetted dependency source
+- **WHEN** a dependency audit fails on a newly published advisory affecting the unchanged base-branch dependency and the available remedy redirects it to an unvetted fork
+- **THEN** `fix-violations` is instructed not to apply or commit the override, to leave the check failing, and to report the failure and proposed remedy for a human decision
+
+#### Scenario: Branch-caused failure requires an unvetted dependency source
+- **WHEN** a CHECK failure is caused by this branch but the only available remedy redirects a dependency to an unvetted source
+- **THEN** `fix-violations` is instructed to leave the check failing and report the proposed remedy for a human decision
 
 ### Requirement: Downstream steps acknowledge external delivery
 
