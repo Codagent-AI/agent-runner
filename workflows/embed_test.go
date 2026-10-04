@@ -561,6 +561,95 @@ func TestCoreVerifyChangeSkipValidatorControlsAllValidatorRuns(t *testing.T) {
 	}
 }
 
+// Agents that implement or repair work ahead of a workflow-owned validator run
+// must not run Agent Validator themselves: their runs are unattributed and a
+// passing one makes the workflow's run-validator step report "Trusted" without
+// running checks or reviews.
+const agentValidatorProhibition = "Do not run Agent Validator (`agent-validator run`, `review`, or `check`) here, directly or through any skill. This gets called explicitly in a later workflow step."
+
+func TestImplementationPromptsProhibitAgentRunValidator(t *testing.T) {
+	tests := []struct {
+		ref    string
+		stepID string
+		repair bool
+	}{
+		{ref: "builtin:core/implement-task-v1.0.yaml", stepID: "generate-code"},
+		{ref: "builtin:core/implement-task-v1.0.yaml", stepID: "commit-leftovers-if-needed"},
+		{ref: "builtin:core/implement-task-v1.0.yaml", stepID: "verify-task-commit", repair: true},
+		{ref: "builtin:core/implement-task-v1.0.yaml", stepID: "session-report"},
+		{ref: "builtin:core/verify-change-v1.0.yaml", stepID: "review-assumptions"},
+		{ref: "builtin:openspec/simple-change-v1.0.yaml", stepID: "generate-code"},
+		{ref: "builtin:spec-driven/simple-change-v1.0.yaml", stepID: "generate-code"},
+		{ref: "builtin:onboarding/guided-workflow-v1.0.yaml", stepID: "implement"},
+	}
+	for _, tt := range tests {
+		wf := readBuiltinWorkflowForTest(t, tt.ref)
+		step := findStep(wf.Steps, tt.stepID)
+		if step == nil {
+			t.Fatalf("%s has no %s step", tt.ref, tt.stepID)
+		}
+		prompt := step.Prompt
+		if tt.repair {
+			if step.Repair == nil {
+				t.Fatalf("%s %s has no repair", tt.ref, tt.stepID)
+			}
+			prompt = step.Repair.Prompt
+		}
+		if !strings.Contains(prompt, agentValidatorProhibition) {
+			t.Errorf("%s %s prompt (repair=%v) missing the Agent Validator prohibition", tt.ref, tt.stepID, tt.repair)
+		}
+	}
+}
+
+func TestEveryImplementTaskPromptProhibitsAgentRunValidator(t *testing.T) {
+	err := fs.WalkDir(FS, ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".yaml") {
+			return nil
+		}
+		data, err := FS.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var wf model.Workflow
+		if err := yaml.Unmarshal(data, &wf); err != nil || len(wf.Steps) == 0 {
+			return nil
+		}
+		walkSteps(wf.Steps, func(step *model.Step) {
+			if strings.Contains(step.Prompt, "Implement the task described in") &&
+				!strings.Contains(step.Prompt, agentValidatorProhibition) {
+				t.Errorf("%s %s implements a task without the Agent Validator prohibition", path, step.ID)
+			}
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk embedded workflows: %v", err)
+	}
+}
+
+func TestFixViolationsLimitsAgentToUpdateReview(t *testing.T) {
+	wf := readBuiltinWorkflowForTest(t, "builtin:core/run-validator-v1.0.yaml")
+	step := findStep(wf.Steps, "fix-violations")
+	if step == nil {
+		t.Fatal("run-validator has no fix-violations step")
+	}
+	for _, want := range []string{
+		agentValidatorProhibition,
+		"The only validator command you may run is `agent-validator update-review fix|skip <#>",
+		"If the review findings have no violation numbers",
+	} {
+		if !strings.Contains(step.Prompt, want) {
+			t.Errorf("fix-violations prompt missing %q", want)
+		}
+	}
+	if strings.Contains(step.Prompt, "Re-run the check command") {
+		t.Error("fix-violations prompt still invites re-running the validator check command")
+	}
+}
+
 func TestV2ImplementChangeCallersProvideChangeKind(t *testing.T) {
 	tests := []struct {
 		ref  string
