@@ -38,7 +38,6 @@ inspection, not fresh execution.
 | `core:finalize-pr` | Push PR, wait for CI, fix failures, and repeat until green, with a maximum of three fix cycles. |
 | `core:implement-change` | Run the shared task implementation, validation, draft-PR, and acceptance-preparation phases. |
 | `core:implement-task` | Implement a single task with an agent step followed by a validator retry loop. The task must leave a commit in the run repository, or, when its work was delivered as pushed commits in another local repository, pass through an external delivery record that the gate verifies against that repository's git objects. Pushed state is judged from that clone's local remote-tracking refs without contacting the remote. |
-| `core:orchestrated-implement-change` | Implement a defined change from its proposal, specs, design, and test plan without tasks: a lead orchestrator delegates all code changes to sub-agents, then the change is validated once against its artifacts and handed to `core:verify-change`. |
 | `core:plan-change` | Run the shared definition validation, task planning, and task-review phases. |
 | `core:review-proposal` | Run adversarial proposal review, lead response, and up to three discussion rounds. |
 | `core:review-tasks` | Independently review and autonomously correct a structured task plan. |
@@ -54,7 +53,6 @@ Some `core:*` workflows are hidden from normal browsing because they are intende
 | `openspec:archive-change` | Move an approved change into the archive, verify the commit, and advance the Validator baseline. |
 | `openspec:change` | Define, plan, implement, validate, prepare evidence, support human acceptance, and finalize a feature change. |
 | `openspec:implement-change` | Implement reviewed task files, validate the result, open a draft PR, and prepare exploratory acceptance evidence. |
-| `openspec:orchestrated-implement-change` | Experimental: implement a defined change without a task breakdown, with a lead orchestrator delegating all code changes to sub-agents, then validate, open a draft PR, and prepare acceptance evidence. |
 | `openspec:plan-change` | Validate an approved proposal, specs, design, and test plan, then create and review implementation tasks. |
 | `openspec:scaffold` | Bootstrap a brand new OpenSpec project, configure validation, and optionally publish it to GitHub. |
 | `openspec:simple-change` | Plan, independently crosscheck, implement, validate, flow-test, review, and archive a small branch-local change without creating a PR. |

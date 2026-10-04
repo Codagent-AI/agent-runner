@@ -9,11 +9,6 @@ params:
     default: "false"
 
 steps:
-  - id: validate-feature-branch
-    workflow: ../core/validate-feature-branch-v1.0.yaml
-    params:
-      workflow_name: "openspec:orchestrated-implement-change"
-
   - id: implement
     workflow: ../core/orchestrated-implement-change-v1.0.yaml
     params:
