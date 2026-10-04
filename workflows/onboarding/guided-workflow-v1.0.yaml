@@ -166,6 +166,8 @@ steps:
 
       Stage all implementation changes with `git add`, including newly added files, but do not commit changes. Leave the staged working tree for the user to review. When implementation and verification are complete, summarize what changed.
 
+      Validation belongs to a later onboarding step: do not run Agent Validator (`agent-validator run`, `review`, or `check`) here, directly or through any skill, including codagent:implement-and-validate; skip any part of a skill that runs it.
+
   - id: summary
     mode: ui
     title: Guided Workflow Complete

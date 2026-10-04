@@ -52,6 +52,8 @@ steps:
 
       Always write `{{session_dir}}/output/acceptance-assumptions.md`. List every unresolved finding or context gap concisely, with its source task or session report, why it is undecided, the decision needed from the user, and the likely impact of each option. If none remain, write an explicit `No unresolved assumptions or context gaps.` statement. This file is the canonical handoff for the first phase of human acceptance.
 
+      Validation belongs to this workflow's own steps: do not run Agent Validator (`agent-validator run`, `review`, or `check`) here, directly or through any skill, including codagent:implement-and-validate; skip any part of a skill that runs it.
+
   - id: verify-assumptions-handoff
     command: test -s "{{session_dir}}/output/acceptance-assumptions.md"
     repair:
