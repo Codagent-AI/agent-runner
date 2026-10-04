@@ -166,7 +166,7 @@ The per-task validator repair (`fix-violations` in `core/run-validator`) SHALL b
 
 ### Requirement: Validator repair reports out-of-scope CHECK failures
 
-`fix-violations` SHALL be instructed not to remediate a CHECK failure that the branch did not cause (neither the affected code or dependency nor the check's definition and configuration changed against the merge base), or whose only remedy replaces or redirects a dependency source. Each condition SHALL apply independently. It SHALL leave that check failing and report the failure, the reason it is out of scope, and the proposed remedy for a human decision.
+`fix-violations` SHALL be instructed not to remediate a CHECK failure that the branch did not cause, or whose only remedy replaces or redirects a dependency source. A failure counts as not caused by the branch only when the same check fails with the same error at the merge base with the branch this work targets (usually `origin/HEAD`). The agent SHALL confirm this by running the check on a temporary worktree of that merge base or, for a dependency audit, by confirming that the flagged package's lockfile entries and the check's definition and configuration are unchanged since the merge base. If it cannot confirm this, it SHALL treat the failure as caused by the branch. If the branch added or changed the check or its policy, it caused the failure. Each out-of-scope condition SHALL apply independently. The agent SHALL leave that check failing and report the failure, the reason it is out of scope, and the proposed remedy for a human decision.
 
 #### Scenario: Unrelated advisory requires an unvetted dependency source
 - **WHEN** a dependency audit fails on a newly published advisory affecting the unchanged base-branch dependency and the available remedy redirects it to an unvetted fork
@@ -175,6 +175,18 @@ The per-task validator repair (`fix-violations` in `core/run-validator`) SHALL b
 #### Scenario: Branch-caused failure requires an unvetted dependency source
 - **WHEN** a CHECK failure is caused by this branch but the only available remedy redirects a dependency to an unvetted source
 - **THEN** `fix-violations` is instructed to leave the check failing and report the proposed remedy for a human decision
+
+#### Scenario: Indirect regression in an untouched file
+- **WHEN** the branch changes a function signature in one file and a check fails in another, untouched file, while the check configuration is unchanged and the same error does not occur at the merge base
+- **THEN** `fix-violations` treats the failure as caused by the branch and fixes it
+
+### Requirement: Pull request repair reports out-of-scope CI failures
+
+`fix-pr` in `core/finalize-pr` SHALL apply the same independent cause and dependency-source conditions as `fix-violations` to CI failures, including merge-base confirmation and treating unconfirmed failures as branch-caused. For either out-of-scope condition, it SHALL leave the check failing without committing a remedy and report what failed, why it is out of scope, and what remedy needs a human decision under "Out-of-scope failures needing a human decision". It SHALL continue fixing other failures and review comments within the approved scope.
+
+#### Scenario: CI audit fails on a newly published advisory
+- **WHEN** a CI dependency audit fails on a newly published advisory for a package whose lockfile entries and audit check definition and configuration are unchanged since the merge base
+- **THEN** `fix-pr` leaves the failing check and dependency source unchanged and reports the failure and proposed remedy for a human decision
 
 ### Requirement: Downstream steps acknowledge external delivery
 

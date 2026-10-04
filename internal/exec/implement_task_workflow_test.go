@@ -119,11 +119,12 @@ func TestImplementTaskExternalDeliveryWiring(t *testing.T) {
 		requireContains(t, "fix-violations prompt", step.Prompt,
 			"either of these independent conditions",
 			"not caused by this branch's changes",
-			"pre-existing",
-			"newly published external advisory",
-			"git diff against the merge base",
-			"the failing check's definition and configuration",
-			"must both be unchanged on this branch",
+			"same check fails with the same error at the merge base",
+			"origin/HEAD",
+			"temporary worktree",
+			"lockfile entries",
+			"check's definition and configuration",
+			"If you cannot confirm it, treat the failure as caused by the branch",
 			"If the branch added or changed the check or its policy, the branch caused the failure",
 			"git, URL, or fork overrides or resolutions",
 			"tarball overrides or resolutions",
@@ -133,6 +134,29 @@ func TestImplementTaskExternalDeliveryWiring(t *testing.T) {
 			"do not apply",
 			"do not commit",
 			"leave the check failing",
+			"Out-of-scope failures needing a human decision",
+			"what remedy a human would need to approve",
+		)
+	})
+
+	t.Run("fix-pr reports out-of-scope CI failures", func(t *testing.T) {
+		workflow := loadBuiltinWorkflow(t, "builtin:core/finalize-pr-v1.0.yaml")
+		step, _ := requireStep(t, &workflow, "fix-pr")
+		requireContains(t, "fix-pr prompt", step.Prompt,
+			"either of these independent conditions",
+			"same check fails with the same error at the merge base",
+			"origin/HEAD",
+			"temporary worktree",
+			"lockfile entries",
+			"check's definition and configuration",
+			"If you cannot confirm it, treat the failure as caused by the branch",
+			"If the branch added or changed the check or its policy, the branch caused the failure",
+			"git, URL, or fork overrides or resolutions",
+			"tarball overrides or resolutions",
+			"new registries",
+			"unvetted packages",
+			"even if the branch caused the failure",
+			"do not commit anything for that failure; leave it failing",
 			"Out-of-scope failures needing a human decision",
 			"what remedy a human would need to approve",
 		)
