@@ -58,7 +58,7 @@ steps:
     prompt: |
       You MUST use the codagent:orchestrate-change skill to implement {{change_label}} "{{change_name}}" from its approved definition artifacts under `{{change_dir}}/`: `proposal.md`, every `specs/*/spec.md`, `design.md`, and `test-plan.md`. There is no task breakdown for this change.
 
-      Keep the skill's slice ledger under `{{session_dir}}/`, never in the repository. Sub-agents must prepend `[{{step_id}}]` to their commit messages. {{artifact_validation_instruction}}
+      Keep your plan file under `{{session_dir}}/`, never in the repository. Sub-agents must prepend `[{{step_id}}]` to their commit messages. {{artifact_validation_instruction}}
 
   - id: run-validator
     workflow: run-validator-v1.0.yaml
