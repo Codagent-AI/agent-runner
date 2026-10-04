@@ -35,7 +35,7 @@ steps:
 
           Fix issues you reasonably agree with or believe the human wants fixed. Skip issues that are purely stylistic or subjective. When you skip, briefly state why.
 
-          This workflow re-runs Agent Validator after this step. Do not run `agent-validator run`, `review`, or `check` yourself, directly or through any skill, including codagent:implement-and-validate. The only validator command you may run is `agent-validator update-review fix|skip <#> "..."`.
+          Do not run Agent Validator (`agent-validator run`, `review`, or `check`) here, directly or through any skill. This gets called explicitly in a later workflow step. The only validator command you may run is `agent-validator update-review fix|skip <#> "..."`.
 
           For CHECK failures: fix the code following the instructions provided. To verify a fix, run the underlying project command the check reports (for example the linter or test command itself), not `agent-validator check`. If a fix skill is named, invoke it instead.
           For REVIEW violations: fix the code, then mark it:
@@ -44,7 +44,7 @@ steps:
             agent-validator update-review skip <#> "why"
           Read the full log file if the summary lacks context.
 
-          If the review findings have no violation numbers (for example, because the reviewer output could not be parsed), fix the findings described in the log that you agree with and report what you fixed and skipped. Do not re-run the review to obtain numbers; the workflow's next validator run reviews your fixes.
+          If the review findings have no violation numbers (for example, because the reviewer output could not be parsed), fix the findings described in the log that you agree with and report what you fixed and skipped.
 
           If a task-compliance review violation says the task's work is missing here, but the task file directs that work to a different repository and it was delivered there, do not re-implement it in this repository and do not add commits for it. Skip it instead:
             agent-validator update-review skip <#> "delivered in <repository>; see task file"

@@ -565,7 +565,7 @@ func TestCoreVerifyChangeSkipValidatorControlsAllValidatorRuns(t *testing.T) {
 // must not run Agent Validator themselves: their runs are unattributed and a
 // passing one makes the workflow's run-validator step report "Trusted" without
 // running checks or reviews.
-const agentValidatorProhibition = "do not run Agent Validator (`agent-validator run`, `review`, or `check`) here, directly or through any skill, including codagent:implement-and-validate"
+const agentValidatorProhibition = "Do not run Agent Validator (`agent-validator run`, `review`, or `check`) here, directly or through any skill. This gets called explicitly in a later workflow step."
 
 func TestImplementationPromptsProhibitAgentRunValidator(t *testing.T) {
 	tests := []struct {
@@ -637,11 +637,9 @@ func TestFixViolationsLimitsAgentToUpdateReview(t *testing.T) {
 		t.Fatal("run-validator has no fix-violations step")
 	}
 	for _, want := range []string{
-		"This workflow re-runs Agent Validator after this step.",
-		"Do not run `agent-validator run`, `review`, or `check` yourself, directly or through any skill",
+		agentValidatorProhibition,
 		"The only validator command you may run is `agent-validator update-review fix|skip <#>",
 		"If the review findings have no violation numbers",
-		"Do not re-run the review to obtain numbers",
 	} {
 		if !strings.Contains(step.Prompt, want) {
 			t.Errorf("fix-violations prompt missing %q", want)
