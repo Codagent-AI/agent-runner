@@ -60,6 +60,8 @@ steps:
 
       Keep your plan file under `{{session_dir}}/`, never in the repository. Sub-agents must prepend `[{{step_id}}]` to their commit messages. {{artifact_validation_instruction}}
 
+      Do not run Agent Validator (`agent-validator run`, `review`, or `check`) here, directly or through any skill, and tell your sub-agents the same. It runs explicitly in a later workflow step.
+
   - id: run-validator
     workflow: run-validator-v1.0.yaml
     # skip_if parameters are shell-quoted by InterpolateShellSafeTyped. The
