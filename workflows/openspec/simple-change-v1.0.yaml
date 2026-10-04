@@ -48,6 +48,8 @@ steps:
 
       Do not run Agent Validator (`agent-validator run`, `review`, or `check`) here, directly or through any skill. This gets called explicitly in a later workflow step.
 
+      Implement this yourself. Do not use the codagent:orchestrate-change skill here.
+
   - id: run-validator
     workflow: ../core/run-validator-v1.0.yaml
     params:
