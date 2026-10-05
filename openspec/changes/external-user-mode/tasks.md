@@ -1,0 +1,7 @@
+- [ ] Implement the change described by these files:
+  - [proposal.md](proposal.md)
+  - [specs/external-user-mode/spec.md](specs/external-user-mode/spec.md)
+  - [specs/run-until/spec.md](specs/run-until/spec.md)
+  - [specs/agent-calls/spec.md](specs/agent-calls/spec.md)
+  - [specs/agent-usage-collection/spec.md](specs/agent-usage-collection/spec.md)
+  - [design.md](design.md)
