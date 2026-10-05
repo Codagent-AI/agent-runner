@@ -64,6 +64,10 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		return nil, ErrAlreadyCompleted
 	}
 	resumeState.fromStep = resolved.StepID
+	var previousStep *model.PreviousStepRecord
+	if state.CurrentStep.Nested != nil {
+		previousStep = state.CurrentStep.Nested.PreviousStep
+	}
 
 	// Create engine if configured
 	var eng engine.Engine
@@ -102,7 +106,7 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		NamedSessionDecls:      resumeState.namedSessionDecls,
 		ChildState:             resumeState.childState,
 		Crashes:                state.Crashes,
-		PreviousStep:           state.CurrentStep.Nested.PreviousStep,
+		PreviousStep:           previousStep,
 		InteractiveAttempt:     resumeInteractiveAttempt(&state),
 		ProcessRunner:          opts.ProcessRunner,
 		GlobExpander:           opts.GlobExpander,
