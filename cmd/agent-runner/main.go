@@ -464,6 +464,9 @@ func run() int {
 	// the live view is broken. Equivalent to AGENT_RUNNER_NO_TUI=1. Works
 	// for both starting and resuming a workflow.
 	headlessFlag := flag.Bool("headless", false, "")
+	externalUserFlag := flag.String("external-user", "", "Directory for external user turn exchange")
+	externalUserTimeoutFlag := flag.String("external-user-timeout", "", "Timeout for each external user reply")
+	untilFlag := flag.String("until", "", "Stop after the named top-level step")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: agent-runner [flags] [workflow [params...]]\n\n")
@@ -479,6 +482,9 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "  -cli <name>\n\tCLI override for intake\n")
 		fmt.Fprintf(os.Stderr, "  -model <name>\n\tModel override for intake\n")
 		fmt.Fprintf(os.Stderr, "  -validate\n\tValidate a workflow file without executing\n")
+		fmt.Fprintf(os.Stderr, "  --external-user <dir>\n\tExchange interactive turns with an external responder\n")
+		fmt.Fprintf(os.Stderr, "  --external-user-timeout <duration>\n\tTimeout for each reply\n")
+		fmt.Fprintf(os.Stderr, "  --until <step-id>\n\tStop after the named top-level step\n")
 		fmt.Fprintf(os.Stderr, "  -v, -version\n\tPrint version and exit\n")
 	}
 
@@ -494,9 +500,7 @@ func run() int {
 
 	_ = flag.CommandLine.Parse(profileArgs)
 
-	if *headlessFlag {
-		_ = os.Setenv("AGENT_RUNNER_NO_TUI", "1")
-	}
+	configureExternalUserNoTUI(*headlessFlag, *externalUserFlag)
 
 	if *chdirFlag != "" {
 		if err := os.Chdir(*chdirFlag); err != nil {
@@ -516,6 +520,10 @@ func run() int {
 	}
 
 	// Validate flag combinations.
+	if err := validateExternalUserGlobalFlags(*resumeFlag, *intakeFlag, *externalUserFlag, *externalUserTimeoutFlag); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+		return 1
+	}
 	if *validateFlag && *resumeFlag {
 		fmt.Fprintln(os.Stderr, "agent-runner: --validate and --resume are mutually exclusive")
 		return 1
@@ -567,6 +575,7 @@ func run() int {
 		onboardingFrom: strings.TrimSpace(*onboardingFromFlag),
 		intake:         *intakeFlag,
 		headless:       *headlessFlag,
+		externalUser:   *externalUserFlag, externalUserTimeout: *externalUserTimeoutFlag, until: *untilFlag,
 		agentOverride: &model.AgentOverride{
 			CLI: strings.TrimSpace(*cliFlag), Model: strings.TrimSpace(*modelFlag),
 		},
@@ -616,16 +625,19 @@ func extractProfileArgs(args []string) (filtered []string, profile string, set b
 }
 
 type commandFlags struct {
-	validate       bool
-	inspect        string
-	list           bool
-	resume         bool
-	profile        string
-	profileSet     bool
-	onboardingFrom string
-	intake         bool
-	headless       bool
-	agentOverride  *model.AgentOverride
+	externalUser        string
+	externalUserTimeout string
+	until               string
+	validate            bool
+	inspect             string
+	list                bool
+	resume              bool
+	profile             string
+	profileSet          bool
+	onboardingFrom      string
+	intake              bool
+	headless            bool
+	agentOverride       *model.AgentOverride
 }
 
 type intakeInvocationOptions struct {
@@ -732,12 +744,16 @@ func dispatchRunCommand(args []string, opts *commandFlags) int {
 
 	var err error
 	var runOpts runCommandOptions
+	if opts.resume && len(args) > 0 {
+		args = append([]string{"run"}, args...)
+	}
 	args, runOpts, err = parseRunCommandArgs(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
 		return 1
 	}
 	runOpts.headless = opts.headless
+	mergeGlobalRunOptions(&runOpts, opts)
 
 	if runOpts.sessionDir != "" {
 		abs, err := filepath.Abs(runOpts.sessionDir)
@@ -776,14 +792,7 @@ func dispatchRunCommand(args []string, opts *commandFlags) int {
 	}
 
 	if opts.resume {
-		if len(args) > 1 {
-			fmt.Fprintln(os.Stderr, "agent-runner: --resume accepts at most one argument (the session ID)")
-			return 1
-		}
-		if len(args) == 1 {
-			return handleResume(args[0], opts.profileOverride())
-		}
-		return handleListWithProfile(opts.profileOverride())
+		return dispatchResumeCommand(args, &runOpts, opts)
 	}
 
 	if len(args) < 1 {
@@ -836,6 +845,8 @@ func printRunUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "\nFlags:")
 	_, _ = fmt.Fprintln(w, "  --until <step-id>\n\tStop successfully after reaching the named top-level step")
 	_, _ = fmt.Fprintln(w, "  --session-dir <path>\n\tUse this directory for the run's session instead of computing one automatically")
+	_, _ = fmt.Fprintln(w, "  --external-user <dir>\n\tExchange interactive turns with an external responder")
+	_, _ = fmt.Fprintln(w, "  --external-user-timeout <duration>\n\tTimeout for each reply")
 }
 
 func normalizeRunCommandArgs(args []string) ([]string, error) {
@@ -852,6 +863,14 @@ func parseRunCommandArgs(args []string) ([]string, runCommandOptions, error) {
 	normalized := []string{args[1]}
 	for i := 2; i < len(args); i++ {
 		arg := args[i]
+		next, handled, err := parseExternalUserArg(args, i, &opts)
+		if err != nil {
+			return nil, opts, err
+		}
+		if handled {
+			i = next
+			continue
+		}
 		switch {
 		case arg == "--param":
 			if i+1 >= len(args) {
@@ -903,12 +922,16 @@ func handleResume(sessionID string, profile ...config.ProfileOverride) int {
 	return handleResumeWithOptions(sessionID, liveTUIOptions{}, profile...)
 }
 
+func handleResumeWithUntil(sessionID, until string, profile config.ProfileOverride) int {
+	return handleResumeOptions(sessionID, until, liveTUIOptions{}, profile)
+}
+
 func handleResumeWithOptions(sessionID string, liveOpts liveTUIOptions, profile ...config.ProfileOverride) int {
+	return handleResumeOptions(sessionID, "", liveOpts, profile...)
+}
+
+func handleResumeOptions(sessionID, until string, liveOpts liveTUIOptions, profile ...config.ProfileOverride) int {
 	liveOpts = liveOpts.withEnv()
-	if err := requireTTY(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
 
 	stateFilePath, err := resolveResumeStatePath(sessionID)
 	if err != nil {
@@ -933,9 +956,17 @@ func handleResumeWithOptions(sessionID string, liveOpts liveTUIOptions, profile 
 		return 1
 	}
 
+	if state.ExternalUser != nil {
+		_ = os.Setenv("AGENT_RUNNER_NO_TUI", "1")
+	}
+	if err := requireTTY(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
 	if os.Getenv("AGENT_RUNNER_NO_TUI") == "1" {
 		result, runErr := runner.ResumeWorkflow(stateFilePath, &runner.Options{
-			ProfileStore: profiles, ProfileOverride: override,
+			ProfileStore: profiles, ProfileOverride: override, Until: until,
 			ProcessRunner: newHeadlessProcessRunner(filepath.Dir(stateFilePath)),
 			GlobExpander:  &realGlobExpander{},
 			Log:           &realLogger{},
@@ -955,7 +986,7 @@ func handleResumeWithOptions(sessionID string, liveOpts liveTUIOptions, profile 
 	}
 
 	h, err := runner.PrepareResume(stateFilePath, &runner.Options{
-		ProfileStore: profiles, ProfileOverride: override,
+		ProfileStore: profiles, ProfileOverride: override, Until: until,
 		ProcessRunner: &realProcessRunner{},
 		GlobExpander:  &realGlobExpander{},
 		Log:           &runner.DiscardLogger{},
@@ -2165,13 +2196,15 @@ func handleRunWithResult(args []string, liveOpts liveTUIOptions) liveTUIResult {
 }
 
 type runCommandOptions struct {
-	liveOpts        liveTUIOptions
-	from            string
-	until           string
-	sessionDir      string
-	profileOverride config.ProfileOverride
-	headless        bool
-	agentOverride   *model.AgentOverride
+	liveOpts            liveTUIOptions
+	from                string
+	until               string
+	sessionDir          string
+	profileOverride     config.ProfileOverride
+	headless            bool
+	externalUser        string
+	externalUserTimeout string
+	agentOverride       *model.AgentOverride
 }
 
 // freshRunRequest contains everything needed to prepare a new top-level run.
@@ -2185,6 +2218,7 @@ type freshRunRequest struct {
 	Until                 string
 	SessionDir            string
 	AgentOverride         *model.AgentOverride
+	ExternalUser          *model.ExternalUserSettings
 	ProfileOverride       config.ProfileOverride
 	IntakeParentRunID     string
 	IntakeHandoffContents string
@@ -2231,6 +2265,7 @@ func prepareFreshRun(req *freshRunRequest) (*runner.RunHandle, error) {
 		Until:                 req.Until,
 		SessionDir:            req.SessionDir,
 		AgentOverride:         req.AgentOverride,
+		ExternalUser:          req.ExternalUser,
 		IntakeParentRunID:     req.IntakeParentRunID,
 		IntakeHandoffContents: req.IntakeHandoffContents,
 		Engine:                eng,
@@ -2258,7 +2293,7 @@ func validateIntakeRunInvocation(workflowFile string, headless bool) error {
 func handleRunWithRunOptions(args []string, runOpts *runCommandOptions) liveTUIResult {
 	liveOpts := runOpts.liveOpts.withEnv()
 	workflowFile := args[0]
-	if err := validateIntakeRunInvocation(workflowFile, runOpts.headless); err != nil {
+	if err := validateIntakeRunInvocation(workflowFile, runOpts.headless || runOpts.externalUser != ""); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return liveTUIResult{exitCode: 1}
 	}
@@ -2275,6 +2310,19 @@ func handleRunWithRunOptions(args []string, runOpts *runCommandOptions) liveTUIR
 		}
 	}
 
+	if runOpts.externalUserTimeout != "" && runOpts.externalUser == "" {
+		fmt.Fprintln(os.Stderr, "agent-runner: --external-user-timeout requires --external-user")
+		return liveTUIResult{exitCode: 1}
+	}
+	var externalSettings *model.ExternalUserSettings
+	if runOpts.externalUser != "" {
+		externalSettings, err = validateExternalUserSettings(runOpts.externalUser, runOpts.externalUserTimeout)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
+			return liveTUIResult{exitCode: 1}
+		}
+		_ = os.Setenv("AGENT_RUNNER_NO_TUI", "1")
+	}
 	if err := requireTTY(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return liveTUIResult{exitCode: 1}
@@ -2284,7 +2332,7 @@ func handleRunWithRunOptions(args []string, runOpts *runCommandOptions) liveTUIR
 		return prepareFreshRun(&freshRunRequest{
 			SourceRef: workflowFile, Positional: positional, Keyed: keyed,
 			From: runOpts.from, Until: runOpts.until, SessionDir: runOpts.sessionDir, AgentOverride: runOpts.agentOverride,
-			ProfileOverride: runOpts.profileOverride, Log: log,
+			ProfileOverride: runOpts.profileOverride, ExternalUser: externalSettings, Log: log,
 		})
 	}
 

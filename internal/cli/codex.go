@@ -52,7 +52,7 @@ func (a *CodexAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, erro
 	sessionID := normalizeCodexSessionID(input.SessionID)
 	resuming := sessionID != ""
 
-	if context.IsAutonomous() {
+	if context.IsAutonomous() || context == ContextExternalUser {
 		sandbox := "workspace-write"
 		if usersettings.EffectiveAutonomousPermissionMode(input.PermissionMode) == usersettings.PermissionModeYOLO {
 			sandbox = "danger-full-access"
@@ -86,6 +86,7 @@ func (a *CodexAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, erro
 		args = append(args, "-c", "notify="+string(notify))
 	}
 
+	args = append(args, "--")
 	if resuming {
 		args = append(args, sessionID)
 	}

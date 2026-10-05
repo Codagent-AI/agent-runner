@@ -195,6 +195,7 @@ type ExecutionContext struct {
 	WorkingDir               string
 	AutonomousBackend        string
 	AutonomousPermissionMode string
+	ExternalUser             *ExternalUserSettings
 
 	// SessionDir is the absolute path of the run's session directory
 	// (e.g. ~/.agent-runner/projects/<encoded-cwd>/runs/<run-id>). Exposed to
@@ -293,6 +294,7 @@ type RootContextOptions struct {
 	WorkingDir               string
 	AutonomousBackend        string
 	AutonomousPermissionMode string
+	ExternalUser             *ExternalUserSettings
 	SessionDir               string
 	IntakeHandoffContents    string
 	IntakeHandoffDelivered   bool
@@ -357,6 +359,7 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		WorkingDir:               opts.WorkingDir,
 		AutonomousBackend:        opts.AutonomousBackend,
 		AutonomousPermissionMode: opts.AutonomousPermissionMode,
+		ExternalUser:             opts.ExternalUser,
 		SessionDir:               opts.SessionDir,
 		IntakeHandoffContents:    opts.IntakeHandoffContents,
 		intakeHandoffState:       NewIntakeHandoffState(opts.IntakeHandoffDelivered),
@@ -496,6 +499,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		WorkingDir:               parent.WorkingDir,
 		AutonomousBackend:        parent.AutonomousBackend,
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
+		ExternalUser:             parent.ExternalUser,
 		SessionDir:               parent.SessionDir,
 		IntakeHandoffContents:    parent.IntakeHandoffContents,
 		intakeHandoffState:       parent.intakeHandoffState,
@@ -554,6 +558,7 @@ func NewRepairAttemptContext(owner *ExecutionContext, checkID string, attempt in
 		WorkingDir:               owner.WorkingDir,
 		AutonomousBackend:        owner.AutonomousBackend,
 		AutonomousPermissionMode: owner.AutonomousPermissionMode,
+		ExternalUser:             owner.ExternalUser,
 		SessionDir:               owner.SessionDir,
 		IntakeHandoffContents:    owner.IntakeHandoffContents,
 		intakeHandoffState:       owner.intakeHandoffState,
@@ -641,6 +646,7 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		WorkingDir:               parent.WorkingDir,
 		AutonomousBackend:        parent.AutonomousBackend,
 		AutonomousPermissionMode: parent.AutonomousPermissionMode,
+		ExternalUser:             parent.ExternalUser,
 		SessionDir:               parent.SessionDir,
 		IntakeHandoffContents:    parent.IntakeHandoffContents,
 		intakeHandoffState:       parent.intakeHandoffState,

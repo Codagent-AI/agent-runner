@@ -182,7 +182,7 @@ func ExecuteAgentStep(
 
 	invocationContext := resolveInvocationContext(mode, ctx, cliName, step.Capture != "", log)
 
-	if modeErr := interactiveModeError(adapter, invocationContext); modeErr != nil {
+	if modeErr := validateAgentInvocationContext(adapter, invocationContext, cliName, step.ID); modeErr != nil {
 		emitAgentFailure(ctx, prefix, startTime, string(mode), step, modeErr.Error(), log)
 		return OutcomeFailed, nil
 	}
@@ -215,6 +215,9 @@ func ExecuteAgentStep(
 		defer deactivate()
 	}
 
+	if invocationContext == cli.ContextExternalUser {
+		return executeExternalUser(step, ctx, runner, log, adapter, profile, args, spawnEnv, cliName, sessionID, isResume, prefix, startTime, callHandler, intakeDelivery.Started)
+	}
 	// Persist knowable session IDs before spawn so interruption cannot orphan
 	// the native session. CLI-assigned IDs are stored after discovery instead.
 	recordSessionOnSpawn(step, ctx, sessionID)
@@ -391,7 +394,7 @@ func prepareAgentCallRuntime(
 	handler.options.Parent.ResolveSessionID = func() string {
 		return discoverParentSessionID(adapter, spawnTime, parentWorkdir, handler)
 	}
-	if !invocationContext.IsHeadless() {
+	if !invocationContext.IsHeadless() || invocationContext == cli.ContextExternalUser {
 		return handler, spawnEnv, nil, nil
 	}
 	server, err := controlServerForContext(ctx)
@@ -480,6 +483,12 @@ func interactiveModeError(adapter cli.Adapter, invocationContext cli.InvocationC
 }
 
 func resolveInvocationContext(mode model.StepMode, ctx *model.ExecutionContext, cliName string, hasCapture bool, log Logger) cli.InvocationContext {
+	if ctx.ExternalUser != nil {
+		if mode == model.ModeAutonomous {
+			return cli.ContextAutonomousHeadless
+		}
+		return cli.ContextExternalUser
+	}
 	if mode != model.ModeAutonomous {
 		return cli.ContextInteractive
 	}
@@ -712,7 +721,7 @@ func buildAdapterInput(
 
 	// Block AskUserQuestion in autonomous mode so the agent cannot stall
 	// waiting for input. Applies to fresh and resumed autonomous sessions alike.
-	if invocationContext.IsAutonomous() {
+	if invocationContext.IsAutonomous() || invocationContext == cli.ContextExternalUser {
 		input.DisallowedTools = []string{"AskUserQuestion"}
 	}
 	if completionExecutable != "" {
@@ -724,7 +733,7 @@ func buildAdapterInput(
 	}
 
 	switch {
-	case invocationContext.IsHeadless():
+	case invocationContext.IsHeadless() && invocationContext != cli.ContextExternalUser:
 		input.Prompt = fullPrompt
 	// Since Claude Code 2.1.267, --system-prompt-snapshot defaults to on and
 	// records the system prompt only on the first request. Resumed sessions
@@ -763,11 +772,11 @@ func buildAdapterInput(
 }
 
 func continueMarkerPromptNeedsRefresh(workflowResumed, isResume bool, invocationContext cli.InvocationContext) bool {
-	return !invocationContext.IsHeadless() && (workflowResumed || isResume)
+	return (!invocationContext.IsHeadless() || invocationContext == cli.ContextExternalUser) && (workflowResumed || isResume)
 }
 
 func completionExecutableForContext(invocationContext cli.InvocationContext) (string, error) {
-	if invocationContext.IsHeadless() {
+	if invocationContext.IsHeadless() && invocationContext != cli.ContextExternalUser {
 		return "", nil
 	}
 	executable, err := agentRunnerExecutable()
@@ -818,7 +827,7 @@ func completionInstruction(executable string) string {
 }
 
 func validateCompletionIntegration(input *cli.BuildArgsInput) error {
-	if input.Context.IsHeadless() {
+	if input.Context.IsHeadless() && input.Context != cli.ContextExternalUser {
 		if input.CompletionCommand != nil {
 			return errors.New("headless invocation unexpectedly includes a completion command")
 		}
@@ -902,7 +911,7 @@ func controlServerForContext(ctx *model.ExecutionContext) (*control.ControlServe
 }
 
 func ensureRunnerControl(ctx *model.ExecutionContext, invocationContext cli.InvocationContext, agentCallEligible bool) error {
-	if invocationContext.IsHeadless() && !agentCallEligible {
+	if invocationContext.IsHeadless() && invocationContext != cli.ContextExternalUser && !agentCallEligible {
 		return nil
 	}
 	if ctx.SessionDir == "" {

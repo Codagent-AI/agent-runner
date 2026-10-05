@@ -1,4 +1,4 @@
-- [ ] Implement the change described by these files:
+- [x] Implement the change described by these files:
   - [proposal.md](proposal.md)
   - [specs/external-user-mode/spec.md](specs/external-user-mode/spec.md)
   - [specs/run-until/spec.md](specs/run-until/spec.md)

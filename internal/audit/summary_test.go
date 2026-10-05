@@ -374,3 +374,10 @@ func auditLine(t *testing.T, event Event) string {
 	}
 	return event.Timestamp + prefix + " " + string(event.Type) + " " + string(data) + "\n"
 }
+
+func TestLatestRunCompletedLeavesCappedRunResumable(t *testing.T) {
+	completed, err := LatestRunCompleted(strings.NewReader("2026-07-25T00:00:00Z run_end {\"outcome\":\"success\",\"completed\":false}\n"))
+	if err != nil || completed {
+		t.Fatalf("completed=%v error=%v", completed, err)
+	}
+}

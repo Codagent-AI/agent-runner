@@ -108,6 +108,9 @@ type InvocationIdentity struct {
 // UsageRecord is the typed usage value passed through audit events and stored
 // in the metrics artifact.
 type UsageRecord struct {
+	// Turns holds per-invocation reports for an external-user step. The metrics
+	// collector attributes cumulative counters before aggregating these reports.
+	Turns                    []UsageRecord      `json:"turns,omitempty"`
 	Allocations              []UsageAllocation  `json:"allocations,omitempty"`
 	SubagentCollection       Completeness       `json:"subagent_collection,omitempty"`
 	SubagentCollectionReason UnavailableReason  `json:"subagent_collection_reason,omitempty"`
