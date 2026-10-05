@@ -445,17 +445,8 @@ func executeIterationWithAudit(
 	} else if result.failed {
 		outcome = "failed"
 	}
-	endData := map[string]any{"iteration": iteration, "outcome": outcome, "duration_ms": time.Since(iterStart).Milliseconds(), "crash_observed": iterCtx.Crashes.ObservedUnder(iterCtx.NestingPath)}
-	if outcome == "failed" {
-		kind := iterCtx.StepFailure.Kind
-		if kind == "" {
-			kind = model.FailureStep
-		}
-		endData["failure_kind"] = kind
-		if kind == model.FailureInfrastructure && iterCtx.StepFailure.Origin != nil {
-			endData["failure_origin"] = iterCtx.StepFailure.Origin
-		}
-	}
+	endData := map[string]any{"iteration": iteration, "outcome": outcome, "duration_ms": time.Since(iterStart).Milliseconds()}
+	addStepFailureAuditData(iterCtx, nil, outcome, endData)
 	endData["identity"] = executionIdentity(iterCtx.ParentContext, &model.Step{ID: lastSeg.StepID, Loop: &model.Loop{}, Steps: []model.Step{{ID: "iteration"}}}, "iteration", iteration, false, "", "")
 
 	emitAudit(iterCtx, audit.Event{
