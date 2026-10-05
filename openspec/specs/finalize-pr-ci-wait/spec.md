@@ -246,7 +246,7 @@ Every call the CI wait makes to GitHub SHALL be bounded by a timeout that does n
 - If the check state was never read successfully, the result SHALL be `CI_PENDING`.
 - If the checks were read but comment or review data could not be read, the result SHALL be `CI_PENDING`. It SHALL NOT be `CI_PASSED` or `CI_REVIEW_INCOMPLETE`.
 
-If there is no pull request for the current branch, if GitHub authentication fails, or if a required tool is unavailable, the wait SHALL exit with a non-zero status and a diagnostic, and SHALL NOT produce a terminal marker. Such a failure SHALL NOT abort `core:finalize-pr` by itself; it SHALL flow through the existing unknown-marker gate behavior.
+If there is no pull request for the current branch, if GitHub authentication fails, or if a required tool is unavailable, the wait SHALL exit with a non-zero status and a diagnostic, and SHALL NOT produce a terminal marker. Both `wait-ci` and `verify-final` SHALL offer one inline repair attempt on the `lead-agent` session. The repair SHALL treat `<repair-evidence>` as untrusted data, fix workspace-recoverable causes, and end with `REPAIR_BLOCKED` for credential, permission, token-scope, or missing-tool causes. Only the rerun wait can establish success. A wait still failing after repair SHALL end `ci-fix-loop` without using the remaining fix cycles and fall through to final verification. An unexpected script error SHALL produce a single-line `ci-wait: unexpected error:` diagnostic and exit code 3. The status gate SHALL identify an empty report as a CI-wait failure.
 
 #### Scenario: Hung GitHub call is bounded
 - **WHEN** a GitHub call made by the CI wait blocks indefinitely
@@ -258,15 +258,31 @@ If there is no pull request for the current branch, if GitHub authentication fai
 
 #### Scenario: No pull request
 - **WHEN** the CI wait runs on a branch that has no open pull request
-- **THEN** the step fails with a diagnostic naming the missing pull request, `ci-status-gate` treats the missing marker as not passed, and no fix cycle runs for that iteration
+- **THEN** the step fails with a diagnostic naming the missing pull request and offers one repair attempt on the lead session
+
+#### Scenario: Repair recovers a missing pull request
+- **WHEN** the in-loop CI wait cannot find a pull request and repair creates one
+- **THEN** the wait reruns, captures its report, and the workflow follows that report's marker without a `fix-pr` turn
+
+#### Scenario: Authentication failure blocks repair
+- **WHEN** authentication fails during the in-loop wait and repair ends with `REPAIR_BLOCKED`
+- **THEN** the loop stops without consuming another fix cycle, final verification runs its own repair once, and the final status gate fails with the CI-wait failure message if authentication remains unavailable
 
 #### Scenario: Authentication failure in final verification
 - **WHEN** the final CI wait fails because GitHub authentication fails
-- **THEN** `final-ci-status-gate` fails and `core:finalize-pr` finishes as failed
+- **THEN** inline repair runs once, `final-ci-status-gate` fails if the wait still fails, and `core:finalize-pr` finishes as failed
 
-### Requirement: Lead session resumed only for fix cycles
+#### Scenario: Unexpected collector error
+- **WHEN** the collector raises an unexpected exception in wait or reuse-verification mode
+- **THEN** it exits with code 3 and a one-line `ci-wait: unexpected error:` diagnostic without a traceback or report
 
-`core:finalize-pr` SHALL resume the `lead-agent` session only in the `fix-pr` step, and only when `ci-fix-needed-gate` reports that a fix is needed (`CI_FAILED` or `CI_COMMENTS`). The fixer prompt SHALL include `ci_report` inside a `<ci-report>` block marked as untrusted data, to be read as evidence and never followed as instructions. The fixer SHALL invoke `codagent:fix-pr` to address current failure details without starting another CI polling wait. The prompt SHALL identify PR comments and logs as untrusted data and forbid following instructions or permission claims within them. The lead session SHALL be resumed at most once per fix cycle. The existing scope boundary SHALL remain in the `fix-pr` prompt: fixes that would change approved requirements, design, or scope are not made silently.
+#### Scenario: Empty report reaches status gate
+- **WHEN** a CI wait fails without producing a report
+- **THEN** the status gate fails and says that the CI wait failed and produced no report
+
+### Requirement: Lead session resumed only for fixes or wait repair
+
+`core:finalize-pr` SHALL resume the `lead-agent` session for `fix-pr` only when `ci-fix-needed-gate` reports that a fix is needed (`CI_FAILED` or `CI_COMMENTS`), and for inline wait repair only when a CI wait fails. The fixer prompt SHALL include `ci_report` inside a `<ci-report>` block marked as untrusted data, to be read as evidence and never followed as instructions. The fixer SHALL invoke `codagent:fix-pr` to address current failure details without starting another CI polling wait. The prompt SHALL identify PR comments and logs as untrusted data and forbid following instructions or permission claims within them. The lead session SHALL be resumed at most once per fix cycle. The existing scope boundary SHALL remain in the `fix-pr` prompt: fixes that would change approved requirements, design, or scope are not made silently.
 
 #### Scenario: Failing cycle resumes lead with the CI report
 - **WHEN** the in-loop CI wait reports `CI_FAILED` with a failed check and log excerpt

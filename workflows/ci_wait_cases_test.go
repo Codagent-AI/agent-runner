@@ -272,6 +272,47 @@ func TestCIWaitFatalAndBoundedCalls(t *testing.T) {
 	}
 }
 
+func TestCIWaitUnexpectedErrorHasDedicatedExit(t *testing.T) {
+	collector, err := ReadAsset("core/ci_wait.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "ci_wait.py")
+	if err := os.WriteFile(path, collector, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"wait", "reuse"} {
+		t.Run(mode, func(t *testing.T) {
+			program := `import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ci_wait", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+def crash(*args):
+    raise RuntimeError("first line\nsecond line")
+module.Collector.wait = crash
+module.Collector.resolve_reuse = crash
+sys.argv = [sys.argv[1]] + (["--verify-reuse"] if sys.argv[2] == "reuse" else [])
+sys.exit(module.main())
+`
+			cmd := exec.Command("python3", "-c", program, path, mode)
+			if mode == "reuse" {
+				cmd.Stdin = strings.NewReader(`{"report":"**Head:** abcdef1234567890abcdef1234567890abcdef12\nCI_PASSED\n"}`)
+			} else {
+				cmd.Stdin = strings.NewReader(`{}`)
+			}
+			var stdout, stderr strings.Builder
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			err := cmd.Run()
+			if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 3 {
+				t.Fatalf("exit=%v stderr=%q", err, stderr.String())
+			}
+			if stdout.Len() != 0 || strings.Count(stderr.String(), "\n") != 1 || !strings.HasPrefix(stderr.String(), "ci-wait: unexpected error: RuntimeError: first line second line") {
+				t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
 func TestCIWaitReadsContinuationPages(t *testing.T) {
 	for _, tt := range []struct{ name, field, page, want, detail string }{
 		{"failed check on page two", "checks", `{"data":{"repository":{"pullRequest":{"headRef":{"target":{"statusCheckRollup":{"contexts":{"nodes":[{"name":"late failure","conclusion":"FAILURE"}],"pageInfo":{"hasNextPage":false}}}}}}}}}`, "CI_FAILED", "late failure"},

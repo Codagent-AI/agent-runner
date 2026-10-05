@@ -15,6 +15,11 @@ status=$(
     tail -n 1
 )
 
+if [ -z "$status" ]; then
+  printf "CI status gate: CI wait failed; no CI report was produced (see the CI wait step's diagnostic)\n"
+  exit 1
+fi
+
 case "$status" in
   CI_PASSED|CI_REVIEW_INCOMPLETE)
     printf 'CI status gate: passed\n'
@@ -33,7 +38,7 @@ case "$status" in
     exit 1
     ;;
   *)
-    printf 'CI status gate: missing or unknown status; waiting for another poll\n'
+    printf 'CI status gate: missing or unknown status in CI report\n'
     exit 1
     ;;
 esac

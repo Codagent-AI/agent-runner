@@ -1470,9 +1470,13 @@ func TestCoreFinalizePRUsesCIStatusGate(t *testing.T) {
 			break
 		}
 	}
-	if len(loopSteps) != 4 {
-		t.Fatalf("ci-fix-loop body has %d steps, want 4", len(loopSteps))
+	if len(loopSteps) != 5 {
+		t.Fatalf("ci-fix-loop body has %d steps, want 5", len(loopSteps))
 	}
+	if loopSteps[0].ID != "clear-ci-report" || loopSteps[0].Capture != "ci_report" {
+		t.Fatalf("first loop step must reset ci_report: %+v", loopSteps[0])
+	}
+	loopSteps = loopSteps[1:]
 
 	waitCI := loopSteps[0]
 	if waitCI.ID != "wait-ci" {

@@ -26,6 +26,8 @@ func TestCIStatusGatesHandleIncompleteReview(t *testing.T) {
 		{"status rejects failed checks", "ci-status-gate.sh", "CI_FAILED", 1, ""},
 		{"status rejects pending checks", "ci-status-gate.sh", "CI_PENDING", 1, ""},
 		{"status rejects unknown marker", "ci-status-gate.sh", "UNKNOWN", 1, ""},
+		{"status identifies empty report", "ci-status-gate.sh", "", 1, "CI wait failed; no CI report was produced"},
+		{"status identifies whitespace report", "ci-status-gate.sh", " \n\t", 1, "CI wait failed; no CI report was produced"},
 		{"fix gate skips incomplete review", "ci-fix-needed-gate.sh", "CI_REVIEW_INCOMPLETE", 0, ""},
 		{"review gate warns on incomplete review", "ci-review-incomplete-gate.sh", "CI_REVIEW_INCOMPLETE", 1, "CI review gate: review bot did not complete review; finishing with warning"},
 		{"review gate accepts passed", "ci-review-incomplete-gate.sh", "CI_PASSED", 0, ""},
@@ -48,7 +50,11 @@ func TestCIStatusGatesHandleIncompleteReview(t *testing.T) {
 			}
 
 			cmd := exec.Command("sh", scriptPath)
-			cmd.Stdin = strings.NewReader(`{"report":` + strconv.Quote("CI report\n"+tt.marker+"\n\n") + `}`)
+			report := "CI report\n" + tt.marker + "\n\n"
+			if tt.marker == "" || tt.marker == " \n\t" {
+				report = tt.marker
+			}
+			cmd.Stdin = strings.NewReader(`{"report":` + strconv.Quote(report) + `}`)
 			out, err := cmd.CombinedOutput()
 			gotCode := 0
 			if err != nil {

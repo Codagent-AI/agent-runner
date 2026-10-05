@@ -19,6 +19,7 @@ const finalizeCIBaseSnapshot = `{"data":{"repository":{"pullRequest":{"url":"htt
 
 // finalizeCIGHStub serves $CI_SNAPSHOT for every GraphQL call; CI_GH_MODE injects failures.
 const finalizeCIGHStub = `#!/bin/sh
+if [ -n "$CI_GH_MODE_FILE" ]; then CI_GH_MODE=$(cat "$CI_GH_MODE_FILE"); fi
 if [ "$CI_GH_MODE" = no_pr ] && [ "$1" = pr ]; then echo 'no pull requests found' >&2; exit 1; fi
 if [ "$CI_GH_MODE" = auth ] && [ "$1" = api ]; then echo 'HTTP 401 Bad credentials' >&2; exit 1; fi
 case "$*" in
@@ -67,12 +68,16 @@ func runFinalizePR(t *testing.T, dir string, params map[string]string, process *
 }
 
 type finalizeCIProcessRunner struct {
-	agents        []string
-	scripts       []string
-	captures      []string
-	snapshots     []string
-	head          string
-	reuseSnapshot string
+	agents         []string
+	scripts        []string
+	captures       []string
+	snapshots      []string
+	head           string
+	reuseSnapshot  string
+	repairModeFile string
+	repairBlocked  bool
+	waitErrors     []string
+	gateOutputs    []string
 }
 
 func (r *finalizeCIProcessRunner) RunShell(_ string, _ bool, _ string) (exec.ProcessResult, error) {
@@ -93,6 +98,8 @@ func (r *finalizeCIProcessRunner) RunScript(path string, stdin []byte, _ bool, w
 		cmd.Env = append(os.Environ(), "CI_SNAPSHOT="+r.reuseSnapshot)
 	}
 	cmd.Stdin = bytes.NewReader(stdin)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	code := 0
 	if exit, ok := err.(*osexec.ExitError); ok {
@@ -102,12 +109,78 @@ func (r *finalizeCIProcessRunner) RunScript(path string, stdin []byte, _ bool, w
 	}
 	if filepath.Base(path) == "ci-wait.sh" {
 		r.captures = append(r.captures, string(out))
+		r.waitErrors = append(r.waitErrors, stderr.String())
 	}
-	return exec.ProcessResult{Started: true, ExitCode: code, Stdout: string(out)}, nil
+	if filepath.Base(path) == "ci-status-gate.sh" {
+		r.gateOutputs = append(r.gateOutputs, string(out))
+	}
+	return exec.ProcessResult{Started: true, ExitCode: code, Stdout: string(out), Stderr: stderr.String()}, nil
+}
+
+func TestFinalizePRRepairsMissingPullRequest(t *testing.T) {
+	dir := setupFinalizeCI(t, finalizeCIBaseSnapshot)
+	modeFile := filepath.Join(dir, "gh-mode")
+	if err := os.WriteFile(modeFile, []byte("no_pr"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CI_GH_MODE_FILE", modeFile)
+	process := &finalizeCIProcessRunner{repairModeFile: modeFile}
+	result, err := runFinalizePR(t, dir, map[string]string{"ci_fix_cycles": "2"}, process)
+	if err != nil || result != "success" {
+		t.Fatalf("result=%s err=%v waits=%v agents=%v", result, err, process.captures, process.agents)
+	}
+	if len(process.captures) != 2 || process.captures[0] != "" || !strings.HasSuffix(strings.TrimSpace(process.captures[1]), "CI_PASSED") {
+		t.Fatalf("wait reports=%v", process.captures)
+	}
+	if !strings.Contains(process.waitErrors[0], "no open pull request") {
+		t.Fatalf("initial CI wait diagnostic=%q", process.waitErrors[0])
+	}
+	if len(process.agents) != 2 || !strings.Contains(process.agents[1], "<repair-evidence>") || !strings.Contains(process.agents[1], "no open pull request") || strings.Contains(process.agents[1], "codagent:fix-pr") {
+		t.Fatalf("agent turns=%v", process.agents)
+	}
+	if !strings.Contains(process.agents[0], "--session-id\n") || !strings.Contains(process.agents[1], "--resume\n") {
+		t.Fatalf("repair did not resume the lead-agent session: %v", process.agents)
+	}
+}
+
+func TestFinalizePRBlockedWaitStopsLoopAndFailsFinalGate(t *testing.T) {
+	dir := setupFinalizeCI(t, finalizeCIBaseSnapshot)
+	t.Setenv("CI_GH_MODE", "auth")
+	process := &finalizeCIProcessRunner{repairBlocked: true}
+	result, err := runFinalizePR(t, dir, map[string]string{"ci_fix_cycles": "3"}, process)
+	if err != nil || result != "failed" {
+		t.Fatalf("result=%s err=%v waits=%v agents=%v", result, err, process.captures, process.agents)
+	}
+	if len(process.captures) != 2 || len(process.agents) != 3 {
+		t.Fatalf("waits=%d agents=%d, want 2 waits and push plus two repairs", len(process.captures), len(process.agents))
+	}
+	for _, diagnostic := range process.waitErrors {
+		if !strings.Contains(diagnostic, "authentication failed") {
+			t.Fatalf("CI wait diagnostic=%q", diagnostic)
+		}
+	}
+	for _, prompt := range process.agents[1:] {
+		if !strings.Contains(prompt, "<repair-evidence>") || !strings.Contains(prompt, "authentication failed") || strings.Contains(prompt, "codagent:fix-pr") {
+			t.Fatalf("unexpected repair prompt: %s", prompt)
+		}
+	}
+	if len(process.gateOutputs) != 1 || !strings.Contains(process.gateOutputs[0], "CI wait failed; no CI report was produced") {
+		t.Fatalf("status gate outputs=%v", process.gateOutputs)
+	}
 }
 
 func (r *finalizeCIProcessRunner) RunAgent(options *exec.AgentProcessOptions) (exec.ProcessResult, error) {
 	r.agents = append(r.agents, strings.Join(options.Args, "\n"))
+	if strings.Contains(r.agents[len(r.agents)-1], "<repair-evidence>") {
+		if r.repairModeFile != "" {
+			if err := os.WriteFile(r.repairModeFile, []byte(""), 0o600); err != nil {
+				return exec.ProcessResult{}, err
+			}
+		}
+		if r.repairBlocked {
+			return exec.ProcessResult{Started: true, Stdout: claudeAgentOutput("authentication needs a new token\nREPAIR_BLOCKED")}, nil
+		}
+	}
 	return exec.ProcessResult{Started: true, Stdout: claudeAgentOutput("done")}, nil
 }
 
@@ -144,8 +217,6 @@ func TestFinalizePRFailureBudgetAndIncompleteReview(t *testing.T) {
 		{"failed checks", strings.Replace(base, `"nodes":[],"pageInfo":{"hasNextPage":false}}}}},"reviews"`, `"nodes":[{"name":"unit tests","conclusion":"FAILURE","detailsUrl":"https://github.com/example/project/actions/runs/123"}],"pageInfo":{"hasNextPage":false}}}}},"reviews"`, 1), "", map[string]string{"ci_fix_cycles": "2"}, 3, 3, "failed", "CI_FAILED",
 			[]string{"unit tests", "failed job log excerpt", "CI_FAILED"}},
 		{"incomplete review", base, "", map[string]string{"review_bots": "coderabbitai"}, 1, 1, "success", "CI_REVIEW_INCOMPLETE", nil},
-		{"missing PR", base, "no_pr", map[string]string{"ci_fix_cycles": "2"}, 1, 3, "failed", "", nil},
-		{"authentication failure", base, "auth", map[string]string{"ci_fix_cycles": "2"}, 1, 3, "failed", "", nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := setupFinalizeCI(t, tt.snapshot)

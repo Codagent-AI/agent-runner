@@ -24,6 +24,7 @@ DEFAULT_TIMINGS = {"deadline_seconds": 900, "poll_interval_seconds": 15,
 LOG_MARGIN_SECONDS = 60
 LOG_TAIL_LINES = 100
 BOT_COMMENT_CHARS = 500
+EXIT_UNEXPECTED = 3
 THREAD = f"id isResolved comments(first: 100) {{ nodes {{ {COMMENT} }} {PAGE} }}"
 CHECK = """... on CheckRun { name status conclusion startedAt completedAt detailsUrl
   checkSuite { app { slug } } }
@@ -461,6 +462,8 @@ class Collector:
         return "\n".join(lines) + "\n"
 
 
+# Exit codes: 0 completed, 1 fatal or reuse mismatch, 2 transient wait failure,
+# 3 unexpected collector error.
 def main():
     try:
         inputs = json.load(sys.stdin)
@@ -490,6 +493,10 @@ def main():
     except (Transient, ValueError, TypeError, KeyError) as exc:
         print("ci-wait: " + str(exc), file=sys.stderr)
         return 1 if len(sys.argv) == 2 and sys.argv[1] == "--verify-reuse" else 2
+    except Exception as exc:
+        detail = " ".join(str(exc).splitlines())
+        print(f"ci-wait: unexpected error: {type(exc).__name__}: {detail}", file=sys.stderr)
+        return EXIT_UNEXPECTED
     return 0
 
 if __name__ == "__main__":
