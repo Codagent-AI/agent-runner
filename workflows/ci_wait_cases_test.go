@@ -313,6 +313,33 @@ sys.exit(module.main())
 	}
 }
 
+func TestCIWaitTimingOverrideIsVisible(t *testing.T) {
+	collector, err := ReadAsset("core/ci_wait.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "ci_wait.py")
+	if err := os.WriteFile(path, collector, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	program := `import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ci_wait", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.Collector({})
+`
+	cmd := exec.Command("python3", "-c", program, path)
+	cmd.Env = append(os.Environ(), `AGENT_RUNNER_CI_WAIT_TIMINGS={"deadline_seconds":2}`)
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("collector setup: %v stderr=%q", err, stderr.String())
+	}
+	if stdout.Len() != 0 || stderr.String() != "ci-wait: timings overridden by env\n" {
+		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
 func TestCIWaitReadsContinuationPages(t *testing.T) {
 	for _, tt := range []struct{ name, field, page, want, detail string }{
 		{"failed check on page two", "checks", `{"data":{"repository":{"pullRequest":{"headRef":{"target":{"statusCheckRollup":{"contexts":{"nodes":[{"name":"late failure","conclusion":"FAILURE"}],"pageInfo":{"hasNextPage":false}}}}}}}}}`, "CI_FAILED", "late failure"},

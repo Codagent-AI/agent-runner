@@ -85,7 +85,10 @@ def now():
 class Collector:
     def __init__(self, inputs):
         # Stdin keys win; the environment override exists for workflow-level tests.
-        timings = {**DEFAULT_TIMINGS, **json.loads(os.environ.get("AGENT_RUNNER_CI_WAIT_TIMINGS", "{}"))}
+        override = os.environ.get("AGENT_RUNNER_CI_WAIT_TIMINGS")
+        if override is not None:
+            print("ci-wait: timings overridden by env", file=sys.stderr)
+        timings = {**DEFAULT_TIMINGS, **json.loads(override or "{}")}
         timings = {key: float(inputs.get(key, value)) for key, value in timings.items() if key in DEFAULT_TIMINGS}
         self.deadline_seconds = timings["deadline_seconds"]
         self.interval = timings["poll_interval_seconds"]
