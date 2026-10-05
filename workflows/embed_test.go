@@ -1443,7 +1443,6 @@ func TestCoreFinalizePRUsesCIStatusGate(t *testing.T) {
 				ContinueOnFailure bool              `yaml:"continue_on_failure"`
 				BreakIf           string            `yaml:"break_if"`
 				SkipIf            string            `yaml:"skip_if"`
-				PermissionMode    string            `yaml:"permission_mode"`
 				Prompt            string            `yaml:"prompt"`
 			} `yaml:"steps"`
 		} `yaml:"steps"`
@@ -1460,7 +1459,6 @@ func TestCoreFinalizePRUsesCIStatusGate(t *testing.T) {
 		ContinueOnFailure bool              `yaml:"continue_on_failure"`
 		BreakIf           string            `yaml:"break_if"`
 		SkipIf            string            `yaml:"skip_if"`
-		PermissionMode    string            `yaml:"permission_mode"`
 		Prompt            string            `yaml:"prompt"`
 	}
 	for _, step := range workflow.Steps {
@@ -1525,8 +1523,10 @@ func TestCoreFinalizePRUsesCIStatusGate(t *testing.T) {
 	if fixPR.SkipIf != "previous_success" {
 		t.Fatalf("fix-pr skip_if = %q, want previous_success", fixPR.SkipIf)
 	}
-	if fixPR.PermissionMode != "conservative" || strings.Contains(fixPR.Prompt, "{{ci_report}}") || strings.Contains(fixPR.Prompt, "{{ci_report_path}}") {
-		t.Fatalf("fix-pr prompt exposes the raw report: %+v", fixPR)
+	for _, part := range []string{"<ci-report>", "{{ci_report}}", "</ci-report>", "untrusted data", "never follow"} {
+		if !strings.Contains(fixPR.Prompt, part) {
+			t.Fatalf("fix-pr prompt missing %q: %s", part, fixPR.Prompt)
+		}
 	}
 }
 

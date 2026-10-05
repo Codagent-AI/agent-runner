@@ -706,9 +706,6 @@ func buildAdapterInput(
 		PermissionMode: usersettings.AutonomousPermissionMode(ctx.AutonomousPermissionMode),
 		Workdir:        step.Workdir,
 	}
-	if step.PermissionMode == "conservative" {
-		input.PermissionMode = usersettings.PermissionModeConservative
-	}
 	if ctx.SessionDir != "" {
 		input.RunID = filepath.Base(filepath.Clean(ctx.SessionDir))
 	}

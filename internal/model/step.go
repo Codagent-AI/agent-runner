@@ -170,7 +170,6 @@ type Step struct {
 	CaptureFormat     string            `yaml:"capture_format,omitempty" json:"capture_format,omitempty"`
 	Agent             string            `yaml:"agent,omitempty" json:"agent,omitempty"`
 	Mode              StepMode          `yaml:"mode,omitempty" json:"mode,omitempty"`
-	PermissionMode    string            `yaml:"permission_mode,omitempty" json:"permission_mode,omitempty"`
 	Session           SessionStrategy   `yaml:"session,omitempty" json:"session,omitempty"`
 	CLI               string            `yaml:"cli,omitempty" json:"cli,omitempty"`
 	Capture           string            `yaml:"capture,omitempty" json:"capture,omitempty"`
@@ -408,10 +407,6 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 	isShell := s.Command != ""
 	isScript := s.Script != ""
 	isUI := s.Mode == ModeUI
-	if err := s.validatePermissionMode(isAgent); err != nil {
-		return err
-	}
-
 	if err := s.validateTools(isAgent); err != nil {
 		return err
 	}
@@ -477,13 +472,6 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 		return fmt.Errorf(`invalid mode: %q`, s.Mode)
 	}
 
-	return nil
-}
-
-func (s *Step) validatePermissionMode(isAgent bool) error {
-	if s.PermissionMode != "" && (!isAgent || s.PermissionMode != "conservative") {
-		return fmt.Errorf(`"permission_mode" is only allowed as "conservative" on agent steps`)
-	}
 	return nil
 }
 
