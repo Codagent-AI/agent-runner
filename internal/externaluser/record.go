@@ -25,11 +25,15 @@ func RecordPath(sessionDir string) string {
 }
 func Append(sessionDir string, event *Event) error {
 	event.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
-	path := RecordPath(sessionDir)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	root, err := os.OpenRoot(sessionDir)
+	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o600)
+	defer func() { _ = root.Close() }()
+	if err := root.MkdirAll("external-user", 0o700); err != nil {
+		return err
+	}
+	f, err := root.OpenFile(filepath.Join("external-user", "exchanges.jsonl"), os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o600)
 	if err != nil {
 		return err
 	}
@@ -47,7 +51,15 @@ func Append(sessionDir string, event *Event) error {
 	return f.Sync()
 }
 func Last(sessionDir, stepKey string) (Event, error) {
-	f, err := os.Open(RecordPath(sessionDir))
+	root, err := os.OpenRoot(sessionDir)
+	if os.IsNotExist(err) {
+		return Event{}, nil
+	}
+	if err != nil {
+		return Event{}, err
+	}
+	defer func() { _ = root.Close() }()
+	f, err := root.Open(filepath.Join("external-user", "exchanges.jsonl"))
 	if os.IsNotExist(err) {
 		return Event{}, nil
 	}
@@ -56,27 +68,24 @@ func Last(sessionDir, stepKey string) (Event, error) {
 	}
 	defer func() { _ = f.Close() }()
 	var last Event
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 4096), 8*1024*1024)
-	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
-		if end := bytes.IndexByte(data, '\n'); end >= 0 {
-			return end + 1, data[:end], nil
+	reader := bufio.NewReader(f)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if err == io.EOF {
+			// Ignore an unpublished partial record left by an interrupted append.
+			return last, nil
 		}
-		if atEOF {
-			return len(data), nil, nil
+		if err != nil {
+			return Event{}, err
 		}
-		return 0, nil, nil
-	})
-	for scanner.Scan() {
 		var event Event
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+		if err := json.Unmarshal(line, &event); err != nil {
 			return Event{}, fmt.Errorf("read exchange record: %w", err)
 		}
 		if event.Identity.StepKey == stepKey {
 			last = event
 		}
 	}
-	return last, scanner.Err()
 }
 
 // The run lock serializes writers. A crash can leave an unpublished partial

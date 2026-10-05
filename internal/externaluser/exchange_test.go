@@ -100,3 +100,51 @@ func TestReplayIgnoresInterruptedAppend(t *testing.T) {
 		t.Fatalf("last=%+v err=%v", last, err)
 	}
 }
+
+func TestReplayRecordLargeRequest(t *testing.T) {
+	dir := t.TempDir()
+	message := strings.Repeat("x", 9*1024*1024)
+	if err := Append(dir, &Event{Type: "request_written", Identity: Identity{StepKey: "large"}, Request: &Request{AgentMessage: message}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Append(dir, &Event{Type: "turn_finished", Identity: Identity{StepKey: "other"}}); err != nil {
+		t.Fatal(err)
+	}
+	last, err := Last(dir, "large")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last.Request == nil || last.Request.AgentMessage != message {
+		t.Fatal("large request was not preserved")
+	}
+	last, err = Last(dir, "other")
+	if err != nil || last.Type != "turn_finished" {
+		t.Fatalf("other step blocked by large request: %q, %v", last.Type, err)
+	}
+}
+
+func TestExchangeRejectsEscapingSymlinks(t *testing.T) {
+	t.Run("reply", func(t *testing.T) {
+		dir, outside := t.TempDir(), t.TempDir()
+		target := filepath.Join(outside, "reply.json")
+		if err := os.WriteFile(target, []byte(`{"schema_version":1,"text":"outside"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, "reply.json")
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := WaitReply(context.Background(), path, time.Second); err == nil {
+			t.Fatal("read reply outside exchange directory")
+		}
+	})
+	t.Run("record", func(t *testing.T) {
+		dir, outside := t.TempDir(), t.TempDir()
+		if err := os.Symlink(outside, filepath.Join(dir, "external-user")); err != nil {
+			t.Fatal(err)
+		}
+		if err := Append(dir, &Event{Type: "turn_finished"}); err == nil {
+			t.Fatal("wrote replay record outside session directory")
+		}
+	})
+}

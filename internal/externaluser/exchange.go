@@ -104,13 +104,19 @@ func WaitReply(ctx context.Context, path string, timeout time.Duration) (Reply, 
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return Reply{}, fmt.Errorf("reply %q: %w", path, err)
+	}
+	defer func() { _ = root.Close() }()
+	name := filepath.Base(path)
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		if err := ctx.Err(); err != nil {
 			return Reply{}, fmt.Errorf("waiting for reply %q: %w", path, err)
 		}
-		body, err := os.ReadFile(path)
+		body, err := root.ReadFile(name)
 		if err == nil {
 			return decodeReply(path, body)
 		}
@@ -119,7 +125,7 @@ func WaitReply(ctx context.Context, path string, timeout time.Duration) (Reply, 
 		}
 		select {
 		case <-ctx.Done():
-			if body, err := os.ReadFile(path); ctx.Err() == context.DeadlineExceeded && err == nil {
+			if body, err := root.ReadFile(name); ctx.Err() == context.DeadlineExceeded && err == nil {
 				return decodeReply(path, body)
 			}
 			return Reply{}, fmt.Errorf("waiting for reply %q: %w", path, ctx.Err())

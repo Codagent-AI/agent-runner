@@ -422,21 +422,20 @@ func recordExternalSession(step *model.Step, ctx *model.ExecutionContext, discov
 	return sessionID
 }
 func externalTurnFinished(ctx *model.ExecutionContext, result *AgentInvocationResult, replyPrompt *string, pending externaluser.Identity, command, sessionID string) (bool, error) {
+	if result.Outcome != OutcomeSuccess {
+		if result.ExitCode != 0 {
+			return true, fmt.Errorf("external-user turn failed (exit %d): %s", result.ExitCode, result.Stderr)
+		}
+		if sessionID == "" {
+			return true, errors.New("external-user turn did not establish a CLI session")
+		}
+	}
 	if replyPrompt != nil {
 		if err := externaluser.Append(ctx.SessionDir, &externaluser.Event{Type: "turn_finished", Identity: pending, CompletionCommand: command}); err != nil {
 			return true, err
 		}
 	}
-	if result.Outcome == OutcomeSuccess {
-		return true, nil
-	}
-	if result.ExitCode != 0 {
-		return true, fmt.Errorf("external-user turn failed (exit %d): %s", result.ExitCode, result.Stderr)
-	}
-	if sessionID == "" {
-		return true, errors.New("external-user turn did not establish a CLI session")
-	}
-	return false, nil
+	return result.Outcome == OutcomeSuccess, nil
 }
 func externalCounterReset(previous, current model.TokenCounts) bool {
 	for key, value := range current {

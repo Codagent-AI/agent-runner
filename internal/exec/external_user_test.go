@@ -248,3 +248,43 @@ func TestExternalUserReplayCommandRefreshAndAbort(t *testing.T) {
 		})
 	}
 }
+
+func TestExternalUserReplyTurnCompletion(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		result    AgentInvocationResult
+		sessionID string
+		wantError bool
+		wantDone  bool
+	}{
+		{name: "process failure", result: AgentInvocationResult{Outcome: OutcomeFailed, ExitCode: 2}, sessionID: "session", wantError: true, wantDone: true},
+		{name: "missing session", result: AgentInvocationResult{Outcome: OutcomeFailed}, wantError: true, wantDone: true},
+		{name: "next exchange", result: AgentInvocationResult{Outcome: OutcomeFailed}, sessionID: "session"},
+		{name: "accepted completion", result: AgentInvocationResult{Outcome: OutcomeSuccess, ExitCode: -1}, wantDone: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := model.NewRootContext(&model.RootContextOptions{SessionDir: t.TempDir(), ExternalUser: &model.ExternalUserSettings{Dir: t.TempDir()}})
+			id := externaluser.Identity{StepKey: "proposal", Attempt: 1, Turn: 1}
+			text := "- option a\ncontinue verbatim"
+			command := "/runner step complete"
+			if err := externaluser.Append(ctx.SessionDir, &externaluser.Event{Type: "reply_acted", Identity: id, Reply: &externaluser.Reply{SchemaVersion: 1, Text: text}, CompletionCommand: command}); err != nil {
+				t.Fatal(err)
+			}
+			done, err := externalTurnFinished(ctx, &tc.result, &text, id, command, tc.sessionID)
+			if done != tc.wantDone || (err != nil) != tc.wantError {
+				t.Fatalf("done=%v error=%v", done, err)
+			}
+			prompt, _, err := externalUserReplay(context.Background(), ctx, "[proposal]", id.StepKey, 0, command, "/runner")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantError {
+				if prompt == nil || *prompt != text {
+					t.Fatalf("failed turn lost original reply: %v", prompt)
+				}
+			} else if prompt != nil {
+				t.Fatal("completed turn replayed reply")
+			}
+		})
+	}
+}
