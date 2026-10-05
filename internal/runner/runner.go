@@ -753,13 +753,15 @@ func handleFailedTopLevelStep(rs *runState, step *model.Step, index int) (Workfl
 }
 
 func persistPreviousStep(rs *runState) {
-	_ = updateState(rs.sessionDir, func(state *model.RunState) {
+	if err := updateState(rs.sessionDir, func(state *model.RunState) {
 		if state.CurrentStep.Nested != nil {
 			state.CurrentStep.Nested.PreviousStep = rs.ctx.PreviousStep
 		}
 		state.Crashes = rs.ctx.Crashes.Records()
 		state.CrashObserved = len(state.Crashes) > 0
-	})
+	}); err != nil {
+		rs.log.Printf("agent-runner: warning: could not persist previous-step state: %v\n", err)
+	}
 }
 
 func stopAfterUntil(rs *runState, stepID string, stepIndex int) bool {
@@ -859,14 +861,16 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 			}
 		}
 	case ResultFailed:
-		_ = updateState(rs.sessionDir, func(state *model.RunState) {
+		if err := updateState(rs.sessionDir, func(state *model.RunState) {
 			state.FailureKind = rs.ctx.StepFailure.Kind
 			if state.FailureKind == "" {
 				state.FailureKind = model.FailureStep
 			}
 			state.Crashes = rs.ctx.Crashes.Records()
 			state.CrashObserved = len(state.Crashes) > 0
-		})
+		}); err != nil {
+			rs.log.Printf("agent-runner: warning: could not persist failed-run state: %v\n", err)
+		}
 		if failureReason != "" {
 			if err := writeStateFailureReason(rs.sessionDir, failureReason); err != nil {
 				rs.log.Printf("agent-runner: warning: could not record failure reason: %v\n", err)
