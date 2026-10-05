@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/config"
@@ -53,6 +55,7 @@ type externalTestRunner struct {
 	mockRunner
 	turns      int
 	prompts    []string
+	suffixes   []string
 	fail       bool
 	completeAt int
 }
@@ -60,6 +63,7 @@ type externalTestRunner struct {
 func (r *externalTestRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, error) {
 	r.turns++
 	r.prompts = append(r.prompts, options.Args[len(options.Args)-1])
+	r.suffixes = append(r.suffixes, options.OutputCopySuffix)
 	options.NotifyStarted()
 	if r.fail {
 		return ProcessResult{Started: true, ExitCode: 2, Stderr: "CLI failed"}, nil
@@ -157,6 +161,9 @@ func TestExternalUserLoop(t *testing.T) {
 				}
 			} else if err == nil || outcome != OutcomeFailed {
 				t.Fatalf("outcome=%s err=%v", outcome, err)
+			}
+			if diff := cmp.Diff([]string{".attempt-1.turn-1", ".attempt-1.turn-2"}, runner.suffixes); scenario == "complete" && diff != "" {
+				t.Fatalf("output copy suffixes (-want +got):\n%s", diff)
 			}
 			if scenario == "pending-reply" {
 				paths, _ := filepath.Glob(filepath.Join(exchange, "*.request.json"))

@@ -39,7 +39,10 @@ type tuiProcessRunner struct {
 }
 
 type outputScope struct {
-	prefix        string
+	prefix string
+	// copySuffix, when set, also persists this invocation's raw output to
+	// <sanitizedPrefix><copySuffix>.<ext>, separate from the prefix's latest-output rotation.
+	copySuffix    string
 	stdoutWrapper func(io.Writer) io.Writer
 	stderrWrapper func(io.Writer) io.Writer
 }
@@ -199,6 +202,10 @@ func sanitizeOutputPrefix(prefix string, escapeLiteralUnderscores bool) string {
 // from a still-exiting process are truncated. Returns nil on any error — callers
 // treat a nil file as "no persistence" and continue without it.
 func (r *tuiProcessRunner) openOutputFile(prefix, ext string) *os.File {
+	return r.openOutputFileWithSuffix(prefix, "", ext)
+}
+
+func (r *tuiProcessRunner) openOutputFileWithSuffix(prefix, suffix, ext string) *os.File {
 	if r.coord.sessionDir == "" || prefix == "" {
 		return nil
 	}
@@ -206,7 +213,7 @@ func (r *tuiProcessRunner) openOutputFile(prefix, ext string) *os.File {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil
 	}
-	base := sanitizePrefix(prefix)
+	base := sanitizePrefix(prefix) + sanitizeOutputPrefix(suffix, true)
 	// Defense in depth: reject any residual traversal tokens even after
 	// allowlist sanitization, and verify the resolved path stays under dir.
 	if base == "" || base == "." || base == ".." || strings.Contains(base, "..") {
@@ -323,10 +330,17 @@ func (r *tuiProcessRunner) compositeWriterFor(scope outputScope, stream, ext str
 	stripped := NewANSIStripper(tuiTarget)
 
 	f := r.openOutputFile(scope.prefix, ext)
+	var turnCopy *os.File
+	if scope.copySuffix != "" {
+		turnCopy = r.openOutputFileWithSuffix(scope.prefix, scope.copySuffix, ext)
+	}
 
 	writers := []io.Writer{stripped}
 	if f != nil {
 		writers = append(writers, f)
+	}
+	if turnCopy != nil {
+		writers = append(writers, turnCopy)
 	}
 	if buf != nil {
 		writers = append(writers, buf)
@@ -340,6 +354,9 @@ func (r *tuiProcessRunner) compositeWriterFor(scope outputScope, stream, ext str
 		chunk.Flush()
 		if f != nil {
 			_ = f.Close()
+		}
+		if turnCopy != nil {
+			_ = turnCopy.Close()
 		}
 	}
 	return w, cleanup
@@ -405,7 +422,7 @@ func (r *tuiProcessRunner) RunAgent(options *iexec.AgentProcessOptions) (iexec.P
 	}
 
 	var stdoutBuf, stderrBuf bytes.Buffer
-	scope := outputScope{prefix: options.Prefix, stdoutWrapper: options.StdoutWrapper, stderrWrapper: options.StderrWrapper}
+	scope := outputScope{prefix: options.Prefix, copySuffix: options.OutputCopySuffix, stdoutWrapper: options.StdoutWrapper, stderrWrapper: options.StderrWrapper}
 	if options.Prefix != "" {
 		r.coord.NotifyStepChange(options.Prefix)
 	}

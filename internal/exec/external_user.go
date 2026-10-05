@@ -68,6 +68,7 @@ func executeExternalUser(step *model.Step, ctx *model.ExecutionContext, runner P
 		}
 		input := buildWorkflowAgentInvocation(step, ctx, adapter, args, spawnEnv, prefix, cli.ContextExternalUser, cliName, profile.Model, profile.Effort, sessionID, isResume || turn > 1, log, nil, onStarted)
 		input.Context = runCtx
+		input.OutputCopySuffix = fmt.Sprintf(".attempt-%d.turn-%d", exchange.attempt, turn)
 		current, runErr := invokeExternalTurn(input, runner, log, server, &attempt, probe, resolveSession, ctx)
 		result = current
 		sessionID = recordExternalSession(step, ctx, current.DiscoveredSessionID, sessionID, log, resolver)
