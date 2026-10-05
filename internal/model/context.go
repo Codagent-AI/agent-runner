@@ -162,7 +162,9 @@ type ExecutionContext struct {
 	SessionIDs         map[string]string
 	SessionProfiles    map[string]string // maps session-originating step ID → profile name
 	CapturedVariables  map[string]CapturedValue
-	LastStepOutcome    *string // nil, "success", or "failed"
+	PreviousStep       *PreviousStepRecord
+	StepFailure        StepFailure
+	Crashes            *CrashLedger
 	// PullRequestCaptureState suppresses duplicate PR audit observations for
 	// the complete run. It is intentionally transient; captured variables
 	// remain the durable resume mechanism.
@@ -347,7 +349,6 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		SessionIDs:               sessionIDs,
 		SessionProfiles:          sessionProfiles,
 		CapturedVariables:        capturedVars,
-		LastStepOutcome:          nil,
 		NestingPath:              []NestingSegment{},
 		ParentContext:            nil,
 		WorkflowFile:             opts.WorkflowFile,
@@ -367,6 +368,7 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		AuditLogger:              opts.AuditLogger,
 		AgentDeprecations:        NewAgentDeprecationState(),
 		WarningOrigins:           NewWarningState(),
+		Crashes:                  NewCrashLedger(),
 		PullRequestCaptureState:  NewPullRequestCaptureState(),
 		NamedSessions:            namedSessions,
 		NamedSessionDecls:        namedSessionDecls,
@@ -415,8 +417,18 @@ func (c *ExecutionContext) BuiltinVarsForStep(stepID string) map[string]string {
 	// It carries the handoff text, not its path, so a consumer workflow receives
 	// the context in its prompt instead of having to elect to read a file.
 	m[IntakeHandoffVar] = c.IntakeHandoffContents
+	m["last_step_failure_kind"] = ""
+	m["last_step_crash_observed"] = "false"
+	if c.PreviousStep != nil {
+		m["last_step_failure_kind"] = string(c.PreviousStep.FailureKind)
+		m["last_step_crash_observed"] = strconv.FormatBool(c.PreviousStep.CrashObserved)
+	}
 	c.addRepairVars(m)
 	return m
+}
+
+func (c *ExecutionContext) RestorePreviousStep(record *PreviousStepRecord) {
+	c.PreviousStep = record
 }
 
 // addRepairVars exposes repair.attempt, repair.check_output,
@@ -485,7 +497,6 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		SessionIDs:               sessionIDs,
 		SessionProfiles:          sessionProfiles,
 		CapturedVariables:        capturedVars,
-		LastStepOutcome:          nil,
 		LastSessionStepID:        parent.LastSessionStepID,
 		NestingPath:              nestingPath,
 		ParentContext:            parent,
@@ -506,6 +517,7 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		AuditLogger:              parent.AuditLogger,
 		AgentDeprecations:        parent.AgentDeprecations,
 		WarningOrigins:           parent.WarningOrigins,
+		Crashes:                  parent.Crashes,
 		PullRequestCaptureState:  parent.PullRequestCaptureState,
 		Control:                  parent.Control,
 		InteractiveAttempt:       parent.InteractiveAttempt,
@@ -543,7 +555,6 @@ func NewRepairAttemptContext(owner *ExecutionContext, checkID string, attempt in
 		SessionIDs:               owner.SessionIDs,
 		SessionProfiles:          owner.SessionProfiles,
 		CapturedVariables:        owner.CapturedVariables,
-		LastStepOutcome:          nil,
 		LastSessionStepID:        owner.LastSessionStepID,
 		NestingPath:              nestingPath,
 		ParentContext:            owner,
@@ -564,6 +575,7 @@ func NewRepairAttemptContext(owner *ExecutionContext, checkID string, attempt in
 		AuditLogger:              owner.AuditLogger,
 		AgentDeprecations:        owner.AgentDeprecations,
 		WarningOrigins:           owner.WarningOrigins,
+		Crashes:                  owner.Crashes,
 		PullRequestCaptureState:  owner.PullRequestCaptureState,
 		Control:                  owner.Control,
 		InteractiveAttempt:       owner.InteractiveAttempt,
@@ -630,7 +642,6 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		SessionIDs:               sessionIDs,
 		SessionProfiles:          sessionProfiles,
 		CapturedVariables:        capturedVars,
-		LastStepOutcome:          nil,
 		LastSessionStepID:        parent.LastSessionStepID,
 		NestingPath:              nestingPath,
 		ParentContext:            parent,
@@ -651,6 +662,7 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		AuditLogger:              parent.AuditLogger,
 		AgentDeprecations:        parent.AgentDeprecations,
 		WarningOrigins:           parent.WarningOrigins,
+		Crashes:                  parent.Crashes,
 		PullRequestCaptureState:  parent.PullRequestCaptureState,
 		Control:                  parent.Control,
 		InteractiveAttempt:       parent.InteractiveAttempt,

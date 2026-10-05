@@ -16,6 +16,29 @@ func DispatchStep(
 	glob GlobExpander,
 	log Logger,
 ) (StepOutcome, error) {
+	return runClassified(ctx, func() (StepOutcome, error) {
+		return dispatchStep(step, ctx, runner, glob, log)
+	})
+}
+
+func runClassified(ctx *model.ExecutionContext, run func() (StepOutcome, error)) (StepOutcome, error) {
+	ctx.StepFailure = model.StepFailure{}
+	outcome, err := run()
+	if outcome == OutcomeFailed || outcome == OutcomeExhausted || err != nil {
+		if ctx.StepFailure.Kind == "" {
+			ctx.StepFailure = model.StepFailure{Kind: model.FailureStep}
+		}
+	} else {
+		ctx.StepFailure = model.StepFailure{}
+	}
+	return outcome, err
+}
+
+func RunClassified(ctx *model.ExecutionContext, run func() (StepOutcome, error)) (StepOutcome, error) {
+	return runClassified(ctx, run)
+}
+
+func dispatchStep(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, glob GlobExpander, log Logger) (StepOutcome, error) {
 	if step.Loop != nil && len(step.Steps) > 0 {
 		result, err := ExecuteLoopStep(step, ctx, runner, glob, log, LoopExecuteOptions{})
 		if err != nil {
@@ -91,6 +114,7 @@ func hasBreakCondition(steps []model.Step) bool {
 	return false
 }
 
+//nolint:funlen // The group sequencer keeps its flow-control branches together.
 func executeGroupStep(
 	step *model.Step,
 	steps []model.Step,
@@ -116,14 +140,16 @@ func executeGroupStep(
 	defer func() { ctx.LastAgentExecution = originalLastAgentExecution }()
 	basePath := childNestingPath
 	if err := PrimeReplayResume(ctx, basePath); err != nil {
+		ctx.StepFailure = model.StepFailure{Kind: model.FailureStep}
 		ctx.NestingPath = originalNestingPath
 		emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), map[string]any{"error": err.Error()}, step)
 		return OutcomeFailed, err
 	}
 	for i := 0; i < len(steps); i++ {
 		// Members honour skip_if exactly as loop bodies and sub-workflow steps do.
-		skip, skipErr := ShouldSkipStep(steps[i].SkipIf, ctx.LastStepOutcome, ctx, steps[i].ID)
+		skip, skipErr := ShouldSkipStep(steps[i].SkipIf, ctx, steps[i].ID)
 		if skipErr != nil {
+			ctx.StepFailure = model.StepFailure{Kind: model.FailureStep}
 			err := fmt.Errorf("step %q skip_if evaluation failed: %w", steps[i].ID, skipErr)
 			ctx.NestingPath = originalNestingPath
 			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), map[string]any{"error": err.Error()}, step)
@@ -131,11 +157,14 @@ func executeGroupStep(
 		}
 		if skip {
 			emitSkippedChildStep(ctx, &steps[i])
-			recordLastStepOutcome(ctx, OutcomeSkipped)
+			recordPreviousStep(ctx, &steps[i], OutcomeSkipped)
 			continue
 		}
 		outcome, err := DispatchStep(&steps[i], ctx, runner, glob, log)
 		if err != nil {
+			if ctx.StepFailure.Kind == "" {
+				ctx.StepFailure = model.StepFailure{Kind: model.FailureStep}
+			}
 			ctx.NestingPath = originalNestingPath
 			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), map[string]any{"error": err.Error()}, step)
 			return OutcomeFailed, err
@@ -152,6 +181,7 @@ func executeGroupStep(
 			continue
 		}
 		if absorbed {
+			ctx.StepFailure = model.StepFailure{}
 			continue
 		}
 
@@ -161,12 +191,13 @@ func executeGroupStep(
 			return OutcomeAborted, nil
 		}
 		closeToleratedFrame(ctx, &steps[i], outcome)
-		recordLastStepOutcome(ctx, outcome)
+		recordPreviousStep(ctx, &steps[i], outcome)
 		if isBlockingOutcome(&steps[i], outcome) {
 			ctx.NestingPath = originalNestingPath
 			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), nil, step)
 			return OutcomeFailed, nil
 		}
+		ctx.StepFailure = model.StepFailure{}
 	}
 	ctx.NestingPath = originalNestingPath
 	emitStepEnd(ctx, prefix, startTime, string(OutcomeSuccess), nil, step)

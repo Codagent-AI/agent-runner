@@ -101,6 +101,8 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		NamedSessions:          resumeState.namedSessions,
 		NamedSessionDecls:      resumeState.namedSessionDecls,
 		ChildState:             resumeState.childState,
+		Crashes:                state.Crashes,
+		PreviousStep:           state.CurrentStep.Nested.PreviousStep,
 		InteractiveAttempt:     resumeInteractiveAttempt(&state),
 		ProcessRunner:          opts.ProcessRunner,
 		GlobExpander:           opts.GlobExpander,

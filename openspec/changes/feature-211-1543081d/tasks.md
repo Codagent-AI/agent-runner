@@ -1,4 +1,4 @@
-- [ ] Implement the change described by these files using TDD, as `CLAUDE.md` requires. Satisfy every spec scenario and every `INT-*` / `E2E-*` obligation in the test plan.
+- [x] Implement the change described by these files using TDD, as `CLAUDE.md` requires. Satisfy every spec scenario and every `INT-*` / `E2E-*` obligation in the test plan.
 
   **Classification**
   - Add `Crashed` and the crash error to `AgentInvocationResult`, and set them in `runAgentProcess` / `InvokeAgent` (`internal/exec/agent.go`, `internal/exec/invocation.go`) following the design's classification table.
