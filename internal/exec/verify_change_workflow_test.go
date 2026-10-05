@@ -199,6 +199,8 @@ func TestBuiltinVerifyChangeLoadsStandalone(t *testing.T) {
 func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator string, readyInRound func(int) bool, breakStatusOnce, validatorFails bool) (events []string, status, evidenceDir string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
+	// Keep the process fake independent of any installed Validator CLI.
+	t.Setenv("AGENT_RUNNER_VALIDATOR_EXECUTABLE", filepath.Join(t.TempDir(), "missing-validator"))
 
 	workflow, err := loader.LoadWorkflow(verifyChangeRef, loader.Options{})
 	if err != nil {

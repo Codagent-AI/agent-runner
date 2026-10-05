@@ -2,6 +2,9 @@ version: "2"
 
 run:
   timeout: 5m
+  # The validator runs both lint tiers concurrently; wait for the shared
+  # golangci-lint lock instead of failing.
+  allow-serial-runners: true
   # Lint the development audit code too; the tagged build is a superset of
   # the release build apart from two inert stubs.
   build-tags:

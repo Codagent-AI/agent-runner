@@ -50,7 +50,7 @@ func probeValidatorCapabilities(launch *validatorMetricsLaunch) error {
 			MaxRecord        int `json:"maximum_individual_record_bytes"`
 		} `json:"limits"`
 	}
-	if protocolDecode(raw, &response) != nil || !response.OK || response.Version != 1 || response.Protocol != 1 || response.Operation != "capabilities" || response.Producer.Name != "agent-validator" || !slices.Contains(response.Protocols, 1) || !slices.Contains(response.Measurements, 1) {
+	if decodeValidatorProtocol(raw, &response, false) != nil || !response.OK || response.Version != 1 || response.Protocol != 1 || response.Operation != "capabilities" || response.Producer.Name != "agent-validator" || !slices.Contains(response.Protocols, 1) || !slices.Contains(response.Measurements, 1) {
 		return fmt.Errorf("capabilities_unsupported")
 	}
 	for _, operation := range []string{"export", "acknowledge"} {

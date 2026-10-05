@@ -84,7 +84,34 @@ cd "$project"
 agent-runner --headless openspec:audit-smoke
 
 source_dir="$(find "$HOME/.agent-runner/projects" -name audit-lifecycle.json -print -quit | xargs -r dirname)"
-test -n "$source_dir" || { echo "smoke: source returned without a durable audit lifecycle" >&2; exit 1; }
+if [ -z "$source_dir" ]; then
+  # Without an automatic audit, the source run is the only run directory.
+  source_dir="$(find "$HOME/.agent-runner/projects" -mindepth 3 -maxdepth 3 -path '*/runs/*' -type d)"
+  case "$source_dir" in
+    "" | *$'\n'*)
+      echo "smoke: expected exactly one source run directory, found: ${source_dir:-none}" >&2
+      exit 1
+      ;;
+  esac
+  session_id="$(python3 - "$source_dir/run-metrics.json" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        sessions = json.load(stream)["sessions"]
+    if len(sessions) != 1 or not sessions[0]["execution_session_id"]:
+        raise ValueError("expected one execution session")
+    print(sessions[0]["execution_session_id"])
+except (OSError, KeyError, TypeError, ValueError) as error:
+    raise SystemExit(f"smoke: source execution session unavailable: {error}")
+PY
+)"
+  echo "smoke: automatic audit is paused (#191); replaying execution session $session_id" >&2
+  if ! agent-runner audit replay "$source_dir" --session "$session_id" --project "$project"; then
+    echo "smoke: explicit audit replay failed" >&2
+    exit 1
+  fi
+fi
+test -f "$source_dir/audit-lifecycle.json" || { echo "smoke: source returned without a durable audit lifecycle" >&2; exit 1; }
 python3 - "$source_dir/audit-lifecycle.json" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as stream: links = json.load(stream).get("links", [])

@@ -1,6 +1,7 @@
 package tuistyle
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -120,8 +121,15 @@ func contrastRatio(foreground, background string) float64 {
 }
 
 func relativeLuminance(hex string) float64 {
-	r, g, b := ParseHex(hex)
+	r, g, b := parseHex(hex)
 	return 0.2126*linearRGB(r) + 0.7152*linearRGB(g) + 0.0722*linearRGB(b)
+}
+
+// parseHex parses a #RRGGBB or RRGGBB hex color string into its components.
+func parseHex(hex string) (r, g, b uint8) {
+	hex = strings.TrimPrefix(hex, "#")
+	_, _ = fmt.Sscanf(hex, "%02x%02x%02x", &r, &g, &b)
+	return r, g, b
 }
 
 func linearRGB(component uint8) float64 {

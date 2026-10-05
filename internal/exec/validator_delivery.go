@@ -168,6 +168,10 @@ type validatorExport struct {
 }
 
 func protocolDecode(raw []byte, target any) error {
+	return decodeValidatorProtocol(raw, target, true)
+}
+
+func decodeValidatorProtocol(raw []byte, target any, strict bool) error {
 	if len(raw) > 4000000 {
 		return fmt.Errorf("export_byte_limit")
 	}
@@ -175,7 +179,9 @@ func protocolDecode(raw []byte, target any) error {
 		return err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
+	if strict {
+		decoder.DisallowUnknownFields()
+	}
 	if decoder.Decode(target) != nil {
 		return fmt.Errorf("invalid_protocol_response")
 	}

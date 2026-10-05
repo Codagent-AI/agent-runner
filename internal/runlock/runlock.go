@@ -242,17 +242,6 @@ func Check(sessionDir string) LockStatus {
 	return status
 }
 
-// CheckPID returns the lock status and the PID recorded in the lock file.
-// Errors reading the lock file are surfaced as LockStale for backward
-// compatibility; see Check for details.
-func CheckPID(sessionDir string) (status LockStatus, pid int) {
-	status, pid, err := checkPID(sessionDir)
-	if err != nil {
-		return LockStale, 0
-	}
-	return status, pid
-}
-
 // checkPID is the error-returning variant used by Acquire to distinguish
 // genuine I/O errors (permission, transient I/O, corrupt mount) from a
 // legitimately stale lock.

@@ -7,13 +7,19 @@ TBD - created by archiving change audit-step. Update Purpose after archive.
 
 Agent Runner SHALL compile the automatic audit hook, hidden workflow asset, replay and setup commands, and concrete audit integrations only into a development-audit build produced by the repository's supported local build paths. `make build` and `dev.sh` SHALL produce development-audit builds. The Docker development sandbox SHALL additionally offer an explicit `--dev-audit` build option; its default build SHALL remain untagged. Release and ordinary untagged builds SHALL NOT register an audit command, inject an audit workflow, or provide a runtime setting that can enable the capability.
 
+A development-audit build SHALL keep its explicit audit commands and hidden audit workflow while automatic post-run auditing is paused. Only the automatic post-finalization trigger is paused.
+
 #### Scenario: Local Make build is used
 - **WHEN** the operator builds Agent Runner through `make build`
-- **THEN** the resulting binary contains the development audit capability and automatically audits eligible executions
+- **THEN** the resulting binary contains the development audit capability, including the explicit audit commands, and automatically audits eligible executions only while automatic auditing is resumed
 
 #### Scenario: Local development script is used
 - **WHEN** the operator runs Agent Runner through `dev.sh`
 - **THEN** the resulting process contains the same development audit capability
+
+#### Scenario: Paused development build keeps explicit audit commands
+- **WHEN** an operator runs `agent-runner audit`, `audit status`, or `audit replay` in a development-audit build with automatic auditing paused
+- **THEN** each command behaves as specified for the development audit capability
 
 #### Scenario: Production release is built
 - **WHEN** Agent Runner is built through the production release process without the development audit tag
@@ -33,13 +39,17 @@ Agent Runner SHALL compile the automatic audit hook, hidden workflow asset, repl
 
 ### Requirement: Development auditing needs no enablement setting
 
-A development-audit build SHALL automatically attempt to audit every eligible finalized execution. Audit enablement, model selection, and an Agent Runner repository path SHALL NOT be added to layered user or project configuration.
+While automatic auditing is resumed, a development-audit build SHALL automatically attempt to audit every eligible finalized execution. While it is paused, the build SHALL attempt no automatic audit. Whether auditing is paused SHALL be fixed at build time by a single source-level switch and SHALL NOT be a runtime setting. Audit enablement, model selection, and an Agent Runner repository path SHALL NOT be added to layered user or project configuration.
 
 Both model stages SHALL resolve the existing `lead` role, the same agent that leads the source workflow, using the profile-set name recorded by the source run and the profile configuration available at audit launch. The audit SHALL freeze the resolved CLI, model, and reasoning-effort provenance that it actually invokes. It SHALL NOT claim that a profile-set name alone reproduces an earlier resolved agent definition. Existing configuration layering, inheritance, and built-in role defaults SHALL apply; an absent explicit project `lead` entry SHALL NOT by itself constitute a resolution failure. Failure to resolve or invoke that agent SHALL fail or degrade only the linked audit and SHALL NOT alter the source execution. An explicitly recorded profile-set name that cannot be resolved SHALL NOT silently fall back to a different profile set.
 
 #### Scenario: Eligible local execution completes
-- **WHEN** an eligible workflow execution is finalized by a development-audit build
+- **WHEN** an eligible workflow execution is finalized by a development-audit build with automatic auditing resumed
 - **THEN** Agent Runner attempts to launch the linked audit without consulting an enablement setting
+
+#### Scenario: Eligible local execution completes while paused
+- **WHEN** an eligible workflow execution is finalized by a development-audit build with automatic auditing paused
+- **THEN** Agent Runner does not launch an audit and does not consult any enablement setting
 
 #### Scenario: Source profile resolves lead
 - **WHEN** the source run's recorded profile-set name resolves a valid `lead` agent at audit launch

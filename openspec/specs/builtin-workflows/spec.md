@@ -124,7 +124,7 @@ The `core:implement-change` workflow SHALL accept `skip_validator` only as `true
 
 ### Requirement: Verify-change workflow
 
-The hidden `core:verify-change` workflow SHALL hold the verification tail of a structured change: assumption review, simplification, final validation, a draft pull request, bounded acceptance-test rounds, and the acceptance handoff. It SHALL require `change_name`, `change_dir`, `change_label`, and `artifact_validation_instruction`, and SHALL accept `skip_validator` (default `false`) and `acceptance_rounds` (default `3`). It SHALL validate `change_name` and `skip_validator` itself so it is valid standalone, and SHALL declare the `lead-agent` (`lead`) and `acceptance-tester` (`tester`) sessions identically to `core:implement-change`, which SHALL compose it after its task-index verification so both share those named sessions.
+The hidden `core:verify-change` workflow SHALL hold the verification tail of a structured change: assumption review, simplification, final validation, a draft pull request, bounded acceptance-test rounds, and the acceptance handoff. It SHALL require `change_name`, `change_dir`, `change_label`, and `artifact_validation_instruction`, and SHALL accept `skip_validator` (default `false`) and `acceptance_rounds` (default `3`). It SHALL validate `change_name` and `skip_validator` itself so it is valid standalone, and SHALL declare the `lead-agent` (`lead`) and `acceptance-tester` (`tester`) sessions identically to `core:implement-change`, which SHALL compose it after its task-index verification so both share those named sessions. The simplification step SHALL run in a new session of the `implementor` agent profile rather than the `lead-agent` session, SHALL review only the change's own diff, and SHALL NOT run Agent Validator or push. It SHALL commit behavior-preserving cleanups and any defect fixes separately with the `[simplify]` prefix, and SHALL record unfixed defects and findings needing a product, scope, or design decision in `acceptance-assumptions.md`, replacing the `No unresolved assumptions or context gaps.` statement when it adds the first entry.
 
 No step of `core:verify-change` SHALL use the Runner-owned `call_agent` tool; the independent tester is an ordinary workflow step in the `acceptance-tester` session. No step prompt SHALL run Agent Validator, directly or through a skill; validation SHALL run only as the `core:run-validator` workflow in its own step. The draft pull request SHALL be pushed and created or updated directly with `git` and `gh`.
 
@@ -147,6 +147,14 @@ Each acceptance round SHALL clear the previous round's `acceptance-round-status.
 #### Scenario: Stale evidence does not converge
 - **WHEN** the tester's `READY` status names an earlier revision than local `HEAD`
 - **THEN** the gate does not pass
+
+#### Scenario: Simplification runs in a fresh implementor session
+- **WHEN** `core:verify-change` reaches its simplification step
+- **THEN** the step starts a new session with the user's `implementor` profile, and the `lead-agent` session's history does not include it
+
+#### Scenario: Simplification records an out-of-scope defect
+- **WHEN** the simplification pass finds a defect in code the change did not touch
+- **THEN** it leaves that code unchanged and `acceptance-assumptions.md` lists the defect in place of the no-unresolved-assumptions statement
 
 ### Requirement: Onboarding namespace embedded
 
@@ -209,3 +217,4 @@ Each builtin namespace directory `workflows/<ns>/` MAY contain a metadata file n
 - **WHEN** a builtin namespace's `_group.yaml` exists but cannot be parsed
 - **THEN** discovery reports the namespace with default display name and empty description
 - **AND** the namespace's workflows are still discovered and runnable
+

@@ -1,0 +1,41 @@
+version: "2"
+
+run:
+  # The validator runs both lint tiers concurrently; wait for the shared
+  # golangci-lint lock instead of failing.
+  allow-serial-runners: true
+  build-tags:
+    - dev_audit
+
+linters:
+  default: none
+  enable:
+    - gocognit
+    - cyclop
+    - dupl
+    - nestif
+    - maintidx
+    - nolintlint
+  settings:
+    gocognit:
+      min-complexity: 25
+    cyclop:
+      max-complexity: 25
+    dupl:
+      threshold: 100
+    nestif:
+      min-complexity: 5
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - gocognit
+          - cyclop
+          - maintidx
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

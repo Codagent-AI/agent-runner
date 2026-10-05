@@ -40,6 +40,8 @@ steps:
     prompt: |
       Implement the task described in {{task_file}}. When you are done implementing, commit your changes following the project's commit message conventions and prepend [{{step_id}}]. Then summarize to the user what you changed.
 
+      Do not run Agent Validator (`agent-validator run`, `review`, or `check`) here, directly or through any skill. This gets called explicitly in a later workflow step.
+
   - id: run-validator
     workflow: ../core/run-validator-v1.0.yaml
     params:
