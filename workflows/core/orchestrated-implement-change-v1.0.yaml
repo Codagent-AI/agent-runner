@@ -69,8 +69,7 @@ steps:
     skip_if: 'sh: test {{skip_validator}} = true'
 
   - id: check-clean
-    command: test -z "$(git status --porcelain)"
-    continue_on_failure: true
+    command: test -z "$(git status --porcelain --untracked-files=no)"
     repair:
       session: lead-agent
       prompt: |
