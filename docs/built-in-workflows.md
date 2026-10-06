@@ -46,6 +46,8 @@ inspection, not fresh execution.
 
 Some `core:*` workflows are hidden from normal browsing because they are intended to be invoked by higher-level workflows. The shared change-lifecycle workflows accept an artifact directory and validation instructions; the OpenSpec and spec-driven namespaces provide those backend-specific values.
 
+`core:finalize-pr` waits for CI and review feedback in bundled scripts, then resumes the lead agent when fixes are needed. If a CI wait script fails, the lead agent gets one repair attempt to resolve workspace causes such as a missing pull request; the script reruns to decide the outcome. A wait that still fails ends the fix loop and proceeds to final verification, whose wait has its own repair attempt. Its optional `review_bots` parameter accepts comma-separated bot logins to wait for after each push.
+
 ## OpenSpec
 
 | Workflow | Purpose |
