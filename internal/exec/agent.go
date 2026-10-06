@@ -964,6 +964,9 @@ func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, options *AgentPr
 		return OutcomeFailed, result, directResult.Started, true, err
 	}
 	if directResult.Completed {
+		if err != nil {
+			log.Printf("  warning: interactive turn completed but cleanup failed: %v\n", err)
+		}
 		return OutcomeSuccess, result, true, false, nil
 	}
 

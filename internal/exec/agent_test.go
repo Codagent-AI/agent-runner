@@ -961,9 +961,33 @@ func TestExecuteAgentStep(t *testing.T) {
 
 		ctx := makeCtx()
 		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew}
-		outcome, err := ExecuteAgentStep(&step, ctx, &mockRunner{}, &mockLogger{})
+		log := &mockLogger{}
+		outcome, err := ExecuteAgentStep(&step, ctx, &mockRunner{}, log)
 		if err != nil || outcome != OutcomeSuccess || ctx.Crashes.ObservedUnder(nil) {
 			t.Fatalf("outcome=%q err=%v crashes=%+v", outcome, err, ctx.Crashes.Records())
+		}
+		if got := strings.Join(log.lines, "\n"); !strings.Contains(got, "interactive turn completed but cleanup failed: terminate process group: operation not permitted") {
+			t.Fatalf("missing cleanup warning in log: %q", got)
+		}
+	})
+
+	t.Run("completed interactive turn logs terminal resume error", func(t *testing.T) {
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(_ []string, _ directRunOptions) (interactive.DirectResult, error) {
+			return interactive.DirectResult{Started: true, Completed: true, ExitCode: 0}, nil
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		ctx := makeCtx()
+		ctx.ResumeHook = func() error { return errors.New("restore terminal: inappropriate ioctl") }
+		log := &mockLogger{}
+		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, ctx, &mockRunner{}, log)
+		if err != nil || outcome != OutcomeSuccess || ctx.Crashes.ObservedUnder(nil) {
+			t.Fatalf("outcome=%q err=%v crashes=%+v", outcome, err, ctx.Crashes.Records())
+		}
+		if got := strings.Join(log.lines, "\n"); !strings.Contains(got, "interactive turn completed but cleanup failed: restore terminal: inappropriate ioctl") {
+			t.Fatalf("missing resume warning in log: %q", got)
 		}
 	})
 
