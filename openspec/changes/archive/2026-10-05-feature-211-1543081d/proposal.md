@@ -37,8 +37,8 @@ work is wrong", with the factory as the immediate consumer.
     ended it was an infrastructure failure. It describes the terminating failure only.
   - **Crash observed** — whether any agent session crashed anywhere inside the step or container during
     this execution, including crashes absorbed by `continue_on_failure` and crashes inside containers that
-    later recovered and **succeeded**. For example, if `finalize-pr`'s `wait-ci` agent crashes and a later
-    CI poll passes, `finalize-pr` still ends `success` but reports a crash observed. The signal is sticky:
+    later recovered and **succeeded**. For example, if `finalize-pr`'s `fix-pr` agent crashes and a later
+    CI check passes, `finalize-pr` still ends `success` but reports a crash observed. The signal is sticky:
     nothing inside the execution clears it. On resume, the signal from a step that re-executes is replaced
     by its new execution; signals from steps that completed before the interruption are kept.
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runlock"
@@ -105,6 +106,27 @@ func crashContainerContext() *model.ExecutionContext {
 
 func crashChild(continueOnFailure bool) model.Step {
 	return model.Step{ID: "agent", Agent: "test-agent", Session: model.SessionNew, Prompt: "work", Mode: model.ModeAutonomous, ContinueOnFailure: continueOnFailure}
+}
+
+func TestCrashedAgentWarnOnFailureKeepsInfrastructureKind(t *testing.T) {
+	ctx := crashContainerContext()
+	recorder := &recordingAuditLogger{}
+	ctx.AuditLogger = recorder
+	step := crashChild(false)
+	step.WarnOnFailure = true
+	outcome, err := DispatchStep(&step, ctx, &crashContainerRunner{agentCode: 1}, &mockGlob{}, &mockLogger{})
+	if err != nil || outcome != OutcomeFailed || ctx.StepFailure.Kind != model.FailureInfrastructure {
+		t.Fatalf("outcome=%q err=%v failure=%+v", outcome, err, ctx.StepFailure)
+	}
+	if ctx.WarningOrigins.Count() != 1 {
+		t.Fatalf("warning count=%d", ctx.WarningOrigins.Count())
+	}
+	for _, event := range recorder.events {
+		if event.Type == audit.EventStepEnd && event.Data["outcome"] == string(OutcomeFailed) && event.Data["failure_kind"] == model.FailureInfrastructure && event.Data["status"] == "warning" {
+			return
+		}
+	}
+	t.Fatalf("missing failed infrastructure warning event: %+v", recorder.events)
 }
 
 func TestAgentPreStartAndControlSetupClassification(t *testing.T) {

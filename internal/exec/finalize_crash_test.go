@@ -11,24 +11,30 @@ import (
 	"github.com/codagent/agent-runner/internal/model"
 )
 
-type finalizeCrashRunner struct{ waits, gates int }
+type finalizeCrashRunner struct{ fixes, statusGates, fixNeededGates int }
 
 func (*finalizeCrashRunner) RunShell(string, bool, string) (ProcessResult, error) {
 	return ProcessResult{Started: true}, nil
 }
 func (r *finalizeCrashRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, error) {
-	if strings.Contains(options.Prefix, "wait-ci") {
-		r.waits++
-		if r.waits == 1 {
+	if strings.Contains(options.Prefix, "fix-pr") {
+		r.fixes++
+		if r.fixes == 1 {
 			return ProcessResult{Started: true, ExitCode: 1, Stderr: "capacity"}, nil
 		}
 	}
 	return ProcessResult{Started: true, Stdout: claudeUsageOutput("CI_PASSED", 0)}, nil
 }
 func (r *finalizeCrashRunner) RunScript(path string, _ []byte, _ bool, _ string) (ProcessResult, error) {
-	if filepath.Base(path) == "ci-status-gate.sh" {
-		r.gates++
-		if r.gates == 1 {
+	switch filepath.Base(path) {
+	case "ci-status-gate.sh":
+		r.statusGates++
+		if r.statusGates == 1 {
+			return ProcessResult{Started: true, ExitCode: 1}, nil
+		}
+	case "ci-fix-needed-gate.sh":
+		r.fixNeededGates++
+		if r.fixNeededGates == 1 {
 			return ProcessResult{Started: true, ExitCode: 1}, nil
 		}
 	}
@@ -47,7 +53,10 @@ func TestBuiltinFinalizePRAbsorbedCrash(t *testing.T) {
 	step := &model.Step{ID: "finalize", Workflow: "builtin:core/finalize-pr-v1.0.yaml", Params: map[string]string{"ci_fix_cycles": "2"}}
 	outcome, err := DispatchStep(step, ctx, runner, &mockGlob{}, &mockLogger{})
 	if err != nil || outcome != OutcomeSuccess {
-		t.Fatalf("outcome=%q err=%v waits=%d gates=%d", outcome, err, runner.waits, runner.gates)
+		t.Fatalf("outcome=%q err=%v fixes=%d statusGates=%d fixNeededGates=%d", outcome, err, runner.fixes, runner.statusGates, runner.fixNeededGates)
+	}
+	if runner.fixes != 1 || runner.statusGates < 2 || runner.fixNeededGates != 1 {
+		t.Fatalf("fixes=%d statusGates=%d fixNeededGates=%d", runner.fixes, runner.statusGates, runner.fixNeededGates)
 	}
 	if !ctx.Crashes.ObservedUnder([]model.NestingSegment{{StepID: "finalize"}}) {
 		t.Fatal("crash lost")

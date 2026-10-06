@@ -56,13 +56,13 @@ The obligations below cover what those unit tests cannot prove:
 
 ### INT-003: Absorbed crash inside builtin `finalize-pr` is still reported on success
 - Covers: `infrastructure-failure-classification`, the requirement "Crash-observed signal"; `sub-workflows`, the scenario "Absorbed crash in finalize-pr"
-- Boundary: the embedded `builtin:core/finalize-pr-v1.0.yaml` runs its real `ci-fix-loop` flow control (`continue_on_failure` on the `wait-ci` agent, `break_if` on the status gate) under the real loop and sub-workflow executors.
-- Setup: use a fake `ProcessRunner` that scripts `push-pr` success. The first `wait-ci` agent invocation exits 1. The first gate run fails. The second `wait-ci` invocation succeeds and the second gate run passes. All later steps succeed. Nothing contacts GitHub, because every script and shell step is faked.
+- Boundary: the embedded `builtin:core/finalize-pr-v1.0.yaml` runs its real `ci-fix-loop` flow control (`continue_on_failure` on the failing gates, `break_if` on the status gate) under the real loop and sub-workflow executors.
+- Setup: use a fake `ProcessRunner` that scripts `push-pr` success and lets `ci-wait.sh` succeed. The first `ci-status-gate.sh` and `ci-fix-needed-gate.sh` runs fail, so `fix-pr` runs and its first agent invocation crashes. Later status gates pass. Nothing contacts GitHub, because every script and shell step is faked.
 - Action: execute a parent workflow whose single step calls `finalize-pr`.
 - Assertions:
   - The sub-workflow step's outcome is `success`, with `crash_observed: true` and no `failure_kind`.
   - The first iteration's `iteration_end` has `crash_observed: true`.
-  - The `wait-ci` `step_end` for that iteration has `failure_kind: infrastructure`.
+  - The `fix-pr` `step_end` for that iteration has `failure_kind: infrastructure`.
 - Execution: `internal/exec`, in `go test ./...`.
 
 ### INT-004: Crashed inline repair agent exhausts a check as an infrastructure failure
