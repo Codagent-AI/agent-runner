@@ -5,7 +5,7 @@ error, a CLI that fails to start or exits non-zero), Agent Runner records the st
 outcome it records for an ordinary failed check. Inside a builtin sub-workflow (`implement-task`,
 `verify-change`, `archive-change`, `finalize-pr`), that crash is further hidden: the caller sees only that
 the sub-workflow step failed, and a crash that a builtin absorbs with `continue_on_failure` (for example
-`finalize-pr`'s `wait-ci` agent) surfaces later as a red CI or validator gate.
+`finalize-pr`'s `fix-pr` agent) surfaces later as a red CI or validator gate.
 
 The Agent Factory (Codagent-AI/agent-factory#92) needs to tell these apart. A crash is transient and should
 get the factory's technical-failure recovery (fresh-clone retry, checkpoint resume, review retry); a real

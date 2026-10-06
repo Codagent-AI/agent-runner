@@ -952,6 +952,21 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 	})
 
+	t.Run("completed interactive turn survives terminal cleanup error", func(t *testing.T) {
+		oldFn := interactiveRunnerFn
+		interactiveRunnerFn = func(_ []string, _ directRunOptions) (interactive.DirectResult, error) {
+			return interactive.DirectResult{Started: true, Completed: true, ExitCode: 0}, errors.New("terminate process group: operation not permitted")
+		}
+		defer func() { interactiveRunnerFn = oldFn }()
+
+		ctx := makeCtx()
+		step := model.Step{ID: "s", Mode: model.ModeInteractive, Prompt: "review", Session: model.SessionNew}
+		outcome, err := ExecuteAgentStep(&step, ctx, &mockRunner{}, &mockLogger{})
+		if err != nil || outcome != OutcomeSuccess || ctx.Crashes.ObservedUnder(nil) {
+			t.Fatalf("outcome=%q err=%v crashes=%+v", outcome, err, ctx.Crashes.Records())
+		}
+	})
+
 	t.Run("interactive exit without trigger returns aborted", func(t *testing.T) {
 		oldFn := interactiveRunnerFn
 		interactiveRunnerFn = func(_ []string, _ directRunOptions) (interactive.DirectResult, error) {

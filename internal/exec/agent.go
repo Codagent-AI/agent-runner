@@ -963,13 +963,13 @@ func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, options *AgentPr
 		}
 		return OutcomeFailed, result, directResult.Started, true, err
 	}
+	if directResult.Completed {
+		return OutcomeSuccess, result, true, false, nil
+	}
 
 	if err != nil {
 		canceled := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 		return OutcomeFailed, result, directResult.Started, !canceled, err
-	}
-	if directResult.Completed {
-		return OutcomeSuccess, result, true, false, nil
 	}
 
 	// CLI exited without a continue trigger.
