@@ -407,7 +407,6 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 	isShell := s.Command != ""
 	isScript := s.Script != ""
 	isUI := s.Mode == ModeUI
-
 	if err := s.validateTools(isAgent); err != nil {
 		return err
 	}
