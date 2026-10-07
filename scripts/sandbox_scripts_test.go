@@ -1385,3 +1385,60 @@ func withoutHostLauncherEnv(base []string) []string {
 	}
 	return result
 }
+
+func TestSandboxRunClaudeAuthFallsBackToOAuthToken(t *testing.T) {
+	home := t.TempDir()
+	cmd := exec.Command("bash", "./sandbox-run.sh", "--dry-run", "--no-default-secrets", "--auth-only", "--mount-claude-auth", "--artifact-dir", t.TempDir(), "--", "true")
+	cmd.Env = append(os.Environ(), "HOME="+home, "CLAUDE_CODE_OAUTH_TOKEN=token-value")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("token fallback dry run: %v\n%s", err, output)
+	}
+	text := string(output)
+	if strings.Count(text, "-e CLAUDE_CODE_OAUTH_TOKEN") != 1 {
+		t.Fatalf("expected one CLAUDE_CODE_OAUTH_TOKEN pass-through:\n%s", text)
+	}
+	if strings.Contains(text, "host-home/claude") || strings.Contains(text, "token-value") {
+		t.Fatalf("token fallback mounted a credentials file or leaked the token:\n%s", text)
+	}
+}
+
+func TestSandboxRunClaudeAuthPrefersCredentialsFile(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".claude", ".credentials.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "./sandbox-run.sh", "--dry-run", "--no-default-secrets", "--auth-only", "--mount-claude-auth", "--artifact-dir", t.TempDir(), "--", "true")
+	cmd.Env = append(os.Environ(), "HOME="+home, "CLAUDE_CODE_OAUTH_TOKEN=token-value")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("credentials file dry run: %v\n%s", err, output)
+	}
+	text := string(output)
+	if !strings.Contains(text, "target=/host-home/claude/.credentials.json") || strings.Contains(text, "CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Fatalf("expected the credentials file mount without the token:\n%s", text)
+	}
+}
+
+func TestSandboxRunClaudeAuthRequiresFileOrToken(t *testing.T) {
+	home := t.TempDir()
+	cmd := exec.Command("bash", "./sandbox-run.sh", "--dry-run", "--no-default-secrets", "--mount-claude-auth", "--artifact-dir", t.TempDir(), "--", "true")
+	env := []string{"HOME=" + home}
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "CLAUDE_CODE_OAUTH_TOKEN=") && !strings.HasPrefix(entry, "HOME=") {
+			env = append(env, entry)
+		}
+	}
+	cmd.Env = env
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected missing Claude auth to fail:\n%s", output)
+	}
+	if !strings.Contains(string(output), ".credentials.json") || !strings.Contains(string(output), "CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Fatalf("missing-auth error should name both sources:\n%s", output)
+	}
+}

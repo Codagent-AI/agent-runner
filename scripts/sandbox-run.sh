@@ -64,6 +64,9 @@ Options:
   --mount-claude-auth    Mount host ~/.claude auth/settings files read-only for
                           subscription-based Claude Code auth. Files are copied
                           into writable container home before the command runs.
+                          Without ~/.claude/.credentials.json (for example a
+                          macOS Keychain login), pass CLAUDE_CODE_OAUTH_TOKEN
+                          from the environment or a secrets file instead.
   --mount-cursor-auth    Mount host ~/.cursor/auth.json read-only for
                           subscription-based Cursor CLI auth. The file is copied
                           to ~/.cursor/auth.json and ~/.config/cursor/auth.json
@@ -390,7 +393,19 @@ if [[ "$MOUNT_CODEX_AUTH" == 1 ]]; then
 fi
 
 if [[ "$MOUNT_CLAUDE_AUTH" == 1 ]]; then
-  add_required_file_mount "$HOME/.claude/.credentials.json" "/host-home/claude/.credentials.json" "Claude"
+  if [[ -f "$HOME/.claude/.credentials.json" ]]; then
+    add_required_file_mount "$HOME/.claude/.credentials.json" "/host-home/claude/.credentials.json" "Claude"
+  elif [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+    # macOS keeps the Claude Code login in the Keychain, so there may be no
+    # file to mount. A `claude setup-token` token authenticates the sandbox
+    # without sharing the host login's refresh token.
+    if [[ " ${ENV_VARS[*]+"${ENV_VARS[*]}"} " != *" CLAUDE_CODE_OAUTH_TOKEN "* ]]; then
+      run_cmd+=(-e CLAUDE_CODE_OAUTH_TOKEN)
+    fi
+  else
+    echo "Claude auth not found: $HOME/.claude/.credentials.json is missing and CLAUDE_CODE_OAUTH_TOKEN is not set (create one with claude setup-token)." >&2
+    exit 2
+  fi
   if [[ "$AUTH_ONLY" != 1 ]]; then
     add_optional_file_mount "$HOME/.claude/settings.json" "/host-home/claude/settings.json"
     add_optional_file_mount "$HOME/.claude/settings.local.json" "/host-home/claude/settings.local.json"
