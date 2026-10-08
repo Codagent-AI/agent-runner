@@ -92,6 +92,7 @@ func isBlockingOutcome(step *model.Step, outcome StepOutcome) bool {
 // a marker from an unrelated agent later in the replay range is never
 // consulted.
 func terminalReplayBlocked(ctx *model.ExecutionContext, checkStep *model.Step, response string) {
+	ctx.StepFailure = model.StepFailure{Kind: model.FailureStep}
 	frame := ctx.RepairFrame
 	owningPrefix := auditBuildPrefixForOwningCheck(ctx, frame.CheckID)
 	emitRepairBlocked(ctx, owningPrefix, frame.Attempts, response)
@@ -237,6 +238,11 @@ func AbsorbReplayFailure(ctx *model.ExecutionContext, checkStep *model.Step, fai
 	if frame == nil {
 		return true
 	}
+	frame.LastAttemptCrashed = ctx.StepFailure.Kind == model.FailureInfrastructure
+	frame.LastCrashPrefix = ""
+	if frame.LastAttemptCrashed && ctx.StepFailure.Origin != nil {
+		frame.LastCrashPrefix = ctx.StepFailure.Origin.Prefix
+	}
 	owningPrefix := auditBuildPrefixForOwningCheck(ctx, frame.CheckID)
 
 	frame.Attempts++
@@ -249,6 +255,11 @@ func AbsorbReplayFailure(ctx *model.ExecutionContext, checkStep *model.Step, fai
 	})
 
 	if frame.Attempts >= frame.Budget {
+		if frame.LastAttemptCrashed && frame.LastCrashPrefix != "" {
+			ctx.StepFailure = model.StepFailure{Kind: model.FailureInfrastructure, Origin: ctx.Crashes.FindPrefix(frame.LastCrashPrefix)}
+		} else {
+			ctx.StepFailure = model.StepFailure{Kind: model.FailureStep}
+		}
 		failFrame(ctx, frame, owningPrefix)
 		flushState(ctx)
 		emitReplayTerminalEnd(ctx, checkStep, owningPrefix, false)

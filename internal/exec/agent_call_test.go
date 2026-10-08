@@ -1503,6 +1503,28 @@ func TestExecuteAgentStepEnablesAuthenticatedCallsFromDeclaredTool(t *testing.T)
 	}
 }
 
+func TestCallAgentChildCrashDoesNotClassifyParent(t *testing.T) {
+	runDir := t.TempDir()
+	if activePID, err := runlock.Acquire(runDir); err != nil || activePID != 0 {
+		t.Fatalf("acquire run lock: active=%d err=%v", activePID, err)
+	}
+	t.Cleanup(func() { runlock.Delete(runDir) })
+	ctx := model.NewRootContext(&model.RootContextOptions{WorkflowFile: "workflow.yaml", SessionDir: runDir, ProjectRoot: runDir, WorkingDir: runDir})
+	ctx.ProfileStore = &config.Config{ActiveAgents: map[string]*config.Agent{
+		"parent":      {DefaultMode: "autonomous", CLI: "claude"},
+		"implementor": {DefaultMode: "interactive", CLI: "claude"},
+	}}
+	runner := &runtimeCallRunner{t: t, childCrash: true}
+	step := &model.Step{ID: "parent", Prompt: "Delegate an independent review.", Agent: "parent", Mode: model.ModeAutonomous, Session: model.SessionNew, Tools: []model.RunnerTool{model.RunnerToolCallAgent}}
+	outcome, err := DispatchStep(step, ctx, runner, &mockGlob{}, &mockLogger{})
+	if err != nil || outcome != OutcomeSuccess || ctx.StepFailure.Kind != "" || ctx.Crashes.ObservedUnder([]model.NestingSegment{{StepID: "parent"}}) {
+		t.Fatalf("outcome=%q err=%v failure=%+v crashes=%+v", outcome, err, ctx.StepFailure, ctx.Crashes.Records())
+	}
+	if server, ok := ctx.Control.(*control.ControlServer); ok {
+		_ = server.Close()
+	}
+}
+
 func TestExecuteAgentStepDoesNotEnableCallFromAuthoredPrompt(t *testing.T) {
 	ctx := model.NewRootContext(&model.RootContextOptions{WorkflowFile: "workflow.yaml"})
 	runner := &callTestRunner{started: make(chan AgentProcessOptions, 1), result: ProcessResult{Started: true}}
@@ -1543,6 +1565,7 @@ func TestExecuteAgentStepDoesNotEnableCallFromInterpolatedPrompt(t *testing.T) {
 
 type runtimeCallRunner struct {
 	t                    *testing.T
+	childCrash           bool
 	parentAttemptID      string
 	childAttemptEnvFound bool
 	callResponse         string
@@ -1556,6 +1579,9 @@ func (r *runtimeCallRunner) RunScript(string, []byte, bool, string) (ProcessResu
 }
 func (r *runtimeCallRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, error) {
 	if strings.Contains(options.Prefix, "call:") {
+		if r.childCrash {
+			return ProcessResult{Started: true, ExitCode: 1, Stderr: "capacity"}, nil
+		}
 		for _, entry := range options.Env {
 			if strings.HasPrefix(entry, control.EnvControlSocket+"=") || strings.HasPrefix(entry, control.EnvAttemptID+"=") {
 				r.childAttemptEnvFound = true
@@ -1578,7 +1604,7 @@ func (r *runtimeCallRunner) RunAgent(options *AgentProcessOptions) (ProcessResul
 	if err := json.Unmarshal(raw, &response); err != nil {
 		r.t.Fatal(err)
 	}
-	if response.Error != nil || response.CallID == "" {
+	if response.CallID == "" || (!r.childCrash && response.Error != nil) {
 		r.t.Fatalf("agent-call start = %#v", response)
 	}
 	deadline := time.Now().Add(2 * time.Second)
@@ -1596,10 +1622,12 @@ func (r *runtimeCallRunner) RunAgent(options *AgentProcessOptions) (ProcessResul
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if response.Error != nil || response.Result == nil {
+	if !r.childCrash && (response.Error != nil || response.Result == nil) {
 		r.t.Fatalf("agent-call response = %#v", response)
 	}
-	r.callResponse = response.Result.Response
+	if response.Result != nil {
+		r.callResponse = response.Result.Response
+	}
 	return ProcessResult{Started: true, Stdout: `{"type":"result","result":"parent done","session_id":"parent-session"}` + "\n"}, nil
 }
 

@@ -109,8 +109,11 @@ Every step can reference:
 | --- | --- |
 | `{{session_dir}}` | Absolute path to the current run directory, such as `~/.agent-runner/projects/<encoded-cwd>/runs/<run-id>`. |
 | `{{step_id}}` | Current step ID. |
+| `{{last_step_failure_kind}}` | Failure kind of the preceding step: `infrastructure`, `step`, or empty. |
+| `{{last_step_crash_observed}}` | Whether a crash occurred in the preceding step: `true` or `false`. |
 
 Workflow parameters and captured variables shadow built-ins with the same name.
+The last-step variables describe the same preceding step that `skip_if: previous_success` evaluates; a skipped step resets them inside groups and loop bodies, but not at top level or in a sub-workflow.
 
 ## Agent Steps
 

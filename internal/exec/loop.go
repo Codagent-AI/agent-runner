@@ -128,6 +128,7 @@ func executeCountedLoop(
 		}
 
 		result, err := executeIterationWithAudit(steps, iterCtx, runner, glob, log)
+		ctx.StepFailure = iterCtx.StepFailure
 		if err != nil {
 			emitLoopEnd(ctx, prefix, startTime, step, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, err
@@ -230,6 +231,7 @@ func executeForEachLoop(
 		}
 
 		result, err := executeIterationWithAudit(steps, iterCtx, runner, globExp, log)
+		ctx.StepFailure = iterCtx.StepFailure
 		if err != nil {
 			emitLoopEnd(ctx, prefix, startTime, step, completed, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, err
@@ -334,6 +336,7 @@ func newIterationBodyEntry(iterCtx *model.ExecutionContext, bodyStepID string, b
 		LastSessionStepID: iterCtx.LastSessionStepID,
 		Completed:         bodyCompleted,
 		LastAgent:         iterCtx.LastAgentRef(),
+		PreviousStep:      iterCtx.PreviousStep,
 		Repair:            iterCtx.RepairFrame,
 	}
 	if deeperChild != nil && deeperChild.StepID == bodyStepID {
@@ -452,24 +455,21 @@ func executeIterationWithAudit(
 	} else if result.failed {
 		outcome = "failed"
 	}
+	endData := map[string]any{"iteration": iteration, "outcome": outcome, "duration_ms": time.Since(iterStart).Milliseconds()}
+	addStepFailureAuditData(iterCtx, nil, outcome, endData)
+	endData["identity"] = executionIdentity(iterCtx.ParentContext, &model.Step{ID: lastSeg.StepID, Loop: &model.Loop{}, Steps: []model.Step{{ID: "iteration"}}}, "iteration", iteration, false, "", "")
 
 	emitAudit(iterCtx, audit.Event{
 		Timestamp: formatAuditTimestamp(time.Now()),
 		Prefix:    prefix,
 		Type:      audit.EventIterationEnd,
-		Data: map[string]any{
-			"iteration":   iteration,
-			"outcome":     outcome,
-			"duration_ms": time.Since(iterStart).Milliseconds(),
-			"identity": executionIdentity(iterCtx.ParentContext, &model.Step{
-				ID: lastSeg.StepID, Loop: &model.Loop{}, Steps: []model.Step{{ID: "iteration"}},
-			}, "iteration", iteration, false, "", ""),
-		},
+		Data:      endData,
 	})
 
 	return result, err
 }
 
+//nolint:gocognit // Resume, skip, replay, and blocking paths share the body sequencer.
 func executeIterationBody(
 	steps []model.Step,
 	iterCtx *model.ExecutionContext,
@@ -481,6 +481,7 @@ func executeIterationBody(
 
 	resumeBody, resolvedStartID, err := resolveIterationResume(iterCtx, steps)
 	if err != nil {
+		iterCtx.StepFailure = model.StepFailure{Kind: model.FailureStep}
 		return iterationResult{failed: true}, err
 	}
 	if resumeBody != nil && resolvedStartID == "" {
@@ -502,6 +503,7 @@ func executeIterationBody(
 			reached = true
 			if resumeBody != nil {
 				if err := resumeIterationBodyAt(iterCtx, resumeBody, basePath); err != nil {
+					iterCtx.StepFailure = model.StepFailure{Kind: model.FailureStep}
 					persistIterationFailState(iterCtx, loopStepID, iteration, steps[i].ID, false)
 					return iterationResult{failed: true}, err
 				}
@@ -509,15 +511,16 @@ func executeIterationBody(
 		}
 
 		bodyStepID := steps[i].ID
-		skip, skipErr := ShouldSkipStep(steps[i].SkipIf, iterCtx.LastStepOutcome, iterCtx, bodyStepID)
+		skip, skipErr := ShouldSkipStep(steps[i].SkipIf, iterCtx, bodyStepID)
 		if skipErr != nil {
+			iterCtx.StepFailure = model.StepFailure{Kind: model.FailureStep}
 			persistIterationFailState(iterCtx, loopStepID, iteration, bodyStepID, false)
 			return iterationResult{failed: true}, fmt.Errorf("step %q skip_if evaluation failed: %w", bodyStepID, skipErr)
 		}
 		if skip {
 			setBody(bodyStepID, true)
 			emitSkippedChildStep(iterCtx, &steps[i])
-			recordLastStepOutcome(iterCtx, OutcomeSkipped)
+			recordPreviousStep(iterCtx, &steps[i], OutcomeSkipped)
 			if iterCtx.FlushState != nil {
 				iterCtx.FlushState()
 			}
@@ -528,6 +531,9 @@ func executeIterationBody(
 
 		outcome, dispatchErr := DispatchStep(&steps[i], iterCtx, runner, glob, log)
 		if dispatchErr != nil {
+			if iterCtx.StepFailure.Kind == "" {
+				iterCtx.StepFailure = model.StepFailure{Kind: model.FailureStep}
+			}
 			persistIterationFailState(iterCtx, loopStepID, iteration, bodyStepID, false)
 			return iterationResult{failed: true}, dispatchErr
 		}
@@ -569,6 +575,9 @@ func finishIterationBodyStep(
 	// A tolerated failure resumes at the next step, so it counts as completed
 	// and its repair frame (if any) is done.
 	bodyCompleted := (outcome != OutcomeFailed && outcome != OutcomeAborted) || closeToleratedFrame(iterCtx, step, outcome)
+	if outcome != OutcomeAborted {
+		recordPreviousStep(iterCtx, step, outcome)
+	}
 	setBody(bodyStepID, bodyCompleted)
 	if bodyCompleted {
 		flushState(iterCtx)
@@ -583,8 +592,6 @@ func finishIterationBodyStep(
 		return iterationResult{breakTriggered: true}, true
 	}
 
-	recordLastStepOutcome(iterCtx, outcome)
-
 	if isBlockingOutcome(step, outcome) {
 		iterCtx.PropagateFailure()
 		persistIterationFailState(iterCtx, loopStepID, iteration, bodyStepID, bodyCompleted)
@@ -592,6 +599,7 @@ func finishIterationBodyStep(
 	}
 	if outcome == OutcomeFailed {
 		iterCtx.ClearInheritedFailure()
+		iterCtx.StepFailure = model.StepFailure{}
 	}
 	return iterationResult{}, false
 }
@@ -771,6 +779,7 @@ func buildIterationFlushChain(
 			LastSessionStepID: parent.LastSessionStepID,
 			Child:             chain,
 			LastAgent:         parent.LastAgentRef(),
+			PreviousStep:      parent.PreviousStep,
 		}
 		if seg.Iteration != nil {
 			iter := *seg.Iteration
@@ -789,6 +798,7 @@ func buildIterationFlushChain(
 // the body step re-enters with the same context it had at flush time.
 func applyIterationBodyResume(iterCtx *model.ExecutionContext, resumeBody *model.NestedStepState) {
 	restorePersistedSessions(iterCtx, resumeBody)
+	iterCtx.RestorePreviousStep(resumeBody.PreviousStep)
 	if resumeBody.Child != nil {
 		iterCtx.ResumeChildState = resumeBody.Child
 	}

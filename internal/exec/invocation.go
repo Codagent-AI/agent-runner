@@ -50,11 +50,13 @@ type AgentInvocation struct {
 // AgentInvocationResult is reusable execution evidence. It deliberately does
 // not contain workflow-step audit, capture, or state-transition semantics.
 type AgentInvocationResult struct {
-	Outcome  StepOutcome
-	Response string
-	Stdout   string
-	Stderr   string
-	ExitCode int
+	Outcome    StepOutcome
+	Response   string
+	Stdout     string
+	Stderr     string
+	ExitCode   int
+	Crashed    bool
+	CrashError string
 
 	CLI                 string
 	Model               string
@@ -74,6 +76,8 @@ type AgentInvocationResult struct {
 
 // InvokeAgent executes one resolved agent invocation and returns typed output,
 // identity, session-discovery, usage, cost, timing, and launch evidence.
+//
+//nolint:funlen // Invocation assembles one process result and its usage evidence.
 func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logger) (AgentInvocationResult, error) {
 	now := input.Now
 	if now == nil {
@@ -135,7 +139,7 @@ func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logge
 		invocationCopy.onStarted = processOptions.NotifyStarted
 		direct = &invocationCopy
 	}
-	outcome, processResult, launched, runErr := runAgentProcess(
+	outcome, processResult, launched, crashed, runErr := runAgentProcess(
 		runner, input.Adapter, &processOptions, input.InvocationContext, log,
 		input.SuspendHook, input.ResumeHook, direct,
 	)
@@ -145,15 +149,20 @@ func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logge
 	if cause := context.Cause(ctx); errors.Is(cause, cli.ErrCursorResultStall) {
 		runErr = cause
 		outcome = OutcomeFailed
+		crashed = true
 	}
 	extraction, usageErr := extractAgentUsage(input.Adapter, input.CLI, input.InvocationContext, processResult.Stdout, cli.UsageContext{Workdir: input.Workdir, Env: BuildAgentEnvironment(os.Environ(), dropEnv, input.Env)})
 	attachInvocationIdentity(&extraction.Usage, input.CLI, input.Model, input.Effort)
 	result := AgentInvocationResult{
 		Outcome: outcome, Stdout: processResult.Stdout, Stderr: processResult.Stderr,
+		Crashed:  crashed,
 		ExitCode: processResult.ExitCode, CLI: input.CLI, Model: input.Model,
 		SessionID: input.SessionID, SessionResumed: input.SessionResumed,
 		Usage: extraction.Usage, EstimatedCostUSD: extraction.EstimatedCostUSD,
 		UsageError: usageErr, StartedAt: startedAt, CLILaunched: launched,
+	}
+	if runErr != nil {
+		result.CrashError = runErr.Error()
 	}
 	if runErr == nil {
 		result.Response = processResult.Stdout

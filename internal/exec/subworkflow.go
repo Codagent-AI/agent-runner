@@ -73,10 +73,23 @@ func ExecuteSubWorkflowStep(
 	log.Printf("  sub-workflow: %s (%s)\n", workflow.Name, workflowPath)
 
 	outcome, err := executeChildSteps(&workflow, childCtx, runner, glob, log, startFromStepID, startCompleted)
+	if outcome == OutcomeFailed {
+		parentCtx.StepFailure = childCtx.StepFailure
+		if parentCtx.StepFailure.Kind == "" {
+			parentCtx.StepFailure = model.StepFailure{Kind: model.FailureStep}
+		}
+	}
 
 	endData := map[string]any{
 		"outcome":     string(outcome),
 		"duration_ms": time.Since(subStart).Milliseconds(),
+	}
+	endData["crash_observed"] = childCtx.Crashes.ObservedUnder(childCtx.NestingPath)
+	if outcome == OutcomeFailed {
+		endData["failure_kind"] = parentCtx.StepFailure.Kind
+		if parentCtx.StepFailure.Origin != nil {
+			endData["failure_origin"] = parentCtx.StepFailure.Origin
+		}
 	}
 	errMsg := ""
 	if err != nil {
@@ -157,6 +170,7 @@ func executeChildSteps(
 	if startFromStepID != "" {
 		resolved, err := model.ResolveResumeStep(workflow.Steps, startFromStepID, startCompleted, childCtx.RepairFrame)
 		if err != nil {
+			childCtx.StepFailure = model.StepFailure{Kind: model.FailureStep}
 			return OutcomeFailed, fmt.Errorf("resume %w in sub-workflow", err)
 		}
 		if resolved.AllDone {
@@ -168,6 +182,7 @@ func executeChildSteps(
 	reached := resolvedStartID == ""
 	basePath := childCtx.NestingPath
 	if err := PrimeReplayResume(childCtx, basePath); err != nil {
+		childCtx.StepFailure = model.StepFailure{Kind: model.FailureStep}
 		return OutcomeFailed, err
 	}
 
@@ -180,8 +195,9 @@ func executeChildSteps(
 			}
 		}
 
-		skip, skipErr := ShouldSkipStep(workflow.Steps[i].SkipIf, childCtx.LastStepOutcome, childCtx, workflow.Steps[i].ID)
+		skip, skipErr := ShouldSkipStep(workflow.Steps[i].SkipIf, childCtx, workflow.Steps[i].ID)
 		if skipErr != nil {
+			childCtx.StepFailure = model.StepFailure{Kind: model.FailureStep}
 			return OutcomeFailed, fmt.Errorf("step %q skip_if evaluation failed: %w", workflow.Steps[i].ID, skipErr)
 		}
 		if skip {
@@ -193,6 +209,9 @@ func executeChildSteps(
 
 		outcome, err := DispatchStep(&workflow.Steps[i], childCtx, runner, glob, log)
 		if err != nil {
+			if childCtx.StepFailure.Kind == "" {
+				childCtx.StepFailure = model.StepFailure{Kind: model.FailureStep}
+			}
 			return OutcomeFailed, err
 		}
 
@@ -216,6 +235,7 @@ func executeChildSteps(
 	}
 
 	if resolvedStartID != "" && !reached {
+		childCtx.StepFailure = model.StepFailure{Kind: model.FailureStep}
 		return OutcomeFailed, fmt.Errorf("resume step %q not found in sub-workflow", resolvedStartID)
 	}
 	return OutcomeSuccess, nil
@@ -229,13 +249,14 @@ func finishChildStep(childCtx *model.ExecutionContext, step *model.Step, outcome
 	// A tolerated failure resumes at the next step, so it counts as completed
 	// and its repair frame (if any) is done.
 	completed := (outcome != OutcomeFailed && outcome != OutcomeAborted) || closeToleratedFrame(childCtx, step, outcome)
-	updateChildProgress(childCtx, step.ID, completed)
 
 	if outcome == OutcomeAborted {
+		updateChildProgress(childCtx, step.ID, completed)
 		return OutcomeAborted, true
 	}
 
-	recordLastStepOutcome(childCtx, outcome)
+	recordPreviousStep(childCtx, step, outcome)
+	updateChildProgress(childCtx, step.ID, completed)
 
 	if isBlockingOutcome(step, outcome) {
 		childCtx.PropagateFailure()
@@ -243,6 +264,7 @@ func finishChildStep(childCtx *model.ExecutionContext, step *model.Step, outcome
 	}
 	if outcome == OutcomeFailed {
 		childCtx.ClearInheritedFailure()
+		childCtx.StepFailure = model.StepFailure{}
 	}
 	return OutcomeSuccess, false
 }
@@ -290,6 +312,7 @@ func recordChildProgress(childCtx *model.ExecutionContext, childStepID string, c
 		LastSessionStepID: childCtx.LastSessionStepID,
 		Completed:         completed,
 		LastAgent:         childCtx.LastAgentRef(),
+		PreviousStep:      childCtx.PreviousStep,
 		Repair:            childCtx.RepairFrame,
 	}
 	// When the deeper state already describes this same step (e.g. a loop step
@@ -315,6 +338,7 @@ func applyResumeState(parentCtx, childCtx *model.ExecutionContext) (stepID strin
 	}
 
 	restorePersistedSessions(childCtx, resumeChild)
+	childCtx.RestorePreviousStep(resumeChild.PreviousStep)
 	if resumeChild.Iteration != nil {
 		// This entry describes a loop step that is being resumed mid-iteration.
 		// Keep the full entry on childCtx so the loop executor can read its

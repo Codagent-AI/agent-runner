@@ -683,7 +683,7 @@ func TestOnboardingStepTypesDemoLearnMoreSkipIfActions(t *testing.T) {
 			})
 			ctx.CapturedVariables["summary_action"] = model.NewCapturedString(tt.action)
 
-			skip, err := ShouldSkipStep(learnMore.SkipIf, nil, ctx, learnMore.ID)
+			skip, err := ShouldSkipStep(learnMore.SkipIf, ctx, learnMore.ID)
 			if err != nil {
 				t.Fatalf("ShouldSkipStep(%s): %v", learnMore.ID, err)
 			}
@@ -715,7 +715,7 @@ func TestBuiltinImplementTaskSessionReportSkipIf(t *testing.T) {
 			"run_session_report": "true",
 		},
 	})
-	skip, err := ShouldSkipStep(sessionReport.SkipIf, nil, ctx, sessionReport.ID)
+	skip, err := ShouldSkipStep(sessionReport.SkipIf, ctx, sessionReport.ID)
 	if err != nil {
 		t.Fatalf("ShouldSkipStep(true): %v", err)
 	}
@@ -724,7 +724,7 @@ func TestBuiltinImplementTaskSessionReportSkipIf(t *testing.T) {
 	}
 
 	ctx.Params["run_session_report"] = "false"
-	skip, err = ShouldSkipStep(sessionReport.SkipIf, nil, ctx, sessionReport.ID)
+	skip, err = ShouldSkipStep(sessionReport.SkipIf, ctx, sessionReport.ID)
 	if err != nil {
 		t.Fatalf("ShouldSkipStep(false): %v", err)
 	}
@@ -733,7 +733,7 @@ func TestBuiltinImplementTaskSessionReportSkipIf(t *testing.T) {
 	}
 
 	ctx.Params["run_session_report"] = "false value"
-	skip, err = ShouldSkipStep(sessionReport.SkipIf, nil, ctx, sessionReport.ID)
+	skip, err = ShouldSkipStep(sessionReport.SkipIf, ctx, sessionReport.ID)
 	if err != nil {
 		t.Fatalf("ShouldSkipStep(whitespace): %v", err)
 	}
@@ -743,7 +743,7 @@ func TestBuiltinImplementTaskSessionReportSkipIf(t *testing.T) {
 
 	sentinel := filepath.Join(t.TempDir(), "created-by-injection")
 	ctx.Params["run_session_report"] = "true; touch " + sentinel
-	skip, err = ShouldSkipStep(sessionReport.SkipIf, nil, ctx, sessionReport.ID)
+	skip, err = ShouldSkipStep(sessionReport.SkipIf, ctx, sessionReport.ID)
 	if err != nil {
 		t.Fatalf("ShouldSkipStep(shell metacharacters): %v", err)
 	}

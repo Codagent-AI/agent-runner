@@ -67,6 +67,10 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	if err := validateResumeUntil(&workflow, opts.Until, resolved.StepID); err != nil {
 		return nil, err
 	}
+	var previousStep *model.PreviousStepRecord
+	if state.CurrentStep.Nested != nil {
+		previousStep = state.CurrentStep.Nested.PreviousStep
+	}
 
 	// Create engine if configured
 	var eng engine.Engine
@@ -106,6 +110,8 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		NamedSessions:          resumeState.namedSessions,
 		NamedSessionDecls:      resumeState.namedSessionDecls,
 		ChildState:             resumeState.childState,
+		Crashes:                state.Crashes,
+		PreviousStep:           previousStep,
 		InteractiveAttempt:     resumeInteractiveAttempt(&state),
 		ProcessRunner:          opts.ProcessRunner,
 		GlobExpander:           opts.GlobExpander,

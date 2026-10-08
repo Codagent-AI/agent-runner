@@ -42,7 +42,7 @@ var interactiveShellRunnerFn = interactive.RunTerminal
 // The shell form runs directly via os/exec — bypassing ProcessRunner — so
 // evaluation output does not leak into the TUI live-run view or clobber the
 // surrounding step's output files.
-func ShouldSkipStep(skipIf string, lastOutcome *string, ctx *model.ExecutionContext, stepID string) (bool, error) {
+func ShouldSkipStep(skipIf string, ctx *model.ExecutionContext, stepID string) (bool, error) {
 	if skipIf == "" {
 		return false, nil
 	}
@@ -56,6 +56,10 @@ func ShouldSkipStep(skipIf string, lastOutcome *string, ctx *model.ExecutionCont
 			return false, fmt.Errorf("skip_if shell: %w", runErr)
 		}
 		return exitCode == 0, nil
+	}
+	var lastOutcome *string
+	if ctx.PreviousStep != nil {
+		lastOutcome = &ctx.PreviousStep.Outcome
 	}
 	return flowctl.ShouldSkip(skipIf, lastOutcome), nil
 }

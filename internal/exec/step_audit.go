@@ -54,6 +54,7 @@ func emitStepEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time
 		data["estimated_api_cost_usd"] = (*float64)(nil)
 	}
 	data["outcome"] = outcome
+	addStepFailureAuditData(ctx, step, outcome, data)
 	if step != nil && step.WarnOnFailure && (outcome == string(OutcomeFailed) || outcome == string(OutcomeExhausted)) {
 		data["status"] = "warning"
 		ctx.WarningOrigins.Add(prefix)
@@ -65,6 +66,24 @@ func emitStepEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time
 		Type:      audit.EventStepEnd,
 		Data:      data,
 	})
+}
+
+func addStepFailureAuditData(ctx *model.ExecutionContext, step *model.Step, outcome string, data map[string]any) {
+	if outcome == string(OutcomeSkipped) {
+		return
+	}
+	data["crash_observed"] = ctx.Crashes.ObservedUnder(stepPath(ctx, step))
+	if outcome != string(OutcomeFailed) && outcome != string(OutcomeExhausted) {
+		return
+	}
+	kind := ctx.StepFailure.Kind
+	if kind == "" {
+		kind = model.FailureStep
+	}
+	data["failure_kind"] = kind
+	if kind == model.FailureInfrastructure && ctx.StepFailure.Origin != nil {
+		data["failure_origin"] = ctx.StepFailure.Origin
+	}
 }
 
 func executionIdentity(ctx *model.ExecutionContext, step *model.Step, kind string, iteration int, agentInvoked bool, cliName, sessionID string) model.ExecutionIdentity {
