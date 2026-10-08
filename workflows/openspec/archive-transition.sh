@@ -129,14 +129,18 @@ fi
 
 current_worktree_json=$(status_lines "$change_dir" "$archive_dir" "$specs_dir" | to_json_lines)
 
-# Files ignored inside the active change directory before the move, at
-# their archived paths. Those still ignored after the move never appear in
-# current_worktree_json; those whose ignore rule no longer matches show up
-# untracked and must be neither owned nor committed.
+# Files ignored inside the active change directory before the move whose
+# ignore rule no longer matches at their archived paths: they show up
+# untracked and must be neither owned nor committed. Files still ignored
+# after the move need no handling, so they are left out to keep the captured
+# state small.
 moved_ignored_json=$(jq -n \
   --arg archive_dir "$archive_dir" \
   --argjson prior_ignored "$prior_ignored_json" \
-  '$prior_ignored | map($archive_dir + "/" + .)')
+  --argjson current "$current_worktree_json" \
+  '$prior_ignored
+   | map($archive_dir + "/" + .)
+   | map(select(("A\t" + .) as $line | $current | index([$line])))')
 
 # prior_worktree never contains a change_dir entry (excluded from the
 # baseline) and never contains an archive_dir entry (it did not exist yet),

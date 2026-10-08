@@ -682,16 +682,24 @@ func TestArchiveTransitionSnapshotsNonASCIIPreExistingPath(t *testing.T) {
 func ignoredRunsFixture(t *testing.T) (f *archiveTestFixture, ignoredRel string) {
 	t.Helper()
 	f = newArchiveTestFixture(t, "ticket-123-demo")
-	mustWriteFile(t, filepath.Join(f.repo, ".gitignore"), "/"+filepath.ToSlash(f.changeDir)+"/poc/runs/\n")
+	ignoredRel = f.ignoreRuns(t, "/"+filepath.ToSlash(f.changeDir)+"/poc/runs/", "conversation.json")
+	return f, ignoredRel
+}
+
+// ignoreRuns commits rule to .gitignore and writes an ignored file named name
+// under poc/runs/x/ in the active change directory, returning its path
+// relative to that directory.
+func (f *archiveTestFixture) ignoreRuns(t *testing.T, rule, name string) string {
+	t.Helper()
+	mustWriteFile(t, filepath.Join(f.repo, ".gitignore"), rule+"\n")
 	runGit(t, f.repo, "add", ".gitignore")
 	runGit(t, f.repo, "commit", "-m", "TICKET-123: ignore poc runs")
-	ignoredRel = filepath.ToSlash(filepath.Join("poc", "runs", "x", "conversation.json"))
 	runDir := filepath.Join(f.repo, f.changeDir, "poc", "runs", "x")
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		t.Fatalf("create ignored run dir: %v", err)
 	}
-	mustWriteFile(t, filepath.Join(runDir, "conversation.json"), "{\"contaminated\": true}\n")
-	return f, ignoredRel
+	mustWriteFile(t, filepath.Join(runDir, name), "{\"contaminated\": true}\n")
+	return "poc/runs/x/" + name
 }
 
 func archiveStateList(t *testing.T, archiveState, field string) []string {
@@ -815,5 +823,50 @@ func TestVerifyArchiveCommitAcceptsReIgnoredPreMoveIgnoredFiles(t *testing.T) {
 	out, err := f.runVerify(t, transitionOut)
 	if err != nil {
 		t.Fatalf("verify rejected a re-ignored file from before the move: %v\n%s", err, out)
+	}
+}
+
+// TestArchiveTransitionOmitsStillIgnoredFilesFromMovedIgnored covers an
+// unanchored ignore rule that still matches after the move: the file needs
+// no handling, so it must not inflate the captured archive state.
+func TestArchiveTransitionOmitsStillIgnoredFilesFromMovedIgnored(t *testing.T) {
+	f := newArchiveTestFixture(t, "ticket-123-demo")
+	f.ignoreRuns(t, "**/poc/runs/", "conversation.json")
+
+	out, err := f.runTransition(t)
+	if err != nil {
+		t.Fatalf("archive-transition failed: %v\n%s", err, out)
+	}
+	archiveDir := archiveStateField(t, out, "archive_dir")
+	wantOwned := []string{
+		"A\t" + filepath.ToSlash(filepath.Join(archiveDir, "proposal.md")),
+		"A\topenspec/specs/spec-a-canonical.md",
+		"D\t" + filepath.ToSlash(filepath.Join(f.changeDir, "proposal.md")),
+	}
+	sortStrings := cmpopts.SortSlices(func(a, b string) bool { return a < b })
+	if diff := cmp.Diff(wantOwned, archiveStateList(t, out, "owned_delta"), sortStrings); diff != "" {
+		t.Fatalf("owned_delta mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{}, archiveStateList(t, out, "moved_ignored")); diff != "" {
+		t.Fatalf("moved_ignored mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestArchiveTransitionRefusesUnrecordableIgnoredPath covers an ignored file
+// whose name Git can only print quoted: it cannot be recorded reliably, so the
+// transition must refuse before moving anything.
+func TestArchiveTransitionRefusesUnrecordableIgnoredPath(t *testing.T) {
+	f := newArchiveTestFixture(t, "ticket-123-demo")
+	f.ignoreRuns(t, "/"+filepath.ToSlash(f.changeDir)+"/poc/runs/", "odd"+string('"')+"name.json")
+
+	out, err := f.runTransition(t)
+	if err == nil {
+		t.Fatalf("archive-transition succeeded with an unrecordable ignored path:\n%s", out)
+	}
+	if !strings.Contains(out, "odd") || !strings.Contains(out, "before archiving") {
+		t.Fatalf("output = %q, want the path named with guidance", out)
+	}
+	if _, statErr := os.Stat(filepath.Join(f.repo, f.changeDir)); statErr != nil {
+		t.Fatalf("change directory should be untouched when the transition refuses: %v", statErr)
 	}
 }
