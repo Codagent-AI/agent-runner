@@ -52,6 +52,12 @@ func TestBoundStderr(t *testing.T) {
 	}
 }
 
+func TestBoundStderrReplacesInvalidUTF8(t *testing.T) {
+	if got := boundStderr("ok\xffdone"); got != "ok\uFFFDdone" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestBoundStderrExactHeadTail(t *testing.T) {
 	original := strings.Repeat("a", 5000) + strings.Repeat("z", 5000)
 	remaining := 4096 - len(stderrMarker)

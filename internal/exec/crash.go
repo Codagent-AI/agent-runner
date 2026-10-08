@@ -16,6 +16,7 @@ const stderrMarker = "\n[... stderr truncated ...]\n"
 const maxCrashReasonRunes = 300
 
 func boundStderr(stderr string) string {
+	stderr = strings.ToValidUTF8(stderr, "\uFFFD")
 	if len(stderr) <= 4096 {
 		return stderr
 	}

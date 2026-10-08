@@ -74,8 +74,8 @@ func (l *CrashLedger) ObservedUnder(path []NestingSegment) bool {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	for _, record := range l.records {
-		if crashPathMatches(record.Path, path) {
+	for i := range l.records {
+		if crashPathMatches(l.records[i].Path, path) {
 			return true
 		}
 	}
@@ -89,9 +89,9 @@ func (l *CrashLedger) PruneReexecuted(path []NestingSegment, sessionID string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	kept := l.records[:0]
-	for _, record := range l.records {
-		if record.ExecutionSessionID == sessionID || !crashPathMatches(record.Path, path) {
-			kept = append(kept, record)
+	for i := range l.records {
+		if l.records[i].ExecutionSessionID == sessionID || !crashPathMatches(l.records[i].Path, path) {
+			kept = append(kept, l.records[i])
 		}
 	}
 	l.records = kept
