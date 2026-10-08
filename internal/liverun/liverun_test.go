@@ -531,6 +531,46 @@ func TestTUIProcessRunnerKeepsEveryExternalUserTurnOutput(t *testing.T) {
 	}
 }
 
+func TestTUIProcessRunnerWarnsWhenTurnCopyCannotOpen(t *testing.T) {
+	sessionDir := t.TempDir()
+	program := &captureProgram{}
+	runner := NewCoordinator(program, sessionDir).TUIProcessRunner(unusedRunner{}).(*tuiProcessRunner)
+	prefix := "[define, proposal]"
+	// A basename longer than the filesystem limit fails only the per-turn copy.
+	scope := outputScope{prefix: prefix, copySuffix: "." + strings.Repeat("t", 300)}
+
+	writer, cleanup := runner.compositeWriterFor(scope, "stdout", "out", nil)
+	if _, err := fmt.Fprint(writer, "turn"); err != nil {
+		t.Fatalf("write turn: %v", err)
+	}
+	cleanup()
+
+	current, err := os.ReadFile(filepath.Join(sessionDir, "output", sanitizePrefix(prefix)+".out"))
+	if err != nil {
+		t.Fatalf("read current output: %v", err)
+	}
+	if got, want := string(current), "turn"; got != want {
+		t.Fatalf("current output = %q, want %q", got, want)
+	}
+
+	var warning string
+	for _, msg := range program.messages() {
+		if chunk, ok := msg.(OutputChunkMsg); ok && chunk.Stream == "stderr" {
+			warning += string(chunk.Bytes)
+		}
+	}
+	if !strings.Contains(warning, "could not keep per-turn output") {
+		t.Fatalf("persistence warning = %q, want per-turn copy failure", warning)
+	}
+	logged, err := os.ReadFile(filepath.Join(sessionDir, "output", "persistence-warnings.log"))
+	if err != nil {
+		t.Fatalf("read persistence warnings: %v", err)
+	}
+	if !strings.Contains(string(logged), "could not keep per-turn output") {
+		t.Fatalf("persistence-warnings.log = %q, want per-turn copy failure", logged)
+	}
+}
+
 func TestTUIProcessRunnerBoundsReplayedOutputArchives(t *testing.T) {
 	const wantArchives = 8
 
