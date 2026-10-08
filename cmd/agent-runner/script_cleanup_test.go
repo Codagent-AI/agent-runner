@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -28,6 +29,18 @@ func TestScriptCleanupFixture(t *testing.T) {
 	if mode == "ignore-terminate" {
 		signal.Ignore(syscall.SIGTERM)
 	}
+	if mode == "descendant" {
+		// A foreground testscript exec is a child of this worker; model one that
+		// does not exit when the worker is signalled.
+		child := exec.Command("sleep", "60")
+		if err := child.Start(); err != nil {
+			t.Fatal(err)
+		}
+		pid := []byte(strconv.Itoa(child.Process.Pid))
+		if err := os.WriteFile(os.Getenv("AGENT_RUNNER_TESTSCRIPT_CHILD_PID"), pid, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := os.WriteFile(os.Getenv("AGENT_RUNNER_TESTSCRIPT_READY"), []byte("ready"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +61,7 @@ func TestScriptCleanupFixture(t *testing.T) {
 		os.Exit(17)
 	case "ignore-terminate":
 		select {}
-	case "timeout", "interrupt", "terminate", "hangup", "quit":
+	case "timeout", "interrupt", "terminate", "hangup", "quit", "descendant":
 		select {}
 	default:
 		t.Fatalf("unknown fixture: %s", mode)
@@ -111,6 +124,8 @@ type cleanupFixture struct {
 	done   chan error
 	mode   string
 	waited bool
+	// childPID names the file holding the pid of the "descendant" fixture's child.
+	childPID string
 }
 
 func startCleanupFixture(t *testing.T, root, mode string) *cleanupFixture {
@@ -133,7 +148,9 @@ func startCleanupFixtureBinary(t *testing.T, root, mode, executable string) *cle
 	}
 	ready := filepath.Join(t.TempDir(), "ready")
 	child := &cleanupFixture{cmd: exec.Command(executable, args...), done: make(chan error, 1), mode: mode}
-	child.cmd.Env = append(os.Environ(), scriptWorkerEnv+"=", scriptTempDirEnv+"=", cleanupFixtureEnv+"="+mode, "AGENT_RUNNER_TESTSCRIPT_READY="+ready, "AGENT_RUNNER_TESTSCRIPT_EXPECT_TEMP="+root, "TMPDIR="+root, "TMP="+root, "TEMP="+root)
+	childPID := filepath.Join(t.TempDir(), "child-pid")
+	child.childPID = childPID
+	child.cmd.Env = append(os.Environ(), "AGENT_RUNNER_TESTSCRIPT_CHILD_PID="+childPID, scriptWorkerEnv+"=", scriptTempDirEnv+"=", cleanupFixtureEnv+"="+mode, "AGENT_RUNNER_TESTSCRIPT_READY="+ready, "AGENT_RUNNER_TESTSCRIPT_EXPECT_TEMP="+root, "TMPDIR="+root, "TMP="+root, "TEMP="+root)
 	child.cmd.Stdout, child.cmd.Stderr = &child.output, &child.output
 	if err := child.cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -185,7 +202,7 @@ func (child *cleanupFixture) wait(t *testing.T) error {
 		if err := child.cmd.Process.Signal(syscall.SIGQUIT); err != nil {
 			t.Fatal(err)
 		}
-	case "terminate", "ignore-terminate":
+	case "terminate", "ignore-terminate", "descendant":
 		if err := child.cmd.Process.Signal(syscall.SIGTERM); err != nil {
 			t.Fatal(err)
 		}
@@ -244,4 +261,52 @@ func TestScriptCleanupNamedTestBinary(t *testing.T) {
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("temporary files remain: %v, %v", entries, err)
 	}
+}
+
+func TestScriptCleanupDescendants(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix process groups")
+	}
+	root := t.TempDir()
+	child := startCleanupFixture(t, root, "descendant")
+	data, err := os.ReadFile(child.childPID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(string(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	if err := child.wait(t); err == nil {
+		t.Fatal("expected signal termination")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for processRunning(pid) {
+		if time.Now().After(deadline) {
+			t.Fatalf("worker's child %d outlived the supervisor", pid)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("temporary files remain: %v, %v", entries, err)
+	}
+}
+
+// processRunning reports whether pid is alive. A zombie counts as dead: where
+// PID 1 does not reap orphans it stays signalable but is no longer running.
+func processRunning(pid int) bool {
+	if syscall.Kill(pid, 0) != nil {
+		return false
+	}
+	stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return true
+	}
+	// The state follows the parenthesised command name, which may contain spaces.
+	if i := bytes.LastIndexByte(stat, ')'); i >= 0 && i+2 < len(stat) {
+		return stat[i+2] != 'Z'
+	}
+	return true
 }

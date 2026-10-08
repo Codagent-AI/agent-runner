@@ -57,7 +57,8 @@ func TestScript(t *testing.T) {
 // timeouts, panics in test goroutines, and signals skip that defer. Keep a
 // supervisor outside the tests so it can reclaim this run's private temporary
 // directory even when the worker exits abruptly. No other run's files are swept.
-// SIGKILL of the supervisor (or SIGKILL of the entire process group) cannot be
+// The worker runs in its own process group so signals, escalation, and the final
+// cleanup also reach commands it started. SIGKILL of the supervisor (or SIGKILL of the entire process group) cannot be
 // handled; such a cancellation can still leave the private directory behind.
 func runScriptWorker() int {
 	signals := make(chan os.Signal, 1)
@@ -82,6 +83,7 @@ func runScriptWorker() int {
 	cmd := exec.Command(executable, os.Args[1:]...)
 	cmd.Env = append(os.Environ(), scriptWorkerEnv+"=1", scriptTempDirEnv+"="+dir)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	runInOwnProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -98,15 +100,17 @@ func runScriptWorker() int {
 	for {
 		select {
 		case sig := <-signals:
-			_ = cmd.Process.Signal(sig)
+			signalProcessGroup(cmd, sig)
 			if escalation == nil {
 				escalation = time.NewTimer(scriptSignalGrace)
 				kill = escalation.C
 			}
 		case <-kill:
-			_ = cmd.Process.Kill()
+			killProcessGroup(cmd)
 			kill = nil
 		case err := <-finished:
+			// Reap anything the worker left running before its directory is removed.
+			killProcessGroup(cmd)
 			if err == nil {
 				return 0
 			}
