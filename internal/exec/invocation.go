@@ -25,6 +25,8 @@ type AgentInvocation struct {
 	DropEnv []string
 	Workdir string
 	Prefix  string
+	// OutputCopySuffix keeps a separate raw-output copy for this invocation.
+	OutputCopySuffix string
 
 	StdoutWrapper func(io.Writer) io.Writer
 	StderrWrapper func(io.Writer) io.Writer
@@ -122,7 +124,7 @@ func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logge
 	processOptions := AgentProcessOptions{
 		Context: ctx, Args: input.Args, CaptureStdout: true,
 		Env: input.Env, DropEnv: dropEnv, Workdir: input.Workdir,
-		Prefix: input.Prefix, StdoutWrapper: stdoutWrapper,
+		Prefix: input.Prefix, OutputCopySuffix: input.OutputCopySuffix, StdoutWrapper: stdoutWrapper,
 		StderrWrapper: stderrWrapper, Supervision: supervision, OnStarted: input.OnStarted, startedOnce: &sync.Once{},
 	}
 	direct := input.direct

@@ -141,6 +141,9 @@ func LatestRunCompleted(r io.Reader) (bool, error) {
 			completed = false
 		case EventRunEnd:
 			completed = stringField(event.Data, "outcome") == "success"
+			if explicit, ok := event.Data["completed"].(bool); ok {
+				completed = completed && explicit
+			}
 		}
 		return nil
 	})

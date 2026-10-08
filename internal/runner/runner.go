@@ -40,6 +40,7 @@ const (
 
 // Options configures a workflow run.
 type Options struct {
+	ExternalUser *model.ExternalUserSettings
 	From         string
 	Until        string
 	WorkflowFile string
@@ -548,6 +549,7 @@ func buildExecutionContext(
 		WorkingDir:               opts.WorkingDir,
 		AutonomousBackend:        string(settings.AutonomousBackend),
 		AutonomousPermissionMode: string(usersettings.EffectiveAutonomousPermissionMode(settings.AutonomousPermissionMode)),
+		ExternalUser:             opts.ExternalUser,
 		SessionDir:               sessionDir,
 		IntakeHandoffContents:    opts.IntakeHandoffContents,
 		IntakeHandoffDelivered:   opts.IntakeHandoffDelivered,
@@ -915,6 +917,7 @@ func updateState(sessionDir string, mutate func(*model.RunState)) error {
 func runEndData(rs *runState, result WorkflowResult, totals *model.RunTotals, failureReason string) map[string]any {
 	data := map[string]any{
 		"outcome":                 string(result),
+		"completed":               result == ResultSuccess && !rs.untilLeavesRemaining,
 		"completed_with_warnings": result == ResultSuccess && rs.ctx.WarningOrigins.Count() > 0,
 		"warning_count":           rs.ctx.WarningOrigins.Count(),
 		"duration_ms":             time.Since(rs.runStartTime).Milliseconds(),
@@ -996,6 +999,7 @@ func initialRunState(workflow *model.Workflow, rs *runState, opts *Options) *mod
 		IntakeHandoffDelivered: rs.ctx.IntakeHandoffDelivered(),
 		IntakeParentRunID:      rs.ctx.IntakeParentRunID,
 		AgentOverride:          rs.ctx.AgentOverride,
+		ExternalUser:           rs.ctx.ExternalUser,
 		ProfileSet:             resolvedProfileSet(rs.ctx),
 	}
 	if stepID == "" {
@@ -1129,6 +1133,7 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		IntakeHandoffDelivered: ctx.IntakeHandoffDelivered(),
 		IntakeParentRunID:      ctx.IntakeParentRunID,
 		AgentOverride:          ctx.AgentOverride,
+		ExternalUser:           ctx.ExternalUser,
 		ProfileSet:             resolvedProfileSet(ctx),
 	}
 	_ = stateio.WriteState(&state, stateDir)

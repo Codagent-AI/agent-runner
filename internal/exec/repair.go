@@ -237,6 +237,9 @@ func commitCheckCapture(step *model.Step, ctx *model.ExecutionContext, result Pr
 // and one terminal step_end for the check and runs the inline or rerun
 // repair cycle around it.
 func ExecuteCheckStep(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, log Logger) (StepOutcome, error) {
+	if ctx.ExternalUser != nil && step.Command != "" && step.Mode == model.ModeInteractive {
+		return ExecuteShellStep(step, ctx, runner, log)
+	}
 	if step.Repair == nil {
 		if step.Command != "" {
 			return ExecuteShellStep(step, ctx, runner, log)
