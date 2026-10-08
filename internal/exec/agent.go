@@ -142,6 +142,16 @@ func resolveStepProfile(step *model.Step, ctx *model.ExecutionContext) (*config.
 	return resolved, nil
 }
 
+// failAgentStepForControlError records a runner-control setup failure as an
+// agent crash, since the session could not run, and emits the step end.
+func failAgentStepForControlError(ctx *model.ExecutionContext, step *model.Step, prefix string, startTime time.Time, cliName, sessionID string, invocationContext cli.InvocationContext, isResume bool, controlErr error) (StepOutcome, error) {
+	identity := executionIdentity(ctx, step, "step", 0, false, cliName, sessionID)
+	recordAgentCrash(ctx, step, prefix, attemptForIdentity(ctx, &identity), nil, controlErr)
+	extraction := cli.UsageExtraction{Usage: defaultAgentUsage(cliName, invocationContext.IsHeadless())}
+	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), nil, controlErr, &extraction, nil)
+	return OutcomeFailed, controlErr
+}
+
 // ExecuteAgentStep runs an agent step using the resolved CLI adapter.
 func ExecuteAgentStep(
 	step *model.Step,
@@ -198,11 +208,7 @@ func ExecuteAgentStep(
 
 	// Bind the run-scoped endpoint before releasing the terminal lease.
 	if controlErr := ensureRunnerControl(ctx, invocationContext, agentCallEligible); controlErr != nil {
-		identity := executionIdentity(ctx, step, "step", 0, false, cliName, sessionID)
-		recordAgentCrash(ctx, step, prefix, attemptForIdentity(ctx, &identity), nil, controlErr)
-		extraction := cli.UsageExtraction{Usage: defaultAgentUsage(cliName, invocationContext.IsHeadless())}
-		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), nil, controlErr, &extraction, nil)
-		return OutcomeFailed, controlErr
+		return failAgentStepForControlError(ctx, step, prefix, startTime, cliName, sessionID, invocationContext, isResume, controlErr)
 	}
 
 	callHandler, spawnEnv, deactivate, controlErr := prepareAgentCallRuntime(
@@ -210,11 +216,7 @@ func ExecuteAgentStep(
 		cliName, sessionID, prefix, spawnEnv,
 	)
 	if controlErr != nil {
-		identity := executionIdentity(ctx, step, "step", 0, false, cliName, sessionID)
-		recordAgentCrash(ctx, step, prefix, attemptForIdentity(ctx, &identity), nil, controlErr)
-		extraction := cli.UsageExtraction{Usage: defaultAgentUsage(cliName, invocationContext.IsHeadless())}
-		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), nil, controlErr, &extraction, nil)
-		return OutcomeFailed, controlErr
+		return failAgentStepForControlError(ctx, step, prefix, startTime, cliName, sessionID, invocationContext, isResume, controlErr)
 	}
 	if deactivate != nil {
 		defer deactivate()
