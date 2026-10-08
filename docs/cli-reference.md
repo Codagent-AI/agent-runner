@@ -29,7 +29,10 @@ paths.
 | `-C` | `<dir>` | Change to `directory` before doing anything. |
 | `-inspect` | `<run-id>` | Launch the run view TUI for a specific run. |
 | `-list` | none | Launch the run list TUI. |
-| `-resume` | optional `session-id` | Resume an interrupted workflow; launches TUI if no session ID is given. |
+| `-resume` | optional `session-id` | Resume an interrupted workflow; accepts an invocation-only `--until` cap. Launches TUI if no session ID is given. |
+| `--external-user` | `<dir>` | Supply interactive Claude and Codex turns through a file exchange; implies no TUI. |
+| `--external-user-timeout` | `<duration>` | Bound each external-user reply wait; requires `--external-user`. |
+| `--until` | `<step-id>` | Stop after the named top-level step on this run or resume invocation. |
 | `-reset-onboarding` | none | Clear onboarding settings, project `.validator/`, and saved onboarding runs before launching. |
 | `-onboarding-from` | `<step-id>` | Start the built-in onboarding workflow from a top-level step. |
 | `--profile` | `<name>` | Select the profile set for this invocation, overriding `active_profile`. |
@@ -82,6 +85,8 @@ agent-runner run <workflow> [--until <step-id>] [--param key=value] [key=value .
 
 The `<workflow>` argument is a version-free logical name such as `deploy`,
 `team/deploy`, or `openspec:plan-change`. It is not a filename or path.
+
+`agent-runner --resume <run-id> --until <step-id>` also caps a resumed invocation. Invalid or already-passed targets fail before dispatch. External-user runs reuse their saved exchange settings on resume; see [External User Mode](external-user-mode.md).
 
 `--until <step-id>` stops successfully after the named top-level step is reached. The target step is inclusive: it runs before the workflow stops. If runtime conditions skip the target step, the workflow still stops at that position. The step ID is validated before execution begins, and nested loop or sub-workflow step IDs cannot be targeted.
 

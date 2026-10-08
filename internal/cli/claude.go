@@ -67,7 +67,7 @@ func (a *ClaudeAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, err
 		args = append(args, "--effort", input.Effort)
 	}
 
-	if context.IsAutonomous() {
+	if context.IsAutonomous() || context == ContextExternalUser {
 		permissionMode := "acceptEdits"
 		if usersettings.EffectiveAutonomousPermissionMode(input.PermissionMode) == usersettings.PermissionModeYOLO {
 			permissionMode = "bypassPermissions"
@@ -92,7 +92,7 @@ func (a *ClaudeAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, err
 			return nil, fmt.Errorf("claude: create agent-call MCP plugin: %w", err)
 		}
 		args = append(args, "--plugin-dir", pluginDir)
-		if context.IsAutonomous() {
+		if context.IsAutonomous() || context == ContextExternalUser {
 			for _, name := range agentCallMCPToolNames {
 				args = append(args, "--allowedTools", "mcp__agent-runner__"+name)
 			}
@@ -153,6 +153,8 @@ func (a *ClaudeAdapter) ProbeModel(modelName, effort string) (ProbeStrength, err
 // CLAUDE_CODE_USE_BEDROCK is deliberately left untouched.
 var claudeEnclosingSessionEnvVars = []string{
 	"CLAUDECODE",
+	"CLAUDE_CODE_SESSION_ATTENDED",
+	"CLAUDE_EFFORT",
 	"CLAUDE_CODE_CHILD_SESSION",
 	"CLAUDE_CODE_ENTRYPOINT",
 	"CLAUDE_CODE_SESSION_ID",

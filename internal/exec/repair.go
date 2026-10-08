@@ -238,6 +238,9 @@ func commitCheckCapture(step *model.Step, ctx *model.ExecutionContext, result Pr
 // repair cycle around it.
 func ExecuteCheckStep(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, log Logger) (StepOutcome, error) {
 	ctx.Crashes.PruneReexecuted(stepPath(ctx, step), ctx.ExecutionSessionID)
+	if ctx.ExternalUser != nil && step.Command != "" && step.Mode == model.ModeInteractive {
+		return ExecuteShellStep(step, ctx, runner, log)
+	}
 	if step.Repair == nil {
 		if step.Command != "" {
 			return ExecuteShellStep(step, ctx, runner, log)

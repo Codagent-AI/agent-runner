@@ -56,6 +56,92 @@ func TestSandboxRunDryRunShowsSafeDockerInvocation(t *testing.T) {
 	}
 }
 
+func TestSandboxRunAuthOnlyDryRunOmitsHostSettings(t *testing.T) {
+	home := t.TempDir()
+	for _, name := range []string{".codex/auth.json", ".claude/.credentials.json", ".claude/settings.json", ".claude/settings.local.json", ".cursor/auth.json"} {
+		path := filepath.Join(home, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("bash", "./sandbox-run.sh", "--dry-run", "--no-default-secrets", "--auth-only", "--mount-codex-auth", "--mount-claude-auth", "--mount-cursor-auth", "--artifact-dir", t.TempDir(), "--", "true")
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("auth-only dry run: %v\n%s", err, output)
+	}
+	for _, want := range []string{"target=/host-home/codex/auth.json", "target=/host-home/claude/.credentials.json", "target=/host-home/cursor/auth.json"} {
+		if !strings.Contains(string(output), want) {
+			t.Fatalf("missing %s:\n%s", want, output)
+		}
+	}
+	if strings.Contains(string(output), "target=/host-home/claude/settings") {
+		t.Fatalf("host settings mounted:\n%s", output)
+	}
+}
+
+func TestSandboxRunHideSourceDryRunSeparatesBuildAndCommandContainers(t *testing.T) {
+	output, err := exec.Command("bash", "./sandbox-run.sh", "--dry-run", "--no-default-secrets", "--hide-source", "--artifact-dir", t.TempDir(), "--", "agent-runner", "--help").CombinedOutput()
+	if err != nil {
+		t.Fatalf("hide-source dry run: %v\n%s", err, output)
+	}
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var runs []string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "docker run ") {
+			runs = append(runs, line)
+		}
+	}
+	if len(runs) != 2 {
+		t.Fatalf("want build and command docker runs, got %d:\n%s", len(runs), output)
+	}
+	if !strings.Contains(runs[0], ":/agent-runner-source:ro") || strings.Contains(runs[1], ":/agent-runner-source:ro") {
+		t.Fatalf("source mount must be build-only:\n%s", output)
+	}
+	if !strings.Contains(runs[0], "go build") || strings.Contains(runs[1], "/tmp/agent-runner-local") {
+		t.Fatalf("command container must use prebuilt binary:\n%s", output)
+	}
+	if strings.Count(runs[1], " -v ") != 1 || strings.Contains(runs[1], "type=bind") || !strings.Contains(runs[1], "type=volume") {
+		t.Fatalf("command container has unexpected mounts:\n%s", runs[1])
+	}
+	if !strings.Contains(string(output), "docker volume create ") || !strings.Contains(string(output), "docker volume rm ") {
+		t.Fatalf("missing named volume lifecycle:\n%s", output)
+	}
+}
+
+func TestSandboxRunRejectsHideSourceDevAudit(t *testing.T) {
+	output, err := exec.Command("bash", "./sandbox-run.sh", "--dry-run", "--no-default-secrets", "--hide-source", "--dev-audit", "--", "true").CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "--hide-source cannot be combined with --dev-audit") {
+		t.Fatalf("expected clear combination error, got %v:\n%s", err, output)
+	}
+}
+
+func TestSandboxRunHideSourceRealContainer(t *testing.T) {
+	if os.Getenv("RUN_DOCKER_SANDBOX_TEST") != "1" {
+		t.Skip("set RUN_DOCKER_SANDBOX_TEST=1 to exercise Docker sandbox")
+	}
+	home := t.TempDir()
+	for _, name := range []string{".claude/.credentials.json", ".claude/settings.json", ".claude/settings.local.json"} {
+		path := filepath.Join(home, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := `test ! -e /agent-runner-source && test ! -e /tmp/agent-runner-local && test ! -e "$HOME/.claude/settings.json" && test ! -e "$HOME/.claude/settings.local.json" && agent-runner --help 2>&1 | grep -q -- --external-user`
+	cmd := exec.Command("bash", "./sandbox-run.sh", "--no-default-secrets", "--auth-only", "--hide-source", "--mount-claude-auth", "--artifact-dir", t.TempDir(), "--", check)
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("isolated sandbox failed: %v\n%s", err, output)
+	}
+}
+
 func TestSandboxRunDevAuditOptInBuildsTaggedBinaryWithMountedSourceProvenance(t *testing.T) {
 	artifacts := filepath.Join(t.TempDir(), "artifacts")
 	cmd := exec.Command("bash", "./sandbox-run.sh",
@@ -1392,4 +1478,61 @@ func withoutHostLauncherEnv(base []string) []string {
 		result = append(result, entry)
 	}
 	return result
+}
+
+func TestSandboxRunClaudeAuthFallsBackToOAuthToken(t *testing.T) {
+	home := t.TempDir()
+	cmd := exec.Command("bash", "./sandbox-run.sh", "--dry-run", "--no-default-secrets", "--auth-only", "--mount-claude-auth", "--artifact-dir", t.TempDir(), "--", "true")
+	cmd.Env = append(os.Environ(), "HOME="+home, "CLAUDE_CODE_OAUTH_TOKEN=token-value")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("token fallback dry run: %v\n%s", err, output)
+	}
+	text := string(output)
+	if strings.Count(text, "-e CLAUDE_CODE_OAUTH_TOKEN") != 1 {
+		t.Fatalf("expected one CLAUDE_CODE_OAUTH_TOKEN pass-through:\n%s", text)
+	}
+	if strings.Contains(text, "host-home/claude") || strings.Contains(text, "token-value") {
+		t.Fatalf("token fallback mounted a credentials file or leaked the token:\n%s", text)
+	}
+}
+
+func TestSandboxRunClaudeAuthPrefersCredentialsFile(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".claude", ".credentials.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "./sandbox-run.sh", "--dry-run", "--no-default-secrets", "--auth-only", "--mount-claude-auth", "--artifact-dir", t.TempDir(), "--", "true")
+	cmd.Env = append(os.Environ(), "HOME="+home, "CLAUDE_CODE_OAUTH_TOKEN=token-value")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("credentials file dry run: %v\n%s", err, output)
+	}
+	text := string(output)
+	if !strings.Contains(text, "target=/host-home/claude/.credentials.json") || strings.Contains(text, "CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Fatalf("expected the credentials file mount without the token:\n%s", text)
+	}
+}
+
+func TestSandboxRunClaudeAuthRequiresFileOrToken(t *testing.T) {
+	home := t.TempDir()
+	cmd := exec.Command("bash", "./sandbox-run.sh", "--dry-run", "--no-default-secrets", "--mount-claude-auth", "--artifact-dir", t.TempDir(), "--", "true")
+	env := []string{"HOME=" + home}
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "CLAUDE_CODE_OAUTH_TOKEN=") && !strings.HasPrefix(entry, "HOME=") {
+			env = append(env, entry)
+		}
+	}
+	cmd.Env = env
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected missing Claude auth to fail:\n%s", output)
+	}
+	if !strings.Contains(string(output), ".credentials.json") || !strings.Contains(string(output), "CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Fatalf("missing-auth error should name both sources:\n%s", output)
+	}
 }

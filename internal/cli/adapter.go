@@ -167,7 +167,7 @@ func (c RunnerCommand) hookCommand() string {
 }
 
 func runnerCommands(input *BuildArgsInput) []RunnerCommand {
-	if input == nil || input.InvocationContext().IsHeadless() {
+	if input == nil || (input.InvocationContext().IsHeadless() && input.InvocationContext() != ContextExternalUser) {
 		return nil
 	}
 	if len(input.RunnerCommands) > 0 {
@@ -268,6 +268,7 @@ const (
 	ContextInteractive           InvocationContext = "interactive"
 	ContextAutonomousHeadless    InvocationContext = "autonomous-headless"
 	ContextAutonomousInteractive InvocationContext = "autonomous-interactive"
+	ContextExternalUser          InvocationContext = "external-user"
 )
 
 func (c InvocationContext) IsInteractive() bool {
@@ -275,11 +276,11 @@ func (c InvocationContext) IsInteractive() bool {
 }
 
 func (c InvocationContext) IsAutonomous() bool {
-	return c != ContextInteractive
+	return c == ContextAutonomousHeadless || c == ContextAutonomousInteractive
 }
 
 func (c InvocationContext) IsHeadless() bool {
-	return c == ContextAutonomousHeadless
+	return c == ContextAutonomousHeadless || c == ContextExternalUser
 }
 
 func (input *BuildArgsInput) InvocationContext() InvocationContext {

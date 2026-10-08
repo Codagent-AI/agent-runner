@@ -344,6 +344,9 @@ func terminalDedupKey(eventType audit.EventType, prefix, parentAttemptID, id str
 
 func (c *Collector) attribute(identity *model.ExecutionIdentity, input *model.UsageRecord) model.UsageRecord {
 	usage := cloneUsage(input)
+	if len(usage.Turns) > 0 {
+		return c.attributeTurns(identity, &usage)
+	}
 	if len(usage.RawCumulative) == 0 {
 		if identity.SessionID != "" {
 			key := baselineKey(identity.CLI, identity.SessionID)
@@ -972,6 +975,10 @@ func cloneCounts(counts model.TokenCounts) model.TokenCounts {
 
 func cloneUsage(usage *model.UsageRecord) model.UsageRecord {
 	cloned := *usage
+	cloned.Turns = make([]model.UsageRecord, len(usage.Turns))
+	for i := range usage.Turns {
+		cloned.Turns[i] = cloneUsage(&usage.Turns[i])
+	}
 	cloned.Allocations = append([]model.UsageAllocation(nil), usage.Allocations...)
 	for i := range cloned.Allocations {
 		cloned.Allocations[i].Tokens = cloneCounts(usage.Allocations[i].Tokens)
@@ -1023,4 +1030,65 @@ func int64Value(value any) int64 {
 	default:
 		return 0
 	}
+}
+
+func (c *Collector) attributeTurns(identity *model.ExecutionIdentity, input *model.UsageRecord) model.UsageRecord {
+	total := cloneUsage(input)
+	total.Tokens = make(model.TokenCounts)
+	total.TokenTotals = nil
+	total.Allocations = nil
+	total.Status = model.UsageUnavailable
+	total.Completeness = model.CompletenessComplete
+	total.Reason = ""
+	total.RawCumulative = nil
+	total.RawCumulativeTokenTotals = nil
+	total.RawCumulativeCostUSD = nil
+	currentIdentity := *identity
+	totalsComplete := true
+	for i := range input.Turns {
+		attributed := c.attribute(&currentIdentity, &input.Turns[i])
+		if i+1 < len(input.Turns) {
+			currentIdentity.SessionResumed = true
+		}
+		total.RawCumulative = attributed.RawCumulative
+		total.RawCumulativeTokenTotals = attributed.RawCumulativeTokenTotals
+		total.RawCumulativeCostUSD = attributed.RawCumulativeCostUSD
+		if attributed.Status != model.UsageCollected {
+			total.Completeness = model.CompletenessPartial
+			total.Reason = attributed.Reason
+			totalsComplete = false
+			continue
+		}
+		total.Status = model.UsageCollected
+		if attributed.Completeness == model.CompletenessPartial {
+			total.Completeness = model.CompletenessPartial
+			total.Reason = attributed.Reason
+		}
+		for key, value := range attributed.Tokens {
+			total.Tokens[key] += value
+		}
+		if attributed.TokenTotals == nil {
+			totalsComplete = false
+		} else {
+			if total.TokenTotals == nil {
+				total.TokenTotals = &model.TokenTotals{}
+			}
+			total.TokenTotals.Input += attributed.TokenTotals.Input
+			total.TokenTotals.Output += attributed.TokenTotals.Output
+			total.TokenTotals.Total += attributed.TokenTotals.Total
+		}
+		for j := range attributed.Allocations {
+			allocation := attributed.Allocations[j]
+			allocation.ID = fmt.Sprintf("turn-%d/%s", i+1, allocation.ID)
+			total.Allocations = append(total.Allocations, allocation)
+		}
+		if attributed.SubagentCollection == model.CompletenessPartial {
+			total.SubagentCollection = model.CompletenessPartial
+			total.SubagentCollectionReason = attributed.SubagentCollectionReason
+		}
+	}
+	if !totalsComplete {
+		total.TokenTotals = nil
+	}
+	return total
 }

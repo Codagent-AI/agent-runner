@@ -237,6 +237,11 @@ func ExecuteShellStep(
 		return OutcomeFailed, nil
 	}
 
+	if ctx.ExternalUser != nil && step.Mode == model.ModeInteractive {
+		err := fmt.Errorf("interactive shell steps are not supported in external-user mode")
+		emitShellInterpolationFailure(ctx, step, err)
+		return OutcomeFailed, err
+	}
 	prep := prepareShellCheck(step, ctx)
 	if prep.Err != nil {
 		// Covers both an interpolation failure (Command unresolved) and a

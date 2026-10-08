@@ -37,7 +37,7 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	}
 
 	if resumeAlreadyCompleted(stateFilePath, &state) {
-		return nil, ErrAlreadyCompleted
+		return nil, completedResumeError(&state, opts.Until)
 	}
 	snapshot, err := json.Marshal(state)
 	if err != nil {
@@ -61,9 +61,12 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		return nil, fmt.Errorf("step no longer exists in workflow: %w", err)
 	}
 	if resolved.AllDone {
-		return nil, ErrAlreadyCompleted
+		return nil, completedResumeError(&state, opts.Until)
 	}
 	resumeState.fromStep = resolved.StepID
+	if err := validateResumeUntil(&workflow, opts.Until, resolved.StepID); err != nil {
+		return nil, err
+	}
 	var previousStep *model.PreviousStepRecord
 	if state.CurrentStep.Nested != nil {
 		previousStep = state.CurrentStep.Nested.PreviousStep
@@ -95,6 +98,8 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 		IntakeHandoffDelivered: intakeHandoffDelivered,
 		IntakeParentRunID:      state.IntakeParentRunID,
 		AgentOverride:          state.AgentOverride,
+		ExternalUser:           state.ExternalUser,
+		Until:                  opts.Until,
 		Engine:                 eng,
 		SessionIDs:             resumeState.sessionIDs,
 		SessionProfiles:        resumeState.sessionProfiles,
@@ -245,4 +250,40 @@ func ResumeWorkflow(stateFilePath string, opts *Options) (WorkflowResult, error)
 		return ResultFailed, err
 	}
 	return ExecuteFromHandle(h, opts), nil
+}
+
+func validateResumeUntil(workflow *model.Workflow, until, from string) error {
+	if err := validateUntilStep(workflow, until); err != nil {
+		return err
+	}
+	if until == "" {
+		return nil
+	}
+	fromIndex, untilIndex := -1, -1
+	for i := range workflow.Steps {
+		if workflow.Steps[i].ID == from {
+			fromIndex = i
+		}
+		if workflow.Steps[i].ID == until {
+			untilIndex = i
+		}
+	}
+	if untilIndex < fromIndex {
+		return fmt.Errorf("--until step %q is already past the resume point %q", until, from)
+	}
+	return nil
+}
+
+func completedResumeError(state *model.RunState, until string) error {
+	if until == "" {
+		return ErrAlreadyCompleted
+	}
+	workflow, err := loadRecordedWorkflow(state.WorkflowFile)
+	if err != nil {
+		return err
+	}
+	if err := validateUntilStep(&workflow, until); err != nil {
+		return err
+	}
+	return fmt.Errorf("--until step %q is already past the resume point: workflow completed", until)
 }

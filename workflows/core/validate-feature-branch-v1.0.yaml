@@ -15,10 +15,24 @@ steps:
         exit 1
       fi
 
-      default_branch=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name) || {
-        echo "could not determine the repository's default branch; verify that gh is installed and authenticated and that the current directory belongs to a GitHub repository" >&2
-        exit 1
-      }
+      if [ -z "$(git remote)" ]; then
+        configured_branch=$(git config init.defaultBranch || true)
+        if [ -n "$configured_branch" ] && git show-ref --verify --quiet "refs/heads/$configured_branch"; then
+          default_branch=$configured_branch
+        elif git show-ref --verify --quiet refs/heads/main; then
+          default_branch=main
+        elif git show-ref --verify --quiet refs/heads/master; then
+          default_branch=master
+        else
+          echo "could not determine the default branch: the repository has no remotes and no main or master branch" >&2
+          exit 1
+        fi
+      else
+        default_branch=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name) || {
+          echo "could not determine the repository's default branch; verify that gh is installed and authenticated and that the current directory belongs to a GitHub repository" >&2
+          exit 1
+        }
+      fi
       if [ -z "$default_branch" ]; then
         echo "repository default branch is empty" >&2
         exit 1

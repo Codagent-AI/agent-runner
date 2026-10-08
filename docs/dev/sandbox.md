@@ -23,6 +23,13 @@ the requested command:
 scripts/sandbox-run.sh -- agent-runner --version
 ```
 
+For an isolated command container, use `--hide-source`. Runner is built in a
+first container, and a temporary Docker named volume carries the binary into a
+second container. The command container has no Agent Runner source mount; the
+volume is removed when the command exits. `--dry-run --hide-source` prints the
+image build, volume lifecycle, and both container commands. `--hide-source`
+cannot be combined with `--dev-audit`.
+
 ## Development-audit builds
 
 The normal sandbox build is deliberately untagged: it has no private audit
@@ -197,7 +204,13 @@ Credentials enter the sandbox only through explicit options:
   use `--no-default-secrets` to disable it.
 - `--mount-codex-auth` mounts `~/.codex/auth.json` read-only.
 - `--mount-claude-auth` mounts Claude credentials and available settings files
-  read-only.
+  read-only. When `~/.claude/.credentials.json` does not exist, as with a macOS
+  Keychain login, it passes `CLAUDE_CODE_OAUTH_TOKEN` (from the environment or a
+  secrets file; create one with `claude setup-token`) instead, and fails when
+  neither is available. The token avoids sharing the host login's refresh token.
+- `--auth-only` limits the auth mounts to credentials. In particular, it omits
+  Claude `settings.json` and `settings.local.json`; Codex and Cursor already
+  mount only their auth files.
 - `--mount-cursor-auth` mounts `~/.cursor/auth.json` read-only. Host Cursor
   `cli-config.json` is intentionally not copied. The sync script seeds both
   `~/.cursor/auth.json` (macOS path) and `~/.config/cursor/auth.json` (Linux

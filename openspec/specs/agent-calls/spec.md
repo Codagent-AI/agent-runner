@@ -13,6 +13,10 @@ integration. An agent started by `call_agent` MUST NOT receive the tool regardle
 profile, or parent's declaration. Eligibility failures SHALL explain that `call_agent` was not enabled
 for the active step declaration and MUST NOT instruct the user to add prompt text.
 
+An interactive parent running in external-user mode SHALL receive the same pre-authorized access as
+an autonomous parent, because its headless turns cannot show an approval prompt. Its access SHALL
+remain available on every resumed turn of the step.
+
 #### Scenario: Interactive enabled parent receives the tool
 - **WHEN** Agent Runner starts an interactive agent step declaring `tools: [call_agent]`
 - **THEN** the agent can invoke `call_agent`
@@ -34,8 +38,12 @@ for the active step declaration and MUST NOT instruct the user to add prompt tex
 - **THEN** only the Runner-owned `call_agent` tool is pre-authorized and its invocation does not wait for interactive approval
 
 #### Scenario: Interactive enabled parent uses normal tool approval
-- **WHEN** Agent Runner provisions `call_agent` for an interactive agent step that declares it
+- **WHEN** Agent Runner provisions `call_agent` for an interactive agent step that declares it, outside external-user mode
 - **THEN** invocation follows that CLI's normal MCP tool-approval flow
+
+#### Scenario: External-user interactive parent receives pre-authorized access
+- **WHEN** Agent Runner provisions `call_agent` for an interactive agent step that declares it, in external-user mode
+- **THEN** on every turn of the step, only the Runner-owned agent-call tools are pre-authorized, and invocation does not wait for approval
 
 #### Scenario: Called child cannot delegate recursively
 - **WHEN** `call_agent` starts a child agent whose supplied prompt mentions `call_agent`

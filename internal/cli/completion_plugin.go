@@ -121,7 +121,7 @@ func prepareCodexRunnerHome(completion *CompletionCommand, integration *RunnerIn
 		if conflict {
 			return "", fmt.Errorf("codex config already defines %s; cannot safely install the Runner-owned server", agentCallMCPServerName)
 		}
-		config = appendCodexAgentCallConfig(config, *integration.AgentCall, context.IsAutonomous())
+		config = appendCodexAgentCallConfig(config, *integration.AgentCall, context.IsAutonomous() || context == ContextExternalUser)
 	}
 	digest := sha256.Sum256([]byte("codex-v6\x00" + runID + "\x00" + sourceHome + "\x00" + string(config) + "\x00" + completionCommand + "\x00" + string(context)))
 	hash := hex.EncodeToString(digest[:6])
