@@ -870,3 +870,63 @@ func TestArchiveTransitionRefusesUnrecordableIgnoredPath(t *testing.T) {
 		t.Fatalf("change directory should be untouched when the transition refuses: %v", statErr)
 	}
 }
+
+// TestArchiveTransitionRetryRecapturesIgnoredFilesBeforeTheMove covers a
+// first attempt that saved its snapshot but failed before the move, after
+// which a repair left a new ignored file in the still-present change
+// directory: the retry must record it so the move does not make it owned.
+func TestArchiveTransitionRetryRecapturesIgnoredFilesBeforeTheMove(t *testing.T) {
+	f := newArchiveTestFixture(t, "ticket-123-demo")
+	mustWriteFile(t, filepath.Join(f.repo, ".gitignore"), "/"+filepath.ToSlash(f.changeDir)+"/poc/runs/\n")
+	runGit(t, f.repo, "add", ".gitignore")
+	runGit(t, f.repo, "commit", "-m", "TICKET-123: ignore poc runs")
+
+	workingEnv := f.env
+	binDir := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("create bin dir: %v", err)
+	}
+	failingOpenSpec := "#!/bin/sh\necho 'validation failed' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(binDir, "openspec"), []byte(failingOpenSpec), 0o700); err != nil {
+		t.Fatalf("write failing openspec: %v", err)
+	}
+	f.env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
+	if out, err := f.runTransition(t); err == nil {
+		t.Fatalf("first transition succeeded despite failing validate:\n%s", out)
+	}
+	f.env = workingEnv
+
+	ignoredRel := "poc/runs/x/conversation.json"
+	runDir := filepath.Join(f.repo, f.changeDir, "poc", "runs", "x")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatalf("create ignored run dir: %v", err)
+	}
+	mustWriteFile(t, filepath.Join(runDir, "conversation.json"), "{\"contaminated\": true}\n")
+
+	out, err := f.runTransition(t)
+	if err != nil {
+		t.Fatalf("retried transition failed: %v\n%s", err, out)
+	}
+	archiveDir := archiveStateField(t, out, "archive_dir")
+	movedPath := filepath.ToSlash(filepath.Join(archiveDir, ignoredRel))
+	wantOwned := []string{
+		"A\t" + filepath.ToSlash(filepath.Join(archiveDir, "proposal.md")),
+		"A\topenspec/specs/spec-a-canonical.md",
+		"D\t" + filepath.ToSlash(filepath.Join(f.changeDir, "proposal.md")),
+	}
+	sortStrings := cmpopts.SortSlices(func(a, b string) bool { return a < b })
+	if diff := cmp.Diff(wantOwned, archiveStateList(t, out, "owned_delta"), sortStrings); diff != "" {
+		t.Fatalf("owned_delta mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{movedPath}, archiveStateList(t, out, "moved_ignored")); diff != "" {
+		t.Fatalf("moved_ignored mismatch (-want +got):\n%s", diff)
+	}
+
+	snapshot, err := os.ReadFile(filepath.Join(f.sessionDir, "output", "archive-transition", f.changeName+".json"))
+	if err != nil {
+		t.Fatalf("read snapshot: %v", err)
+	}
+	if diff := cmp.Diff([]string{ignoredRel}, archiveStateList(t, string(snapshot), "prior_ignored")); diff != "" {
+		t.Fatalf("snapshot prior_ignored mismatch (-want +got):\n%s", diff)
+	}
+}

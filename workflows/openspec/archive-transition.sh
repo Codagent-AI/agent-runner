@@ -93,7 +93,18 @@ if [ -f "$snapshot_file" ]; then
   start_head=$(jq -r '.start_head' "$snapshot_file")
   prior_index_json=$(jq -c '.prior_index' "$snapshot_file")
   prior_worktree_json=$(jq -c '.prior_worktree' "$snapshot_file")
-  prior_ignored_json=$(jq -c '.prior_ignored // []' "$snapshot_file")
+  if [ -d "$change_dir" ]; then
+    # An earlier attempt failed before the move, so files may have become
+    # ignored since the snapshot (or it predates prior_ignored): recapture
+    # them now and persist the refreshed list for any replay after the move.
+    prior_ignored_lines=$(prior_ignored_lines) || exit 1
+    prior_ignored_json=$(printf '%s\n' "$prior_ignored_lines" | to_json_lines)
+    jq --argjson prior_ignored "$prior_ignored_json" '.prior_ignored = $prior_ignored' \
+      "$snapshot_file" > "$snapshot_file.tmp"
+    mv "$snapshot_file.tmp" "$snapshot_file"
+  else
+    prior_ignored_json=$(jq -c '.prior_ignored // []' "$snapshot_file")
+  fi
 else
   start_head=$(git rev-parse --verify HEAD)
   prior_index_json=$(repo_index_lines | to_json_lines)
