@@ -21,14 +21,17 @@ type PreviousStepRecord struct {
 }
 
 type CrashRecord struct {
-	StepID             string           `json:"stepId"`
-	Prefix             string           `json:"prefix"`
-	Path               []NestingSegment `json:"path"`
-	Attempt            int              `json:"attempt"`
-	ExitCode           *int             `json:"exitCode,omitempty"`
-	Error              string           `json:"error,omitempty"`
-	Stderr             string           `json:"stderr,omitempty"`
-	ExecutionSessionID string           `json:"executionSessionId"`
+	StepID   string           `json:"stepId"`
+	Prefix   string           `json:"prefix"`
+	Path     []NestingSegment `json:"path"`
+	Attempt  int              `json:"attempt"`
+	ExitCode *int             `json:"exitCode,omitempty"`
+	Error    string           `json:"error,omitempty"`
+	Stderr   string           `json:"stderr,omitempty"`
+	// ExecutionSessionID is the Agent Runner execution (one per start or resume),
+	// not the agent CLI session; AgentSessionID carries that when known.
+	ExecutionSessionID string `json:"executionSessionId"`
+	AgentSessionID     string `json:"agentSessionId,omitempty"`
 }
 
 type CrashLedger struct {

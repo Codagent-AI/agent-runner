@@ -121,3 +121,37 @@ func TestInteractiveAgentCrashClassification(t *testing.T) {
 		})
 	}
 }
+
+func TestClassifyCrashBoundsReason(t *testing.T) {
+	long := strings.Repeat("é", maxCrashReasonRunes+50)
+	got := ClassifyCrash(&model.CrashRecord{StepID: "agent", Stderr: long}, 2)
+	message := strings.TrimSuffix(strings.TrimPrefix(got, "agent failed (infrastructure): "), " after 2 repair attempts")
+	if utf8.RuneCountInString(message) != maxCrashReasonRunes || !strings.HasSuffix(message, "…") || !utf8.ValidString(got) {
+		t.Fatalf("message runes=%d: %q", utf8.RuneCountInString(message), got)
+	}
+	short := ClassifyCrash(&model.CrashRecord{StepID: "agent", Stderr: strings.Repeat("x", maxCrashReasonRunes)}, 0)
+	if strings.HasSuffix(short, "…") {
+		t.Fatalf("unneeded truncation: %q", short)
+	}
+}
+
+func TestRecordAgentCrashAgentSessionID(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		invocation *AgentInvocationResult
+		want       string
+	}{
+		{"discovered", &AgentInvocationResult{SessionID: "resumed", DiscoveredSessionID: "discovered"}, "discovered"},
+		{"resumed", &AgentInvocationResult{SessionID: "resumed"}, "resumed"},
+		{"none", nil, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := &model.ExecutionContext{ExecutionSessionID: "runner-exec", Crashes: model.NewCrashLedger()}
+			recordAgentCrash(ctx, &model.Step{ID: "agent"}, "[agent]", 1, tt.invocation, nil)
+			origin := ctx.StepFailure.Origin
+			if origin.AgentSessionID != tt.want || origin.ExecutionSessionID != "runner-exec" {
+				t.Fatalf("agent=%q execution=%q", origin.AgentSessionID, origin.ExecutionSessionID)
+			}
+		})
+	}
+}

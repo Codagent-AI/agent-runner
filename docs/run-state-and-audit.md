@@ -50,9 +50,9 @@ version-free YAML name, the content hash, and all params. A sub-workflow
 `step_start` records the exact resolved child path and interpolated params;
 `sub_workflow_start` and `sub_workflow_end` preserve the nested lifecycle.
 
-The `step_end`, `iteration_end`, `sub_workflow_end`, and `run_end` events report `crash_observed` when an agent session crashed anywhere in that execution, even if the failure was absorbed and the container succeeded. Failed and exhausted end events also report `failure_kind` as `infrastructure` for a crashed agent or `step` for an ordinary failure. When the terminating failure is infrastructure, `failure_origin` identifies the crashed agent step, its audit prefix and attempt, with a bounded error or stderr excerpt. Skipped step end events omit these fields.
+The `step_end`, `iteration_end`, `sub_workflow_end`, and `run_end` events report `crash_observed` when an agent session crashed anywhere in that execution, even if the failure was absorbed and the container succeeded. Failed and exhausted end events also report `failure_kind` as `infrastructure` for a crashed agent or `step` for an ordinary failure. When the terminating failure is infrastructure, `failure_origin` identifies the crashed agent step, its audit prefix and attempt, with a bounded error or stderr excerpt. Its `executionSessionId` is the Agent Runner execution (each start or resume gets a new one), not the agent CLI session; `agentSessionId` carries the agent CLI session ID when it is known. Skipped step end events omit these fields.
 
-`state.json` records the final `failureKind`, `crashObserved`, and `crashes` ledger. The ledger contains the crashed step ID, nested path, prefix, attempt, and available exit or error details. These fields let a caller classify a completed run without reading `audit.log`.
+`state.json` records the final `failureKind`, `crashObserved`, and `crashes` ledger. The ledger contains the crashed step ID, nested path, prefix, attempt, and available exit or error details. The infrastructure failure reason shown in the console, `state.json`, and the run list keeps only the first line of evidence, cut to 300 characters. These fields let a caller classify a completed run without reading `audit.log`.
 
 ## Recorded Workflow Versions
 

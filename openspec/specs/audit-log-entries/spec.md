@@ -332,7 +332,7 @@ The `step_end`, `iteration_end`, `sub_workflow_end`, and `run_end` events SHALL 
 
 - `failure_kind`: `infrastructure` or `step` when the outcome is `failed` or `exhausted`. It SHALL be absent for other outcomes.
 - `crash_observed`: a boolean, present on every end event except those for skipped steps.
-- `failure_origin`: present when `failure_kind` is `infrastructure`. It SHALL identify the crashed agent execution by step ID, full audit prefix, and attempt, and SHALL carry a bounded excerpt of its error or stderr.
+- `failure_origin`: present when `failure_kind` is `infrastructure`. It SHALL identify the crashed agent execution by step ID, full audit prefix, and attempt, and SHALL carry a bounded excerpt of its error or stderr. Its `executionSessionId` SHALL name the Agent Runner execution (one per start or resume), and its `agentSessionId` SHALL name the agent CLI session when one was known or discovered.
 
 The `run_end` values SHALL describe the whole run, so the classification can be read from `run_end` alone without the workflow definition.
 

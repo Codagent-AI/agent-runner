@@ -11,6 +11,10 @@ import (
 
 const stderrMarker = "\n[... stderr truncated ...]\n"
 
+// maxCrashReasonRunes bounds the evidence line in a crash reason, which is
+// shown in the console, state.json, and the run list.
+const maxCrashReasonRunes = 300
+
 func boundStderr(stderr string) string {
 	if len(stderr) <= 4096 {
 		return stderr
@@ -31,6 +35,10 @@ func recordAgentCrash(ctx *model.ExecutionContext, step *model.Step, prefix stri
 	record := model.CrashRecord{StepID: step.ID, Prefix: prefix, Path: stepPath(ctx, step), Attempt: attempt, ExecutionSessionID: ctx.ExecutionSessionID}
 	if invocation != nil {
 		record.Stderr = boundStderr(invocation.Stderr)
+		record.AgentSessionID = invocation.DiscoveredSessionID
+		if record.AgentSessionID == "" {
+			record.AgentSessionID = invocation.SessionID
+		}
 		if invocation.CrashError != "" {
 			record.Error = invocation.CrashError
 		}
@@ -64,6 +72,9 @@ func ClassifyCrash(record *model.CrashRecord, repairAttempts int) string {
 	}
 	if message == "" {
 		message = "agent session did not finish"
+	}
+	if runes := []rune(message); len(runes) > maxCrashReasonRunes {
+		message = string(runes[:maxCrashReasonRunes-1]) + "…"
 	}
 	reason := name + " failed (infrastructure): " + message
 	if repairAttempts > 0 {
