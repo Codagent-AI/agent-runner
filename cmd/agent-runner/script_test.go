@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -22,14 +23,18 @@ type scriptTestRun func() int
 func (run scriptTestRun) Run() int { return run() }
 
 func TestMain(m *testing.M) {
-	// Script commands use a deliberately reduced environment, so recognize the
-	// registered command by name rather than relying on the worker marker.
-	name := filepath.Base(os.Args[0])
-	if name != "agent-runner" && name != "agent-runner.exe" && os.Getenv(scriptWorkerEnv) != "1" {
+	// Script commands use a reduced environment. Identify the installed binary
+	// by its location so a top-level test binary named agent-runner still runs tests.
+	command := isScriptCommand()
+	if !command && os.Getenv(scriptWorkerEnv) != "1" {
 		os.Exit(runScriptWorker())
 	}
 	run := testscript.TestingM(m)
-	if dir := os.Getenv(scriptTempDirEnv); name != "agent-runner" && name != "agent-runner.exe" && dir != "" {
+	if !command {
+		// Upstream dispatches on argv[0]; normalize only the test-harness invocation.
+		os.Args[0] = "agent-runner.test"
+	}
+	if dir := os.Getenv(scriptTempDirEnv); !command && dir != "" {
 		run = scriptRunWithTempDir(m, dir)
 	}
 	testscript.Main(run, map[string]func(){
@@ -56,7 +61,7 @@ func TestScript(t *testing.T) {
 // handled; such a cancellation can still leave the private directory behind.
 func runScriptWorker() int {
 	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
 	defer signal.Stop(signals)
 
 	dir, err := os.MkdirTemp("", "agent-runner-testscript-")
@@ -147,4 +152,15 @@ func scriptRunWithTempDir(m *testing.M, dir string) testscript.TestingM {
 		}
 		return m.Run()
 	})
+}
+
+func isScriptCommand() bool {
+	executable, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	name := filepath.Base(executable)
+	bin := filepath.Dir(executable)
+	return (name == "agent-runner" || name == "agent-runner.exe") && filepath.Base(bin) == "bin" &&
+		strings.HasPrefix(filepath.Base(filepath.Dir(bin)), "testscript-main")
 }

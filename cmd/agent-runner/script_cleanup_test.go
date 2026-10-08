@@ -2,13 +2,11 @@ package main
 
 import (
 	"bytes"
-	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -50,7 +48,7 @@ func TestScriptCleanupFixture(t *testing.T) {
 		os.Exit(17)
 	case "ignore-terminate":
 		select {}
-	case "timeout", "interrupt", "terminate":
+	case "timeout", "interrupt", "terminate", "hangup", "quit":
 		select {}
 	default:
 		t.Fatalf("unknown fixture: %s", mode)
@@ -61,46 +59,21 @@ func TestScriptCleanup(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix signal termination")
 	}
-	for _, mode := range []string{"normal", "command-exit", "failure", "failfast", "panic", "exit", "timeout", "interrupt", "terminate"} {
+	for _, mode := range []string{"normal", "command-exit", "failure", "failfast", "panic", "exit", "timeout", "interrupt", "terminate", "hangup", "quit"} {
 		t.Run(mode, func(t *testing.T) {
-			// Characterize the upstream defer and then exercise the same path with the
-			// supervisor. Both use a private root, so even the intentional leak is safe.
-			for _, supervised := range []bool{false, true} {
-				t.Run(fmt.Sprintf("supervised=%t", supervised), func(t *testing.T) {
-					root := t.TempDir()
-					child := startCleanupFixture(t, root, mode, supervised)
-					err := child.wait(t)
-					success := mode == "normal" || mode == "command-exit"
-					if (err == nil) != success {
-						t.Fatalf("exit error = %v, output:\n%s", err, child.output.String())
-					}
-					if mode == "exit" && child.cmd.ProcessState.ExitCode() != 17 {
-						t.Fatalf("exit code = %d, want 17", child.cmd.ProcessState.ExitCode())
-					}
-					entries, err := os.ReadDir(root)
-					if err != nil {
-						t.Fatal(err)
-					}
-					leaks := !supervised && !success && mode != "failure" && mode != "failfast"
-					if !leaks {
-						if len(entries) != 0 {
-							t.Fatalf("temporary files remain: %v", entries)
-						}
-						return
-					}
-					if len(entries) != 1 || !strings.HasPrefix(entries[0].Name(), "testscript-main") {
-						t.Fatalf("expected upstream binary directory leak: %v", entries)
-					}
-					dir := filepath.Join(root, entries[0].Name())
-					files, err := os.ReadDir(dir)
-					if err != nil || len(files) != 1 || files[0].Name() != "bin" {
-						t.Fatalf("leaked directory contents: %v, %v", files, err)
-					}
-					binaries, err := os.ReadDir(filepath.Join(dir, "bin"))
-					if err != nil || len(binaries) != 1 || binaries[0].Name() != "agent-runner" {
-						t.Fatalf("leaked binaries: %v, %v", binaries, err)
-					}
-				})
+			root := t.TempDir()
+			child := startCleanupFixture(t, root, mode)
+			err := child.wait(t)
+			success := mode == "normal" || mode == "command-exit"
+			if (err == nil) != success {
+				t.Fatalf("exit error = %v, output:\n%s", err, child.output.String())
+			}
+			if mode == "exit" && child.cmd.ProcessState.ExitCode() != 17 {
+				t.Fatalf("exit code = %d, want 17", child.cmd.ProcessState.ExitCode())
+			}
+			entries, err := os.ReadDir(root)
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("temporary files remain: %v, %v", entries, err)
 			}
 		})
 	}
@@ -111,12 +84,12 @@ func TestScriptCleanupConcurrentRuns(t *testing.T) {
 		t.Skip("Unix signal termination")
 	}
 	root := t.TempDir()
-	live := startCleanupFixture(t, root, "terminate", true)
+	live := startCleanupFixture(t, root, "terminate")
 	dirs, err := filepath.Glob(filepath.Join(root, "agent-runner-testscript-*", "testscript-main*", "bin", "agent-runner"))
 	if err != nil || len(dirs) != 1 {
 		t.Fatalf("live worker binary: %v, %v", dirs, err)
 	}
-	other := startCleanupFixture(t, root, "panic", true)
+	other := startCleanupFixture(t, root, "panic")
 	if err := other.wait(t); err == nil {
 		t.Fatal("expected panic")
 	}
@@ -140,12 +113,17 @@ type cleanupFixture struct {
 	waited bool
 }
 
-func startCleanupFixture(t *testing.T, root, mode string, supervised bool) *cleanupFixture {
+func startCleanupFixture(t *testing.T, root, mode string) *cleanupFixture {
 	t.Helper()
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
+	return startCleanupFixtureBinary(t, root, mode, executable)
+}
+
+func startCleanupFixtureBinary(t *testing.T, root, mode, executable string) *cleanupFixture {
+	t.Helper()
 	args := []string{"-test.run=^TestScriptCleanupFixture$", "-test.timeout=15s"}
 	if mode == "timeout" {
 		args[1] = "-test.timeout=3s"
@@ -154,12 +132,8 @@ func startCleanupFixture(t *testing.T, root, mode string, supervised bool) *clea
 		args = append(args, "-test.failfast")
 	}
 	ready := filepath.Join(t.TempDir(), "ready")
-	worker := "1"
-	if supervised {
-		worker = ""
-	}
 	child := &cleanupFixture{cmd: exec.Command(executable, args...), done: make(chan error, 1), mode: mode}
-	child.cmd.Env = append(os.Environ(), scriptWorkerEnv+"="+worker, scriptTempDirEnv+"=", cleanupFixtureEnv+"="+mode, "AGENT_RUNNER_TESTSCRIPT_READY="+ready, "AGENT_RUNNER_TESTSCRIPT_EXPECT_TEMP="+root, "TMPDIR="+root, "TMP="+root, "TEMP="+root)
+	child.cmd.Env = append(os.Environ(), scriptWorkerEnv+"=", scriptTempDirEnv+"=", cleanupFixtureEnv+"="+mode, "AGENT_RUNNER_TESTSCRIPT_READY="+ready, "AGENT_RUNNER_TESTSCRIPT_EXPECT_TEMP="+root, "TMPDIR="+root, "TMP="+root, "TEMP="+root)
 	child.cmd.Stdout, child.cmd.Stderr = &child.output, &child.output
 	if err := child.cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -173,7 +147,7 @@ func startCleanupFixture(t *testing.T, root, mode string, supervised bool) *clea
 		_ = child.cmd.Process.Signal(syscall.SIGTERM)
 		select {
 		case <-child.done:
-		case <-time.After(5 * time.Second):
+		case <-time.After(10 * time.Second):
 			_ = child.cmd.Process.Kill()
 		}
 	})
@@ -203,6 +177,14 @@ func (child *cleanupFixture) wait(t *testing.T) error {
 		if err := child.cmd.Process.Signal(os.Interrupt); err != nil {
 			t.Fatal(err)
 		}
+	case "hangup":
+		if err := child.cmd.Process.Signal(syscall.SIGHUP); err != nil {
+			t.Fatal(err)
+		}
+	case "quit":
+		if err := child.cmd.Process.Signal(syscall.SIGQUIT); err != nil {
+			t.Fatal(err)
+		}
 	case "terminate", "ignore-terminate":
 		if err := child.cmd.Process.Signal(syscall.SIGTERM); err != nil {
 			t.Fatal(err)
@@ -223,12 +205,40 @@ func TestScriptCleanupSignalEscalation(t *testing.T) {
 		t.Skip("Unix signal termination")
 	}
 	root := t.TempDir()
-	child := startCleanupFixture(t, root, "ignore-terminate", true)
+	child := startCleanupFixture(t, root, "ignore-terminate")
 	if err := child.wait(t); err == nil {
 		t.Fatal("expected forced termination")
 	}
 	if got, want := child.cmd.ProcessState.ExitCode(), 128+int(syscall.SIGKILL); got != want {
 		t.Fatalf("exit code = %d, want %d", got, want)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("temporary files remain: %v, %v", entries, err)
+	}
+}
+
+func TestScriptCleanupNamedTestBinary(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "agent-runner"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	renamed := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(renamed, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	child := startCleanupFixtureBinary(t, root, "command-exit", renamed)
+	if err := child.wait(t); err != nil {
+		t.Fatalf("named test binary failed: %v, %s", err, child.output.String())
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil || len(entries) != 0 {
