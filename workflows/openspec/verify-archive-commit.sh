@@ -35,6 +35,10 @@ prior_worktree=$(jq -c '.prior_worktree | sort' "$snapshot_file")
 # Older snapshots carry no content lines; verification then covers status
 # and path only, as before.
 prior_content=$(jq -c '.prior_content // [] | sort' "$snapshot_file")
+# Files ignored inside the active change directory before the move may stay
+# untracked at their archived paths; older snapshots record none.
+moved_ignored_worktree=$(jq -c --arg archive_dir "$archive_dir" \
+  '.prior_ignored // [] | map("A\t" + $archive_dir + "/" + .)' "$snapshot_file")
 
 # Match the transition's unquoted non-ASCII paths so status and content
 # lines compare against the snapshot as-is.
@@ -127,7 +131,10 @@ assert_same_set "$prior_index" "$current_index" \
 # unstaged and untracked state captured by the transition snapshot: a repair
 # that leaves stray uncommitted changes anywhere must be caught, and every
 # pre-existing edit outside the archived paths must remain exactly as it was.
-current_worktree=$(status_lines . | to_json_lines)
+# Files ignored before the move may stay untracked here, or be ignored again;
+# they are not part of the owned delta, so committing them fails the check
+# above.
+current_worktree=$(status_lines . | to_json_lines | jq -c --argjson moved_ignored "$moved_ignored_worktree" '. - $moved_ignored')
 assert_same_set "$prior_worktree" "$current_worktree" \
   'pre-existing unstaged change is missing from the worktree' \
   'unexpected uncommitted change remains in the worktree'

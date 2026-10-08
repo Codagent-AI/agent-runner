@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
 // archiveTestFixture wires up a temp Git repository plus the archive-transition
@@ -671,5 +672,148 @@ func TestArchiveTransitionSnapshotsNonASCIIPreExistingPath(t *testing.T) {
 	}
 	if !strings.Contains(string(snapshot), "openspec/specs/résumé.md\\t") {
 		t.Fatalf("snapshot should record the non-ASCII path unquoted with its blob:\n%s", snapshot)
+	}
+}
+
+// ignoredRunsFixture gitignores poc/runs/ under the active change directory
+// with a rule anchored to the active path, then leaves an ignored file there.
+// After the archive move the anchored rule no longer matches, so the file
+// shows up untracked under the archive directory.
+func ignoredRunsFixture(t *testing.T) (f *archiveTestFixture, ignoredRel string) {
+	t.Helper()
+	f = newArchiveTestFixture(t, "ticket-123-demo")
+	mustWriteFile(t, filepath.Join(f.repo, ".gitignore"), "/"+filepath.ToSlash(f.changeDir)+"/poc/runs/\n")
+	runGit(t, f.repo, "add", ".gitignore")
+	runGit(t, f.repo, "commit", "-m", "TICKET-123: ignore poc runs")
+	ignoredRel = filepath.ToSlash(filepath.Join("poc", "runs", "x", "conversation.json"))
+	runDir := filepath.Join(f.repo, f.changeDir, "poc", "runs", "x")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatalf("create ignored run dir: %v", err)
+	}
+	mustWriteFile(t, filepath.Join(runDir, "conversation.json"), "{\"contaminated\": true}\n")
+	return f, ignoredRel
+}
+
+func archiveStateList(t *testing.T, archiveState, field string) []string {
+	t.Helper()
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(archiveState), &decoded); err != nil {
+		t.Fatalf("unmarshal archive state: %v\n%s", err, archiveState)
+	}
+	var list []string
+	if err := json.Unmarshal(decoded[field], &list); err != nil {
+		t.Fatalf("archive state field %q is not a string list: %v\n%s", field, err, archiveState)
+	}
+	return list
+}
+
+// TestArchiveTransitionExcludesPreMoveIgnoredFilesFromOwnedDelta covers a
+// file that was gitignored inside the active change directory: the move must
+// not turn it into owned, must-commit delta, on the first run or on replay.
+func TestArchiveTransitionExcludesPreMoveIgnoredFilesFromOwnedDelta(t *testing.T) {
+	f, ignoredRel := ignoredRunsFixture(t)
+
+	first, err := f.runTransition(t)
+	if err != nil {
+		t.Fatalf("archive-transition failed: %v\n%s", err, first)
+	}
+	archiveDir := archiveStateField(t, first, "archive_dir")
+	movedPath := filepath.ToSlash(filepath.Join(archiveDir, ignoredRel))
+
+	wantOwned := []string{
+		"A\t" + filepath.ToSlash(filepath.Join(archiveDir, "proposal.md")),
+		"A\topenspec/specs/spec-a-canonical.md",
+		"D\t" + filepath.ToSlash(filepath.Join(f.changeDir, "proposal.md")),
+	}
+	gotOwned := archiveStateList(t, first, "owned_delta")
+	sortStrings := cmpopts.SortSlices(func(a, b string) bool { return a < b })
+	if diff := cmp.Diff(wantOwned, gotOwned, sortStrings); diff != "" {
+		t.Fatalf("owned_delta mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{movedPath}, archiveStateList(t, first, "moved_ignored")); diff != "" {
+		t.Fatalf("moved_ignored mismatch (-want +got):\n%s", diff)
+	}
+
+	second, err := f.runTransition(t)
+	if err != nil {
+		t.Fatalf("replayed transition failed: %v\n%s", err, second)
+	}
+	if diff := cmp.Diff(gotOwned, archiveStateList(t, second, "owned_delta"), sortStrings); diff != "" {
+		t.Fatalf("replayed owned_delta differs (-first +second):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{movedPath}, archiveStateList(t, second, "moved_ignored")); diff != "" {
+		t.Fatalf("replayed moved_ignored mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestVerifyArchiveCommitAcceptsUncommittedPreMoveIgnoredFiles proves a file
+// ignored before the move may stay untracked after an otherwise complete
+// archive commit.
+func TestVerifyArchiveCommitAcceptsUncommittedPreMoveIgnoredFiles(t *testing.T) {
+	f, ignoredRel := ignoredRunsFixture(t)
+	transitionOut, err := f.runTransition(t)
+	if err != nil {
+		t.Fatalf("archive-transition failed: %v\n%s", err, transitionOut)
+	}
+	archiveDir := archiveStateField(t, transitionOut, "archive_dir")
+	archivedProposal := filepath.Join(archiveDir, "proposal.md")
+	canonicalSpec := filepath.Join("openspec", "specs", "spec-a-canonical.md")
+	runGit(t, f.repo, "add", "--", f.changeDir, archivedProposal, canonicalSpec)
+	runGit(t, f.repo, "commit", "-m", "TICKET-123: archive change", "--", f.changeDir, archivedProposal, canonicalSpec)
+
+	movedPath := filepath.ToSlash(filepath.Join(archiveDir, ignoredRel))
+	status := string(runGitOutput(t, f.repo, "status", "--porcelain", "--untracked-files=all"))
+	if !strings.Contains(status, "?? "+movedPath) {
+		t.Fatalf("moved ignored file should be untracked after the archive commit:\n%s", status)
+	}
+
+	out, err := f.runVerify(t, transitionOut)
+	if err != nil {
+		t.Fatalf("verify required committing a file ignored before the move: %v\n%s", err, out)
+	}
+}
+
+// TestVerifyArchiveCommitRejectsCommittingPreMoveIgnoredFiles proves the
+// verifier never accepts publishing content the user had gitignored.
+func TestVerifyArchiveCommitRejectsCommittingPreMoveIgnoredFiles(t *testing.T) {
+	f, ignoredRel := ignoredRunsFixture(t)
+	transitionOut, err := f.runTransition(t)
+	if err != nil {
+		t.Fatalf("archive-transition failed: %v\n%s", err, transitionOut)
+	}
+	archiveDir := archiveStateField(t, transitionOut, "archive_dir")
+	canonicalSpec := filepath.Join("openspec", "specs", "spec-a-canonical.md")
+	runGit(t, f.repo, "add", "--", f.changeDir, archiveDir, canonicalSpec)
+	runGit(t, f.repo, "commit", "-m", "TICKET-123: archive change", "--", f.changeDir, archiveDir, canonicalSpec)
+
+	out, err := f.runVerify(t, transitionOut)
+	if err == nil {
+		t.Fatalf("verify accepted a commit publishing a file ignored before the move:\n%s", out)
+	}
+	if !strings.Contains(out, ignoredRel) {
+		t.Fatalf("output = %q, want the ignored path named", out)
+	}
+}
+
+// TestVerifyArchiveCommitAcceptsReIgnoredPreMoveIgnoredFiles covers a user
+// who re-points the ignore rule at the archived path in a separate commit:
+// the file is ignored again and must not be reported missing either.
+func TestVerifyArchiveCommitAcceptsReIgnoredPreMoveIgnoredFiles(t *testing.T) {
+	f, _ := ignoredRunsFixture(t)
+	transitionOut, err := f.runTransition(t)
+	if err != nil {
+		t.Fatalf("archive-transition failed: %v\n%s", err, transitionOut)
+	}
+	archiveDir := archiveStateField(t, transitionOut, "archive_dir")
+	archivedProposal := filepath.Join(archiveDir, "proposal.md")
+	canonicalSpec := filepath.Join("openspec", "specs", "spec-a-canonical.md")
+	runGit(t, f.repo, "add", "--", f.changeDir, archivedProposal, canonicalSpec)
+	runGit(t, f.repo, "commit", "-m", "TICKET-123: archive change", "--", f.changeDir, archivedProposal, canonicalSpec)
+	mustWriteFile(t, filepath.Join(f.repo, ".gitignore"), "/"+filepath.ToSlash(archiveDir)+"/poc/runs/\n")
+	runGit(t, f.repo, "commit", "-m", "TICKET-123: re-point ignore rule", "--", ".gitignore")
+
+	out, err := f.runVerify(t, transitionOut)
+	if err != nil {
+		t.Fatalf("verify rejected a re-ignored file from before the move: %v\n%s", err, out)
 	}
 }

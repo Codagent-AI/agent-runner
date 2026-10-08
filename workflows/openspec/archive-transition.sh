@@ -72,22 +72,43 @@ content_lines() {
   done
 }
 
+# Emits the paths, relative to the active change directory, of files Git
+# ignores inside it. The archive move can carry them out from under an ignore
+# rule anchored to the active path, so they must be recorded before the move
+# to keep them out of the owned delta afterwards.
+prior_ignored_lines() {
+  [ -d "$change_dir" ] || return 0
+  git ls-files --others --ignored --exclude-standard -- "$change_dir" | while IFS= read -r path; do
+    case "$path" in
+      \"*)
+        printf 'archive-transition: cannot record ignored path %s (its name needs quoting); move or rename it before archiving\n' "$path" >&2
+        exit 1
+        ;;
+    esac
+    printf '%s\n' "${path#"$change_dir"/}"
+  done
+}
+
 if [ -f "$snapshot_file" ]; then
   start_head=$(jq -r '.start_head' "$snapshot_file")
   prior_index_json=$(jq -c '.prior_index' "$snapshot_file")
   prior_worktree_json=$(jq -c '.prior_worktree' "$snapshot_file")
+  prior_ignored_json=$(jq -c '.prior_ignored // []' "$snapshot_file")
 else
   start_head=$(git rev-parse --verify HEAD)
   prior_index_json=$(repo_index_lines | to_json_lines)
   prior_worktree_json=$(repo_worktree_lines | to_json_lines)
   prior_content_lines=$(repo_worktree_lines | content_lines) || exit 1
   prior_content_json=$(printf '%s\n' "$prior_content_lines" | to_json_lines)
+  prior_ignored_lines=$(prior_ignored_lines) || exit 1
+  prior_ignored_json=$(printf '%s\n' "$prior_ignored_lines" | to_json_lines)
   jq -n \
     --arg start_head "$start_head" \
     --argjson prior_index "$prior_index_json" \
     --argjson prior_worktree "$prior_worktree_json" \
     --argjson prior_content "$prior_content_json" \
-    '{start_head: $start_head, prior_index: $prior_index, prior_worktree: $prior_worktree, prior_content: $prior_content}' \
+    --argjson prior_ignored "$prior_ignored_json" \
+    '{start_head: $start_head, prior_index: $prior_index, prior_worktree: $prior_worktree, prior_content: $prior_content, prior_ignored: $prior_ignored}' \
     > "$snapshot_file"
 fi
 
@@ -108,14 +129,25 @@ fi
 
 current_worktree_json=$(status_lines "$change_dir" "$archive_dir" "$specs_dir" | to_json_lines)
 
+# Files ignored inside the active change directory before the move, at
+# their archived paths. Those still ignored after the move never appear in
+# current_worktree_json; those whose ignore rule no longer matches show up
+# untracked and must be neither owned nor committed.
+moved_ignored_json=$(jq -n \
+  --arg archive_dir "$archive_dir" \
+  --argjson prior_ignored "$prior_ignored_json" \
+  '$prior_ignored | map($archive_dir + "/" + .)')
+
 # prior_worktree never contains a change_dir entry (excluded from the
 # baseline) and never contains an archive_dir entry (it did not exist yet),
 # so subtracting it here only ever removes pre-existing specs_dir noise from
-# the narrowly-scoped current set above.
+# the narrowly-scoped current set above. Pre-move ignored files are
+# subtracted separately because the baseline never recorded them.
 owned_delta_json=$(jq -n \
   --argjson current "$current_worktree_json" \
   --argjson prior "$prior_worktree_json" \
-  '$current - $prior')
+  --argjson moved_ignored "$moved_ignored_json" \
+  '$current - $prior - ($moved_ignored | map("A\t" + .))')
 
 jq -n \
   --arg archive_dir "$archive_dir" \
@@ -123,4 +155,5 @@ jq -n \
   --arg start_head "$start_head" \
   --argjson owned_delta "$owned_delta_json" \
   --argjson prior_index "$prior_index_json" \
-  '{archive_dir: $archive_dir, change_dir: $change_dir, start_head: $start_head, owned_delta: $owned_delta, prior_index: $prior_index}'
+  --argjson moved_ignored "$moved_ignored_json" \
+  '{archive_dir: $archive_dir, change_dir: $change_dir, start_head: $start_head, owned_delta: $owned_delta, prior_index: $prior_index, moved_ignored: $moved_ignored}'

@@ -45,7 +45,7 @@ steps:
         {{archive_state}}
         </archive-state>
 
-        You may stage and commit only the paths named by `archive_dir` and the file paths listed in `owned_delta` in that JSON. Do not stage or commit anything else, including unrelated files or other pre-existing staged or unstaged edits, even inside `openspec/specs`.
+        You may stage and commit only the paths named by `archive_dir` and the file paths listed in `owned_delta` in that JSON. Do not stage or commit anything else, including unrelated files or other pre-existing staged or unstaged edits, even inside `openspec/specs`. Paths listed in `moved_ignored` were gitignored before the archive move; never stage or commit them, even though they sit under `archive_dir`.
 
         Follow the repository's commit message conventions. If the change name begins with a ticket prefix and numeric identifier (for example "proj-123-some-change"), a subject like `PROJ-123: Archive change` is a reasonable hint; otherwise `[archive] chore: archive openspec documents for {{change_name}}` is a reasonable default. If the commit is rejected by a repository hook (subject format, length, or another convention), read the hook's output and adjust the commit message to comply, then retry the commit.
 
