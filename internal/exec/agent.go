@@ -521,18 +521,17 @@ func resolveInvocationContext(step *model.Step, mode model.StepMode, ctx *model.
 			return cli.ContextAutonomousHeadless, fmt.Errorf("autonomous_backend %q requires the autonomous-interactive backend, which is not supported in external-user mode", backend)
 		case step.Capture != "":
 			return cli.ContextAutonomousHeadless, fmt.Errorf("autonomous_backend %q requires the autonomous-interactive backend, which cannot be combined with capture", backend)
-		case !isStdinTerminal():
-			return cli.ContextAutonomousHeadless, fmt.Errorf("autonomous_backend %q requires the autonomous-interactive backend, which needs a TTY (stdin is not a terminal)", backend)
 		}
-		return cli.ContextAutonomousInteractive, nil
-	}
-	// Inherited preferences retain the existing headless fallbacks. Capture
-	// requires a clean stdout pipe, which direct terminal invocation cannot supply.
-	if ctx.ExternalUser != nil || step.Capture != "" {
+	} else if ctx.ExternalUser != nil || step.Capture != "" {
+		// Inherited preferences fall back to headless. Capture requires a clean
+		// stdout pipe, which direct terminal invocation cannot supply.
 		return cli.ContextAutonomousHeadless, nil
 	}
 	if isStdinTerminal() {
 		return cli.ContextAutonomousInteractive, nil
+	}
+	if stepRequired {
+		return cli.ContextAutonomousHeadless, fmt.Errorf("autonomous_backend %q requires the autonomous-interactive backend, which needs a TTY (stdin is not a terminal)", backend)
 	}
 	if log != nil {
 		log.Errorf("  autonomous backend requested interactive mode for %s, but stdin is not a TTY; falling back to headless\n", cliName)
