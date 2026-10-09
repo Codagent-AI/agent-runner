@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -180,8 +181,11 @@ func TestDirectRunnerCompletesThroughControlChannelAndRestores(t *testing.T) {
 
 // gatedAckLogger holds the control server's completion_acknowledged audit
 // emit, which sits between the client acknowledgement and the completion's
-// delivery, until release is closed.
-type gatedAckLogger struct{ release chan struct{} }
+// delivery, until Release is called.
+type gatedAckLogger struct {
+	release chan struct{}
+	once    sync.Once
+}
 
 func (l *gatedAckLogger) Emit(event audit.Event) {
 	if event.Type == audit.EventCompletionAcknowledged {
@@ -189,14 +193,23 @@ func (l *gatedAckLogger) Emit(event audit.Event) {
 	}
 }
 
+// Release unblocks any held emit; it is safe to call more than once.
+func (l *gatedAckLogger) Release() { l.once.Do(func() { close(l.release) }) }
+
 func TestDirectRunnerCompletesWhenChildExitsBeforeCompletionDelivery(t *testing.T) {
 	logger := &gatedAckLogger{release: make(chan struct{})}
 	server := newTestControlServer(t, t.TempDir(), logger)
-	defer server.Close()
 	t.Setenv("AGENT_RUNNER_DIRECT_HELPER", "3")
 	// The helper exits as soon as its client is acknowledged; hold delivery
 	// until well after that exit so the runner observes it first.
-	time.AfterFunc(time.Second, func() { close(logger.release) })
+	releaseTimer := time.AfterFunc(time.Second, logger.Release)
+	// Close waits for connection goroutines, so release a held emit first
+	// rather than leaving teardown blocked on the timer after a failure.
+	t.Cleanup(func() {
+		releaseTimer.Stop()
+		logger.Release()
+		_ = server.Close()
+	})
 
 	runner := NewDirectRunner(&DirectOptions{
 		Args:              []string{os.Args[0], "-test.run=^TestDirectRunnerHelperProcess$"},

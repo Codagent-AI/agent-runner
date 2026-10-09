@@ -136,7 +136,11 @@ func TestControlServerCompletionEligibleAttemptAcceptsCompletion(t *testing.T) {
 type blockingAckLogger struct {
 	recordingEventLogger
 	release chan struct{}
+	once    sync.Once
 }
+
+// Release unblocks any held emit; it is safe to call more than once.
+func (l *blockingAckLogger) Release() { l.once.Do(func() { close(l.release) }) }
 
 func (l *blockingAckLogger) Emit(event audit.Event) {
 	if event.Type == audit.EventCompletionAcknowledged {
@@ -151,7 +155,12 @@ func TestControlServerAwaitAcceptedCompletionWaitsForAcknowledgedDelivery(t *tes
 	// still receive the accepted completion instead of reading a natural exit.
 	logger := &blockingAckLogger{release: make(chan struct{})}
 	server := newTestControlServer(t, t.TempDir(), logger)
-	defer server.Close()
+	// Close waits for connection goroutines, so release a held emit first
+	// rather than deadlocking teardown when the test fails before releasing.
+	t.Cleanup(func() {
+		logger.Release()
+		_ = server.Close()
+	})
 	attempt := server.ActivateAttempt(context.Background(), "external", AttemptOptions{CompletionEligible: true})
 	if response := exchange(t, server.SocketPath(), &controlRequest{Type: MessageCompleteStep, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "complete"}); !response.OK {
 		t.Fatalf("completion response = %#v", response)
@@ -170,7 +179,7 @@ func TestControlServerAwaitAcceptedCompletionWaitsForAcknowledgedDelivery(t *tes
 		completion, ok := server.AwaitAcceptedCompletion(context.Background(), attempt.ID)
 		result <- awaited{completion, ok}
 	}()
-	close(logger.release)
+	logger.Release()
 	select {
 	case got := <-result:
 		if !got.ok || got.completion.AttemptID != attempt.ID || got.completion.RequestID != "complete" {
