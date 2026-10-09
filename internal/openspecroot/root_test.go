@@ -139,3 +139,26 @@ func TestGuardIncompleteExternalContext(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestResolveExternalInstructionWording(t *testing.T) {
+	wd := t.TempDir()
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	if err := os.MkdirAll(filepath.Join(root, "openspec"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Resolve(wd, Input{ChangeName: "foo", Operation: "create", SpecRoot: root}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	change := filepath.Join(root, "openspec", "changes", "foo")
+	want := map[string]string{
+		"location_instruction":        "Keep every OpenSpec definition and planning artifact under `" + change + "/` in the OpenSpec project at `" + root + "`.",
+		"validate_instruction":        "When an approved artifact changed, run `openspec validate --type change \"foo\"` from `" + root + "`.",
+		"accept_validate_instruction": "If a specification changed, run `openspec validate --type change \"foo\"` from `" + root + "`.",
+	}
+	for key, text := range want {
+		if result[key] != text {
+			t.Errorf("%s = %q, want %q", key, result[key], text)
+		}
+	}
+}

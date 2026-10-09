@@ -106,9 +106,9 @@ func Resolve(wd string, input Input, roots map[string]string) (map[string]string
 		return nil, err
 	}
 	result["external"], result["commit_plan"], result["change_dir"] = "true", "false", change
-	result["location_instruction"] = fmt.Sprintf("Keep every OpenSpec definition and planning artifact under `%s/` in the OpenSpec project at `%s`.", change, resolved)
-	result["validate_instruction"] = fmt.Sprintf("When an approved artifact changed, run `openspec validate --type change %q` from `%s`.", input.ChangeName, resolved)
-	result["accept_validate_instruction"] = fmt.Sprintf("If a specification changed, run `openspec validate --type change %q` from `%s`.", input.ChangeName, resolved)
+	result["location_instruction"] = fmt.Sprintf("Keep every OpenSpec definition and planning artifact under %#q in the OpenSpec project at %#q.", change+"/", resolved)
+	result["validate_instruction"] = fmt.Sprintf("When an approved artifact changed, run `openspec validate --type change %q` from %#q.", input.ChangeName, resolved)
+	result["accept_validate_instruction"] = fmt.Sprintf("If a specification changed, run `openspec validate --type change %q` from %#q.", input.ChangeName, resolved)
 	result["simple_validate_instruction"] = fmt.Sprintf("Validate OpenSpec change %q with `openspec validate --type change %q` run from `%s`.", input.ChangeName, input.ChangeName, resolved)
 	result["validation_failure_instruction"] = fmt.Sprintf("`openspec validate --type change %q` run from `%s` failed for OpenSpec change %q.", input.ChangeName, resolved, input.ChangeName)
 	result["context_instruction"] = externalContext(wd, resolved, change)
