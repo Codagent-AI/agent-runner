@@ -276,7 +276,15 @@ The `session` field is exclusively for declared named sessions; `new`, `resume`,
 
 ### Requirement: Long-running MCP execution
 
-Agent Runner MUST NOT impose a fixed duration limit on a valid agent call. Only a caller-supplied `timeout` bounds a call's duration. A child's survival MUST NOT depend on any MCP request staying open, on host MCP tool-execution timeout configuration, or on progress notifications. When a supported host exposes a process-local MCP tool-execution timeout control, adapters SHALL raise or disable a generic short default so one waiting `call_agent` can cover a long child. Where a host enforces an unconfigurable `tools/call` abort, its parents SHALL receive a wait budget shorter than that abort and reach the result by polling. Progress notifications MUST NOT be treated as a substitute for either path.
+Agent Runner MUST NOT impose a fixed duration limit on a valid agent call. Only a caller-supplied `timeout` bounds a call's duration. A child's survival MUST NOT depend on any MCP request staying open, on host MCP tool-execution timeout configuration, or on progress notifications. The process-local MCP integration SHALL avoid allowing a generic short host tool timeout to govern called-agent execution when the host exposes a supported timeout control, while preserving an explicit deadline configured by the user or requesting client. When a supported host exposes such a control, adapters SHALL raise or disable a generic short default so one waiting `call_agent` can cover a long child. Where a host enforces an unconfigurable `tools/call` abort, its parents SHALL receive a wait budget shorter than that abort and reach the result by polling. When an MCP client supplies a progress token, the bridge SHALL emit rate-limited progress notifications while the child remains active. Progress notifications MUST NOT be treated as a substitute for client-side timeout configuration, polling, or cancellation.
+
+#### Scenario: Configurable host timeout does not bound the call
+- **WHEN** a supported host exposes a process-local MCP tool-execution timeout control
+- **THEN** Agent Runner provisions `call_agent` so the host's generic short default does not terminate an otherwise active child
+
+#### Scenario: Requested progress is reported
+- **WHEN** an MCP client invokes `call_agent` with a progress token and the child remains active
+- **THEN** the bridge emits rate-limited progress notifications until the call reaches a terminal result
 
 #### Scenario: Child outlives an aborted request
 - **WHEN** a host aborts an open `call_agent` request for a child that runs longer than its `tools/call` wait
