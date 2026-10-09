@@ -495,17 +495,22 @@ func assertAgentCallApproval(t *testing.T, adapterName string, invocationContext
 		if wantApproval {
 			found = true
 			for _, name := range expectedAgentCallTools {
-				if !hasFlagValue(prepared.args, "--allowedTools", "mcp__agent-runner__"+name) {
-					found = false
-					break
+				// Claude namespaces plugin-provided MCP tools as
+				// mcp__plugin_<plugin>_<server>__<tool>; the bare server form is
+				// kept for hosts that register the server directly.
+				for _, prefix := range []string{"mcp__plugin_agent-runner-call_agent-runner__", "mcp__agent-runner__"} {
+					if !hasFlagValue(prepared.args, "--allowedTools", prefix+name) {
+						found = false
+					}
 				}
 			}
 		} else {
 			found = false
 			for _, name := range expectedAgentCallTools {
-				if hasFlagValue(prepared.args, "--allowedTools", "mcp__agent-runner__"+name) {
-					found = true
-					break
+				for _, prefix := range []string{"mcp__plugin_agent-runner-call_agent-runner__", "mcp__agent-runner__"} {
+					if hasFlagValue(prepared.args, "--allowedTools", prefix+name) {
+						found = true
+					}
 				}
 			}
 		}
