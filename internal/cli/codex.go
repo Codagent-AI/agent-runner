@@ -466,7 +466,7 @@ func isCodexIgnoredStderrLine(line string, state *codexIgnoredStderrState) bool 
 
 // discoverCodexInteractiveSession scans ~/.codex/sessions/YYYY/MM/DD/ for the
 // most recent .jsonl file created after spawn time, matching CWD from the
-// session_meta payload.
+// session_meta payload and skipping sub-agent threads.
 func discoverCodexInteractiveSession(spawnTime time.Time) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -588,13 +588,20 @@ func matchesSessionCwd(sessionFile, cwd string) bool {
 			Type    string `json:"type"`
 			Cwd     string `json:"cwd"`
 			Payload struct {
-				Cwd string `json:"cwd"`
+				Cwd            string `json:"cwd"`
+				ParentThreadID string `json:"parent_thread_id"`
+				ForkedFromID   string `json:"forked_from_id"`
 			} `json:"payload"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &meta); err != nil {
 			continue
 		}
 		if meta.Type == "session_meta" {
+			// Sub-agent threads share the parent's cwd and can be written
+			// after it, so they must never be taken for the spawned session.
+			if meta.Payload.ParentThreadID != "" || meta.Payload.ForkedFromID != "" {
+				return false
+			}
 			return meta.Cwd == cwd || meta.Payload.Cwd == cwd
 		}
 	}
