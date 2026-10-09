@@ -21,10 +21,10 @@ import (
 
 func TestExternalUserInput(t *testing.T) {
 	ctx := model.NewRootContext(&model.RootContextOptions{ExternalUser: &model.ExternalUserSettings{Dir: t.TempDir()}})
-	if got := resolveInvocationContext(model.ModeInteractive, ctx, "claude", false, nil); got != cli.ContextExternalUser {
+	if got, err := resolveInvocationContext(&model.Step{}, model.ModeInteractive, ctx, "claude", nil); err != nil || got != cli.ContextExternalUser {
 		t.Fatalf("context = %s", got)
 	}
-	if got := resolveInvocationContext(model.ModeAutonomous, ctx, "claude", false, nil); got != cli.ContextAutonomousHeadless {
+	if got, err := resolveInvocationContext(&model.Step{}, model.ModeAutonomous, ctx, "claude", nil); err != nil || got != cli.ContextAutonomousHeadless {
 		t.Fatalf("autonomous context = %s", got)
 	}
 	input := buildAdapterInput(&model.Step{ID: "proposal"}, ctx, &config.ResolvedAgent{}, &cli.ClaudeAdapter{}, "Ask about scope", "", "session", false, cli.ContextExternalUser, "/runner")
