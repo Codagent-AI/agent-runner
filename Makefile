@@ -11,13 +11,13 @@ build:
 	go build -tags dev_audit -ldflags "$(DEV_AUDIT_LDFLAGS)" -o bin/agent-runner ./cmd/agent-runner
 
 test:
-	go test -tags dev_audit ./...
+	./.validator/go-test.sh
 
 test-verbose:
-	go test -tags dev_audit -v ./...
+	./.validator/go-test.sh -v
 
 test-cover:
-	go test -tags dev_audit -coverprofile=coverage.out ./...
+	./.validator/go-test.sh -coverprofile=coverage.out
 	go tool cover -html=coverage.out -o coverage.html
 
 test-e2e-agents: test-e2e-headless-agents test-e2e-interactive-agents
@@ -31,8 +31,8 @@ test-e2e-interactive-agents:
 	./.validator/go-offline.sh go test -count=1 -timeout 30m -tags e2e_agents ./cmd/agent-runner -run 'InteractiveRealAgentE2E$$' -v
 
 lint:
-	golangci-lint run ./...
-	golangci-lint run -c .golangci-strict.yml --new-from-merge-base=origin/main ./...
+	golangci-lint run $$(./.validator/go-packages.sh -tags dev_audit | sed "s#^github.com/codagent/agent-runner#.#")
+	golangci-lint run -c .golangci-strict.yml --new-from-merge-base=origin/main $$(./.validator/go-packages.sh -tags dev_audit | sed "s#^github.com/codagent/agent-runner#.#")
 	./.validator/deadcode.sh
 	./.validator/duplication.sh
 
