@@ -43,6 +43,7 @@ type AgentInvocation struct {
 	SuspendHook func() error
 	ResumeHook  func() error
 	OnStarted   func()
+	OnExited    func(int)
 	direct      *directInvocation
 	Now         func() time.Time
 }
@@ -143,6 +144,9 @@ func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logge
 		runner, input.Adapter, &processOptions, input.InvocationContext, log,
 		input.SuspendHook, input.ResumeHook, direct,
 	)
+	if launched && input.OnExited != nil {
+		input.OnExited(processResult.ExitCode)
+	}
 	if launched {
 		processOptions.NotifyStarted()
 	}

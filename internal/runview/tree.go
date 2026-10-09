@@ -160,6 +160,11 @@ type StepNode struct {
 	CallSessionResumed bool
 	CallCLILaunched    bool
 	CallWorkdir        string
+	CallTimeout        string
+	CallFollowUpOf     string
+	CallErrorCode      string
+	CallGitState       string
+	CallExit           string
 	CallUsageError     string
 	CallOutputPrefix   string
 	CallOutputLoaded   bool
@@ -499,6 +504,9 @@ func (n *StepNode) IsContainer() bool {
 func (n *StepNode) callLabel() string {
 	if n == nil || n.Type != NodeAgentCall {
 		return ""
+	}
+	if n.CallTargetKind == "follow_up" {
+		return "call follow-up: " + n.CallTargetName
 	}
 	return "call " + n.CallTargetKind + ": " + n.CallTargetName
 }

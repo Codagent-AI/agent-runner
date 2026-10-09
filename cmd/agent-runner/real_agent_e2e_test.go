@@ -12,7 +12,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -20,8 +22,10 @@ import (
 	gopty "github.com/creack/pty"
 	"github.com/google/uuid"
 
+	"github.com/codagent/agent-runner/internal/agentcall"
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
+	"github.com/codagent/agent-runner/internal/runview"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
 
@@ -1012,4 +1016,187 @@ func cleanupNewRealAgentRuns(t *testing.T, workdir, workflowName string) {
 			}
 		}
 	})
+}
+
+// E2E-001 keeps the token out of the worktree until resume; transcript and
+// audit identities distinguish genuine continuity from a fresh-call reply.
+func TestClaudeFollowUpHeadlessRealAgentE2E(t *testing.T) {
+	_, dir, bin := prepareRealAgentE2E(t, "claude")
+	home := t.TempDir()
+	writeRealAgentTestFile(t, filepath.Join(home, ".agent-runner", "settings.yaml"), []byte("autonomous_permission_mode: yolo\nrun_retention:\n  enabled: false\n"))
+	name := "real-claude-followup"
+	runGit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	runGit("init")
+	runGit("config", "user.name", "E2E")
+	runGit("config", "user.email", "e2e@example.com")
+	runGit("commit", "--allow-empty", "-m", "initial")
+	workflow := fmt.Sprintf(`name: %s
+steps:
+  - id: parent
+    agent: claude_headless_smoke
+    session: new
+    tools: [call_agent]
+    prompt: |
+      Use only Runner call_agent for delegation. Call agent claude_headless_smoke with timeout 10m and this exact prompt: "Invent EXACTLY TWO unusual lowercase words joined by exactly ONE underscore (format word_word, with no third word). Keep the secret only in your native conversation history: run a no-output shell command of the form colon-space-hash-space followed by YOUR_TOKEN (: # YOUR_TOKEN), substituting your invented token. This shell comment is a conversation-only memory aid. Do not put the token in any workspace file, commit, or reply. Create notes.txt with exactly 'continuation test' and commit ONLY notes.txt. Reply only ready."
+      Wait for the terminal result (poll get_agent_call if needed). Save that call's entire tool response as first.json. Run find "$HOME/.claude/projects" -name "*.jsonl" | sort and save those paths in before-transcripts.txt.
+      Call follow_up using the first call_id with timeout 10m and this exact prompt: "Write the secret token you invented earlier into token.txt, then reply only saved." Save its entire terminal tool response as second.json. Run the same find command again and save the sorted paths in after-transcripts.txt.
+      Then make a fresh agent claude_headless_smoke call with timeout 10m and prompt: "Write the secret token you invented earlier into control.txt if you remember one; otherwise reply unknown without creating a file." Save its entire terminal response as control.json.
+      Reply done.
+`, name)
+	writeRealAgentCatalogWorkflow(t, dir, name, []byte(workflow))
+	env := realAgentTestEnv(false)
+	env = appendEnvOverride(env, "HOME", home)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "--headless", "--profile", "smoke_test", name)
+	cmd.Dir = dir
+	cmd.Env = env
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("follow-up E2E: %v\n%s", err, output)
+	}
+	read := func(file string) agentcall.Response {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(dir, file))
+		if err != nil {
+			t.Fatalf("read %s: %v\n%s", file, err, output)
+		}
+		var r agentcall.Response
+		if err := json.Unmarshal(data, &r); err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		return r
+	}
+	first, second, control := read("first.json"), read("second.json"), read("control.json")
+	if first.Error != nil || second.Error != nil || first.Details == nil || len(first.Details.Git.Commits) != 1 || second.Details == nil || !second.Details.Session.Resumed {
+		t.Fatalf("invalid details: first=%+v second=%+v", first, second)
+	}
+	token := readRealAgentToken(t, filepath.Join(dir, "token.txt"), output)
+	if !regexp.MustCompile(`^[a-z]{2,32}_[a-z]{2,32}$`).MatchString(token) {
+		t.Fatalf("invalid token %q", token)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, "control.txt")); strings.TrimSpace(string(data)) == token {
+		t.Fatal("fresh-call negative control recovered token")
+	}
+	for _, commit := range first.Details.Git.Commits {
+		if strings.Contains(runGit("show", commit.SHA+":notes.txt"), token) {
+			t.Fatal("token stored before resume")
+		}
+	}
+	// Read persisted Runner evidence and the native transcript in the isolated HOME.
+	calls := map[string]string{}
+	err = filepath.WalkDir(home, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || entry.Name() != "audit.log" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			event, err := runview.ParseLine(line)
+			if err != nil || event.Type != string(audit.EventAgentCallEnd) {
+				continue
+			}
+			id, _ := event.Data["call_id"].(string)
+			session, _ := event.Data["resolved_session_id"].(string)
+			calls[id] = session
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls[first.CallID] == "" || calls[first.CallID] != calls[second.CallID] || calls[first.CallID] == calls[control.CallID] {
+		t.Fatalf("native identity continuity: %v", calls)
+	}
+	var transcript []byte
+	_ = filepath.WalkDir(filepath.Join(home, ".claude", "projects"), func(path string, entry os.DirEntry, err error) error {
+		if err == nil && !entry.IsDir() && entry.Name() == calls[first.CallID]+".jsonl" {
+			transcript, _ = os.ReadFile(path)
+		}
+		return nil
+	})
+	for _, needle := range []string{"Invent EXACTLY TWO", "Write the secret token you invented earlier", "saved"} {
+		if !strings.Contains(string(transcript), needle) {
+			t.Fatalf("native transcript lacks %q", needle)
+		}
+	}
+	before, _ := os.ReadFile(filepath.Join(dir, "before-transcripts.txt"))
+	after, _ := os.ReadFile(filepath.Join(dir, "after-transcripts.txt"))
+	if len(before) == 0 || string(before) != string(after) {
+		t.Fatal("follow-up created a new transcript")
+	}
+}
+
+func TestClaudeTimeoutHeadlessRealAgentE2E(t *testing.T) {
+	_, dir, bin := prepareRealAgentE2E(t, "claude")
+	home := t.TempDir()
+	writeRealAgentTestFile(t, filepath.Join(home, ".agent-runner", "settings.yaml"), []byte("autonomous_permission_mode: yolo\nrun_retention:\n  enabled: false\n"))
+	name := "real-claude-call-timeout"
+	workflow := fmt.Sprintf(`name: %s
+steps:
+  - id: parent
+    agent: claude_headless_smoke
+    session: new
+    tools: [call_agent]
+    prompt: |
+      Call agent claude_headless_smoke with timeout 30s. Ask it to run 'echo $$ > sleeper.pid; exec sleep 600' in its shell before replying. Wait for the terminal tool result, polling get_agent_call if needed. Write error.code to timeout.txt, then reply done.
+`, name)
+	writeRealAgentCatalogWorkflow(t, dir, name, []byte(workflow))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "--headless", "--profile", "smoke_test", name)
+	cmd.Dir = dir
+	cmd.Env = appendEnvOverride(realAgentTestEnv(false), "HOME", home)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("timeout E2E: %v\n%s", err, output)
+	}
+	if got := readRealAgentToken(t, filepath.Join(dir, "timeout.txt"), output); got != agentcall.CodeTimedOut {
+		t.Fatalf("code %q", got)
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "sleeper.pid")); err == nil {
+		pid, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+		if pid > 0 && syscall.Kill(pid, 0) == nil {
+			t.Fatalf("sleep process %d survived", pid)
+		}
+	}
+	found := false
+	_ = filepath.WalkDir(home, func(path string, entry os.DirEntry, err error) error {
+		if err == nil && !entry.IsDir() && entry.Name() == "audit.log" {
+			data, _ := os.ReadFile(path)
+			for _, line := range strings.Split(string(data), "\n") {
+				event, err := runview.ParseLine(line)
+				if err == nil && event.Type == string(audit.EventAgentCallEnd) && event.Data["error_code"] == "timed_out" && event.Data["outcome"] == "failed" {
+					found = true
+				}
+			}
+		}
+		return nil
+	})
+	if !found {
+		t.Fatal("missing timed-out audit evidence")
+	}
+}
+func appendEnvOverride(env []string, key, value string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, key+"=") {
+			out = append(out, entry)
+		}
+	}
+	return append(out, key+"="+value)
 }

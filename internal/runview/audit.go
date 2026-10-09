@@ -1005,6 +1005,21 @@ func applyAgentCallFields(call *StepNode, data map[string]any) {
 	if value, ok := stringField(data, "target_kind"); ok {
 		call.CallTargetKind = value
 	}
+	if value, ok := stringField(data, "timeout"); ok {
+		call.CallTimeout = value
+	}
+	if value, ok := stringField(data, "follow_up_of"); ok {
+		call.CallFollowUpOf = value
+	}
+	if value, ok := stringField(data, "error_code"); ok {
+		call.CallErrorCode = value
+	}
+	if value, ok := stringField(data, "git_state"); ok {
+		call.CallGitState = value
+	}
+	if value, ok := stringField(data, "exit"); ok {
+		call.CallExit = value
+	}
 	if value, ok := stringField(data, "target_name"); ok {
 		call.CallTargetName = value
 	}

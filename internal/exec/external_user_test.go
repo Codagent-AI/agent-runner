@@ -90,8 +90,14 @@ func TestExternalUserLoop(t *testing.T) {
 			}
 			defer runlock.Delete(runDir)
 			ctx := model.NewRootContext(&model.RootContextOptions{SessionDir: runDir, ExternalUser: &model.ExternalUserSettings{Dir: exchange, Timeout: "1s"}})
-			if scenario == "timeout" {
+			responds := scenario != "timeout" && scenario != "process-failure" && scenario != "stale-reply" && scenario != "pending-reply"
+			switch {
+			case scenario == "timeout":
 				ctx.ExternalUser.Timeout = "10ms"
+			case responds:
+				// A responder writes the reply, so the wait ends as soon as it
+				// lands; the wide budget only absorbs loaded-CI scheduling delay.
+				ctx.ExternalUser.Timeout = "30s"
 			}
 			step := &model.Step{ID: "proposal", Session: model.SessionNew, Workdir: t.TempDir()}
 			adapter := &externalTestAdapter{}
@@ -117,7 +123,7 @@ func TestExternalUserLoop(t *testing.T) {
 			if scenario == "stale-reply" {
 				os.WriteFile(filepath.Join(exchange, id.ReplyName()), []byte(`{"schema_version":1,"text":"stale"}`), 0o644)
 			}
-			if scenario != "timeout" && scenario != "process-failure" && scenario != "stale-reply" && scenario != "pending-reply" {
+			if responds {
 				done := make(chan struct{})
 				defer close(done)
 				go func() {

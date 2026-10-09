@@ -77,6 +77,9 @@ type AgentCallHandlerOptions struct {
 	AttemptContext context.Context
 	OnAccepted     func(AgentCallAccepted)
 	OnFinished     func(AgentCallAccepted)
+	AfterFunc      func(time.Duration, func()) *time.Timer
+	afterSettle    func()
+	Git            func(context.Context, string, ...string) (string, error)
 }
 
 type acceptedAgentCall struct {
@@ -86,7 +89,13 @@ type acceptedAgentCall struct {
 	target          agentcall.Target
 	started         time.Time
 	status          string
-	cancel          context.CancelFunc
+	cancel          context.CancelCauseFunc
+	resolved        *resolvedAgentCall
+	nativeSessionID string
+	settlement      *callSettlement
+	deadline        *time.Timer
+	activity        *activityTracker
+	startGit        agentcall.GitDelta
 	done            chan struct{}
 	response        json.RawMessage
 	childSessionID  string
@@ -145,6 +154,12 @@ func NewAgentCallHandler(input *AgentCallHandlerOptions) *AgentCallHandler {
 	if options.Now == nil {
 		options.Now = time.Now
 	}
+	if options.AfterFunc == nil {
+		options.AfterFunc = time.AfterFunc
+	}
+	if options.Git == nil {
+		options.Git = defaultAgentCallGit
+	}
 	if options.Log == nil {
 		options.Log = discardLogger{}
 	}
@@ -193,15 +208,34 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 		})
 	}
 	parent := h.childParentContext(ctx)
-	childCtx, cancel := context.WithCancel(parent)
+	childCtx, cancel := context.WithCancelCause(context.WithoutCancel(parent))
 	record := &acceptedAgentCall{
 		callID: h.options.NewID(), requestID: envelope.RequestID, parentAttemptID: envelope.AttemptID, target: resolved.target,
+		resolved: resolved, activity: newActivityTracker(resolved.adapter, h.options.Now),
 		started: h.options.Now(), status: agentcall.StatusAccepted, cancel: cancel, done: make(chan struct{}),
 	}
 	h.accepted[envelope.RequestID] = record
 	h.byCallID[record.callID] = record
 	h.active = record
 	h.mu.Unlock()
+	if timeout := resolved.request.TimeoutDuration(); timeout > 0 {
+		h.mu.Lock()
+		record.deadline = h.options.AfterFunc(timeout, func() {
+			if h.trySettle(record, settledTimedOut, nil) {
+				cancel(errAgentCallTimedOut)
+			}
+		})
+		h.mu.Unlock()
+	}
+	go func() {
+		select {
+		case <-parent.Done():
+			if h.trySettle(record, settledAborted, nil) {
+				cancel(parent.Err())
+			}
+		case <-record.done:
+		}
+	}()
 	h.emitAgentCallStart(record, resolved)
 
 	if h.options.OnAccepted != nil {
@@ -274,8 +308,8 @@ func (h *AgentCallHandler) HandleCancelAgentCall(ctx context.Context, envelope c
 	cancel := record.cancel
 	done := record.done
 	h.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	if cancel != nil && h.trySettle(record, settledCanceled, nil) {
+		cancel(errAgentCallCanceled)
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -300,10 +334,28 @@ func (h *AgentCallHandler) finishAccepted(ctx context.Context, record *acceptedA
 }
 
 func (h *AgentCallHandler) finalizeExecution(record *acceptedAgentCall, resolved *resolvedAgentCall, execution *agentCallExecution) {
-	h.emitAgentCallEnd(record, resolved, execution)
-	if h.options.OnFinished != nil {
-		h.options.OnFinished(h.lifecycleEvent(record, resolved.target))
+	// Finalization must publish a terminal result even if an execution path
+	// omitted settlement. An existing winner remains authoritative.
+	if execution.invocation.CLILaunched {
+		h.trySettle(record, settledExited, &execution.invocation.ExitCode)
+	} else {
+		h.trySettle(record, settledLaunchFailed, nil)
 	}
+
+	h.mu.Lock()
+	if record.deadline != nil {
+		record.deadline.Stop()
+	}
+	record.nativeSessionID = strings.TrimSpace(execution.invocation.DiscoveredSessionID)
+	if record.nativeSessionID == "" {
+		record.nativeSessionID = record.childSessionID
+	}
+	if record.nativeSessionID == "" && execution.invocation.CLILaunched {
+		record.nativeSessionID = execution.invocation.SessionID
+	}
+	h.mu.Unlock()
+	h.applySettlement(record, resolved, execution)
+	execution.response.Details = h.buildDetails(record, resolved)
 	execution.response.CallID = record.callID
 	target := resolved.target
 	execution.response.Target = &target
@@ -317,20 +369,25 @@ func (h *AgentCallHandler) finalizeExecution(record *acceptedAgentCall, resolved
 		execution.response.Status = agentcall.StatusSucceeded
 	}
 	var raw json.RawMessage
-	if successfulAgentCallResponseDefinitelyTooLarge(execution.response) {
+	tooLarge := successfulAgentCallResponseDefinitelyTooLarge(&execution.response)
+	if !tooLarge {
+		raw = marshalAgentCallResponse(execution.response)
+		tooLarge = execution.response.Result != nil && !control.FitsAgentCallPayload(raw)
+	}
+	if tooLarge {
+		details := execution.response.Details
 		execution.response = oversizedAgentCallFailure(record, resolved.target)
+		execution.response.Details = details
 		raw = marshalAgentCallResponse(execution.response)
-	} else {
-		raw = marshalAgentCallResponse(execution.response)
-		if execution.response.Result != nil && !control.FitsAgentCallPayload(raw) {
-			execution.response = oversizedAgentCallFailure(record, resolved.target)
-			raw = marshalAgentCallResponse(execution.response)
-		}
+	}
+	h.emitAgentCallEnd(record, resolved, execution)
+	if h.options.OnFinished != nil {
+		h.options.OnFinished(h.lifecycleEvent(record, resolved.target))
 	}
 	h.mu.Lock()
 	record.response = raw
 	record.status = execution.response.Status
-	record.childSessionID = strings.TrimSpace(execution.invocation.DiscoveredSessionID)
+	record.childSessionID = record.nativeSessionID
 	if h.active == record {
 		h.active = nil
 	}
@@ -495,7 +552,7 @@ func childStdoutCapture(adapter cli.Adapter, capture io.Writer) func(io.Writer) 
 		if capture == nil {
 			return next
 		}
-		return io.MultiWriter(next, capture)
+		return agentCallTeeWriter{Writer: io.MultiWriter(next, capture), downstream: next}
 	}
 }
 
@@ -584,7 +641,7 @@ func (h *AgentCallHandler) marshalSnapshotLocked(record *acceptedAgentCall) json
 	}
 	target := record.target
 	return marshalAgentCallResponse(agentcall.Response{
-		CallID: record.callID, Status: record.status, Target: &target, Elapsed: elapsed,
+		CallID: record.callID, Status: record.status, Target: &target, Elapsed: elapsed, Activity: record.activity.Describe(h.options.Now()),
 	})
 }
 
@@ -647,6 +704,7 @@ type resolvedAgentCall struct {
 	sessionID   string
 	resume      bool
 	profileName string
+	knownModel  string
 }
 
 func (h *AgentCallHandler) resolve(raw json.RawMessage) (*resolvedAgentCall, *agentcall.Error) {
@@ -664,6 +722,9 @@ func (h *AgentCallHandler) resolve(raw json.RawMessage) (*resolvedAgentCall, *ag
 	}
 	if h.options.Runner == nil {
 		return nil, callFailure(agentcall.CodeControlFailure, "agent-call process runner is unavailable", target)
+	}
+	if target.Kind == agentcall.TargetFollowUp {
+		return h.resolveFollowUp(&request)
 	}
 	cfg, _ := ctx.ProfileStore.(*config.Config)
 	if cfg == nil {
@@ -714,8 +775,13 @@ func (h *AgentCallHandler) resolve(raw json.RawMessage) (*resolvedAgentCall, *ag
 			return nil, callFailure(agentcall.CodeSelfSession, fmt.Sprintf("named session %q is the parent's active CLI session", target.Name), target)
 		}
 	}
+	knownModel := resolvedProfile.Model
+	if sessionID != "" && !appliesResumeModel(adapter) {
+		knownModel = ""
+	}
 	return &resolvedAgentCall{
-		request: request, target: target, profile: &resolvedProfile,
+		knownModel: knownModel,
+		request:    request, target: target, profile: &resolvedProfile,
 		adapter: adapter, cliName: resolvedProfile.CLI, model: resolvedProfile.Model,
 		workdir: workdir, sessionID: sessionID, resume: sessionID != "", profileName: profileName,
 	}, nil
@@ -789,6 +855,16 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if ctx.Err() != nil {
+		return h.preLaunchFailure(record, call, "called agent was canceled before launch")
+	}
+	if call.target.Kind == agentcall.TargetFollowUp {
+		if store, ok := call.adapter.(cli.SessionStore); ok && !store.SessionExists(call.sessionID, call.workdir) {
+			e := h.preLaunchFailure(record, call, "native session is not available in this workdir")
+			e.response.Error.Code = agentcall.CodeNotResumable
+			return e
+		}
+	}
 	sessionID := call.sessionID
 	if !call.resume && sessionID == "" && call.cliName == "claude" {
 		sessionID = uuid.NewString()
@@ -818,6 +894,7 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 	if err != nil {
 		return h.preLaunchFailure(record, call, "prepare called agent environment: "+err.Error())
 	}
+	record.startGit = h.captureStartGit(call.workdir)
 	probeCtx, stopProbe := context.WithCancel(ctx)
 	defer stopProbe()
 	output := &synchronizedBuffer{limit: maxChildSessionProbeBytes}
@@ -828,11 +905,23 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 		InvocationContext: cli.ContextAutonomousHeadless,
 		CLI:               call.cliName, Model: call.model, Effort: call.profile.Effort, SessionID: sessionID, SessionResumed: call.resume,
 		Log: h.options.Log, Now: h.options.Now,
-		StdoutWrapper: childStdoutCapture(call.adapter, output),
+		StdoutWrapper: childStdoutCapture(call.adapter, io.MultiWriter(output, record.activity)),
+		StderrWrapper: record.activity.stderrWrapper(call.adapter),
+		OnExited:      func(code int) { h.trySettle(record, settledExited, &code) },
 		OnStarted: func() {
+			h.mu.Lock()
+			if record.nativeSessionID == "" {
+				record.nativeSessionID = sessionID
+			}
+			h.mu.Unlock()
 			go h.probeChildSessionID(probeCtx, record, call, output)
 		},
 	}, h.options.Runner, h.options.Log)
+	if invocation.CLILaunched {
+		h.trySettle(record, settledExited, &invocation.ExitCode)
+	} else {
+		h.trySettle(record, settledLaunchFailed, nil)
+	}
 	if runErr != nil {
 		if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) || ctx.Err() != nil {
 			invocation.Outcome = OutcomeAborted
@@ -864,6 +953,7 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 }
 
 func (h *AgentCallHandler) preLaunchFailure(record *acceptedAgentCall, call *resolvedAgentCall, message string) agentCallExecution {
+	h.trySettle(record, settledLaunchFailed, nil)
 	finished := h.options.Now()
 	return agentCallExecution{
 		response: acceptedFailure(record, agentcall.CodeExecutionFailed, message, call.target),
@@ -894,7 +984,7 @@ func (h *AgentCallHandler) emitAgentCallStart(record *acceptedAgentCall, call *r
 
 func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *resolvedAgentCall, execution *agentCallExecution) {
 	invocation := execution.invocation
-	finished := invocation.FinishedAt
+	finished := record.settlement.at
 	if finished.IsZero() {
 		finished = h.options.Now()
 	}
@@ -921,6 +1011,13 @@ func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *res
 	// attempt of the same-prefix step are never attributed to the wrong one.
 	data["parent_execution_attempt"] = h.options.Parent.Attempt
 	data["outcome"] = string(invocation.Outcome)
+	if execution.response.Error != nil {
+		data["error_code"] = execution.response.Error.Code
+	}
+	if execution.response.Details != nil {
+		data["exit"] = execution.response.Details.Exit
+		data["git_state"] = execution.response.Details.Git.State
+	}
 	data["duration_ms"] = duration.Milliseconds()
 	data["cli_launched"] = invocation.CLILaunched
 	data["discovered_session_id"] = invocation.DiscoveredSessionID
@@ -953,16 +1050,26 @@ func (h *AgentCallHandler) emitAgentCallEnd(record *acceptedAgentCall, call *res
 }
 
 func agentCallAuditData(record *acceptedAgentCall, call *resolvedAgentCall) map[string]any {
-	return map[string]any{
+	data := map[string]any{
 		"call_id":           record.callID,
 		"request_id":        record.requestID,
 		"parent_attempt_id": record.parentAttemptID,
 		"target_kind":       string(call.target.Kind),
 		"target_name":       call.target.Name,
 	}
+	if call.request.Timeout != nil {
+		data["timeout"] = *call.request.Timeout
+	}
+	if call.target.Kind == agentcall.TargetFollowUp {
+		data["follow_up_of"] = call.target.Name
+	}
+	return data
 }
 
 func agentCallSessionStrategy(call *resolvedAgentCall) string {
+	if call.target.Kind == agentcall.TargetFollowUp {
+		return "resume"
+	}
 	if call.target.Kind == agentcall.TargetSession {
 		return call.target.Name
 	}
@@ -1001,7 +1108,7 @@ func callFailure(code, message string, target agentcall.Target) *agentcall.Error
 	return &agentcall.Error{Code: code, Message: message, Target: &target}
 }
 
-func successfulAgentCallResponseDefinitelyTooLarge(response agentcall.Response) bool {
+func successfulAgentCallResponseDefinitelyTooLarge(response *agentcall.Response) bool {
 	if response.Result == nil {
 		return false
 	}
@@ -1018,6 +1125,7 @@ func oversizedAgentCallFailure(record *acceptedAgentCall, target agentcall.Targe
 	)
 }
 
+//nolint:gocritic // Value ownership keeps inline rejection construction simple at the JSON boundary.
 func marshalAgentCallResponse(response agentcall.Response) json.RawMessage {
 	raw, err := json.Marshal(response)
 	if err != nil {

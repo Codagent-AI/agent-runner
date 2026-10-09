@@ -381,3 +381,16 @@ func TestLatestRunCompletedLeavesCappedRunResumable(t *testing.T) {
 		t.Fatalf("completed=%v error=%v", completed, err)
 	}
 }
+
+func TestSummaryAgentCallOptionalEvidence(t *testing.T) {
+	input := `2026-09-01T00:00:00Z [parent, call:c1] agent_call_end {"call_id":"c1","outcome":"success"}
+2026-09-01T00:00:01Z [parent, call:c2] agent_call_end {"call_id":"c2","target_kind":"follow_up","follow_up_of":"c1","timeout":"1s","error_code":"timed_out","git_state":"captured","exit":"terminated","outcome":"failed"}
+`
+	summary, err := BuildSummary(strings.NewReader(input), 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summary.AgentCalls) != 2 || summary.AgentCalls[0].Timeout != "" || summary.AgentCalls[1].FollowUpOf != "c1" || summary.AgentCalls[1].ErrorCode != "timed_out" || summary.AgentCalls[1].GitState != "captured" || summary.AgentCalls[1].Exit != "terminated" {
+		t.Fatalf("%+v", summary.AgentCalls)
+	}
+}
