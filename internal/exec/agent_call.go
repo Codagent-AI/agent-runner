@@ -370,19 +370,16 @@ func (h *AgentCallHandler) finalizeExecution(record *acceptedAgentCall, resolved
 		execution.response.Status = agentcall.StatusSucceeded
 	}
 	var raw json.RawMessage
-	if successfulAgentCallResponseDefinitelyTooLarge(&execution.response) {
+	tooLarge := successfulAgentCallResponseDefinitelyTooLarge(&execution.response)
+	if !tooLarge {
+		raw = marshalAgentCallResponse(execution.response)
+		tooLarge = execution.response.Result != nil && !control.FitsAgentCallPayload(raw)
+	}
+	if tooLarge {
 		details := execution.response.Details
 		execution.response = oversizedAgentCallFailure(record, resolved.target)
 		execution.response.Details = details
 		raw = marshalAgentCallResponse(execution.response)
-	} else {
-		raw = marshalAgentCallResponse(execution.response)
-		if execution.response.Result != nil && !control.FitsAgentCallPayload(raw) {
-			details := execution.response.Details
-			execution.response = oversizedAgentCallFailure(record, resolved.target)
-			execution.response.Details = details
-			raw = marshalAgentCallResponse(execution.response)
-		}
 	}
 	h.emitAgentCallEnd(record, resolved, execution)
 	if h.options.OnFinished != nil {
