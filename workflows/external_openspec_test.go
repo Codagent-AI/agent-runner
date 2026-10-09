@@ -72,7 +72,7 @@ func TestExternalArchiveRecovery(t *testing.T) {
 	root := t.TempDir()
 	session := t.TempDir()
 	bin := t.TempDir()
-	for _, dir := range []string{"openspec/changes/foo", "openspec/specs"} {
+	for _, dir := range []string{"openspec/changes/foo", "openspec/specs", "openspec/changes/archive/2026-10-09-bar-foo"} {
 		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -110,6 +110,16 @@ rm openspec/specs/deleted
 	out, err := runExternalScript(t, "report-spec-changes.sh", payload, root, env)
 	if err != nil || !strings.Contains(out, "deleted") || !strings.Contains(out, "added") || strings.Contains(out, "same") {
 		t.Fatal(out, err)
+	}
+	// A duplicate active directory must not cause a completed archive to run again.
+	if err := os.Mkdir(filepath.Join(root, "openspec", "changes", "foo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runExternalScript(t, "archive-external.sh", payload, root, env); err == nil || !strings.Contains(out, "both active change and archive exist") {
+		t.Fatal(out, err)
+	}
+	if err := os.Remove(filepath.Join(root, "openspec", "changes", "foo")); err != nil {
+		t.Fatal(err)
 	}
 	payload["session_dir"] = t.TempDir()
 	if out, err := runExternalScript(t, "archive-external.sh", payload, root, env); err == nil || !strings.Contains(out, "2026-10-09-foo") {
@@ -203,7 +213,7 @@ func TestExternalReportGitSubdirectory(t *testing.T) {
 }
 
 func TestSpecLeakGuard(t *testing.T) {
-	for _, location := range []string{"clean", "commit", "file", "title", "body"} {
+	for _, location := range []string{"clean", "prefix", "relative", "commit", "file", "title", "body"} {
 		t.Run(location, func(t *testing.T) {
 			repo := t.TempDir()
 			root := t.TempDir()
@@ -221,6 +231,10 @@ func TestSpecLeakGuard(t *testing.T) {
 			contents := "safe"
 			title, body := "safe", "safe"
 			switch location {
+			case "prefix":
+				contents = root + "-code/file"
+			case "relative":
+				contents = "specs describe behavior"
 			case "commit":
 				message = root
 			case "file":
@@ -252,8 +266,8 @@ if [ "$4" = number ]; then printf '{"number":1}'; else cat "$PR_FIXTURE"; fi
 				t.Fatal(err)
 			}
 			head := string(runGitOutput(t, repo, "rev-parse", "HEAD"))
-			out, err := runExternalScript(t, "check-spec-leak.sh", map[string]string{"spec_root": root}, repo, []string{"PATH=" + bin + ":" + os.Getenv("PATH"), "PR_FIXTURE=" + fixture, "GH_LOG=" + filepath.Join(bin, "gh.log")})
-			if location == "clean" {
+			out, err := runExternalScript(t, "check-spec-leak.sh", map[string]string{"spec_root": root, "spec_root_input": "specs"}, repo, []string{"PATH=" + bin + ":" + os.Getenv("PATH"), "PR_FIXTURE=" + fixture, "GH_LOG=" + filepath.Join(bin, "gh.log")})
+			if location == "clean" || location == "prefix" || location == "relative" {
 				if err != nil {
 					t.Fatal(out, err)
 				}
@@ -417,5 +431,46 @@ func TestExternalPlanningValidation(t *testing.T) {
 	payload["spec_root"] = code
 	if out, err := runExternalScript(t, "../core/validate-planning-artifacts.sh", payload, code, env); err == nil || !strings.Contains(out, "change_dir must be") {
 		t.Fatal(out, err)
+	}
+}
+
+func TestArchiveSnapshotStreaming(t *testing.T) {
+	root := t.TempDir()
+	excluded := filepath.Join(root, "openspec", "changes", "foo")
+	for _, dir := range []string{excluded, filepath.Join(root, ".git"), filepath.Join(root, "node_modules")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data := bytes.Repeat([]byte("large binary\x00"), 200000)
+	for _, path := range []string{filepath.Join(root, "node_modules", "binary"), filepath.Join(excluded, "ignored"), filepath.Join(root, ".git", "ignored")} {
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	helper, err := filepath.Abs("openspec")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("python3", "-B", "-c", `
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from archive_snapshot import snapshot
+original = Path.open
+class BoundedReader:
+    def __init__(self, file): self.file = file
+    def __enter__(self): return self
+    def __exit__(self, *args): self.file.close()
+    def read(self, size=-1):
+        assert 0 < size <= 1024 * 1024, size
+        return self.file.read(size)
+Path.open = lambda path, *args, **kwargs: BoundedReader(original(path, *args, **kwargs))
+canonical, other = snapshot(Path(sys.argv[2]), Path(sys.argv[3]))
+assert canonical == {}, canonical
+assert other == {'node_modules/binary': sys.argv[4]}, other
+`, helper, root, excluded, fmt.Sprintf("%x", sha256.Sum256(data)))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatal(string(out), err)
 	}
 }

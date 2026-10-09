@@ -1,8 +1,7 @@
 #!/bin/sh
 set -eu
 payload=$(cat)
-EXTERNAL_ARCHIVE_PAYLOAD="$payload" python3 - <<'PY'
-import hashlib
+ARCHIVE_SCRIPT_DIR="$(dirname "$0")" EXTERNAL_ARCHIVE_PAYLOAD="$payload" python3 - <<'PY'
 import json
 import os
 import re
@@ -10,6 +9,10 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.environ['ARCHIVE_SCRIPT_DIR'])
+from archive_snapshot import snapshot
 
 try:
     p = json.loads(os.environ['EXTERNAL_ARCHIVE_PAYLOAD'])
@@ -25,7 +28,7 @@ try:
     session = Path(p['session_dir']).resolve(strict=True)
     record_path = session / 'output/archive-transition' / (name + '-external.json')
     active = root / 'openspec/changes' / name
-    archives = list((root / 'openspec/changes/archive').glob('*-' + name))
+    archives = list((root / 'openspec/changes/archive').glob('[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-' + name))
     if record_path.exists():
         record = json.loads(record_path.read_text())
         if (record.get('spec_root'), record.get('change_name'), record.get('run_id'), record.get('archive_absent_at_start')) != (str(root), name, session.name, True):
@@ -35,13 +38,7 @@ try:
             raise ValueError(f'pre-existing archive: {archives[0]}')
         if not active.is_dir():
             raise ValueError(f'missing active change directory: {active}')
-        canonical, other = {}, {}
-        for path in sorted(root.rglob('*')):
-            rel = path.relative_to(root)
-            if '.git' in rel.parts or rel == Path('openspec/changes') / name or active in path.parents or not path.is_file():
-                continue
-            target = canonical if rel.parts[:2] == ('openspec', 'specs') else other
-            target[rel.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+        canonical, other = snapshot(root, active)
         record = dict(spec_root=str(root), change_name=name, run_id=session.name,
                       archive_absent_at_start=True, canonical=canonical, other=other)
         record_path.parent.mkdir(parents=True, exist_ok=True)
@@ -55,6 +52,8 @@ try:
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
+    if archives and active.exists():
+        raise ValueError(f'both active change and archive exist: {active}, {archives}')
     if active.exists():
         subprocess.run(['openspec', 'validate', '--type', 'change', name], cwd=root, check=True)
         subprocess.run(['openspec', 'archive', name, '--yes'], cwd=root, check=True)

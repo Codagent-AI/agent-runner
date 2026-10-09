@@ -27,6 +27,7 @@ steps:
     script_inputs:
       change_name: "{{change_name}}"
       spec_root: "{{spec_root}}"
+      spec_external: "{{spec_external}}"
       operation: guard
     skip_if: 'sh: test -n "{{spec_root}}"'
 

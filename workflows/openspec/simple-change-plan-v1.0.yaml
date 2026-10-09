@@ -14,6 +14,7 @@ engine:
   type: openspec
   change_param: change_name
   root_param: spec_root
+workspace_dirs: ["{{spec_root}}"]
 sessions:
   - name: lead-agent
     agent: lead

@@ -12,9 +12,10 @@ import (
 )
 
 type Input struct {
-	ChangeName string `json:"change_name"`
-	SpecRoot   string `json:"spec_root"`
-	Operation  string `json:"operation"`
+	SpecExternal string `json:"spec_external"`
+	ChangeName   string `json:"change_name"`
+	SpecRoot     string `json:"spec_root"`
+	Operation    string `json:"operation"`
 }
 
 func canonical(wd, path string) (string, error) {
@@ -63,6 +64,9 @@ func Resolve(wd string, input Input, roots map[string]string) (map[string]string
 	}
 	if input.Operation != "create" && input.Operation != "continue" && input.Operation != "guard" {
 		return nil, fmt.Errorf("invalid operation %q", input.Operation)
+	}
+	if input.Operation == "guard" && input.SpecExternal == "true" && input.SpecRoot == "" {
+		return nil, fmt.Errorf("recorded OpenSpec root context is missing for external archive")
 	}
 	wd, err := canonical(wd, wd)
 	if err != nil {
@@ -116,7 +120,7 @@ func validateChange(resolved, change string, input Input) error {
 		if _, e := os.Stat(change); !os.IsNotExist(e) {
 			return fmt.Errorf("change %q in %s already exists at %s", input.ChangeName, resolved, change)
 		}
-		matches, e := filepath.Glob(filepath.Join(resolved, "openspec", "changes", "archive", "*-"+input.ChangeName))
+		matches, e := filepath.Glob(filepath.Join(resolved, "openspec", "changes", "archive", "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-"+input.ChangeName))
 		if e != nil {
 			return e
 		}

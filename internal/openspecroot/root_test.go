@@ -1,6 +1,7 @@
 package openspecroot
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -107,6 +108,34 @@ func TestResolveGitWorktreeAndPathExpansion(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := Resolve(repo, Input{ChangeName: "foo", Operation: "create", SpecRoot: root}, nil); err == nil || !strings.Contains(err.Error(), archive) {
+		t.Fatal(err)
+	}
+}
+
+func TestResolveArchiveNameBoundary(t *testing.T) {
+	root := t.TempDir()
+	archive := filepath.Join(root, "openspec", "changes", "archive")
+	if err := os.MkdirAll(filepath.Join(archive, "2026-10-09-bar-foo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	input := Input{ChangeName: "foo", Operation: "create", SpecRoot: root}
+	if _, err := Resolve(t.TempDir(), input, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(archive, "2026-10-09-foo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Resolve(t.TempDir(), input, nil); err == nil {
+		t.Fatal("accepted exact archive collision")
+	}
+}
+
+func TestGuardIncompleteExternalContext(t *testing.T) {
+	var input Input
+	if err := json.Unmarshal([]byte(`{"change_name":"foo","operation":"guard","spec_external":"true"}`), &input); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Resolve(t.TempDir(), input, nil); err == nil || !strings.Contains(err.Error(), "recorded OpenSpec root context is missing") {
 		t.Fatal(err)
 	}
 }
