@@ -1,54 +1,39 @@
 #!/bin/sh
+# Archive an OpenSpec change in an external spec root. Never commits there.
 set -eu
+
 payload=$(cat)
-ARCHIVE_SCRIPT_DIR="$(dirname "$0")" EXTERNAL_ARCHIVE_PAYLOAD="$payload" python3 - <<'PY'
-import json
-import os
-import re
-import subprocess
-import sys
-from pathlib import Path
+script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
+change_name=$(printf '%s' "$payload" | "$script_dir/validate-change-name.sh")
+spec_root=$(PAYLOAD="$payload" python3 -c 'import json,os; print(json.loads(os.environ["PAYLOAD"]).get("spec_root", ""))')
 
-sys.dont_write_bytecode = True
-sys.path.insert(0, os.environ['ARCHIVE_SCRIPT_DIR'])
-from archive_snapshot import snapshot, write_record
+case "$spec_root" in
+  /*) ;;
+  *)
+    printf 'archive-external: spec_root must be absolute: %s\n' "$spec_root" >&2
+    exit 1
+    ;;
+esac
+if [ ! -d "$spec_root/openspec" ]; then
+  printf 'archive-external: not an OpenSpec project: %s\n' "$spec_root" >&2
+  exit 1
+fi
+cd "$spec_root"
 
-try:
-    p = json.loads(os.environ['EXTERNAL_ARCHIVE_PAYLOAD'])
-    name = p['change_name']
-    if not isinstance(name, str) or not re.fullmatch(r'[a-z0-9][a-z0-9-]*', name):
-        raise ValueError('invalid change_name')
-    raw_root = Path(p['spec_root'])
-    if not raw_root.is_absolute():
-        raise ValueError('spec_root must be absolute')
-    root = raw_root.resolve(strict=True)
-    if not (root / 'openspec').is_dir():
-        raise ValueError(f'not an OpenSpec project: {root}')
-    session = Path(p['session_dir']).resolve(strict=True)
-    record_path = session / 'output/archive-transition' / (name + '-external.json')
-    active = root / 'openspec/changes' / name
-    archives = list((root / 'openspec/changes/archive').glob('[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-' + name))
-    if record_path.exists():
-        record = json.loads(record_path.read_text())
-        if (record.get('spec_root'), record.get('change_name'), record.get('run_id'), record.get('archive_absent_at_start')) != (str(root), name, session.name, True):
-            raise ValueError(f'mismatched archive transition record: {record_path}')
-    else:
-        if archives:
-            raise ValueError(f'pre-existing archive: {archives[0]}')
-        if not active.is_dir():
-            raise ValueError(f'missing active change directory: {active}')
-        canonical, other = snapshot(root, active)
-        record = dict(spec_root=str(root), change_name=name, run_id=session.name,
-                      archive_absent_at_start=True, canonical=canonical, other=other)
-        record_path.parent.mkdir(parents=True, exist_ok=True)
-        write_record(record_path, record, prefix=name + '-')
-    if archives and active.exists():
-        raise ValueError(f'both active change and archive exist: {active}, {archives}')
-    if active.exists():
-        subprocess.run(['openspec', 'validate', '--type', 'change', name], cwd=root, check=True)
-        subprocess.run(['openspec', 'archive', name, '--yes'], cwd=root, check=True)
-    print(f'External archive transition recorded at {record_path}')
-except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as e:
-    print(f'archive-external: {e}', file=sys.stderr)
-    sys.exit(1)
-PY
+archive=""
+for dir in openspec/changes/archive/????-??-??-"$change_name"; do
+  if [ -d "$dir" ]; then archive=$dir; fi
+done
+active="openspec/changes/$change_name"
+
+if [ -n "$archive" ]; then
+  if [ -e "$active" ]; then
+    printf 'archive-external: both %s and %s exist in %s\n' "$active" "$archive" "$spec_root" >&2
+    exit 1
+  fi
+  printf 'Change %s is already archived at %s\n' "$change_name" "$archive"
+  exit 0
+fi
+
+openspec validate --type change "$change_name"
+openspec archive "$change_name" --yes

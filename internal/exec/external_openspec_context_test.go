@@ -20,7 +20,7 @@ func TestExternalContextInValidatorAndArchiveRepairs(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("working rules"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := openspecroot.Resolve(code, openspecroot.Input{ChangeName: "foo", SpecRoot: root, Operation: "guard"}, nil)
+	resolved, err := openspecroot.Resolve(code, openspecroot.Input{ChangeName: "foo", SpecRoot: root, Operation: "create"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestExternalContextInValidatorAndArchiveRepairs(t *testing.T) {
 			ctx.LastSessionStepID = "parent"
 			step := &model.Step{ID: name, Workflow: "builtin:core/run-validator-v1.0.yaml", Params: map[string]string{"context_instruction": resolved["context_instruction"]}}
 			if name == "archive" {
-				step.Workflow = "builtin:openspec/archive-change-v1.1.yaml"
+				step.Workflow = "builtin:openspec/archive-change-v1.0.yaml"
 				step.Params["spec_root"] = root
 				step.Params["spec_external"] = "true"
 				step.Params["change_name"] = "foo"

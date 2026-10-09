@@ -103,8 +103,8 @@ func TestResolveSelectsLatestVersionWhileExactReadsRemainAvailable(t *testing.T)
 	if err != nil {
 		t.Fatalf("Resolve(openspec:change): %v", err)
 	}
-	if ref != "builtin:openspec/change-v2.1.yaml" {
-		t.Fatalf("resolved ref = %q, want latest v2.1", ref)
+	if ref != "builtin:openspec/change-v2.0.yaml" {
+		t.Fatalf("resolved ref = %q, want latest v2.0", ref)
 	}
 
 	if _, err := ReadFile("builtin:openspec/change-v1.0.yaml"); err != nil {
@@ -257,7 +257,7 @@ func TestV2NamespaceAdaptersConfigureSharedCorePhases(t *testing.T) {
 		{
 			ref:            "builtin:openspec/plan-change-v2.0.yaml",
 			wantWorkflow:   "../core/plan-change-v1.0.yaml",
-			wantChangeDir:  "openspec/changes/{{change_name}}",
+			wantChangeDir:  "{{openspec.change_dir}}",
 			wantChangeKind: "openspec",
 		},
 		{
@@ -269,7 +269,7 @@ func TestV2NamespaceAdaptersConfigureSharedCorePhases(t *testing.T) {
 		{
 			ref:           "builtin:openspec/implement-change-v2.0.yaml",
 			wantWorkflow:  "../core/implement-change-v1.0.yaml",
-			wantChangeDir: "openspec/changes/{{change_name}}",
+			wantChangeDir: "{{openspec.change_dir}}",
 		},
 		{
 			ref:           "builtin:spec-driven/implement-change-v2.0.yaml",
@@ -292,10 +292,16 @@ func TestV2NamespaceAdaptersConfigureSharedCorePhases(t *testing.T) {
 			if err := yaml.Unmarshal(body, &workflow); err != nil {
 				t.Fatalf("unmarshal %s: %v", tt.ref, err)
 			}
-			if len(workflow.Steps) != 1 {
-				t.Fatalf("%s has %d steps, want one shared-core adapter step", tt.ref, len(workflow.Steps))
+			var adapters []int
+			for i := range workflow.Steps {
+				if workflow.Steps[i].Workflow != "" {
+					adapters = append(adapters, i)
+				}
 			}
-			step := workflow.Steps[0]
+			if len(adapters) != 1 {
+				t.Fatalf("%s has %d sub-workflow steps, want one shared-core adapter step", tt.ref, len(adapters))
+			}
+			step := workflow.Steps[adapters[0]]
 			if step.Workflow != tt.wantWorkflow {
 				t.Fatalf("%s workflow = %q, want %q", tt.ref, step.Workflow, tt.wantWorkflow)
 			}
@@ -854,8 +860,8 @@ func TestV2SimpleChangeWorkflowsShareCorePhases(t *testing.T) {
 	}{
 		{
 			ref:                    "builtin:openspec/simple-change-v2.0.yaml",
-			wantChangeDir:          "openspec/changes/{{change_name}}",
-			wantValidationText:     "openspec validate",
+			wantChangeDir:          "{{openspec.change_dir}}",
+			wantValidationText:     "{{openspec.simple_validate_instruction}}",
 			wantOpenSpecValidation: true,
 			wantArchive:            true,
 		},

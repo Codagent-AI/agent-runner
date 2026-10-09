@@ -1,7 +1,6 @@
 package openspecroot
 
 import (
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,11 +29,8 @@ func TestResolve(t *testing.T) {
 	if _, err := Resolve(wd, Input{ChangeName: "foo", Operation: "create", SpecRoot: root}, nil); err == nil {
 		t.Fatal("expected collision")
 	}
-	if _, err := Resolve(wd, Input{ChangeName: "foo", Operation: "guard"}, map[string]string{wd: root}); err == nil || !strings.Contains(err.Error(), "recorded OpenSpec root context is missing") {
-		t.Fatal(err)
-	}
-	if _, err := Resolve(wd, Input{ChangeName: "foo", Operation: "guard"}, map[string]string{wd: filepath.Join(root, "missing")}); err == nil || !strings.Contains(err.Error(), "recorded OpenSpec root context is missing") {
-		t.Fatal(err)
+	if _, err := Resolve(wd, Input{ChangeName: "foo", Operation: "guard"}, map[string]string{wd: root}); err == nil {
+		t.Fatal("accepted unknown operation")
 	}
 	result, err = Resolve(wd, Input{ChangeName: "foo", Operation: "create"}, nil)
 	if err != nil || result["change_dir"] != "openspec/changes/foo" || result["context_instruction"] != "" {
@@ -127,16 +123,6 @@ func TestResolveArchiveNameBoundary(t *testing.T) {
 	}
 	if _, err := Resolve(t.TempDir(), input, nil); err == nil {
 		t.Fatal("accepted exact archive collision")
-	}
-}
-
-func TestGuardIncompleteExternalContext(t *testing.T) {
-	var input Input
-	if err := json.Unmarshal([]byte(`{"change_name":"foo","operation":"guard","spec_external":"true"}`), &input); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Resolve(t.TempDir(), input, nil); err == nil || !strings.Contains(err.Error(), "recorded OpenSpec root context is missing") {
-		t.Fatal(err)
 	}
 }
 

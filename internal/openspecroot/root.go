@@ -12,10 +12,9 @@ import (
 )
 
 type Input struct {
-	SpecExternal string `json:"spec_external"`
-	ChangeName   string `json:"change_name"`
-	SpecRoot     string `json:"spec_root"`
-	Operation    string `json:"operation"`
+	ChangeName string `json:"change_name"`
+	SpecRoot   string `json:"spec_root"`
+	Operation  string `json:"operation"`
 }
 
 func canonical(wd, path string) (string, error) {
@@ -62,11 +61,8 @@ func Resolve(wd string, input Input, roots map[string]string) (map[string]string
 	if !regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`).MatchString(input.ChangeName) {
 		return nil, fmt.Errorf("invalid change_name %q", input.ChangeName)
 	}
-	if input.Operation != "create" && input.Operation != "continue" && input.Operation != "guard" {
+	if input.Operation != "create" && input.Operation != "continue" {
 		return nil, fmt.Errorf("invalid operation %q", input.Operation)
-	}
-	if input.Operation == "guard" && input.SpecExternal == "true" && input.SpecRoot == "" {
-		return nil, fmt.Errorf("recorded OpenSpec root context is missing for external archive")
 	}
 	wd, err := canonical(wd, wd)
 	if err != nil {
@@ -75,17 +71,10 @@ func Resolve(wd string, input Input, roots map[string]string) (map[string]string
 	root, source := selectRoot(wd, input.SpecRoot, roots)
 	resolved, err := canonical(wd, root)
 	if err != nil {
-		if input.Operation == "guard" && source == "setting" {
-			return nil, fmt.Errorf("recorded OpenSpec root context is missing (setting: %s): %w", root, err)
-		}
 		return nil, fmt.Errorf("OpenSpec root %q from %s does not exist or cannot be resolved: %w", root, source, err)
 	}
 	external := resolved != wd
 	if external {
-		if input.Operation == "guard" && input.SpecRoot == "" {
-			return nil, fmt.Errorf("recorded OpenSpec root context is missing (setting: %s)", resolved)
-		}
-
 		for _, p := range []string{resolved, filepath.Join(resolved, "openspec")} {
 			info, e := os.Stat(p)
 			if e != nil || !info.IsDir() {
@@ -94,7 +83,7 @@ func Resolve(wd string, input Input, roots map[string]string) (map[string]string
 		}
 	}
 	change := filepath.Join("openspec", "changes", input.ChangeName)
-	result := map[string]string{"code_root": wd, "spec_root": resolved, "external": "false", "source": source, "spec_root_input": root, "change_dir": change, "change_dir_absolute": filepath.Join(resolved, change), "commit_plan": "true", "context_instruction": "", "location_instruction": fmt.Sprintf("Keep every OpenSpec definition and planning artifact under the repository-local `%s/` directory.", change), "validate_instruction": fmt.Sprintf("When an approved artifact changed, run `openspec validate --type change %q`.", input.ChangeName)}
+	result := map[string]string{"code_root": wd, "spec_root": resolved, "external": "false", "source": source, "change_dir": change, "change_dir_absolute": filepath.Join(resolved, change), "commit_plan": "true", "context_instruction": "", "location_instruction": fmt.Sprintf("Keep every OpenSpec definition and planning artifact under the repository-local `%s/` directory.", change), "validate_instruction": fmt.Sprintf("When an approved artifact changed, run `openspec validate --type change %q`.", input.ChangeName)}
 	result["accept_validate_instruction"] = fmt.Sprintf("If a specification changed, run `openspec validate --type change %q`.", input.ChangeName)
 	result["simple_validate_instruction"] = fmt.Sprintf("Validate OpenSpec change %q with `openspec validate --type change %q`.", input.ChangeName, input.ChangeName)
 	result["validation_failure_instruction"] = fmt.Sprintf("`openspec validate --type change %q` failed for OpenSpec change %q.", input.ChangeName, input.ChangeName)

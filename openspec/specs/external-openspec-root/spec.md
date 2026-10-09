@@ -35,7 +35,7 @@ The user-level mapping SHALL be the `openspec_roots` key of `~/.agent-runner/set
 
 ### Requirement: Spec root resolved once and recorded in run state
 
-The spec root SHALL be resolved exactly once per run, by the outermost built-in `openspec:*` entry workflow the user started. The resolved context SHALL be recorded in run state. It SHALL include at least the code root, the spec root, whether the spec root is external, and the absolute change directory. Nested `openspec:*` workflows invoked from a parent SHALL use the context passed down by the parent and SHALL NOT consult the user setting. On resume, every step SHALL use the recorded context. Changes to the user setting after a run starts SHALL NOT affect that run. If a step needs the spec root and the recorded context is missing or invalid while an external spec root is configured for the repository, the step SHALL fail with a message naming the missing context. It SHALL NOT fall back to the working directory.
+The spec root SHALL be resolved exactly once per run, by the outermost built-in `openspec:*` entry workflow the user started. The resolved context SHALL be recorded in run state. It SHALL include at least the code root, the spec root, whether the spec root is external, and the absolute change directory. Nested `openspec:*` workflows invoked from a parent SHALL use the context passed down by the parent and SHALL NOT consult the user setting. On resume, every step SHALL use the recorded context. Changes to the user setting after a run starts SHALL NOT affect that run. The nested `archive-change` workflow does not resolve the root itself: when a caller invokes it with only `change_name`, it keeps its repository-local behavior.
 
 #### Scenario: Nested archive reuses the parent's root
 - **WHEN** `openspec:change` resolved an external spec root and later invokes its nested archive workflow
@@ -45,9 +45,9 @@ The spec root SHALL be resolved exactly once per run, by the outermost built-in 
 - **WHEN** a run of `openspec:change` recorded spec root `/work/specs-a`, the user changes the setting to `/work/specs-b`, and then resumes the run
 - **THEN** the resumed run and all later steps use `/work/specs-a`
 
-#### Scenario: Missing recorded context with external root configured
-- **WHEN** an inner OpenSpec workflow step needs the spec root, the recorded context is absent, and the user setting maps the repository to an external spec root
-- **THEN** the step fails with an error stating that the recorded OpenSpec root context is missing, and no OpenSpec command runs in the code repository
+#### Scenario: Archive invoked directly with only a change name
+- **WHEN** a caller invokes `archive-change-v1.0` with only `change_name`
+- **THEN** it archives repository-locally and verifies the archive commit, whatever the user setting says
 
 ### Requirement: Spec root preflight validation
 
@@ -76,7 +76,7 @@ When the spec root is external, each entry workflow SHALL check the named change
 
 - Workflows that create a change (`openspec:change`, `openspec:simple-change`) SHALL fail if the spec root already has an active change directory or a dated archive directory for that change name.
 - Workflows that continue an existing change (`openspec:plan-change`, `openspec:implement-change`) SHALL fail if the spec root has no active change directory for that name.
-- Archive SHALL require the active change directory. The exception is a retry or resume of the same run after that run already completed the archive transition, in which case it SHALL accept that run's completed transition.
+- Archive SHALL require the active change directory, unless a dated archive directory for the change exists and the active directory does not, in which case it SHALL report that the change is already archived and succeed. If both exist, archive SHALL fail.
 
 Each failure message SHALL name the change, the spec root, and the conflicting or missing path.
 
@@ -96,9 +96,9 @@ Each failure message SHALL name the change, the spec root, and the conflicting o
 - **WHEN** `openspec:plan-change change_name=foo` starts and `<spec_root>/openspec/changes/foo/` does not exist
 - **THEN** the run fails with a message naming `foo` and the expected path
 
-#### Scenario: Archive retried after its transition completed
-- **WHEN** an archive step's earlier attempt in the same run already moved `foo` into `<spec_root>/openspec/changes/archive/` and the run is resumed
-- **THEN** archive accepts the completed transition and continues instead of reporting a missing change
+#### Scenario: Archive retried after the move completed
+- **WHEN** an earlier archive attempt already moved `foo` into `<spec_root>/openspec/changes/archive/` and the run is resumed
+- **THEN** archive reports that `foo` is already archived and continues instead of reporting a missing change
 
 ### Requirement: Prompts state both roots
 
@@ -126,7 +126,7 @@ When the spec root is external, the definition, acceptance, and archive prompts 
 
 ### Requirement: No leakage into the code repository
 
-When the spec root is external, Agent Runner SHALL NOT create an `openspec/` directory in the code repository. It SHALL NOT stage or commit spec-root files in the code repository. Content that Agent Runner itself writes into the code repository or publishes from it, such as PR bodies and the commit messages it generates, SHALL NOT contain the external spec root path or any path under it. Prompts for code-repository commit, repair, validator-fix, and PR steps SHALL instruct the agent not to include the external spec root path in commits, PR text, or checked-in files. After the steps that push or publish, the entry workflow SHALL check the branch's commit messages and diff against the default branch, and the pull request's title and body when a pull request exists. If any of them contains the external spec root path, the step SHALL fail and name each location. History SHALL NOT be rewritten.
+When the spec root is external, Agent Runner SHALL NOT create an `openspec/` directory in the code repository. It SHALL NOT stage or commit spec-root files in the code repository. Content that Agent Runner itself writes into the code repository or publishes from it, such as PR bodies and the commit messages it generates, SHALL NOT contain the external spec root path or any path under it. Prompts for code-repository commit, repair, validator-fix, and PR steps, including PR finalization, SHALL instruct the agent not to include the external spec root path in commits, PR text, or checked-in files. This rule is enforced by prompt instruction only; Agent Runner does not scan commits or PR text for the path.
 
 #### Scenario: No stray openspec directory
 - **WHEN** `openspec:change` runs to completion with an external spec root in a code repository that has no `openspec/` directory
@@ -136,13 +136,13 @@ When the spec root is external, Agent Runner SHALL NOT create an `openspec/` dir
 - **WHEN** PR finalization creates or updates the pull request for a run with external spec root `/work/private/specs`
 - **THEN** the PR body written by Agent Runner does not contain `/work/private/specs`
 
-#### Scenario: Leak detected in the pull request body
-- **WHEN** a run with external spec root `/work/private/specs` reaches the leak check, and the pull request body contains `/work/private/specs/openspec/changes/foo`
-- **THEN** the leak check fails and names `PR body` as the location
+#### Scenario: Finalize prompt carries the no-path rule
+- **WHEN** the PR finalization step runs with external spec root `/work/private/specs`
+- **THEN** its prompt instructs the agent never to write the spec-root path into commit messages, the PR title or body, or code-repository files
 
 ### Requirement: Spec repository changes reported, never committed
 
-When the spec root is external, Agent Runner SHALL NOT run `git add`, `git commit`, or `git push` in the spec root's repository. When the run completes, including runs that stop after archive or PR finalization, Agent Runner SHALL report which files under the spec root the run changed so the user can commit them. The report SHALL show paths relative to the spec root and SHALL NOT be written into any file committed in the code repository. If the spec root is inside a Git working tree, the report SHALL list the spec-root files with uncommitted changes. Otherwise it SHALL state that the spec root is not under version control and list the change's active or archive directory and the canonical spec files the archive updated.
+When the spec root is external, Agent Runner SHALL NOT run `git add`, `git commit`, or `git push` in the spec root's repository. When the run completes, including runs that stop after archive or PR finalization, Agent Runner SHALL report which files under the spec root the run changed so the user can commit them. The report SHALL show paths relative to the spec root and SHALL NOT be written into any file committed in the code repository. If the spec root is inside a Git working tree, the report SHALL list the spec-root files with uncommitted changes. Otherwise it SHALL state that the spec root is not under version control and list the change's active directory or dated archive directory, whichever exists.
 
 The report SHALL appear as the output of the workflow's final step.
 
@@ -152,5 +152,5 @@ The report SHALL appear as the output of the workflow's final step.
 
 #### Scenario: Spec root not under version control
 - **WHEN** a run completes with an external spec root that is not inside a Git working tree
-- **THEN** the run output states that the spec root is not version-controlled and lists the archive directory and the updated canonical spec files
+- **THEN** the run output states that the spec root is not version-controlled and lists the change's archive directory
 

@@ -1,4 +1,4 @@
-# External archive through the real executor; direct guard refuses lost context.
+# External archive through the real executor; never commits in either repository.
 env PATH=$WORK/bin:$PATH
 env LOG=$WORK/openspec.log
 chmod 755 bin/openspec
@@ -26,9 +26,7 @@ cmp $WORK/code-head $WORK/code-after
 cmp $WORK/spec-head $WORK/spec-after
 mkdir $WORK/specs/openspec/changes/foo
 ! exec agent-runner run archive spec_root=$WORK/specs
-stdout 'pre-existing archive'
-! exec agent-runner run guard
-stdout 'recorded OpenSpec root context is missing'
+stdout 'both openspec/changes/foo and'
 exec cat $WORK/openspec.log
 stdout 'specs archive foo --yes'
 
@@ -55,7 +53,7 @@ params:
     required: true
 steps:
   - id: archive
-    workflow: builtin:openspec/archive-change-v1.1.yaml
+    workflow: builtin:openspec/archive-change-v1.0.yaml
     params:
       change_name: foo
       spec_root: "{{spec_root}}"
@@ -66,13 +64,6 @@ steps:
       spec_root: "{{spec_root}}"
       change_name: foo
       session_dir: "{{session_dir}}"
--- code/.agent-runner/workflows/guard-v1.0.yaml --
-name: guard
-steps:
-  - id: archive
-    workflow: builtin:openspec/archive-change-v1.1.yaml
-    params:
-      change_name: foo
 -- bin/claude --
 #!/bin/sh
 printf 'REPAIR_BLOCKED\n'
