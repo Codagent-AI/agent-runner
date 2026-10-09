@@ -197,3 +197,40 @@ User settings live in `~/.agent-runner/settings.yaml`:
 | `autonomous_permission_mode` | `conservative` or `yolo` |
 
 Setup, onboarding, and splash lifecycle fields are managed by Agent Runner.
+
+### Autonomous permission mode
+
+`autonomous_permission_mode` defaults to `conservative`. With `yolo`, Agent Runner
+pre-approves shell, file, and network actions; use it only inside an external sandbox
+such as Docker. Claude's permission mode depends on the resolved autonomous backend:
+
+| Setting | Autonomous-headless (incl. capture steps) | Autonomous-interactive |
+| --- | --- | --- |
+| `conservative` | `acceptEdits` | `acceptEdits` |
+| `yolo` | `bypassPermissions` | `auto` |
+
+This mapping applies to fresh and resumed sessions. Steps that capture output always
+use headless invocation, even when an interactive backend is selected. Ordinary
+interactive steps remain supervised and receive no `--permission-mode` flag.
+
+Claude's `auto` mode requires a supported Claude Code version, model, provider, and
+plan, and must not be disabled by `disableAutoMode` or server-side policy. When auto
+mode is unavailable, Claude can start in Manual mode and the step may wait on
+permission prompts. Older CLIs that do not recognize `auto` can fail at launch.
+Agent Runner does not probe availability or substitute another mode.
+
+Auto mode uses classifier-reviewed approval and can fall back to permission prompts
+after repeated classifier blocks. Autonomy is best-effort: Claude may occasionally
+prompt for permission, while agent clarifying questions (`AskUserQuestion`) remain
+blocked. Fresh sessions receive the autonomy instructions; resumed sessions retain
+the existing resume prompt and completion instruction without re-injecting the
+preamble.
+
+For cross-session messaging, `auto` and other non-bypass modes share the prompting
+permission class with ordinary interactive Claude sessions. Messages within that
+class are delivered by default, subject to inbound policy and Claude's normal
+checks. Headless yolo steps, including capture steps, remain in the bypass class;
+messages crossing the two classes are held for approval by default. For coordination
+across that boundary, set `crossSessionInbound: accept` on the receiving session
+(for a `-p` worker, through its `--settings`). Agent Runner does not change Claude's
+messaging settings.

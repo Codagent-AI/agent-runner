@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/codagent/agent-runner/internal/usersettings"
 )
 
 func TestRegistry(t *testing.T) {
@@ -159,15 +161,57 @@ func TestClaudeAdapter(t *testing.T) {
 		}
 	})
 
-	t.Run("yolo autonomous-interactive uses bypass permission mode", func(t *testing.T) {
+	t.Run("yolo autonomous-interactive uses auto permission mode", func(t *testing.T) {
 		args := adapter.BuildArgs(&BuildArgsInput{
 			Prompt:         "do something",
 			Context:        ContextAutonomousInteractive,
 			PermissionMode: "yolo",
 		})
-		if !hasFlagValue(args, "--permission-mode", "bypassPermissions") {
-			t.Fatalf("expected --permission-mode bypassPermissions in autonomous-interactive yolo args, got %v", args)
+		if !hasFlagValue(args, "--permission-mode", "auto") {
+			t.Fatalf("expected --permission-mode auto in autonomous-interactive yolo args, got %v", args)
 		}
+		if containsString(args, "bypassPermissions") {
+			t.Fatalf("unexpected bypassPermissions in args: %v", args)
+		}
+	})
+
+	t.Run("permission mode matrix", func(t *testing.T) {
+		for _, tc := range []struct {
+			context InvocationContext
+			want    []string
+		}{
+			{ContextInteractive, []string{"", "", ""}},
+			{ContextAutonomousHeadless, []string{"acceptEdits", "acceptEdits", "bypassPermissions"}},
+			{ContextAutonomousInteractive, []string{"acceptEdits", "acceptEdits", "auto"}},
+			{ContextExternalUser, []string{"acceptEdits", "acceptEdits", "bypassPermissions"}},
+		} {
+			for i, mode := range []usersettings.AutonomousPermissionMode{"", usersettings.PermissionModeConservative, usersettings.PermissionModeYOLO} {
+				t.Run(string(tc.context)+"/"+string(mode), func(t *testing.T) {
+					args, err := adapter.BuildArgsWithError(&BuildArgsInput{Context: tc.context, PermissionMode: mode})
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := []string{"claude"}
+					if tc.want[i] != "" {
+						want = append(want, "--permission-mode", tc.want[i])
+					}
+					if tc.context.IsHeadless() {
+						want = append(want, "-p", "--output-format", "stream-json", "--verbose")
+					}
+					assertArgs(t, want, args)
+				})
+			}
+		}
+	})
+
+	t.Run("yolo autonomous-interactive resume uses auto", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{Context: ContextAutonomousInteractive, PermissionMode: "yolo", Resume: true, SessionID: "id", Prompt: "continue"})
+		assertArgs(t, []string{"claude", "--resume", "id", "--permission-mode", "auto", "--", "continue"}, args)
+	})
+
+	t.Run("yolo auto keeps clarification questions blocked", func(t *testing.T) {
+		args := adapter.BuildArgs(&BuildArgsInput{Context: ContextAutonomousInteractive, PermissionMode: "yolo", DisallowedTools: []string{"AskUserQuestion"}})
+		assertArgs(t, []string{"claude", "--permission-mode", "auto", "--disallowedTools", "AskUserQuestion"}, args)
 	})
 
 	t.Run("resume headless uses --resume", func(t *testing.T) {

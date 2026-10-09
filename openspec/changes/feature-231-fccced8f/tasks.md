@@ -1,4 +1,4 @@
-- [ ] Implement the change described by these files using TDD, as `CLAUDE.md` requires. Satisfy every spec scenario and every `INT-*` obligation in the test plan (there are no `E2E-*` obligations). HT-001 is human-only and is not part of this task.
+- [x] Implement the change described by these files using TDD, as `CLAUDE.md` requires. Satisfy every spec scenario and every `INT-*` obligation in the test plan (there are no `E2E-*` obligations). HT-001 is human-only and is not part of this task.
 
   **Adapter**
   - In `internal/cli/claude.go`, add the pure helper `claudePermissionMode(context InvocationContext, mode usersettings.AutonomousPermissionMode) string` and use it from `BuildArgsWithError` in place of the inline selection. The helper returns:

@@ -146,7 +146,7 @@ func TestEditorCursorRowYoloShowsRiskCopy(t *testing.T) {
 		m = next.(*Model)
 	}
 	view := m.View()
-	for _, want := range []string{"per-command approval", "external sandbox"} {
+	for _, want := range []string{"Pre-approve shell, file, and network actions", "interactive backend", "auto mode", "classifier-reviewed", "may occasionally prompt", "external sandbox"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("View() should show YOLO risk copy %q when cursor on Permission Mode row with value YOLO:\n%s", want, view)
 		}
@@ -165,7 +165,7 @@ func TestEditorAgentSettingsCopyAppearsBelowSelectedOptionDescription(t *testing
 	}
 
 	view := m.View()
-	descIdx := strings.Index(view, "per-command approval")
+	descIdx := strings.Index(view, "Pre-approve shell, file, and network actions")
 	agentSettingsIdx := strings.Index(view, "Looking for agent settings")
 	if descIdx == -1 || agentSettingsIdx == -1 {
 		t.Fatalf("View() missing expected copy:\n%s", view)
@@ -185,7 +185,7 @@ func TestEditorCursorRowYoloRiskCopyDisappearsWhenCursorMovesAway(t *testing.T) 
 		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
 		m = next.(*Model)
 	}
-	if !strings.Contains(m.View(), "per-command approval") {
+	if !strings.Contains(m.View(), "Pre-approve shell, file, and network actions") {
 		t.Fatalf("precondition: risk copy should be visible at Permission Mode row")
 	}
 	// Move back to Theme row.
@@ -193,7 +193,7 @@ func TestEditorCursorRowYoloRiskCopyDisappearsWhenCursorMovesAway(t *testing.T) 
 	m = next.(*Model)
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
 	m = next.(*Model)
-	if strings.Contains(m.View(), "per-command approval") {
+	if strings.Contains(m.View(), "Pre-approve shell, file, and network actions") {
 		t.Fatalf("risk copy should be hidden when cursor is not on Permission Mode row:\n%s", m.View())
 	}
 }
