@@ -1,4 +1,4 @@
-- [ ] Implement the per-step `autonomous_backend` field described by these files using TDD, as `CLAUDE.md` requires. Satisfy every spec scenario and every `INT-*` / `E2E-*` obligation in the test plan.
+- [x] Implement the per-step `autonomous_backend` field described by these files using TDD, as `CLAUDE.md` requires. Satisfy every spec scenario and every `INT-*` / `E2E-*` obligation in the test plan.
 
   **Model (`internal/model/step.go`)**
   - Add `AutonomousBackend string` with tags `yaml:"autonomous_backend,omitempty" json:"autonomous_backend,omitempty"` to `Step`.

@@ -18,7 +18,7 @@ agent-runner --resume <run-id> --until define
 
 Interactive steps run as successive headless turns on one session. The first turn receives the usual step instructions and completion command. Later replies are sent verbatim, including text beginning with a dash. AskUserQuestion is disabled; the agent asks in plain text. These steps omit the autonomy preamble and use the user's autonomous permission setting. The caller's sandbox provides the isolation boundary. Declared `call_agent` tools are pre-authorized on every turn.
 
-Only Claude and Codex interactive leads are supported. Autonomous steps run headlessly regardless of the configured backend. Interactive shell and UI steps fail immediately.
+Only Claude and Codex interactive leads are supported. Autonomous steps that inherit the user backend setting run headlessly. A step-level `headless` backend also runs headlessly. Steps requiring the interactive backend (`autonomous_backend: interactive`, or `interactive-claude` with Claude) fail before launch in this mode. `interactive-claude` with another CLI runs headlessly. Interactive shell and UI steps fail immediately.
 
 ## Exchange contract
 

@@ -73,9 +73,21 @@ Agent Runner does not draw a continuation overlay or intercept a global keyboard
 
 ## Autonomous Agent Steps
 
-Autonomous steps run without user interaction. Depending on `~/.agent-runner/settings.yaml`, autonomous steps may run in headless mode or in an interactive backend with autonomy instructions.
+Autonomous steps run without user interaction, either headlessly or through an interactive backend with autonomy instructions. An agent step can set `autonomous_backend` to override the user setting for that step:
 
-Capturing an autonomous agent step forces headless execution so `stdout` can be captured reliably.
+```yaml
+- id: implement
+  agent: developer
+  prompt: Implement the task.
+  mode: autonomous
+  autonomous_backend: interactive
+```
+
+The values are `headless`, `interactive`, and `interactive-claude`. The last value uses the interactive backend for Claude and headless for other CLIs. Resolution uses the step field first, then `~/.agent-runner/settings.yaml`, then the default `headless`.
+
+A step-level interactive request is required: if stdin has no TTY or the run uses external-user mode, the step fails before launching the agent. Steps that inherit an interactive user setting still fall back to headless, with a warning when there is no TTY. Existing failure handling such as `continue_on_failure` applies.
+
+The field is allowed only on agent steps that resolve to autonomous mode, including when the mode comes from a profile. It cannot be combined with explicit `mode: interactive`. `capture` cannot be combined with step-level `interactive` or `interactive-claude`; use `headless` for captured output. Capture still forces headless execution when the backend is inherited from user settings.
 
 ## Interactive Shell Steps
 

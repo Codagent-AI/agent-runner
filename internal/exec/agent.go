@@ -191,7 +191,11 @@ func ExecuteAgentStep(
 		return OutcomeFailed, nil
 	}
 
-	invocationContext := resolveInvocationContext(mode, ctx, cliName, step.Capture != "", log)
+	invocationContext, contextErr := resolveInvocationContext(step, mode, ctx, cliName, log)
+	if contextErr != nil {
+		emitAgentFailure(ctx, prefix, startTime, string(mode), step, contextErr.Error(), log)
+		return OutcomeFailed, nil
+	}
 
 	if modeErr := validateAgentInvocationContext(adapter, invocationContext, cliName, step.ID); modeErr != nil {
 		emitAgentFailure(ctx, prefix, startTime, string(mode), step, modeErr.Error(), log)
@@ -492,43 +496,48 @@ func interactiveModeError(adapter cli.Adapter, invocationContext cli.InvocationC
 	return rejector.InteractiveModeError()
 }
 
-func resolveInvocationContext(mode model.StepMode, ctx *model.ExecutionContext, cliName string, hasCapture bool, log Logger) cli.InvocationContext {
-	if ctx.ExternalUser != nil {
-		if mode == model.ModeAutonomous {
-			return cli.ContextAutonomousHeadless
-		}
-		return cli.ContextExternalUser
-	}
+func resolveInvocationContext(step *model.Step, mode model.StepMode, ctx *model.ExecutionContext, cliName string, log Logger) (cli.InvocationContext, error) {
 	if mode != model.ModeAutonomous {
-		return cli.ContextInteractive
+		if step.AutonomousBackend != "" {
+			return cli.ContextAutonomousHeadless, fmt.Errorf(`"autonomous_backend" requires autonomous mode (step resolved to %s)`, mode)
+		}
+		if ctx.ExternalUser != nil {
+			return cli.ContextExternalUser, nil
+		}
+		return cli.ContextInteractive, nil
 	}
-
-	// Captured agent output must come from a clean stdout pipe, so capture
-	// currently forces headless execution even when the user selected an
-	// interactive autonomous backend such as "interactive-claude".
-	// TODO: Support capture for autonomous-interactive steps without relying on
-	// stdout parsing, so built-in review workflows can honor interactive Claude.
-	if hasCapture {
-		return cli.ContextAutonomousHeadless
+	backend := step.AutonomousBackend
+	stepRequired := backend != ""
+	if !stepRequired {
+		backend = ctx.AutonomousBackend
 	}
-
-	var wantsInteractive bool
-	switch usersettings.AutonomousBackend(ctx.AutonomousBackend) {
-	case usersettings.BackendInteractive:
-		wantsInteractive = true
-	case usersettings.BackendInteractiveClaude:
-		wantsInteractive = cliName == "claude"
-	}
+	wantsInteractive := backend == string(usersettings.BackendInteractive) || backend == string(usersettings.BackendInteractiveClaude) && cliName == "claude"
 	if !wantsInteractive {
-		return cli.ContextAutonomousHeadless
+		return cli.ContextAutonomousHeadless, nil
+	}
+	if stepRequired {
+		switch {
+		case ctx.ExternalUser != nil:
+			return cli.ContextAutonomousHeadless, fmt.Errorf("autonomous_backend %q requires the autonomous-interactive backend, which is not supported in external-user mode", backend)
+		case step.Capture != "":
+			return cli.ContextAutonomousHeadless, fmt.Errorf("autonomous_backend %q requires the autonomous-interactive backend, which cannot be combined with capture", backend)
+		case !isStdinTerminal():
+			return cli.ContextAutonomousHeadless, fmt.Errorf("autonomous_backend %q requires the autonomous-interactive backend, which needs a TTY (stdin is not a terminal)", backend)
+		}
+		return cli.ContextAutonomousInteractive, nil
+	}
+	// Inherited preferences retain the existing headless fallbacks. Capture
+	// requires a clean stdout pipe, which direct terminal invocation cannot supply.
+	if ctx.ExternalUser != nil || step.Capture != "" {
+		return cli.ContextAutonomousHeadless, nil
 	}
 	if isStdinTerminal() {
-		return cli.ContextAutonomousInteractive
+		return cli.ContextAutonomousInteractive, nil
 	}
 	if log != nil {
 		log.Errorf("  autonomous backend requested interactive mode for %s, but stdin is not a TTY; falling back to headless\n", cliName)
 	}
-	return cli.ContextAutonomousHeadless
+	return cli.ContextAutonomousHeadless, nil
 }
 
 // ResolveAgentInvocationContext returns the effective adapter invocation context
@@ -543,7 +552,11 @@ func ResolveAgentInvocationContext(step *model.Step, ctx *model.ExecutionContext
 	}
 	mode := resolveModeFromProfile(step, profile)
 	cliName := resolveCLIName(step, profile)
-	return resolveInvocationContext(mode, ctx, cliName, step.Capture != "", nil)
+	invocationContext, err := resolveInvocationContext(step, mode, ctx, cliName, nil)
+	if err != nil {
+		return cli.ContextAutonomousHeadless
+	}
+	return invocationContext
 }
 
 func resolveCLIName(step *model.Step, profile *config.ResolvedAgent) string {

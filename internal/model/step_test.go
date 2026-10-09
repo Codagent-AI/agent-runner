@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -898,4 +899,86 @@ func TestCLIValidation(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
+}
+
+func TestStepAutonomousBackendValidation(t *testing.T) {
+	for _, backend := range []string{"headless", "interactive", "interactive-claude", "tty"} {
+		for _, kind := range []string{"agent", "shell", "script", "ui", "workflow", "group", "loop"} {
+			for _, mode := range []StepMode{ModeAutonomous, ModeInteractive, ""} {
+				for _, capture := range []string{"", "out"} {
+					t.Run(fmt.Sprintf("%s/%s/%s/%s", backend, kind, mode, capture), func(t *testing.T) {
+						s := Step{ID: "test", Mode: mode, AutonomousBackend: backend, Capture: capture}
+						switch kind {
+						case "agent":
+							s.Agent = "worker"
+							s.Prompt = "work"
+						case "shell":
+							s.Command = "true"
+						case "script":
+							s.Script = "true"
+						case "ui":
+							s.Mode = ModeUI
+						case "workflow":
+							s.Workflow = "child"
+						case "group":
+							s.Steps = []Step{{ID: "child", Command: "true"}}
+						case "loop":
+							s.Loop = &Loop{}
+						}
+						want := ""
+						switch {
+						case kind != "agent":
+							want = `"autonomous_backend" is only allowed on agent steps`
+						case backend == "tty":
+							want = "valid values: headless, interactive, interactive-claude"
+						case mode == ModeInteractive:
+							want = `"autonomous_backend" requires autonomous mode`
+						case capture != "" && backend != "headless":
+							want = `"capture" cannot be combined with an interactive "autonomous_backend"`
+						}
+						err := s.validateAutonomousBackendField(s.isAgentContext(), kind == "script", kind == "ui")
+						if want == "" {
+							if err != nil {
+								t.Fatal(err)
+							}
+						} else if err == nil || !strings.Contains(err.Error(), want) {
+							t.Fatalf("error = %v, want %s", err, want)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestAutonomousBackendYAMLValidation(t *testing.T) {
+	for _, tc := range []struct{ fields, want string }{
+		{"prompt: work\nmode: autonomous\nautonomous_backend: headless\ncapture: out", ""},
+		{"agent: worker\nprompt: work\nautonomous_backend: interactive", ""},
+		{"prompt: work\nmode: autonomous\nautonomous_backend: tty", "valid values"},
+		{"command: true\nautonomous_backend: headless", "only allowed on agent steps"},
+		{"script: echo hi\nautonomous_backend: headless", "only allowed on agent steps"},
+		{"mode: ui\ntitle: hi\nautonomous_backend: headless", "only allowed on agent steps"},
+		{"workflow: child\nautonomous_backend: headless", "only allowed on agent steps"},
+		{"steps: [{id: child, command: echo hi}]\nautonomous_backend: headless", "only allowed on agent steps"},
+		{"loop: {max: 1}\nsteps: [{id: child, command: echo hi}]\nautonomous_backend: headless", "only allowed on agent steps"},
+		{"prompt: work\nmode: interactive\nautonomous_backend: headless", "requires autonomous mode"},
+		{"prompt: work\nmode: autonomous\ncapture: out\nautonomous_backend: interactive", "cannot be combined"},
+		{"prompt: work\nmode: autonomous\ncapture: out\nautonomous_backend: interactive-claude", "cannot be combined"},
+	} {
+		t.Run(tc.fields, func(t *testing.T) {
+			var step Step
+			if err := yaml.Unmarshal([]byte("id: test\n"+tc.fields), &step); err != nil {
+				t.Fatal(err)
+			}
+			err := step.Validate(nil)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%v want %s", err, tc.want)
+			}
+		})
+	}
 }
