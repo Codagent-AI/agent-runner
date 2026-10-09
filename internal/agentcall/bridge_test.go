@@ -255,6 +255,56 @@ func TestBridgeReportsRateLimitedProgressAndPropagatesCancellation(t *testing.T)
 	}
 }
 
+func TestBridgeReturnsCompletionWithoutWaitingForActivitySnapshot(t *testing.T) {
+	activityStarted := make(chan struct{})
+	activityCanceled := make(chan struct{})
+	var activityOnce, canceledOnce sync.Once
+	server := NewServer(BridgeOptions{
+		ProgressInterval: 10 * time.Millisecond,
+		Send: func(ctx context.Context, kind string, _ string, _ json.RawMessage) (Response, error) {
+			if kind == control.MessageAgentCallActivity {
+				activityOnce.Do(func() { close(activityStarted) })
+				<-ctx.Done()
+				canceledOnce.Do(func() { close(activityCanceled) })
+				return Response{}, ctx.Err()
+			}
+			<-activityStarted
+			return Response{CallID: "call-1", Status: StatusSucceeded, Result: &Result{Target: Target{Kind: TargetAgent, Name: "implementor"}, Response: "done"}}, nil
+		},
+	})
+	clientSession, closeSessions := connectBridgeTest(t, server, nil)
+	defer closeSessions()
+	params := &mcp.CallToolParams{Name: ToolName, Arguments: map[string]any{"prompt": "do it", "agent": "implementor"}}
+	params.SetProgressToken("progress-token")
+	type callOutcome struct {
+		result *mcp.CallToolResult
+		err    error
+	}
+	done := make(chan callOutcome, 1)
+	go func() {
+		result, err := clientSession.CallTool(context.Background(), params)
+		done <- callOutcome{result: result, err: err}
+	}()
+	select {
+	case <-activityStarted:
+	case <-time.After(time.Second):
+		t.Fatal("bridge never requested an activity snapshot")
+	}
+	select {
+	case outcome := <-done:
+		if outcome.err != nil || outcome.result.IsError {
+			t.Fatalf("CallTool result = %#v err=%v", outcome.result, outcome.err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("completed call waited for the in-flight activity snapshot")
+	}
+	select {
+	case <-activityCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("in-flight activity snapshot was not canceled after completion")
+	}
+}
+
 func connectBridgeTest(t *testing.T, server *mcp.Server, options *mcp.ClientOptions) (clientSession *mcp.ClientSession, closeSessions func()) {
 	t.Helper()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()

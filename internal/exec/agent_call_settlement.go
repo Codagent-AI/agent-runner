@@ -140,7 +140,7 @@ func (h *AgentCallHandler) resolveFollowUp(request *agentcall.Request) (*resolve
 		c.knownModel = c.model
 	}
 	if request.Workdir != nil {
-		dir, err := resolveAgentCallWorkdir(h.options.Parent.Worktree, h.options.Parent.Workdir, *request.Workdir)
+		dir, err := resolveAgentCallWorkdir(h.options.Parent.Worktree, h.options.Parent.Workdir, strings.TrimSpace(*request.Workdir))
 		if err != nil {
 			return fail(agentcall.CodeInvalidWorkdir, err.Error())
 		}

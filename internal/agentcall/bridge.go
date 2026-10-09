@@ -123,6 +123,14 @@ func invokeBridge(
 		defer ticker.Stop()
 		ticks = ticker.C
 	}
+	// Activity snapshots are fetched off the select loop so a terminal result
+	// on done never waits for an in-flight snapshot. At most one fetch runs at
+	// a time, its result channel is buffered so it can always finish, and any
+	// fetch still running when this call returns is canceled.
+	activityCtx, cancelActivities := context.WithCancel(ctx)
+	defer cancelActivities()
+	activityMessages := make(chan string, 1)
+	activityInFlight := false
 	progressCount := float64(0)
 	for {
 		select {
@@ -135,17 +143,27 @@ func invokeBridge(
 			}
 			return mcpResponseResult(&outcome.response), nil
 		case <-ticks:
-			message := "called agent is still running"
+			if activityInFlight {
+				continue
+			}
+			activityInFlight = true
 			activityPayload := payload
 			if messageType == control.MessageAgentCall {
 				activityPayload, _ = json.Marshal(map[string]string{"start_request_id": requestID})
 			}
-			activityCtx, cancelActivity := context.WithTimeout(ctx, 2*time.Second)
-			snapshot, err := options.Send(activityCtx, control.MessageAgentCallActivity, options.NewRequestID(), activityPayload)
-			cancelActivity()
-			if err == nil && snapshot.Error == nil && snapshot.Activity != "" {
-				message = snapshot.Activity
-			}
+			activityRequestID := options.NewRequestID()
+			go func() {
+				fetchCtx, cancelFetch := context.WithTimeout(activityCtx, 2*time.Second)
+				defer cancelFetch()
+				message := "called agent is still running"
+				snapshot, err := options.Send(fetchCtx, control.MessageAgentCallActivity, activityRequestID, activityPayload)
+				if err == nil && snapshot.Error == nil && snapshot.Activity != "" {
+					message = snapshot.Activity
+				}
+				activityMessages <- message
+			}()
+		case message := <-activityMessages:
+			activityInFlight = false
 			progressCount++
 			_ = request.Session.NotifyProgress(ctx, &mcp.ProgressNotificationParams{
 				ProgressToken: progressToken,

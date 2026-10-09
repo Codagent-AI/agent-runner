@@ -3,6 +3,8 @@ package exec
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -82,6 +84,30 @@ func TestFollowUpSourceRejections(t *testing.T) {
 				t.Fatalf("got %+v want %s", err, tc.code)
 			}
 		})
+	}
+}
+
+func TestFollowUpTrimsExplicitWorkdir(t *testing.T) {
+	worktree := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(worktree, "child"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	h := NewAgentCallHandler(testAgentCallOptions(worktree, &callTestRunner{}, &callTestAdapter{}))
+	source, failure := h.resolve([]byte(`{"agent":"implementor","prompt":"x"}`))
+	if failure != nil {
+		t.Fatal(failure)
+	}
+	h.byCallID["source"] = &acceptedAgentCall{callID: "source", target: agentcall.Target{Kind: agentcall.TargetAgent}, status: agentcall.StatusSucceeded, nativeSessionID: "native", resolved: source, started: time.Now()}
+	trimmed, failure := h.resolve([]byte(`{"follow_up":"source","prompt":"fix","workdir":"child"}`))
+	if failure != nil {
+		t.Fatal(failure)
+	}
+	padded, failure := h.resolve([]byte(`{"follow_up":"source","prompt":"fix","workdir":"  child\t"}`))
+	if failure != nil {
+		t.Fatalf("padded workdir: %+v", failure)
+	}
+	if padded.workdir != trimmed.workdir {
+		t.Fatalf("padded workdir = %q, want %q", padded.workdir, trimmed.workdir)
 	}
 }
 
