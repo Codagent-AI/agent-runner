@@ -5,19 +5,20 @@ entry_points:
       - .claude
       - .validator
       - openspec
+      - worktrees
     checks:
       - build:
-          command: ./.validator/go-offline.sh sh -c "go build ./... && go build -tags dev_audit ./..."
+          command: ./.validator/go-offline.sh sh -c './.validator/go-build.sh && ./.validator/go-build.sh -tags dev_audit'
       - lint:
-          command: ./.validator/go-offline.sh golangci-lint run ./...
+          command: ./.validator/go-offline.sh sh -c 'golangci-lint run $(./.validator/go-packages.sh -tags dev_audit | sed "s#^github.com/codagent/agent-runner#.#")'
       - lint-strict:
-          command: ./.validator/go-offline.sh golangci-lint run -c .golangci-strict.yml --new-from-merge-base=origin/main ./...
+          command: ./.validator/go-offline.sh sh -c 'golangci-lint run -c .golangci-strict.yml --new-from-merge-base=origin/main $(./.validator/go-packages.sh -tags dev_audit | sed "s#^github.com/codagent/agent-runner#.#")'
       - deadcode:
           command: ./.validator/go-offline.sh ./.validator/deadcode.sh
       - duplication:
           command: ./.validator/duplication.sh
       - test:
-          command: ./.validator/go-offline.sh go test -tags dev_audit ./...
+          command: ./.validator/go-offline.sh ./.validator/go-test.sh
       - security-code:
           command: ./.validator/go-offline.sh gosec -tags=dev_audit -exclude-dir=.claude -exclude-dir=.validator -exclude-dir=worktrees ./...
     reviews:

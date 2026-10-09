@@ -13,8 +13,13 @@ plain_output="$(mktemp)"
 tagged_output="$(mktemp)"
 trap 'rm -f "$plain_output" "$tagged_output"' EXIT
 
-deadcode -test ./... > "$plain_output"
-deadcode -test -tags dev_audit ./... > "$tagged_output"
+plain_packages="$("$script_dir/go-packages.sh")"
+tagged_packages="$("$script_dir/go-packages.sh" -tags dev_audit)"
+# Package import paths contain no whitespace; split the lists into arguments.
+# shellcheck disable=SC2086
+deadcode -test $plain_packages > "$plain_output"
+# shellcheck disable=SC2086
+deadcode -test -tags dev_audit $tagged_packages > "$tagged_output"
 
 findings="$(comm -12 <(sort -u "$plain_output") <(sort -u "$tagged_output"))"
 if [ -n "$findings" ]; then
