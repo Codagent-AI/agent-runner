@@ -168,8 +168,6 @@ steps:
 
       Do not run Agent Validator (`agent-validator run`, `review`, or `check`) here, directly or through any skill. This gets called explicitly in a later workflow step.
 
-      Implement this yourself. Do not use the codagent:orchestrate-change skill here.
-
   - id: summary
     mode: ui
     title: Guided Workflow Complete
