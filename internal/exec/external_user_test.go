@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -178,6 +179,66 @@ func TestExternalUserLoop(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// gatedAckLogger holds the control server's completion_acknowledged audit
+// emit, which sits between the client acknowledgement and the completion's
+// delivery, until Release is called.
+type gatedAckLogger struct {
+	release chan struct{}
+	once    sync.Once
+}
+
+func (l *gatedAckLogger) Emit(event audit.Event) {
+	if event.Type == audit.EventCompletionAcknowledged {
+		<-l.release
+	}
+}
+
+// Release unblocks any held emit; it is safe to call more than once.
+func (l *gatedAckLogger) Release() { l.once.Do(func() { close(l.release) }) }
+
+// exitBeforeDeliveryRunner completes the step and exits while the server is
+// still between acknowledging the client and delivering the completion.
+type exitBeforeDeliveryRunner struct {
+	externalTestRunner
+	release func()
+}
+
+func (r *exitBeforeDeliveryRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, error) {
+	result, err := r.externalTestRunner.RunAgent(options)
+	time.AfterFunc(50*time.Millisecond, r.release)
+	return result, err
+}
+
+func TestExternalUserCompletionSurvivesExitBeforeDelivery(t *testing.T) {
+	exchange := t.TempDir()
+	runDir := t.TempDir()
+	if pid, err := runlock.Acquire(runDir); err != nil || pid != 0 {
+		t.Fatalf("lock pid=%d error=%v", pid, err)
+	}
+	defer runlock.Delete(runDir)
+	logger := &gatedAckLogger{release: make(chan struct{})}
+	ctx := model.NewRootContext(&model.RootContextOptions{SessionDir: runDir, AuditLogger: logger, ExternalUser: &model.ExternalUserSettings{Dir: exchange, Timeout: "1s"}})
+	step := &model.Step{ID: "proposal", Session: model.SessionNew, Workdir: t.TempDir()}
+	runner := &exitBeforeDeliveryRunner{externalTestRunner: externalTestRunner{completeAt: 1}, release: logger.Release}
+	outcome, err := executeExternalUser(step, ctx, runner, &mockLogger{}, &externalTestAdapter{}, &config.ResolvedAgent{}, []string{"codex", "--", "initial"}, nil, "codex", "session", false, "[proposal]", time.Now(), nil, nil)
+	if server, ok := ctx.Control.(*control.ControlServer); ok {
+		// Close waits for connection goroutines, so release a held emit first.
+		defer func() {
+			logger.Release()
+			_ = server.Close()
+		}()
+	}
+	if err != nil || outcome != OutcomeSuccess {
+		t.Fatalf("completed step read as a natural exit: outcome=%s err=%v", outcome, err)
+	}
+	if runner.turns != 1 {
+		t.Fatalf("turns = %d, want 1", runner.turns)
+	}
+	if paths, _ := filepath.Glob(filepath.Join(exchange, "*.request.json")); len(paths) != 0 {
+		t.Fatalf("completed step published a request: %v", paths)
 	}
 }
 

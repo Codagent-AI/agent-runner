@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -175,6 +176,59 @@ func TestDirectRunnerCompletesThroughControlChannelAndRestores(t *testing.T) {
 	}
 	if before != 1 || after != 1 {
 		t.Fatalf("lease calls = before %d after %d, want 1 each", before, after)
+	}
+}
+
+// gatedAckLogger holds the control server's completion_acknowledged audit
+// emit, which sits between the client acknowledgement and the completion's
+// delivery, until Release is called.
+type gatedAckLogger struct {
+	release chan struct{}
+	once    sync.Once
+}
+
+func (l *gatedAckLogger) Emit(event audit.Event) {
+	if event.Type == audit.EventCompletionAcknowledged {
+		<-l.release
+	}
+}
+
+// Release unblocks any held emit; it is safe to call more than once.
+func (l *gatedAckLogger) Release() { l.once.Do(func() { close(l.release) }) }
+
+func TestDirectRunnerCompletesWhenChildExitsBeforeCompletionDelivery(t *testing.T) {
+	logger := &gatedAckLogger{release: make(chan struct{})}
+	server := newTestControlServer(t, t.TempDir(), logger)
+	t.Setenv("AGENT_RUNNER_DIRECT_HELPER", "3")
+	// The helper exits as soon as its client is acknowledged; hold delivery
+	// until well after that exit so the runner observes it first.
+	releaseTimer := time.AfterFunc(time.Second, logger.Release)
+	// Close waits for connection goroutines, so release a held emit first
+	// rather than leaving teardown blocked on the timer after a failure.
+	t.Cleanup(func() {
+		releaseTimer.Stop()
+		logger.Release()
+		_ = server.Close()
+	})
+
+	runner := NewDirectRunner(&DirectOptions{
+		Args:              []string{os.Args[0], "-test.run=^TestDirectRunnerHelperProcess$"},
+		StepID:            "implement",
+		SessionID:         "session-1",
+		CLI:               "cursor",
+		Control:           server,
+		Probe:             &receiptCapturingProbe{receipts: make(chan string, 1)},
+		Foreground:        false,
+		TerminationGrace:  250 * time.Millisecond,
+		DurabilityTimeout: 2 * time.Second,
+	})
+
+	result, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Started || !result.Completed || result.DurabilityFailed {
+		t.Fatalf("Run result = %#v, want the accepted completion to win over the natural exit", result)
 	}
 }
 
@@ -533,11 +587,14 @@ func TestWatchdogCommandRunsInOwnProcessGroup(t *testing.T) {
 
 func TestDirectRunnerHelperProcess(t *testing.T) {
 	helperMode := os.Getenv("AGENT_RUNNER_DIRECT_HELPER")
-	if helperMode != "1" && helperMode != "2" {
+	if helperMode != "1" && helperMode != "2" && helperMode != "3" {
 		return
 	}
 	if _, err := control.SendControlEventFromEnvironment(context.Background(), control.MessageCompleteStep, os.Getenv); err != nil {
 		os.Exit(10)
+	}
+	if helperMode == "3" {
+		os.Exit(0)
 	}
 	if helperMode == "1" {
 		if _, err := control.SendControlEventFromEnvironment(context.Background(), control.MessageTurnCommitted, os.Getenv); err != nil {

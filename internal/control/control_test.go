@@ -130,6 +130,87 @@ func TestControlServerCompletionEligibleAttemptAcceptsCompletion(t *testing.T) {
 	}
 }
 
+// blockingAckLogger holds the completion_acknowledged audit emit until
+// released, widening any window between the client acknowledgement and the
+// completion's delivery to the consumer.
+type blockingAckLogger struct {
+	recordingEventLogger
+	release chan struct{}
+	once    sync.Once
+}
+
+// Release unblocks any held emit; it is safe to call more than once.
+func (l *blockingAckLogger) Release() { l.once.Do(func() { close(l.release) }) }
+
+func (l *blockingAckLogger) Emit(event audit.Event) {
+	if event.Type == audit.EventCompletionAcknowledged {
+		<-l.release
+	}
+	l.recordingEventLogger.Emit(event)
+}
+
+func TestControlServerAwaitAcceptedCompletionWaitsForAcknowledgedDelivery(t *testing.T) {
+	// The client is acknowledged before its completion is delivered, so the
+	// CLI can exit inside that window. A consumer that observes the exit must
+	// still receive the accepted completion instead of reading a natural exit.
+	logger := &blockingAckLogger{release: make(chan struct{})}
+	server := newTestControlServer(t, t.TempDir(), logger)
+	// Close waits for connection goroutines, so release a held emit first
+	// rather than deadlocking teardown when the test fails before releasing.
+	t.Cleanup(func() {
+		logger.Release()
+		_ = server.Close()
+	})
+	attempt := server.ActivateAttempt(context.Background(), "external", AttemptOptions{CompletionEligible: true})
+	if response := exchange(t, server.SocketPath(), &controlRequest{Type: MessageCompleteStep, RunID: attempt.RunID, StepID: attempt.StepID, Token: attempt.Token, RequestID: "complete"}); !response.OK {
+		t.Fatalf("completion response = %#v", response)
+	}
+	select {
+	case completion := <-server.Completions():
+		t.Fatalf("precondition: completion delivered before the blocked acknowledgement audit: %#v", completion)
+	default:
+	}
+	type awaited struct {
+		completion CompletionRequest
+		ok         bool
+	}
+	result := make(chan awaited, 1)
+	go func() {
+		completion, ok := server.AwaitAcceptedCompletion(context.Background(), attempt.ID)
+		result <- awaited{completion, ok}
+	}()
+	logger.Release()
+	select {
+	case got := <-result:
+		if !got.ok || got.completion.AttemptID != attempt.ID || got.completion.RequestID != "complete" {
+			t.Fatalf("AwaitAcceptedCompletion = %#v, %v", got.completion, got.ok)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AwaitAcceptedCompletion did not return the accepted completion")
+	}
+}
+
+func TestControlServerAwaitAcceptedCompletionReportsNaturalExit(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+	attempt := server.ActivateAttempt(context.Background(), "external", AttemptOptions{CompletionEligible: true})
+	for _, attemptID := range []string{attempt.ID, "other-attempt"} {
+		done := make(chan bool, 1)
+		go func() {
+			_, ok := server.AwaitAcceptedCompletion(context.Background(), attemptID)
+			done <- ok
+		}()
+		select {
+		case ok := <-done:
+			if ok {
+				t.Fatalf("AwaitAcceptedCompletion(%q) reported a completion that was never accepted", attemptID)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("AwaitAcceptedCompletion(%q) blocked without an accepted completion", attemptID)
+		}
+	}
+}
+
 func TestControlServerActivationDrainsPreviousCompletion(t *testing.T) {
 	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
 	defer server.Close()
