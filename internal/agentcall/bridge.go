@@ -76,7 +76,7 @@ func NewServer(options BridgeOptions) *mcp.Server {
 		if err != nil {
 			return mcpErrorResult(&Error{Code: CodeControlFailure, Message: err.Error()}), nil
 		}
-		return invokeBridge(ctx, request, options, control.MessageAgentCallGet, payload, false)
+		return invokeBridge(ctx, request, options, control.MessageAgentCallGet, payload, true)
 	})
 	server.AddTool(CancelTool(), func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		input, validation := DecodeCallIDRequest(request.Params.Arguments)
@@ -133,13 +133,24 @@ func invokeBridge(
 				}
 				return mcpErrorResult(&Error{Code: CodeControlFailure, Message: outcome.err.Error()}), nil
 			}
-			return mcpResponseResult(outcome.response), nil
+			return mcpResponseResult(&outcome.response), nil
 		case <-ticks:
+			message := "called agent is still running"
+			activityPayload := payload
+			if messageType == control.MessageAgentCall {
+				activityPayload, _ = json.Marshal(map[string]string{"start_request_id": requestID})
+			}
+			activityCtx, cancelActivity := context.WithTimeout(ctx, 2*time.Second)
+			snapshot, err := options.Send(activityCtx, control.MessageAgentCallActivity, options.NewRequestID(), activityPayload)
+			cancelActivity()
+			if err == nil && snapshot.Error == nil && snapshot.Activity != "" {
+				message = snapshot.Activity
+			}
 			progressCount++
 			_ = request.Session.NotifyProgress(ctx, &mcp.ProgressNotificationParams{
 				ProgressToken: progressToken,
 				Progress:      progressCount,
-				Message:       "called agent is still running",
+				Message:       message,
 			})
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -162,7 +173,7 @@ func sendWithRetry(ctx context.Context, send BridgeSender, messageType, requestI
 	return Response{}, lastErr
 }
 
-func mcpResponseResult(response Response) *mcp.CallToolResult {
+func mcpResponseResult(response *Response) *mcp.CallToolResult {
 	if response.Error != nil && response.CallID == "" {
 		return mcpErrorResult(response.Error)
 	}

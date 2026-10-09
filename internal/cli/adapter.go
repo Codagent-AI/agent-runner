@@ -558,3 +558,9 @@ func KnownCLIs() []string {
 	}
 	return names
 }
+
+// ResumeModelApplier declares that model arguments are applied on native resume.
+type ResumeModelApplier interface{ AppliesResumeModel() bool }
+
+// HeadlessActivitySummarizer reads only event metadata, never event content.
+type HeadlessActivitySummarizer interface{ SummarizeActivity([]byte) (string, bool) }

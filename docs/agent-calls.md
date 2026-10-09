@@ -36,10 +36,11 @@ Every invocation requires `prompt` and exactly one target:
 
 | Field | Meaning | Allowed overrides |
 | --- | --- | --- |
-| `agent: <profile>` | Start a fresh session using an Agent Runner profile. | `cli`, `model`, `workdir` |
-| `session: <name>` | Create or resume a workflow-declared named session. | `model`, `workdir` |
+| `agent: <profile>` | Start a fresh session using an Agent Runner profile. | `cli`, `model`, `workdir`, `timeout` |
+| `session: <name>` | Create or resume a workflow-declared named session. | `model`, `workdir`, `timeout` |
+| `follow_up: <call_id>` | Resume an earlier child from this parent attempt. | `model` where supported, `workdir`, `timeout` |
 
-The full supported field set is `prompt`, `agent`, `session`, `cli`, `model`, and `workdir`. `session` accepts declared names only; `new`, `resume`, and `inherit` are workflow-step strategies, not call targets. A named-session call cannot also set `agent` or `cli`.
+The supported fields are `prompt`, `agent`, `session`, `follow_up`, `cli`, `model`, `workdir`, and `timeout`. `session` accepts declared names only; `new`, `resume`, and `inherit` are workflow-step strategies, not call targets. A named-session call cannot also set `agent` or `cli`.
 
 A typical profile-targeted request is equivalent to:
 
@@ -72,7 +73,7 @@ Cursor is the exception. Its MCP client aborts any `tools/call` at about 60 seco
 Collect the outcome with `get_agent_call` and the same `call_id`:
 
 - `get_agent_call` waits on the same budget as `call_agent`, so it returns the terminal result directly unless the parent's budget expires first.
-- While the child is still running at the end of that budget, the poll returns `call_id`, status, target, and elapsed time. It does not include the child's final response.
+- While the child is still running at the end of that budget, the poll returns `call_id`, status, target, elapsed time, and activity. It does not include the child's final response.
 - When the child is terminal, the poll returns that cached success or structured error, including `call_id` and status. Later polls return the same cached result.
 - An unknown `call_id` is a structured error and does not spawn a child.
 
@@ -82,7 +83,7 @@ Do not treat an `accepted` or `running` start or poll as success. A parent that 
 
 ## Execution And Safety
 
-Called children always run autonomous-headless through the resolved profile and CLI adapter. They receive the profile system prompt and the call's `prompt`, but not workflow-step enrichment. An omitted `workdir` inherits the parent's effective directory; an override must remain valid under the normal agent-step workdir rules and within the same worktree.
+Called children always run autonomous-headless through the resolved profile and CLI adapter. They receive the profile system prompt and the call's `prompt`, but not workflow-step enrichment. An omitted `workdir` inherits the parent's effective directory for profile and named-session calls, and the referenced child's directory for follow-ups; an override must remain valid under the normal agent-step workdir rules and within the same worktree.
 
 Calls are serial per parent attempt:
 
@@ -93,7 +94,7 @@ Calls are serial per parent attempt:
 
 A call is accepted only after authentication, schema and target validation, safety checks, and request-ID reservation. Rejections before that boundary create no child execution and have no `call_id`. Once accepted, the call remains visible even if the CLI fails to launch. Retrying the same request ID returns the same `call_id` without waiting; `get_agent_call` returns the cached result, including a post-accept launch failure.
 
-Autonomous parents receive pre-authorized access only to the Runner-owned `call_agent`, `get_agent_call`, and `cancel_agent_call` tools. Interactive parents use their CLI's normal MCP approval flow. Agent Runner imposes no fixed child duration limit. Where a CLI supports a process-local MCP timeout setting, Runner raises it so a long child can complete inside one waiting `call_agent`. Cursor exposes no such setting, which is why it polls instead.
+Autonomous parents receive pre-authorized access only to the Runner-owned `call_agent`, `get_agent_call`, and `cancel_agent_call` tools. Interactive parents use their CLI's normal MCP approval flow. An optional `timeout` sets a Runner-enforced duration budget from acceptance (Go durations from `1s` to `24h`). Calls without it have no fixed duration limit. Where a CLI supports a process-local MCP timeout setting, Runner raises it so a long child can complete inside one waiting `call_agent`. Cursor exposes no such setting, which is why it polls instead.
 
 The child is leased to the parent attempt. Canceling or stopping the parent, or parent exit, terminates the child and retains terminal evidence. Timing out, canceling, or restarting a `call_agent` / `get_agent_call` MCP request after acceptance, or losing the stdio bridge or one control connection, does not kill the child. A later authenticated poll or cancel with the same `call_id` still works. A child failure returns control to the parent as a structured error; it does not automatically fail the parent step or retry the call.
 
@@ -134,6 +135,9 @@ The run view reads full child output from the output files. It does not rebuild 
 
 ## Troubleshooting
 
+- For `timed_out`, inspect retained output, choose a longer timeout, or follow up if a native session was retained.
+- For `not_resumable`, the source has no native session or its transcript is unavailable in the selected directory. Use the original directory or explicitly start a fresh `agent` call. Runner never silently starts a fresh session for a follow-up.
+
 - If the tools are absent, confirm the active parent agent step declares `tools: [call_agent]`. Mentioning `call_agent` in the prompt does not enable them.
 - If an interactive call waits, complete the CLI's normal tool-approval prompt. Autonomous parents pre-authorize only these Runner-owned tools.
 - If `call_agent` returns a `call_id` with status `accepted` or `running`, poll `get_agent_call` until the call is terminal. Do not treat that start result as the child's response.
@@ -143,4 +147,20 @@ The run view reads full child output from the output files. It does not rebuild 
 - To abort a running child without ending the parent step, invoke `cancel_agent_call`, then poll `get_agent_call` until the call is terminal. A cancel RPC can return while the child is still stopping; that is not a freed slot. Canceling the MCP `tools/call` for start or poll does not stop the child.
 - If a named target is rejected, confirm it is declared, is not `new`, `resume`, or `inherit`, and does not resolve to the parent's own active session.
 - If usage or cost is unavailable, the child CLI may not have launched or may not have reported the metric. Failed launches remain visible but do not reduce usage coverage.
-- Agent calls do not provide recursive delegation, parallel fan-out, interactive children, call-specific duration budgets, or workflow-engine enrichment.
+- Agent calls do not provide recursive delegation, parallel fan-out, interactive children or workflow-engine enrichment.
+
+## Follow-ups, deadlines, and details
+
+Use `follow_up` with a terminal call's `call_id` to continue the same native session:
+
+```json
+{"prompt":"Apply the review fixes", "follow_up":"call-id", "timeout":"20m"}
+```
+
+Exactly one of `agent`, `session`, or `follow_up` is required. Follow-ups inherit the referenced call's profile, CLI, effort, model, and working directory. A `workdir` override resolves against the parent's directory and must remain inside its worktree. A model change is supported on Codex; adapters that omit model arguments on resume reject a differing override. Follow-ups do not write named-session state. Named-session calls cannot be follow-up sources. Failed, canceled, and timed-out calls can be resumed when a native session is available.
+
+Every terminal response with a `call_id` includes `details`: `exit` (`exited`, `not_launched`, or `terminated`), an exit code for a natural exit, acceptance-to-settlement `duration`, session metadata (`cli`, known effective `model`, `resumed`, and follow-up eligibility), and `git`. Native session IDs are not exposed in these details. A named-session resume omits the model when its original model is unknown and the requested model is not applied.
+
+`details.git` observes HEAD movement; it does not establish commit authorship in a shared worktree. Its state is `captured`, `not_git`, `unavailable`, or `non_linear`. Captured deltas include start/end HEADs and up to 50 commits, newest first, with `truncated` when more exist. Git failures never change the call's outcome.
+
+Running snapshots and MCP progress notifications include a short `activity` summary with event kind, tool name, and age. Claude and Codex provide structured summaries. Other output falls back to recency from stdout or stderr. Summaries exclude message text, commands, arguments, and output.

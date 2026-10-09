@@ -1,4 +1,4 @@
-- [ ] Implement the change described by these files using TDD, as `CLAUDE.md` requires. Satisfy every spec scenario and every `INT-*` / `E2E-*` obligation in the test plan.
+- [x] Implement the change described by these files using TDD, as `CLAUDE.md` requires. Satisfy every spec scenario and every `INT-*` / `E2E-*` obligation in the test plan.
 
   **Contract** (`internal/agentcall/contract.go`)
   - Add `Request.FollowUp` (`follow_up`) and `Request.Timeout` (`timeout`).

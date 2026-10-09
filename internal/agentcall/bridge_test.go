@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codagent/agent-runner/internal/control"
 	"github.com/google/go-cmp/cmp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -197,7 +198,10 @@ func TestBridgeReportsRateLimitedProgressAndPropagatesCancellation(t *testing.T)
 	canceled := make(chan struct{})
 	server := NewServer(BridgeOptions{
 		ProgressInterval: 10 * time.Millisecond,
-		Send: func(ctx context.Context, _ string, _ string, _ json.RawMessage) (Response, error) {
+		Send: func(ctx context.Context, kind string, _ string, _ json.RawMessage) (Response, error) {
+			if kind == control.MessageAgentCallActivity {
+				return Response{}, errors.New("snapshot unavailable")
+			}
 			close(started)
 			<-ctx.Done()
 			close(canceled)

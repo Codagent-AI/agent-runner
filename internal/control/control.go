@@ -33,12 +33,13 @@ const (
 	EnvAttemptID     = "AGENT_RUNNER_ATTEMPT_ID"
 	EnvControlToken  = "AGENT_RUNNER_CONTROL_TOKEN"
 
-	MessageCompleteStep    = "complete_step"
-	MessageTurnCommitted   = "turn_committed"
-	MessageAgentCall       = "agent_call"
-	MessageAgentCallGet    = "agent_call_get"
-	MessageAgentCallCancel = "agent_call_cancel"
-	MessageSubmitRoute     = "submit_route"
+	MessageCompleteStep      = "complete_step"
+	MessageTurnCommitted     = "turn_committed"
+	MessageAgentCall         = "agent_call"
+	MessageAgentCallGet      = "agent_call_get"
+	MessageAgentCallCancel   = "agent_call_cancel"
+	MessageAgentCallActivity = "agent_call_activity"
+	MessageSubmitRoute       = "submit_route"
 
 	ControlSocketPointerFile  = "control-socket"
 	MaxControlMessageBytes    = 16 * 1024 * 1024
@@ -143,6 +144,10 @@ type AgentCallRequest struct {
 	AttemptID string
 	RequestID string
 	Payload   json.RawMessage
+}
+
+type AgentCallActivityHandler interface {
+	HandleAgentCallActivity(context.Context, AgentCallRequest) json.RawMessage
 }
 
 type AgentCallHandler interface {
@@ -494,6 +499,13 @@ func (s *ControlServer) handleConnection(connection net.Conn) {
 		s.handleAgentCallOp(connection, &request, active, func(ctx context.Context, handler AgentCallHandler, envelope AgentCallRequest) json.RawMessage {
 			return handler.HandleGetAgentCall(ctx, envelope)
 		})
+	case MessageAgentCallActivity:
+		s.handleAgentCallOp(connection, &request, active, func(ctx context.Context, handler AgentCallHandler, envelope AgentCallRequest) json.RawMessage {
+			if activity, ok := handler.(AgentCallActivityHandler); ok {
+				return activity.HandleAgentCallActivity(ctx, envelope)
+			}
+			return json.RawMessage(`{"error":{"code":"control_failure","message":"activity snapshots are unavailable"}}`)
+		})
 	case MessageAgentCallCancel:
 		s.handleAgentCallOp(connection, &request, active, func(ctx context.Context, handler AgentCallHandler, envelope AgentCallRequest) json.RawMessage {
 			return handler.HandleCancelAgentCall(ctx, envelope)
@@ -774,7 +786,7 @@ func validateControlRequest(request *controlRequest, active *attemptState, runID
 	if active == nil {
 		return errors.New("no interactive step is active")
 	}
-	if request.Type != MessageCompleteStep && request.Type != MessageTurnCommitted && request.Type != MessageAgentCall && request.Type != MessageAgentCallGet && request.Type != MessageAgentCallCancel && request.Type != MessageSubmitRoute {
+	if request.Type != MessageCompleteStep && request.Type != MessageTurnCommitted && request.Type != MessageAgentCall && request.Type != MessageAgentCallGet && request.Type != MessageAgentCallCancel && request.Type != MessageAgentCallActivity && request.Type != MessageSubmitRoute {
 		return fmt.Errorf("unknown control message type %q", request.Type)
 	}
 	if request.RunID == "" || request.StepID == "" || request.Token == "" || request.RequestID == "" {
@@ -783,7 +795,7 @@ func validateControlRequest(request *controlRequest, active *attemptState, runID
 	if request.RunID != runID || request.RunID != active.RunID || request.StepID != active.StepID || request.Token != active.Token {
 		return errors.New("control credential does not match the active step attempt")
 	}
-	if (request.Type == MessageAgentCall || request.Type == MessageAgentCallGet || request.Type == MessageAgentCallCancel) && request.AttemptID != active.ID {
+	if (request.Type == MessageAgentCall || request.Type == MessageAgentCallGet || request.Type == MessageAgentCallCancel || request.Type == MessageAgentCallActivity) && request.AttemptID != active.ID {
 		return errors.New("control credential does not match the active step attempt")
 	}
 	return nil
@@ -878,7 +890,7 @@ func SendAgentCallFromEnvironment(
 		return nil, err
 	}
 	switch messageType {
-	case MessageAgentCall, MessageAgentCallGet, MessageAgentCallCancel:
+	case MessageAgentCall, MessageAgentCallGet, MessageAgentCallCancel, MessageAgentCallActivity:
 	default:
 		return nil, fmt.Errorf("unsupported agent-call control message type %q", messageType)
 	}

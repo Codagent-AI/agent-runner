@@ -1395,3 +1395,25 @@ func TestControlServerRejectsCompletionWhenFreezeFails(t *testing.T) {
 		t.Fatalf("completion error = %q, want it to surface the freeze failure", completion.Error)
 	}
 }
+
+func TestControlActivityOptionalHandlerAndStaleAttempt(t *testing.T) {
+	server := newTestControlServer(t, t.TempDir(), &recordingEventLogger{})
+	defer server.Close()
+	handler := &recordingCallHandler{requests: make(chan AgentCallRequest, 1)}
+	attempt := server.ActivateAttempt(context.Background(), "parent", AttemptOptions{AgentCallEligible: true, AgentCallHandler: handler})
+	req := &controlRequest{Type: MessageAgentCallActivity, RunID: attempt.RunID, StepID: attempt.StepID, AttemptID: attempt.ID, Token: attempt.Token, RequestID: "activity", Payload: json.RawMessage(`{"call_id":"c"}`)}
+	response := exchange(t, server.SocketPath(), req)
+	if !response.OK || !strings.Contains(string(response.Payload), `"code":"control_failure"`) {
+		t.Fatalf("optional activity: %+v", response)
+	}
+	req.AttemptID = "stale"
+	req.RequestID = "stale-activity"
+	if response = exchange(t, server.SocketPath(), req); response.OK {
+		t.Fatalf("stale snapshot admitted: %+v", response)
+	}
+	select {
+	case r := <-handler.requests:
+		t.Fatalf("activity started a call: %+v", r)
+	default:
+	}
+}
