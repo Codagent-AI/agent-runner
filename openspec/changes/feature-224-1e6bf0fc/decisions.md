@@ -75,9 +75,3 @@
 | --- | --- | --- |
 | `tasks.md` holds exactly one implementation task covering the whole change, grouped by area and following the format of the archived `feature-211` change, with source-file links and finish criteria (`make fmt`, `make test`, `make lint`). | Multiple tasks per area. | No |
 | The task forbids archiving this change before `async-mcp`, and forbids editing the sibling Agent Skills repository. | Leave ordering implicit. | No |
-
-## archive-repair
-
-| Decision | Alternatives considered | Decision-bearing |
-| --- | --- | --- |
-| Archive failed because `async-mcp` is still unarchived, so the main spec's `Long-running MCP execution` still has the pre-async scenarios that this change's MODIFIED block (copied from `async-mcp`) dropped. The block is now a merge: it keeps both current scenarios ("Configurable host timeout does not bound the call", "Requested progress is reported") and the current text on explicit client deadlines and progress notifications, plus the implemented async wait-budget/polling rules and this change's caller-`timeout` bound. No current scenario is dropped. `async-mcp`'s own MODIFIED block for this header will need the same reconciliation when it is archived. | Block on archiving `async-mcp` first (outside this change's allowed edits); drop the async scenarios (would under-describe implemented behavior). | No |
