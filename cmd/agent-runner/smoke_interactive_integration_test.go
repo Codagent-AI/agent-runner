@@ -1107,3 +1107,73 @@ func withoutHostLauncherEnv(base []string) []string {
 	}
 	return result
 }
+
+// INT-002 exercises the step override through the real loader, settings,
+// adapter, terminal handoff and control-channel completion.
+func TestStepAutonomousBackendPTYIntegration(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a POSIX terminal")
+	}
+	repoRoot := findRepoRoot(t)
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	binDir := filepath.Join(tmp, "bin")
+	runnerBin := filepath.Join(tmp, "agent-runner")
+	logPath := filepath.Join(tmp, "invocations.jsonl")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSmokeProfileConfig(t, home)
+	writeTestFile(t, filepath.Join(home, ".agent-runner", "settings.yaml"), "autonomous_backend: headless\nautonomous_permission_mode: yolo\n")
+	workflow := filepath.Join(home, ".agent-runner", "workflows", "step-backend-v1.0.yaml")
+	writeTestFile(t, workflow, `name: step-backend
+steps:
+  - id: required
+    agent: claude_interactive_smoke
+    session: new
+    prompt: Complete the fixture.
+    mode: autonomous
+    autonomous_backend: interactive
+`)
+	buildAgentRunner(t, repoRoot, runnerBin)
+	writeInteractiveAgentFixtures(t, binDir, []string{"claude"})
+	cmd := exec.Command(runnerBin, "--headless", "--profile", "smoke_test", "step-backend")
+	cmd.Dir = repoRoot
+	cmd.Env = smokeCommandEnv(os.Environ(), "AGENT_RUNNER_NO_TUI=1", "HOME="+home, "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"), interactiveFixtureEnv+"=1", interactiveFixtureLog+"="+logPath)
+	output, err := runCommandInPTY(cmd, 45*time.Second)
+	if err != nil {
+		t.Fatalf("PTY workflow: %v\n%s", err, output)
+	}
+	invocations := readInteractiveFixtureInvocations(t, logPath)
+	if len(invocations) != 1 {
+		t.Fatalf("invocations=%v", invocations)
+	}
+	invocation := invocations[0]
+	if invocation.CLI != "claude" || invocation.Resume {
+		t.Fatalf("invocation=%+v", invocation)
+	}
+	args := invocation.Args
+	for _, arg := range args {
+		if arg == "-p" || arg == "--output-format" {
+			t.Fatalf("headless args: %v", args)
+		}
+	}
+	if valueAfter(args, "--permission-mode") != "bypassPermissions" {
+		t.Fatalf("permission args: %v", args)
+	}
+	prompt := valueAfter(args, "--append-system-prompt")
+	for _, text := range []string{"autonomously", "step complete"} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("missing %q in prompt: %s", text, prompt)
+		}
+	}
+	runDir := latestWorkflowRunDir(t, home, repoRoot, "step-backend")
+	state, err := stateio.ReadState(filepath.Join(runDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.Completed {
+		t.Fatalf("incomplete state: %+v", state)
+	}
+	assertSuccessfulInteractiveSteps(t, filepath.Join(runDir, "audit.log"), []string{"required"})
+}

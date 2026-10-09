@@ -1,0 +1,65 @@
+# E2E-001: required requests fail; inherited requests fall back per step.
+chmod 755 bin/claude
+env PATH=$WORK/bin:$PATH
+env CLAUDE_STUB_LOG=$WORK/claude-args.log
+env HOME=$WORK/home
+exec agent-runner workflow
+stderr 'step "required".*autonomous_backend "interactive".*needs a TTY'
+stderr -count=1 'falling back to headless'
+grep -count=2 ' -p ' claude-args.log
+! grep 'required-prompt' claude-args.log
+grep 'inherited-prompt' claude-args.log
+grep 'capture-prompt' claude-args.log
+stdout 'captured-output'
+
+rm claude-args.log
+! exec agent-runner stop
+stderr 'step "required".*needs a TTY'
+! exists claude-args.log
+
+-- bin/claude --
+#!/bin/sh
+echo "$@" >> "$CLAUDE_STUB_LOG"
+echo '{"type":"result","result":"captured-output"}'
+
+-- .agent-runner/config.yaml --
+profiles:
+  default:
+    agents:
+      worker:
+        default_mode: autonomous
+        cli: claude
+
+-- home/.agent-runner/settings.yaml --
+autonomous_backend: interactive
+
+-- .agent-runner/workflows/workflow-v1.0.yaml --
+name: workflow
+steps:
+  - id: required
+    agent: worker
+    session: new
+    prompt: required-prompt
+    autonomous_backend: interactive
+    continue_on_failure: true
+  - id: inherited
+    agent: worker
+    session: new
+    prompt: inherited-prompt
+  - id: captured
+    agent: worker
+    session: new
+    prompt: capture-prompt
+    autonomous_backend: headless
+    capture: out
+  - id: show
+    command: echo {{out}}
+
+-- .agent-runner/workflows/stop-v1.0.yaml --
+name: stop
+steps:
+  - id: required
+    agent: worker
+    session: new
+    prompt: required-prompt
+    autonomous_backend: interactive
