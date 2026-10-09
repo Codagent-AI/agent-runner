@@ -19,7 +19,7 @@ try:
     if Path(raw).is_absolute() or (raw.startswith('~/') and len(raw) > 2):
         roots.add(raw)
     roots.discard('')
-    patterns = [re.compile(r'(?<![\w./~-])' + re.escape(root.rstrip('/')) + r'(?![\w.-])') for root in roots]
+    patterns = [re.compile(r'(?<![\w.~-])' + re.escape(root.rstrip('/')) + r'(?![\w-]|\.\w)') for root in roots]
     default = subprocess.run(['git', 'symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD'], capture_output=True, text=True)
     candidates = [default.stdout.strip()] if default.returncode == 0 else ['origin/main', 'origin/master', 'main', 'master']
     base = None

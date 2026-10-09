@@ -213,7 +213,7 @@ func TestExternalReportGitSubdirectory(t *testing.T) {
 }
 
 func TestSpecLeakGuard(t *testing.T) {
-	for _, location := range []string{"clean", "prefix", "relative", "commit", "file", "title", "body"} {
+	for _, location := range []string{"clean", "prefix", "dot-prefix", "relative", "commit", "commit-period", "file", "file-url", "title", "title-url", "body", "body-period"} {
 		t.Run(location, func(t *testing.T) {
 			repo := t.TempDir()
 			root := t.TempDir()
@@ -233,10 +233,20 @@ func TestSpecLeakGuard(t *testing.T) {
 			switch location {
 			case "prefix":
 				contents = root + "-code/file"
+			case "dot-prefix":
+				contents = root + ".backup/file"
 			case "relative":
 				contents = "specs describe behavior"
 			case "commit":
 				message = root
+			case "commit-period":
+				message = "see " + root + "."
+			case "file-url":
+				contents = "file://" + root + "/openspec/foo"
+			case "title-url":
+				title = "file://" + root
+			case "body-period":
+				body = "see " + root + "."
 			case "file":
 				contents = root + "/openspec/foo"
 			case "title":
@@ -267,12 +277,12 @@ if [ "$4" = number ]; then printf '{"number":1}'; else cat "$PR_FIXTURE"; fi
 			}
 			head := string(runGitOutput(t, repo, "rev-parse", "HEAD"))
 			out, err := runExternalScript(t, "check-spec-leak.sh", map[string]string{"spec_root": root, "spec_root_input": "specs"}, repo, []string{"PATH=" + bin + ":" + os.Getenv("PATH"), "PR_FIXTURE=" + fixture, "GH_LOG=" + filepath.Join(bin, "gh.log")})
-			if location == "clean" || location == "prefix" || location == "relative" {
+			if location == "clean" || location == "prefix" || location == "dot-prefix" || location == "relative" {
 				if err != nil {
 					t.Fatal(out, err)
 				}
 			} else {
-				label := map[string]string{"commit": "commit ", "file": "file file.txt", "title": "PR title", "body": "PR body"}[location]
+				label := map[string]string{"commit": "commit ", "commit-period": "commit ", "file": "file file.txt", "file-url": "file file.txt", "title": "PR title", "title-url": "PR title", "body": "PR body", "body-period": "PR body"}[location]
 				if err == nil || !strings.Contains(out, label) {
 					t.Fatal(out, err)
 				}
