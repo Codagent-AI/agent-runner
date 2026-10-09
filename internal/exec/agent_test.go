@@ -2642,14 +2642,12 @@ func TestStepBackendFailureBeforeLaunch(t *testing.T) {
 					}
 				}
 				end := findAuditEvent(auditLog.events, audit.EventStepEnd)
-				if end != nil {
-					usage, ok := end.Data["usage"].(model.UsageRecord)
-					if !ok || usage.Reason != model.UnavailableNotInvoked {
-						t.Fatalf("usage=%v", end.Data["usage"])
-					}
-				}
-				if findAuditEvent(auditLog.events, audit.EventStepEnd) == nil {
+				if end == nil {
 					t.Fatal("missing failure event")
+				}
+				usage, ok := end.Data["usage"].(model.UsageRecord)
+				if !ok || usage.Reason != model.UnavailableNotInvoked {
+					t.Fatalf("usage=%v", end.Data["usage"])
 				}
 			})
 		}
