@@ -69,14 +69,20 @@ steps:
     mode: autonomous
     # Headless CLIs exit when the lead ends its turn, aborting sub-agents that
     # are still running. The interactive backend keeps the session open until
-    # the lead signals completion.
+    # the lead signals completion. This requires a TTY: unattended runners
+    # (factory, CI, external-user mode) fail here instead of falling back.
     autonomous_backend: interactive
     prompt: |
       You MUST use the codagent:orchestrate-change skill to implement {{change_label}} "{{change_name}}" from its approved definition artifacts under `{{change_dir}}/`: `proposal.md`, every `specs/*/spec.md`, `design.md`, and `test-plan.md`. There is no task breakdown for this change.
 
       Keep your plan file under `{{session_dir}}/`, never in the repository. Sub-agents must prepend `[{{step_id}}]` to their commit messages. {{artifact_validation_instruction}}
 
-      Do not run Agent Validator (`agent-validator run`, `review`, or `check`) here, directly or through any skill, and tell your sub-agents the same. It runs explicitly in a later workflow step.
+      Later workflow steps own the following work, so neither you nor your sub-agents do it here; tell your sub-agents the same:
+      - Agent Validator (`agent-validator run`, `review`, or `check`), directly or through any skill. It runs the project's configured checks and code reviews right after this step and again before the pull request, and it fixes what it finds.
+      - Code review of the change, including review sub-agents or review skills. A maintainability pass also runs later.
+      - Exploratory, manual, or acceptance testing; opening or updating a pull request; and archiving.
+
+      Testing in this step is limited to automated tests: each sub-agent adds the tests its slice needs and runs the narrowest relevant ones. This overrides the skill's integration pass: do not run the project's checks or reviews,.
 
       A later step audits this change's assumptions. Every brief must tell the sub-agent to finish its slice by running the codagent:session-report skill, treating the artifacts and requirements its brief covered as the task specification, and to include that report verbatim in its final response. Save each sub-agent's report verbatim, labeled with its slice, in your plan file as it arrives.
 
