@@ -15,11 +15,84 @@ import (
 
 const cleanupFixtureEnv = "AGENT_RUNNER_TESTSCRIPT_CLEANUP_FIXTURE"
 
+func TestSweepScriptTempDirs(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		entry      string
+		marker     string
+		checkErr   error
+		file       bool
+		wantRemove bool
+		wantCheck  bool
+	}{
+		{name: "dead", marker: "12345", checkErr: syscall.ESRCH, wantRemove: true, wantCheck: true},
+		{name: "live", marker: "12345", wantCheck: true},
+		{name: "self", marker: strconv.Itoa(os.Getpid())},
+		{name: "missing"},
+		{name: "garbage", marker: "not a pid"},
+		{name: "zero", marker: "0"},
+		{name: "negative", marker: "-1"},
+		{name: "permission denied", marker: "12345", checkErr: syscall.EPERM, wantCheck: true},
+		{name: "unknown error", marker: "12345", checkErr: syscall.EIO, wantCheck: true},
+		{name: "nonmatching", entry: "unrelated", marker: "12345", checkErr: syscall.ESRCH},
+		{name: "file", file: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			name := tt.entry
+			if name == "" {
+				name = "agent-runner-testscript-fixture"
+			}
+			dir := filepath.Join(root, name)
+			if tt.file {
+				if err := os.WriteFile(dir, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.Mkdir(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !tt.file && tt.marker != "" {
+				if err := os.WriteFile(filepath.Join(dir, scriptPIDMarker), []byte(tt.marker), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			checked := false
+			sweepScriptTempDirs(root, func(pid int) error {
+				checked = true
+				if pid != 12345 {
+					t.Fatalf("checked pid = %d, want 12345", pid)
+				}
+				return tt.checkErr
+			})
+			if checked != tt.wantCheck {
+				t.Errorf("process checked = %v, want %v", checked, tt.wantCheck)
+			}
+			_, err := os.Stat(dir)
+			if tt.wantRemove {
+				if !os.IsNotExist(err) {
+					t.Fatalf("stale directory remains: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("entry not preserved: %v", err)
+			}
+		})
+	}
+}
+
 // This test only performs the requested termination inside an isolated worker.
 func TestScriptCleanupFixture(t *testing.T) {
 	mode := os.Getenv(cleanupFixtureEnv)
 	if mode == "" {
 		t.Skip("subprocess fixture")
+	}
+	marker, err := os.ReadFile(filepath.Join(os.Getenv(scriptTempDirEnv), scriptPIDMarker))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(marker), strconv.Itoa(os.Getppid()); got != want {
+		t.Fatalf("supervisor pid marker = %q, want %q", got, want)
 	}
 	for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
 		if got, want := os.Getenv(key), os.Getenv("AGENT_RUNNER_TESTSCRIPT_EXPECT_TEMP"); got != want {
