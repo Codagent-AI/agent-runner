@@ -1,0 +1,84 @@
+# External archive through the real executor; direct guard refuses lost context.
+env PATH=$WORK/bin:$PATH
+env LOG=$WORK/openspec.log
+chmod 755 bin/openspec
+chmod 755 bin/claude
+chmod 755 code/.agent-runner/workflows/report.sh
+mkdir specs/openspec/changes/foo specs/openspec/specs
+exec git init -b main code
+exec git -C code config user.name Test
+exec git -C code config user.email test@example.com
+exec git -C code commit --allow-empty -m initial
+exec git init -b main specs
+exec git -C specs config user.name Test
+exec git -C specs config user.email test@example.com
+exec git -C specs commit --allow-empty -m initial
+exec sh -c 'git -C code rev-parse HEAD > code-head; git -C specs rev-parse HEAD > spec-head'
+exec sh -c 'printf "openspec_roots:\n  %s/code: %s/specs\n" "$PWD" "$PWD" > .agent-runner/settings.yaml'
+cd code
+exec agent-runner run archive spec_root=$WORK/specs
+stdout 'openspec/specs/canonical.md'
+! exists $WORK/specs/openspec/changes/foo
+exists $WORK/specs/openspec/changes/archive/2026-10-09-foo
+! exists openspec
+exec sh -c 'git rev-parse HEAD > "$HOME/code-after"; git -C "$HOME/specs" rev-parse HEAD > "$HOME/spec-after"'
+cmp $WORK/code-head $WORK/code-after
+cmp $WORK/spec-head $WORK/spec-after
+mkdir $WORK/specs/openspec/changes/foo
+! exec agent-runner run archive spec_root=$WORK/specs
+stdout 'pre-existing archive'
+! exec agent-runner run guard
+stdout 'recorded OpenSpec root context is missing'
+exec cat $WORK/openspec.log
+stdout 'specs archive foo --yes'
+
+-- bin/openspec --
+#!/bin/sh
+set -eu
+printf '%s %s\n' "$PWD" "$*" >> "$LOG"
+if [ "$1" = archive ]; then
+  mkdir -p openspec/changes/archive
+  mv openspec/changes/foo openspec/changes/archive/2026-10-09-foo
+  printf updated > openspec/specs/canonical.md
+fi
+-- .agent-runner/settings.yaml --
+{}
+-- .agent-runner/config.yaml --
+profiles:
+  default:
+    agents:
+      lead: {cli: claude, default_mode: autonomous}
+-- code/.agent-runner/workflows/archive-v1.0.yaml --
+name: archive
+params:
+  - name: spec_root
+    required: true
+steps:
+  - id: archive
+    workflow: builtin:openspec/archive-change-v1.1.yaml
+    params:
+      change_name: foo
+      spec_root: "{{spec_root}}"
+      spec_external: "true"
+  - id: report
+    script: report.sh
+    script_inputs:
+      spec_root: "{{spec_root}}"
+      change_name: foo
+      session_dir: "{{session_dir}}"
+-- code/.agent-runner/workflows/guard-v1.0.yaml --
+name: guard
+steps:
+  - id: archive
+    workflow: builtin:openspec/archive-change-v1.1.yaml
+    params:
+      change_name: foo
+-- bin/claude --
+#!/bin/sh
+printf 'REPAIR_BLOCKED\n'
+-- code/.agent-runner/workflows/report.sh --
+#!/bin/sh
+set -eu
+payload=$(cat)
+session=$(PAYLOAD="$payload" python3 -c 'import json,os; print(json.loads(os.environ["PAYLOAD"])["session_dir"])')
+printf '%s' "$payload" | sh "$session/bundled/openspec/report-spec-changes.sh"

@@ -1,6 +1,6 @@
 # Tasks
 
-- [ ] 1. Support an OpenSpec project outside the working repository
+- [x] 1. Support an OpenSpec project outside the working repository
 
 ## 1. Support an OpenSpec project outside the working repository
 

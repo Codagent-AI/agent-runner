@@ -67,6 +67,7 @@ func TestCoreVerifyChangeShape(t *testing.T) {
 		params = append(params, param{Name: p.Name, Required: p.IsRequired(), Default: p.Default})
 	}
 	wantParams := []param{
+		{Name: "context_instruction"},
 		{Name: "change_name", Required: true},
 		{Name: "change_dir", Required: true},
 		{Name: "change_label", Required: true},
@@ -235,7 +236,7 @@ func TestCoreVerifyChangeAcceptanceValidatorRecordsResultWithoutGating(t *testin
 	wantValidator := model.Step{
 		ID:       "acceptance-validator",
 		Workflow: "run-validator-v1.0.yaml",
-		Params:   map[string]string{"result_file": resultFile},
+		Params:   map[string]string{"result_file": resultFile, "context_instruction": "{{context_instruction}}"},
 		SkipIf:   "sh: test {{skip_validator}} = true",
 	}
 	validator := findStep(loop.Steps, "acceptance-validator")
@@ -368,6 +369,7 @@ func TestCoreImplementChangeComposesVerifyChangeWithSharedSessions(t *testing.T)
 		t.Fatalf("verify-change workflow = %q", call.Workflow)
 	}
 	wantParams := map[string]string{
+		"context_instruction":             "{{context_instruction}}",
 		"change_name":                     "{{change_name}}",
 		"change_dir":                      "{{change_dir}}",
 		"change_label":                    "{{change_label}}",

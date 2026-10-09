@@ -1,0 +1,67 @@
+name: implement-change
+description: "Implement and validate OpenSpec tasks, then prepare completion evidence and a draft pull request for human acceptance."
+hidden: true
+
+params:
+  - name: spec_root
+    required: false
+    default: ""
+  - name: change_name
+    required: true
+  - name: skip_validator
+    required: false
+    default: "false"
+
+sessions:
+  - name: lead-agent
+    agent: lead
+
+workspace_dirs: ["{{openspec.spec_root}}"]
+
+steps:
+  - id: resolve-openspec-root
+    script: resolve-openspec-root.sh
+    script_inputs:
+      change_name: "{{change_name}}"
+      spec_root: "{{spec_root}}"
+      operation: continue
+      session_dir: "{{session_dir}}"
+    capture: openspec
+    capture_format: json
+
+  - id: implement
+    workflow: ../core/implement-change-v1.0.yaml
+    params:
+      context_instruction: "{{openspec.context_instruction}}"
+      change_name: "{{change_name}}"
+      change_dir: "{{openspec.change_dir}}"
+      change_label: "OpenSpec change"
+      change_kind: "openspec"
+      spec_root: "{{openspec.spec_root}}"
+      artifact_validation_instruction: "{{openspec.validate_instruction}}"
+      skip_validator: "{{skip_validator}}"
+
+  # These closing steps intentionally remain top-level in each entry for phase caps.
+  # jscpd:ignore-start
+  - id: check-spec-leak
+    script: check-spec-leak.sh
+    script_inputs:
+      spec_root: "{{openspec.spec_root}}"
+      spec_root_input: "{{openspec.spec_root_input}}"
+      session_dir: "{{session_dir}}"
+    skip_if: 'sh: test {{openspec.external}} = false'
+    repair:
+      session: lead-agent
+      max: 1
+      prompt: |
+        The external spec path leak check failed. Fix PR title/body with gh pr edit or the bundled update-pr-body.sh, preserving human text outside the generated block. You may add a follow-up commit removing leaked paths from tracked files. Never rewrite history or force-push. A leaked pushed commit message cannot be repaired: report it and end with REPAIR_BLOCKED. Never declare success yourself; the check that runs after you decides.
+        {{openspec.context_instruction}}
+
+  - id: report-spec-changes
+    script: report-spec-changes.sh
+    script_inputs:
+      spec_root: "{{openspec.spec_root}}"
+      change_name: "{{change_name}}"
+      session_dir: "{{session_dir}}"
+    skip_if: 'sh: test {{openspec.external}} = false'
+  # jscpd:ignore-end

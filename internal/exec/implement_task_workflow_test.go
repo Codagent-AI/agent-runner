@@ -326,9 +326,10 @@ func (f *taskDeliveryFixture) runImplementTask(t *testing.T, runner *taskDeliver
 	generate.Mode = model.ModeAutonomous
 	ctx := model.NewRootContext(&model.RootContextOptions{
 		Params: map[string]string{
-			"task_file":          filepath.Join(f.run, taskFile),
-			"skip_validator":     skipValidator,
-			"run_session_report": "false",
+			"context_instruction": "",
+			"task_file":           filepath.Join(f.run, taskFile),
+			"skip_validator":      skipValidator,
+			"run_session_report":  "false",
 		},
 		WorkflowFile: implementTaskRef,
 		SessionDir:   f.sessionDir,
@@ -347,7 +348,8 @@ func TestBuiltinImplementTaskCrashReachesCaller(t *testing.T) {
 	runner := f.runner(t)
 	runner.crashGenerate = true
 	ctx := model.NewRootContext(&model.RootContextOptions{SessionDir: f.sessionDir, ProjectRoot: f.run, WorkingDir: f.run, ProfileStore: &config.Config{ActiveAgents: map[string]*config.Agent{"implementor": {CLI: "claude", DefaultMode: "autonomous"}}}})
-	step := &model.Step{ID: "implement", Workflow: implementTaskRef, Params: map[string]string{"task_file": filepath.Join(f.run, "01-task.md"), "skip_validator": "true", "run_session_report": "false"}}
+	step := &model.Step{ID: "implement", Workflow: implementTaskRef, Params: map[string]string{
+		"context_instruction": "", "task_file": filepath.Join(f.run, "01-task.md"), "skip_validator": "true", "run_session_report": "false"}}
 	outcome, err := DispatchStep(step, ctx, runner, &mockGlob{}, &mockLogger{})
 	if err != nil || outcome != OutcomeFailed {
 		t.Fatalf("outcome=%q err=%v events=%v", outcome, err, runner.events)
@@ -367,7 +369,8 @@ func TestBuiltinImplementTaskRedValidatorIsStepFailure(t *testing.T) {
 	runner := f.runner(t)
 	runner.validatorFailures = 100
 	ctx := model.NewRootContext(&model.RootContextOptions{SessionDir: f.sessionDir, ProjectRoot: f.run, WorkingDir: f.run, ProfileStore: &config.Config{ActiveAgents: map[string]*config.Agent{"implementor": {CLI: "claude", DefaultMode: "autonomous"}}}})
-	step := &model.Step{ID: "implement", Workflow: implementTaskRef, Params: map[string]string{"task_file": filepath.Join(f.run, "01-task.md"), "skip_validator": "false", "run_session_report": "false"}}
+	step := &model.Step{ID: "implement", Workflow: implementTaskRef, Params: map[string]string{
+		"context_instruction": "", "task_file": filepath.Join(f.run, "01-task.md"), "skip_validator": "false", "run_session_report": "false"}}
 	outcome, err := DispatchStep(step, ctx, runner, &mockGlob{}, &mockLogger{})
 	if err != nil || outcome != OutcomeFailed {
 		t.Fatalf("outcome=%q err=%v events=%v", outcome, err, runner.events)

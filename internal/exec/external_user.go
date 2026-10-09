@@ -123,7 +123,10 @@ func emitExternalEvent(ctx *model.ExecutionContext, prefix, event string, id ext
 	ctx.AuditLogger.Emit(audit.Event{Timestamp: time.Now().UTC().Format(time.RFC3339Nano), Prefix: prefix, Type: audit.EventType(event), Data: data})
 }
 func externalReplyArgs(step *model.Step, ctx *model.ExecutionContext, profile *config.ResolvedAgent, adapter cli.Adapter, text, sessionID, executable string) ([]string, error) {
-	input := cli.BuildArgsInput{Context: cli.ContextExternalUser, SessionID: sessionID, Resume: true, Prompt: text, Model: profile.Model, Effort: profile.Effort, Workdir: step.Workdir, RunID: filepath.Base(ctx.SessionDir), PermissionMode: usersettings.AutonomousPermissionMode(ctx.AutonomousPermissionMode), DisallowedTools: []string{"AskUserQuestion"}, CompletionCommand: &cli.CompletionCommand{Executable: executable, Args: []string{"step", "complete"}}, RunnerCommands: []cli.RunnerCommand{{Kind: cli.RunnerCommandCompleteStep, Executable: executable}}}
+	if err := evaluateWorkspaceDirs(ctx, step.ID); err != nil {
+		return nil, err
+	}
+	input := cli.BuildArgsInput{AdditionalDirs: ctx.WorkspaceDirs, Context: cli.ContextExternalUser, SessionID: sessionID, Resume: true, Prompt: text, Model: profile.Model, Effort: profile.Effort, Workdir: step.Workdir, RunID: filepath.Base(ctx.SessionDir), PermissionMode: usersettings.AutonomousPermissionMode(ctx.AutonomousPermissionMode), DisallowedTools: []string{"AskUserQuestion"}, CompletionCommand: &cli.CompletionCommand{Executable: executable, Args: []string{"step", "complete"}}, RunnerCommands: []cli.RunnerCommand{{Kind: cli.RunnerCommandCompleteStep, Executable: executable}}}
 	if step.HasTool(model.RunnerToolCallAgent) {
 		input.RunnerIntegration = &cli.RunnerIntegration{AgentCall: &cli.MCPServerCommand{Executable: executable, Args: []string{"internal", "call-agent-mcp"}}}
 	}

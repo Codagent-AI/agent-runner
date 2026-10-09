@@ -118,6 +118,9 @@ func prepareSubWorkflow(
 	parentCtx *model.ExecutionContext,
 	log Logger,
 ) (model.Workflow, *model.ExecutionContext, error) {
+	if err := evaluateWorkspaceDirs(parentCtx, step.ID); err != nil {
+		return model.Workflow{}, nil, err
+	}
 	workflow, err := loader.LoadWorkflow(workflowPath, loader.Options{IsSubWorkflow: true})
 	if err != nil {
 		return model.Workflow{}, nil, err
@@ -137,6 +140,11 @@ func prepareSubWorkflow(
 		if err != nil {
 			return model.Workflow{}, nil, err
 		}
+		if binder, ok := eng.(engine.ContextBinder); ok {
+			if err := binder.BindContext(resolvedParams); err != nil {
+				return model.Workflow{}, nil, err
+			}
+		}
 		childEngine = eng
 	}
 
@@ -148,6 +156,8 @@ func prepareSubWorkflow(
 		EngineRef:       childEngine,
 		EngineSet:       workflow.Engine != nil,
 	})
+
+	childCtx.WorkspaceDirTemplates = workflow.WorkspaceDirs
 
 	if err := MergeSessionDecls(childCtx, workflow.Sessions, log); err != nil {
 		return model.Workflow{}, nil, err

@@ -48,6 +48,9 @@ func (a *CopilotAdapter) BuildArgs(input *BuildArgsInput) []string {
 // process-local completion command cannot be materialized.
 func (a *CopilotAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, error) {
 	args := []string{"copilot"}
+	for _, dir := range input.AdditionalDirs {
+		args = append(args, "--add-dir", dir)
+	}
 	context := input.InvocationContext()
 	agentCall, err := validatedAgentCall(input)
 	if err != nil {
@@ -413,3 +416,5 @@ func canonicalize(p string) string {
 	}
 	return filepath.Clean(p)
 }
+
+func (a *CopilotAdapter) AdditionalDirSupport() DirSupport { return DirFlag }

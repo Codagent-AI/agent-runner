@@ -3,6 +3,12 @@ description: "Implement and validate change tasks, then prepare completion evide
 hidden: true
 
 params:
+  - name: spec_root
+    required: false
+    default: ""
+  - name: context_instruction
+    required: false
+    default: ""
   - name: change_name
     required: true
   - name: change_dir
@@ -41,6 +47,7 @@ steps:
       change_name: "{{change_name}}"
       change_dir: "{{change_dir}}"
       change_kind: "{{change_kind}}"
+      spec_root: "{{spec_root}}"
       require_tasks: "true"
 
   - id: implement-tasks
@@ -52,6 +59,7 @@ steps:
       - id: implement-single-task
         workflow: ../core/implement-task-v1.0.yaml
         params:
+          context_instruction: "{{context_instruction}}"
           task_file: "{{task_file}}"
           run_session_report: "true"
           skip_validator: "{{skip_validator}}"
@@ -66,6 +74,8 @@ steps:
 
       If the index changed and belongs to the current project repository, commit only that file following the project's commit message conventions and prepend `[{{step_id}}]`. If it lives outside the repository, leave it uncommitted. If it was already correct, do not create an empty commit.
 
+      {{context_instruction}}
+
   - id: verify-task-index
     command: |
       if grep -Eq '^[[:space:]]*-[[:space:]]+\[[[:space:]]\]' "{{change_dir}}/tasks.md"; then
@@ -77,9 +87,12 @@ steps:
       prompt: |
         `{{change_dir}}/tasks.md` still has unchecked task entries. Update it so each checklist entry corresponding to a task file under `{{change_dir}}/tasks/*.md` is checked, without changing task wording, task-file content, requirements, design, or implementation. Commit only that file, following the project's commit message conventions. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
 
+        {{context_instruction}}
+
   - id: verify-change
     workflow: verify-change-v1.0.yaml
     params:
+      context_instruction: "{{context_instruction}}"
       change_name: "{{change_name}}"
       change_dir: "{{change_dir}}"
       change_label: "{{change_label}}"

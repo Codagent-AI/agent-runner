@@ -391,3 +391,14 @@ steps:
 ```
 
 Agent Runner enforces the loop. The named `fixer` session gives the first fix step a real agent profile and lets later loop iterations resume the same role. The agent only sees the focused task for the current step.
+
+## Additional workspace directories
+
+A workflow can grant agent sessions access to existing directories outside the project:
+
+```yaml
+workspace_dirs:
+  - "{{spec_root}}"
+```
+
+Values can refer to parameters or captures from earlier steps. They are evaluated before an agent or sub-workflow starts, and nested workflows inherit the normalized parent list. Empty values, duplicates and directories inside the project are omitted. Other values must be absolute paths to existing directories; symlinks are resolved. Invalid values stop the step before spawning an agent. Claude, Codex and Copilot receive `--add-dir`, OpenCode needs no additional flag, and Cursor rejects additional directories.

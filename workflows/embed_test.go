@@ -103,8 +103,8 @@ func TestResolveSelectsLatestVersionWhileExactReadsRemainAvailable(t *testing.T)
 	if err != nil {
 		t.Fatalf("Resolve(openspec:change): %v", err)
 	}
-	if ref != "builtin:openspec/change-v2.0.yaml" {
-		t.Fatalf("resolved ref = %q, want latest v2.0", ref)
+	if ref != "builtin:openspec/change-v2.1.yaml" {
+		t.Fatalf("resolved ref = %q, want latest v2.1", ref)
 	}
 
 	if _, err := ReadFile("builtin:openspec/change-v1.0.yaml"); err != nil {

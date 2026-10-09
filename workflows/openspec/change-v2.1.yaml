@@ -1,0 +1,117 @@
+name: change
+description: "Use for a substantial or higher-risk change in an OpenSpec project when you need the full proposal, specification, design, test plan, task breakdown, and acceptance lifecycle. It manages OpenSpec artifacts in the configured project while guiding implementation, evidence-based acceptance, human review, archival, and pull-request finalization."
+
+params:
+  - name: spec_root
+    required: false
+    default: ""
+  - name: change_name
+    required: true
+
+sessions:
+  - name: lead-agent
+    agent: lead
+
+workspace_dirs: ["{{openspec.spec_root}}"]
+
+steps:
+  - id: resolve-openspec-root
+    script: resolve-openspec-root.sh
+    script_inputs:
+      change_name: "{{change_name}}"
+      spec_root: "{{spec_root}}"
+      operation: create
+      session_dir: "{{session_dir}}"
+    capture: openspec
+    capture_format: json
+
+  - id: validate-feature-branch
+    workflow: ../core/validate-feature-branch-v1.0.yaml
+    params:
+      workflow_name: "openspec:change"
+
+  - id: create
+    script: create-change.sh
+    script_inputs:
+      spec_root: "{{openspec.spec_root}}"
+      spec_external: "{{openspec.external}}"
+      change_name: "{{change_name}}"
+
+  - id: define
+    workflow: ../core/define-change-v1.0.yaml
+    params:
+      context_instruction: "{{openspec.context_instruction}}"
+      change_name: "{{change_name}}"
+      change_dir: "{{openspec.change_dir}}"
+      change_label: "OpenSpec change"
+      artifact_location_instruction: "{{openspec.location_instruction}}"
+
+  - id: plan
+    workflow: ../core/plan-change-v1.0.yaml
+    params:
+      context_instruction: "{{openspec.context_instruction}}"
+      change_name: "{{change_name}}"
+      change_dir: "{{openspec.change_dir}}"
+      change_label: "OpenSpec change"
+      change_kind: "openspec"
+      spec_root: "{{openspec.spec_root}}"
+      commit_plan: "{{openspec.commit_plan}}"
+
+  - id: implement
+    workflow: ../core/implement-change-v1.0.yaml
+    params:
+      context_instruction: "{{openspec.context_instruction}}"
+      change_name: "{{change_name}}"
+      change_dir: "{{openspec.change_dir}}"
+      change_label: "OpenSpec change"
+      change_kind: "openspec"
+      spec_root: "{{openspec.spec_root}}"
+      artifact_validation_instruction: "{{openspec.validate_instruction}}"
+      skip_validator: "false"
+
+  - id: accept
+    workflow: ../core/accept-change-v1.0.yaml
+    params:
+      context_instruction: "{{openspec.context_instruction}}"
+      change_name: "{{change_name}}"
+      change_dir: "{{openspec.change_dir}}"
+      change_label: "OpenSpec change"
+      artifact_validation_instruction: "{{openspec.accept_validate_instruction}}"
+
+  - id: archive
+    workflow: archive-change-v1.1.yaml
+    params:
+      spec_root: "{{openspec.spec_root}}"
+      spec_external: "{{openspec.external}}"
+      context_instruction: "{{openspec.context_instruction}}"
+      change_name: "{{change_name}}"
+
+  - id: finalize
+    workflow: ../core/finalize-pr-v1.0.yaml
+    params:
+      context_instruction: "{{openspec.context_instruction}}"
+
+  # These closing steps intentionally remain top-level in each entry for phase caps.
+  # jscpd:ignore-start
+  - id: check-spec-leak
+    script: check-spec-leak.sh
+    script_inputs:
+      spec_root: "{{openspec.spec_root}}"
+      spec_root_input: "{{openspec.spec_root_input}}"
+      session_dir: "{{session_dir}}"
+    skip_if: 'sh: test {{openspec.external}} = false'
+    repair:
+      session: lead-agent
+      max: 1
+      prompt: |
+        The external spec path leak check failed. Fix PR title/body with gh pr edit or the bundled update-pr-body.sh, preserving human text outside the generated block. You may add a follow-up commit removing leaked paths from tracked files. Never rewrite history or force-push. A leaked pushed commit message cannot be repaired: report it and end with REPAIR_BLOCKED. Never declare success yourself; the check that runs after you decides.
+        {{openspec.context_instruction}}
+
+  - id: report-spec-changes
+    script: report-spec-changes.sh
+    script_inputs:
+      spec_root: "{{openspec.spec_root}}"
+      change_name: "{{change_name}}"
+      session_dir: "{{session_dir}}"
+    skip_if: 'sh: test {{openspec.external}} = false'
+  # jscpd:ignore-end
