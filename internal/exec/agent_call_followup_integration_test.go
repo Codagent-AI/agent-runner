@@ -2,16 +2,20 @@ package exec
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/codagent/agent-runner/internal/agentcall"
+	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/control"
+	"github.com/codagent/agent-runner/internal/metrics"
 )
 
 func TestFollowUpSubprocessINT003(t *testing.T) {
@@ -33,6 +37,11 @@ func TestFollowUpSubprocessINT003(t *testing.T) {
 			o := testAgentCallOptions(root, runner, a)
 			o.Context.ProfileStore = &config.Config{ActiveAgents: map[string]*config.Agent{"implementor": {CLI: name, Model: "m1"}}}
 			o.Adapter = func(string) (cli.Adapter, error) { return a, nil }
+			// Route the handler's real audit events through the metrics pipeline
+			// so the persisted evidence, not hand-built fixtures, is asserted.
+			metricsDir := t.TempDir()
+			recorder := &recordingAuditLogger{}
+			o.Context.AuditLogger = metrics.NewPipeline(metrics.NewCollector(metricsDir, "run", "workflow", time.Now()), recorder)
 			h := NewAgentCallHandler(o)
 			call := func(id, payload string) agentcall.Response {
 				return decodeCallResponse(t, h.HandleAgentCall(context.Background(), control.AgentCallRequest{RequestID: id, Payload: []byte(payload)}))
@@ -93,6 +102,33 @@ func TestFollowUpSubprocessINT003(t *testing.T) {
 			}
 			if len(o.Context.NamedSessions) != 0 {
 				t.Fatal("follow-up wrote named session")
+			}
+			var followUpEnd *audit.Event
+			for i := range recorder.events {
+				if e := &recorder.events[i]; e.Type == audit.EventAgentCallEnd && e.Data["call_id"] == second.CallID {
+					followUpEnd = e
+				}
+			}
+			if followUpEnd == nil || followUpEnd.Data["target_kind"] != "follow_up" || followUpEnd.Data["follow_up_of"] != first.CallID ||
+				followUpEnd.Data["exit"] != "exited" || followUpEnd.Data["git_state"] != "not_git" {
+				t.Fatalf("follow-up agent_call_end = %+v", followUpEnd)
+			}
+			raw, err := os.ReadFile(filepath.Join(metricsDir, metrics.FileName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var artifact metrics.Artifact
+			if err := json.Unmarshal(raw, &artifact); err != nil {
+				t.Fatal(err)
+			}
+			var record *metrics.StepRecord
+			for i := range artifact.Steps {
+				if artifact.Steps[i].CallID == second.CallID {
+					record = &artifact.Steps[i]
+				}
+			}
+			if record == nil || record.TargetKind != "follow_up" || record.FollowUpOf != first.CallID || record.Exit != "exited" || record.GitState != "not_git" {
+				t.Fatalf("follow-up metrics record = %+v", record)
 			}
 			if name == "claude" {
 				o.Context.NamedSessions["named"] = native

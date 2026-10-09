@@ -44,6 +44,50 @@ func TestActivityStreamsINT005(t *testing.T) {
 		}
 	}
 }
+
+// Sanitized excerpts of real headless streams captured from Agent Runner runs:
+// every content string is replaced with SECRET while the event structure is
+// kept, so CLI format drift shows up here rather than only in live runs.
+func TestActivityRecordedRealStreams(t *testing.T) {
+	cases := map[string][]string{
+		"claude": {
+			"session started", "tool_use: Skill", "tool_result", "thinking", "assistant message", "tool_use: Bash", "tool_result",
+			"tool_use: Bash", "tool_result", "thinking", "tool_use: Bash", "tool_result", "thinking", "tool_use: Bash", "tool_result",
+			"thinking", "tool_use: Bash", "tool_result", "thinking", "tool_use: Bash", "tool_result",
+		},
+		"codex": {
+			"turn.started", "item.completed: agent_message",
+			"item.started: command_execution", "item.completed: command_execution",
+			"item.started: command_execution", "item.completed: command_execution",
+			"item.started: command_execution", "item.completed: command_execution",
+			"item.started: command_execution", "item.completed: command_execution",
+			"item.started: command_execution",
+		},
+	}
+	for name, want := range cases {
+		t.Run(name, func(t *testing.T) {
+			a, _ := Get(name)
+			s := a.(HeadlessActivitySummarizer)
+			data, err := os.ReadFile("testdata/activity/" + name + "-recorded.jsonl")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+				if summary, ok := s.SummarizeActivity([]byte(line)); ok {
+					if strings.Contains(summary, "SECRET") {
+						t.Fatalf("summary leaks content: %q", summary)
+					}
+					got = append(got, summary)
+				}
+			}
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Fatal(diff)
+			}
+		})
+	}
+}
+
 func TestResumeModelDeclarationMatchesArgs(t *testing.T) {
 	for _, name := range KnownCLIs() {
 		t.Run(name, func(t *testing.T) {
