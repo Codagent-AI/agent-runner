@@ -7,12 +7,11 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.environ['ARCHIVE_SCRIPT_DIR'])
-from archive_snapshot import snapshot
+from archive_snapshot import snapshot, write_record
 
 try:
     p = json.loads(os.environ['EXTERNAL_ARCHIVE_PAYLOAD'])
@@ -42,16 +41,7 @@ try:
         record = dict(spec_root=str(root), change_name=name, run_id=session.name,
                       archive_absent_at_start=True, canonical=canonical, other=other)
         record_path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temporary = tempfile.mkstemp(dir=record_path.parent, prefix=name + '-', suffix='.tmp')
-        try:
-            with os.fdopen(fd, 'w') as f:
-                json.dump(record, f)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(temporary, record_path)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
+        write_record(record_path, record, prefix=name + '-')
     if archives and active.exists():
         raise ValueError(f'both active change and archive exist: {active}, {archives}')
     if active.exists():

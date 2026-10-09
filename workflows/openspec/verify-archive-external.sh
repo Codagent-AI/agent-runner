@@ -6,12 +6,11 @@ import json
 import os
 import re
 import sys
-import tempfile
 from pathlib import Path
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.environ['ARCHIVE_SCRIPT_DIR'])
-from archive_snapshot import snapshot
+from archive_snapshot import snapshot, write_record
 
 try:
     p = json.loads(os.environ['EXTERNAL_ARCHIVE_PAYLOAD'])
@@ -42,16 +41,7 @@ try:
         modified=sorted(k for k in canonical.keys() & old.keys() if canonical[k] != old[k]),
         deleted=sorted(old.keys() - canonical.keys()))
     record['archive_dir'] = archive.relative_to(root).as_posix()
-    fd, temporary = tempfile.mkstemp(dir=record_path.parent, suffix='.tmp')
-    try:
-        with os.fdopen(fd, 'w') as f:
-            json.dump(record, f)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(temporary, record_path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+    write_record(record_path, record)
     print(f'Verified external archive: {record["archive_dir"]}')
 except (OSError, ValueError, KeyError) as e:
     print(f'verify-archive-external: {e}', file=sys.stderr)
