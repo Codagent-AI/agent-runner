@@ -166,7 +166,7 @@ func externalContext(wd, resolved, change string) string {
 	for _, name := range []string{"AGENTS.md", "CLAUDE.md", "openspec/config.yaml"} {
 		p := filepath.Join(resolved, name)
 		if info, e := os.Stat(p); e == nil && !info.IsDir() {
-			context += fmt.Sprintf(" Read and follow `%s` as the spec project's working rules.", p)
+			context += fmt.Sprintf(" Read and follow %#q as the spec project's working rules.", p)
 		}
 	}
 	return context
