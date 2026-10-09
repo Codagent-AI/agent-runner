@@ -1020,7 +1020,7 @@ func cleanupNewRealAgentRuns(t *testing.T, workdir, workflowName string) {
 
 // E2E-001 keeps the token out of the worktree until resume; transcript and
 // audit identities distinguish genuine continuity from a fresh-call reply.
-func TestClaudeFollowUpRealAgentE2E001(t *testing.T) {
+func TestClaudeFollowUpHeadlessRealAgentE2E(t *testing.T) {
 	_, dir, bin := prepareRealAgentE2E(t, "claude")
 	home := t.TempDir()
 	writeRealAgentTestFile(t, filepath.Join(home, ".agent-runner", "settings.yaml"), []byte("autonomous_permission_mode: yolo\nrun_retention:\n  enabled: false\n"))
@@ -1141,7 +1141,7 @@ steps:
 	}
 }
 
-func TestClaudeTimeoutRealAgentE2E002(t *testing.T) {
+func TestClaudeTimeoutHeadlessRealAgentE2E(t *testing.T) {
 	_, dir, bin := prepareRealAgentE2E(t, "claude")
 	home := t.TempDir()
 	writeRealAgentTestFile(t, filepath.Join(home, ".agent-runner", "settings.yaml"), []byte("autonomous_permission_mode: yolo\nrun_retention:\n  enabled: false\n"))
