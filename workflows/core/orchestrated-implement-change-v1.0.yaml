@@ -67,6 +67,10 @@ steps:
   - id: orchestrate-implementation
     session: lead-agent
     mode: autonomous
+    # Headless CLIs exit when the lead ends its turn, aborting sub-agents that
+    # are still running. The interactive backend keeps the session open until
+    # the lead signals completion.
+    autonomous_backend: interactive
     prompt: |
       You MUST use the codagent:orchestrate-change skill to implement {{change_label}} "{{change_name}}" from its approved definition artifacts under `{{change_dir}}/`: `proposal.md`, every `specs/*/spec.md`, `design.md`, and `test-plan.md`. There is no task breakdown for this change.
 
@@ -75,6 +79,8 @@ steps:
       Do not run Agent Validator (`agent-validator run`, `review`, or `check`) here, directly or through any skill, and tell your sub-agents the same. It runs explicitly in a later workflow step.
 
       A later step audits this change's assumptions. Every brief must tell the sub-agent to finish its slice by running the codagent:session-report skill, treating the artifacts and requirements its brief covered as the task specification, and to include that report verbatim in its final response. Save each sub-agent's report verbatim, labeled with its slice, in your plan file as it arrives.
+
+      Signal completion only after every sub-agent has finished and its work is committed.
 
   - id: run-validator
     workflow: run-validator-v1.0.yaml
