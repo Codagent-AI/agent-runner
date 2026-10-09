@@ -53,8 +53,12 @@ try:
     for path in paths:
         if path and (leaks(path) or leaks(git('diff', '--no-ext-diff', '--no-textconv', base + '..HEAD', '--', path))):
             locations.append('file ' + path)
-    pr = subprocess.run(['gh', 'pr', 'view', '--json', 'number'], capture_output=True, text=True)
-    if pr.returncode == 0:
+    # Without a remote there is no PR to scan. With one, only gh's "no pull
+    # requests found" means no PR; any other failure must not pass the guard.
+    pr = subprocess.run(['gh', 'pr', 'view', '--json', 'number'], capture_output=True, text=True) if git('remote') else None
+    if pr is not None and pr.returncode != 0 and 'no pull requests found' not in pr.stderr:
+        raise ValueError('cannot read PR: ' + pr.stderr.strip())
+    if pr is not None and pr.returncode == 0:
         details = subprocess.run(['gh', 'pr', 'view', '--json', 'title,body'], capture_output=True, text=True, check=True)
         data = json.loads(details.stdout)
         for field in ('title', 'body'):

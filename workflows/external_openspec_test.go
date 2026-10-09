@@ -321,6 +321,7 @@ func TestSpecLeakGuardFindsNonMainDefaultBranch(t *testing.T) {
 			fake := `#!/bin/sh
 set -eu
 if [ "$1" = repo ]; then printf 'develop\n'; exit 0; fi
+printf 'no pull requests found for branch "feature"\n' >&2
 exit 1
 `
 			if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(fake), 0o700); err != nil {
@@ -329,6 +330,48 @@ exit 1
 			out, err := runExternalScript(t, "check-spec-leak.sh", map[string]string{"spec_root": root}, repo, []string{"PATH=" + bin + ":" + os.Getenv("PATH")})
 			if err == nil || !strings.Contains(out, "file file.txt") {
 				t.Fatalf("want leak in file.txt using develop as base, got err=%v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestSpecLeakGuardPRLookup(t *testing.T) {
+	for _, mode := range []string{"no-pr", "gh-error", "no-remote"} {
+		t.Run(mode, func(t *testing.T) {
+			repo := t.TempDir()
+			root := t.TempDir()
+			bin := t.TempDir()
+			runGit(t, repo, "init", "-b", "main")
+			runGit(t, repo, "config", "user.name", "Test")
+			runGit(t, repo, "config", "user.email", "test@example.com")
+			runGit(t, repo, "commit", "--allow-empty", "-m", "initial")
+			if mode != "no-remote" {
+				remote := filepath.Join(t.TempDir(), "remote.git")
+				runGit(t, repo, "init", "--bare", remote)
+				runGit(t, repo, "remote", "add", "origin", remote)
+				runGit(t, repo, "push", "origin", "main")
+			}
+			runGit(t, repo, "checkout", "-b", "feature")
+			runGit(t, repo, "commit", "--allow-empty", "-m", "feature")
+			fake := `#!/bin/sh
+if [ "$1" = repo ]; then printf 'main\n'; exit 0; fi
+if [ "$MODE" = no-pr ]; then printf 'no pull requests found for branch "feature"\n' >&2; exit 1; fi
+if [ "$MODE" = no-remote ]; then printf 'unexpected gh call\n' >&2; exit 1; fi
+printf 'HTTP 401: Bad credentials\n' >&2
+exit 1
+`
+			if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(fake), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			out, err := runExternalScript(t, "check-spec-leak.sh", map[string]string{"spec_root": root}, repo, []string{"PATH=" + bin + ":" + os.Getenv("PATH"), "MODE=" + mode})
+			if mode == "gh-error" {
+				if err == nil || !strings.Contains(out, "Bad credentials") {
+					t.Fatalf("want failure naming the gh error, got err=%v\n%s", err, out)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("want pass with no PR to scan, got err=%v\n%s", err, out)
 			}
 		})
 	}
