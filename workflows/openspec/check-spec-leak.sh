@@ -20,8 +20,21 @@ try:
         roots.add(raw)
     roots.discard('')
     patterns = [re.compile(r'(?<![\w.~-])' + re.escape(root.rstrip('/')) + r'(?![\w-]|\.\w)') for root in roots]
+    # Mirror core:validate-feature-branch: GitHub's default branch when a remote
+    # exists, else init.defaultBranch, then the conventional names.
+    candidates = []
     default = subprocess.run(['git', 'symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD'], capture_output=True, text=True)
-    candidates = [default.stdout.strip()] if default.returncode == 0 else ['origin/main', 'origin/master', 'main', 'master']
+    if default.returncode == 0:
+        candidates.append(default.stdout.strip())
+    if git('remote'):
+        hosted = subprocess.run(['gh', 'repo', 'view', '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'], capture_output=True, text=True)
+        name = hosted.stdout.strip() if hosted.returncode == 0 else ''
+        if name:
+            candidates += ['origin/' + name, name]
+    configured = subprocess.run(['git', 'config', 'init.defaultBranch'], capture_output=True, text=True)
+    if configured.returncode == 0 and configured.stdout.strip():
+        candidates.append(configured.stdout.strip())
+    candidates += ['origin/main', 'origin/master', 'main', 'master']
     base = None
     for ref in candidates:
         result = subprocess.run(['git', 'merge-base', ref, 'HEAD'], capture_output=True, text=True)

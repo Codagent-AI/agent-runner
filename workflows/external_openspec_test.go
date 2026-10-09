@@ -294,6 +294,46 @@ if [ "$4" = number ]; then printf '{"number":1}'; else cat "$PR_FIXTURE"; fi
 	}
 }
 
+func TestSpecLeakGuardFindsNonMainDefaultBranch(t *testing.T) {
+	for _, mode := range []string{"github-default", "init-default"} {
+		t.Run(mode, func(t *testing.T) {
+			repo := t.TempDir()
+			root := t.TempDir()
+			bin := t.TempDir()
+			runGit(t, repo, "init", "-b", "develop")
+			runGit(t, repo, "config", "user.name", "Test")
+			runGit(t, repo, "config", "user.email", "test@example.com")
+			runGit(t, repo, "commit", "--allow-empty", "-m", "initial")
+			if mode == "github-default" {
+				remote := filepath.Join(t.TempDir(), "remote.git")
+				runGit(t, repo, "init", "--bare", remote)
+				runGit(t, repo, "remote", "add", "origin", remote)
+				runGit(t, repo, "push", "origin", "develop")
+			} else {
+				runGit(t, repo, "config", "init.defaultBranch", "develop")
+			}
+			runGit(t, repo, "checkout", "-b", "feature")
+			if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte(root+"/openspec/foo"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runGit(t, repo, "add", "file.txt")
+			runGit(t, repo, "commit", "-m", "feature")
+			fake := `#!/bin/sh
+set -eu
+if [ "$1" = repo ]; then printf 'develop\n'; exit 0; fi
+exit 1
+`
+			if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(fake), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			out, err := runExternalScript(t, "check-spec-leak.sh", map[string]string{"spec_root": root}, repo, []string{"PATH=" + bin + ":" + os.Getenv("PATH")})
+			if err == nil || !strings.Contains(out, "file file.txt") {
+				t.Fatalf("want leak in file.txt using develop as base, got err=%v\n%s", err, out)
+			}
+		})
+	}
+}
+
 func TestExternalArchiveInterrupted(t *testing.T) {
 	root := t.TempDir()
 	session := t.TempDir()
