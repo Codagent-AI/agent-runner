@@ -694,7 +694,7 @@ func isBuiltin(name string) bool {
 }
 
 func builtinNamesMap() map[string]string {
-	return map[string]string{"session_dir": "", "step_id": "", model.IntakeHandoffVar: ""}
+	return map[string]string{"session_dir": "", "step_id": "", model.IntakeHandoffVar: "", "last_step_failure_kind": "", "last_step_crash_observed": "false"}
 }
 
 func (s *walkState) probeTriples() error {

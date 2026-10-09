@@ -92,6 +92,14 @@ steps:
 	}
 }
 
+func TestPipelineRecognizesPreviousStepBuiltins(t *testing.T) {
+	for _, name := range []string{"last_step_failure_kind", "last_step_crash_observed"} {
+		if !isBuiltin(name) {
+			t.Fatalf("%s is not a builtin", name)
+		}
+	}
+}
+
 func TestPipelineRecognizesAndReservesIntakeHandoff(t *testing.T) {
 	opts, _, _ := fakeOptions(t, &config.Config{})
 	fixtures := filepath.Join("..", "..", "testdata")

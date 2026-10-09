@@ -142,6 +142,16 @@ func resolveStepProfile(step *model.Step, ctx *model.ExecutionContext) (*config.
 	return resolved, nil
 }
 
+// failAgentStepForControlError records a runner-control setup failure as an
+// agent crash, since the session could not run, and emits the step end.
+func failAgentStepForControlError(ctx *model.ExecutionContext, step *model.Step, prefix string, startTime time.Time, cliName, sessionID string, invocationContext cli.InvocationContext, isResume bool, controlErr error) (StepOutcome, error) {
+	identity := executionIdentity(ctx, step, "step", 0, false, cliName, sessionID)
+	recordAgentCrash(ctx, step, prefix, attemptForIdentity(ctx, &identity), nil, controlErr)
+	extraction := cli.UsageExtraction{Usage: defaultAgentUsage(cliName, invocationContext.IsHeadless())}
+	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), nil, controlErr, &extraction, nil)
+	return OutcomeFailed, controlErr
+}
+
 // ExecuteAgentStep runs an agent step using the resolved CLI adapter.
 func ExecuteAgentStep(
 	step *model.Step,
@@ -152,6 +162,7 @@ func ExecuteAgentStep(
 	if step.Prompt == "" {
 		return OutcomeFailed, nil
 	}
+	ctx.Crashes.PruneReexecuted(stepPath(ctx, step), ctx.ExecutionSessionID)
 	agentCallEligible := step.HasTool(model.RunnerToolCallAgent)
 	routeEligible := isRouteEligible(step, ctx)
 
@@ -182,7 +193,7 @@ func ExecuteAgentStep(
 
 	invocationContext := resolveInvocationContext(mode, ctx, cliName, step.Capture != "", log)
 
-	if modeErr := interactiveModeError(adapter, invocationContext); modeErr != nil {
+	if modeErr := validateAgentInvocationContext(adapter, invocationContext, cliName, step.ID); modeErr != nil {
 		emitAgentFailure(ctx, prefix, startTime, string(mode), step, modeErr.Error(), log)
 		return OutcomeFailed, nil
 	}
@@ -197,9 +208,7 @@ func ExecuteAgentStep(
 
 	// Bind the run-scoped endpoint before releasing the terminal lease.
 	if controlErr := ensureRunnerControl(ctx, invocationContext, agentCallEligible); controlErr != nil {
-		extraction := cli.UsageExtraction{Usage: defaultAgentUsage(cliName, invocationContext.IsHeadless())}
-		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), nil, controlErr, &extraction, nil)
-		return OutcomeFailed, controlErr
+		return failAgentStepForControlError(ctx, step, prefix, startTime, cliName, sessionID, invocationContext, isResume, controlErr)
 	}
 
 	callHandler, spawnEnv, deactivate, controlErr := prepareAgentCallRuntime(
@@ -207,14 +216,15 @@ func ExecuteAgentStep(
 		cliName, sessionID, prefix, spawnEnv,
 	)
 	if controlErr != nil {
-		extraction := cli.UsageExtraction{Usage: defaultAgentUsage(cliName, invocationContext.IsHeadless())}
-		emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, false, "", OutcomeFailed, "", controlErr.Error(), nil, controlErr, &extraction, nil)
-		return OutcomeFailed, controlErr
+		return failAgentStepForControlError(ctx, step, prefix, startTime, cliName, sessionID, invocationContext, isResume, controlErr)
 	}
 	if deactivate != nil {
 		defer deactivate()
 	}
 
+	if invocationContext == cli.ContextExternalUser {
+		return executeExternalUser(step, ctx, runner, log, adapter, profile, args, spawnEnv, cliName, sessionID, isResume, prefix, startTime, callHandler, intakeDelivery.Started)
+	}
 	// Persist knowable session IDs before spawn so interruption cannot orphan
 	// the native session. CLI-assigned IDs are stored after discovery instead.
 	recordSessionOnSpawn(step, ctx, sessionID)
@@ -281,6 +291,9 @@ func finishAgentStep(
 	identity := executionIdentity(ctx, step, "step", 0, invocation.CLILaunched, cliName, resolvedSessionID)
 	attempt := attemptForIdentity(ctx, &identity)
 	extraction := cli.UsageExtraction{Usage: invocation.Usage, EstimatedCostUSD: invocation.EstimatedCostUSD}
+	if invocation.Crashed {
+		recordAgentCrash(ctx, step, prefix, attempt, invocation, runErr)
+	}
 	emitAgentEnd(ctx, prefix, startTime, step, cliName, sessionID, invocationContext, isResume, invocation.CLILaunched, discoveredID, invocation.Outcome, invocation.Response, invocation.Stderr, &invocation.ExitCode, runErr, &extraction, invocation.UsageError)
 	if runErr == nil {
 		publishLastAgentExecution(ctx, prefix, attempt, invocation.Response, callHandler)
@@ -391,7 +404,7 @@ func prepareAgentCallRuntime(
 	handler.options.Parent.ResolveSessionID = func() string {
 		return discoverParentSessionID(adapter, spawnTime, parentWorkdir, handler)
 	}
-	if !invocationContext.IsHeadless() {
+	if !invocationContext.IsHeadless() || invocationContext == cli.ContextExternalUser {
 		return handler, spawnEnv, nil, nil
 	}
 	server, err := controlServerForContext(ctx)
@@ -480,6 +493,12 @@ func interactiveModeError(adapter cli.Adapter, invocationContext cli.InvocationC
 }
 
 func resolveInvocationContext(mode model.StepMode, ctx *model.ExecutionContext, cliName string, hasCapture bool, log Logger) cli.InvocationContext {
+	if ctx.ExternalUser != nil {
+		if mode == model.ModeAutonomous {
+			return cli.ContextAutonomousHeadless
+		}
+		return cli.ContextExternalUser
+	}
 	if mode != model.ModeAutonomous {
 		return cli.ContextInteractive
 	}
@@ -712,7 +731,7 @@ func buildAdapterInput(
 
 	// Block AskUserQuestion in autonomous mode so the agent cannot stall
 	// waiting for input. Applies to fresh and resumed autonomous sessions alike.
-	if invocationContext.IsAutonomous() {
+	if invocationContext.IsAutonomous() || invocationContext == cli.ContextExternalUser {
 		input.DisallowedTools = []string{"AskUserQuestion"}
 	}
 	if completionExecutable != "" {
@@ -724,7 +743,7 @@ func buildAdapterInput(
 	}
 
 	switch {
-	case invocationContext.IsHeadless():
+	case invocationContext.IsHeadless() && invocationContext != cli.ContextExternalUser:
 		input.Prompt = fullPrompt
 	// Since Claude Code 2.1.267, --system-prompt-snapshot defaults to on and
 	// records the system prompt only on the first request. Resumed sessions
@@ -763,11 +782,11 @@ func buildAdapterInput(
 }
 
 func continueMarkerPromptNeedsRefresh(workflowResumed, isResume bool, invocationContext cli.InvocationContext) bool {
-	return !invocationContext.IsHeadless() && (workflowResumed || isResume)
+	return (!invocationContext.IsHeadless() || invocationContext == cli.ContextExternalUser) && (workflowResumed || isResume)
 }
 
 func completionExecutableForContext(invocationContext cli.InvocationContext) (string, error) {
-	if invocationContext.IsHeadless() {
+	if invocationContext.IsHeadless() && invocationContext != cli.ContextExternalUser {
 		return "", nil
 	}
 	executable, err := agentRunnerExecutable()
@@ -818,7 +837,7 @@ func completionInstruction(executable string) string {
 }
 
 func validateCompletionIntegration(input *cli.BuildArgsInput) error {
-	if input.Context.IsHeadless() {
+	if input.Context.IsHeadless() && input.Context != cli.ContextExternalUser {
 		if input.CompletionCommand != nil {
 			return errors.New("headless invocation unexpectedly includes a completion command")
 		}
@@ -902,7 +921,7 @@ func controlServerForContext(ctx *model.ExecutionContext) (*control.ControlServe
 }
 
 func ensureRunnerControl(ctx *model.ExecutionContext, invocationContext cli.InvocationContext, agentCallEligible bool) error {
-	if invocationContext.IsHeadless() && !agentCallEligible {
+	if invocationContext.IsHeadless() && invocationContext != cli.ContextExternalUser && !agentCallEligible {
 		return nil
 	}
 	if ctx.SessionDir == "" {
@@ -931,45 +950,15 @@ func setInteractiveAttempt(ctx *model.ExecutionContext, metadata *interactive.Pr
 	root.InteractiveAttempt = stored
 }
 
-func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, options *AgentProcessOptions, invocationContext cli.InvocationContext, log Logger, suspendHook, resumeHook func() error, direct *directInvocation) (StepOutcome, ProcessResult, bool, error) {
+func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, options *AgentProcessOptions, invocationContext cli.InvocationContext, log Logger, suspendHook, resumeHook func() error, direct *directInvocation) (processOutcome StepOutcome, processResult ProcessResult, launched, crashed bool, processErr error) {
 	if invocationContext.IsHeadless() {
-		// Capture stdout for headless runs so that adapters (e.g. Codex) can
-		// parse session IDs from the process output.
-		result, runErr := runner.RunAgent(options)
-		if errors.Is(runErr, stdexec.ErrWaitDelay) {
-			if detector, ok := adapter.(cli.HeadlessCompletionDetector); ok &&
-				detector.HasCompletedHeadlessOutput(result.Stdout) {
-				result.ExitCode = 0
-				runErr = nil
-			}
-		}
-		if runErr != nil {
-			return OutcomeFailed, result, result.Started, runErr
-		}
-		if f, ok := adapter.(cli.HeadlessResultFilter); ok {
-			result.ExitCode, result.Stderr = f.FilterHeadlessResult(result.ExitCode, result.Stdout, result.Stderr)
-		}
-		if result.ExitCode != 0 {
-			return OutcomeFailed, result, true, nil
-		}
-		// Detect AskUserQuestion failures in autonomous mode — these indicate
-		// the agent could not complete the task autonomously. Only scan
-		// stderr: CLI tool-blocked errors go there, while stdout contains
-		// agent natural language that may mention AskUserQuestion without
-		// indicating an actual failure.
-		for _, line := range strings.Split(strings.ToLower(result.Stderr), "\n") {
-			if strings.Contains(line, "askuserquestion") && isToolDisallowedLine(line) {
-				log.Errorf("  autonomous session attempted interactive prompt (AskUserQuestion); treating as failure\n")
-				return OutcomeFailed, result, true, nil
-			}
-		}
-		return OutcomeSuccess, result, true, nil
+		return runHeadlessAgentProcess(runner, adapter, options, log)
 	}
 
 	// Interactive: release the terminal if a hook is set, then hand it directly to the CLI.
 	if suspendHook != nil {
 		if err := suspendHook(); err != nil {
-			return OutcomeFailed, ProcessResult{}, false, err
+			return OutcomeFailed, ProcessResult{}, false, true, err
 		}
 	}
 	directResult, err := interactiveRunnerFn(options.Args, directRunOptions{context: options.Context, workdir: options.Workdir, invocation: direct})
@@ -983,19 +972,52 @@ func runAgentProcess(runner ProcessRunner, adapter cli.Adapter, options *AgentPr
 		if err == nil {
 			err = directResult.DurabilityError
 		}
-		return OutcomeFailed, result, directResult.Started, err
+		return OutcomeFailed, result, directResult.Started, true, err
+	}
+	if directResult.Completed {
+		if err != nil {
+			log.Printf("  warning: interactive turn completed but cleanup failed: %v\n", err)
+		}
+		return OutcomeSuccess, result, true, false, nil
 	}
 
-	if directResult.Completed {
-		return OutcomeSuccess, result, true, err
-	}
 	if err != nil {
-		return OutcomeFailed, result, directResult.Started, err
+		canceled := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+		return OutcomeFailed, result, directResult.Started, !canceled, err
 	}
 
 	// CLI exited without a continue trigger.
 	log.Printf("\n  CLI session exited. To resume this workflow, run:\n    agent-runner --resume\n\n")
-	return OutcomeAborted, result, true, nil
+	return OutcomeAborted, result, true, false, nil
+}
+
+func runHeadlessAgentProcess(runner ProcessRunner, adapter cli.Adapter, options *AgentProcessOptions, log Logger) (processOutcome StepOutcome, processResult ProcessResult, launched, crashed bool, processErr error) {
+	// Capture stdout so adapters can parse session IDs from process output.
+	result, runErr := runner.RunAgent(options)
+	if errors.Is(runErr, stdexec.ErrWaitDelay) {
+		if detector, ok := adapter.(cli.HeadlessCompletionDetector); ok && detector.HasCompletedHeadlessOutput(result.Stdout) {
+			result.ExitCode = 0
+			runErr = nil
+		}
+	}
+	if runErr != nil {
+		canceled := (errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded)) && !errors.Is(context.Cause(options.Context), cli.ErrCursorResultStall)
+		return OutcomeFailed, result, result.Started, !canceled, runErr
+	}
+	if f, ok := adapter.(cli.HeadlessResultFilter); ok {
+		result.ExitCode, result.Stderr = f.FilterHeadlessResult(result.ExitCode, result.Stdout, result.Stderr)
+	}
+	if result.ExitCode != 0 {
+		return OutcomeFailed, result, true, true, nil
+	}
+	// Only stderr conveys blocked tool calls; stdout can mention the tool in prose.
+	for _, line := range strings.Split(strings.ToLower(result.Stderr), "\n") {
+		if strings.Contains(line, "askuserquestion") && isToolDisallowedLine(line) {
+			log.Errorf("  autonomous session attempted interactive prompt (AskUserQuestion); treating as failure\n")
+			return OutcomeFailed, result, true, false, nil
+		}
+	}
+	return OutcomeSuccess, result, true, false, nil
 }
 
 // isToolDisallowedLine returns true if a lowercased output line matches a

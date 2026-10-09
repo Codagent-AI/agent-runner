@@ -67,6 +67,24 @@ steps:
 	}
 }
 
+func TestPrepareResumeLegacyCurrentStepWithoutNestedState(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	workflowPath := filepath.Join(dir, "work-v1.0.yaml")
+	if err := os.WriteFile(workflowPath, []byte("name: work\nsteps:\n  - id: step\n    command: echo ok\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := model.RunState{WorkflowFile: workflowPath, WorkflowName: "work", CurrentStep: model.CurrentStep{StepID: "step"}}
+	if err := stateio.WriteState(&state, dir); err != nil {
+		t.Fatal(err)
+	}
+	handle, err := PrepareResume(filepath.Join(dir, "state.json"), &Options{ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{}})
+	if err != nil {
+		t.Fatalf("PrepareResume: %v", err)
+	}
+	finalizeRun(handle.rs, ResultStopped)
+}
+
 func TestResumeRetentionExclusion(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()

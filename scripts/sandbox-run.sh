@@ -9,6 +9,8 @@ DOCKERFILE="${DOCKERFILE:-docker/dev/Dockerfile}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-}"
 INPUT_DIR=""
 DRY_RUN=0
+AUTH_ONLY=0
+HIDE_SOURCE=0
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 RUNNER_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 DEFAULT_SECRETS_FILE="${SANDBOX_SECRETS_FILE:-$RUNNER_ROOT/.sandbox-secrets.env}"
@@ -32,6 +34,13 @@ agent-runner before the command runs.
 
 Options:
   --dry-run              Print the docker commands instead of running them.
+  --auth-only            With auth mounts, forward credential files only;
+                          omit host Claude settings. Codex and Cursor already
+                          mount only their auth files.
+  --hide-source          Build in a separate container, pass the binary through
+                          a temporary Docker named volume, and run the command
+                          without the Agent Runner source mount. Incompatible
+                          with --dev-audit.
   --image IMAGE          Docker image tag. Default: agent-runner-dev:local
   --dockerfile PATH      Dockerfile path relative to repo root.
                           Default: docker/dev/Dockerfile
@@ -49,12 +58,15 @@ Options:
   --env-file PATH        Read simple NAME=value or export NAME=value entries
                           from a local env file and pass those variable names.
                           The file is parsed, not sourced.
-  --mount-codex-auth     Mount host ~/.codex auth/config files read-only for
+  --mount-codex-auth     Mount host ~/.codex/auth.json read-only for
                           subscription-based Codex CLI auth. Files are copied
                           into writable container home before the command runs.
   --mount-claude-auth    Mount host ~/.claude auth/settings files read-only for
                           subscription-based Claude Code auth. Files are copied
                           into writable container home before the command runs.
+                          Without ~/.claude/.credentials.json (for example a
+                          macOS Keychain login), pass CLAUDE_CODE_OAUTH_TOKEN
+                          from the environment or a secrets file instead.
   --mount-cursor-auth    Mount host ~/.cursor/auth.json read-only for
                           subscription-based Cursor CLI auth. The file is copied
                           to ~/.cursor/auth.json and ~/.config/cursor/auth.json
@@ -90,6 +102,14 @@ while (($#)); do
   case "$1" in
     --dry-run)
       DRY_RUN=1
+      shift
+      ;;
+    --auth-only)
+      AUTH_ONLY=1
+      shift
+      ;;
+    --hide-source)
+      HIDE_SOURCE=1
       shift
       ;;
     --image)
@@ -166,6 +186,11 @@ done
 
 if [[ "$AUDIT_SMOKE" == 1 && "$DEV_AUDIT" != 1 ]]; then
   echo "--dev-audit-smoke requires --dev-audit" >&2
+  exit 2
+fi
+
+if [[ "$HIDE_SOURCE" == 1 && "$DEV_AUDIT" == 1 ]]; then
+  echo "--hide-source cannot be combined with --dev-audit" >&2
   exit 2
 fi
 
@@ -279,15 +304,30 @@ fi
 cd /workspace
 BOOTSTRAP
 )
+if [[ "$HIDE_SOURCE" == 1 ]]; then
+  command_bootstrap=$'set -euo pipefail\nmkdir -p "$HOME"\n/workspace/bin/sandbox-sync-home.sh\ncd /workspace'
+else
+  command_bootstrap="$bootstrap"
+fi
 if (($# == 1)); then
-  container_script="${bootstrap}"$'\n'"$1"
+  container_script="${command_bootstrap}"$'\n'"$1"
   container_command=(bash -lc "$container_script")
 else
-  container_script="${bootstrap}"$'\n''exec "$@"'
+  container_script="${command_bootstrap}"$'\n''exec "$@"'
   container_command=(bash -lc "$container_script" -- "$@")
+fi
+if [[ "$HIDE_SOURCE" == 1 ]]; then
+  # The base image creates an empty source directory for other launch modes.
+  # Remove it as root, then run the payload as the image's unprivileged user.
+  source_cleanup=$'set -euo pipefail\nrmdir /agent-runner-source\nexec setpriv --reuid=pwuser --regid=pwuser --init-groups "$@"'
+  container_command=(bash -lc "$source_cleanup" -- "${container_command[@]}")
 fi
 
 build_cmd=(docker build -t "$IMAGE" -f "$DOCKERFILE_ABS" "$RUNNER_ROOT")
+source_mount=()
+if [[ "$HIDE_SOURCE" != 1 ]]; then
+  source_mount=(-v "$RUNNER_ROOT:/agent-runner-source:ro")
+fi
 run_cmd=(
   docker run
   --rm
@@ -300,7 +340,7 @@ run_cmd=(
   -e AGENT_RUNNER_SOURCE_DIRTY
   -e AGENT_RUNNER_DEV_AUDIT=$DEV_AUDIT
   -e AGENT_RUNNER_AUDIT_SMOKE=$AUDIT_SMOKE
-  -v "$RUNNER_ROOT:/agent-runner-source:ro"
+  ${source_mount[@]+"${source_mount[@]}"}
   -v "$ARTIFACT_DIR:/artifacts"
 )
 
@@ -353,15 +393,41 @@ if [[ "$MOUNT_CODEX_AUTH" == 1 ]]; then
 fi
 
 if [[ "$MOUNT_CLAUDE_AUTH" == 1 ]]; then
-  add_required_file_mount "$HOME/.claude/.credentials.json" "/host-home/claude/.credentials.json" "Claude"
-  add_optional_file_mount "$HOME/.claude/settings.json" "/host-home/claude/settings.json"
-  add_optional_file_mount "$HOME/.claude/settings.local.json" "/host-home/claude/settings.local.json"
+  if [[ -f "$HOME/.claude/.credentials.json" ]]; then
+    add_required_file_mount "$HOME/.claude/.credentials.json" "/host-home/claude/.credentials.json" "Claude"
+  elif [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+    # macOS keeps the Claude Code login in the Keychain, so there may be no
+    # file to mount. A `claude setup-token` token authenticates the sandbox
+    # without sharing the host login's refresh token.
+    if [[ " ${ENV_VARS[*]+"${ENV_VARS[*]}"} " != *" CLAUDE_CODE_OAUTH_TOKEN "* ]]; then
+      run_cmd+=(-e CLAUDE_CODE_OAUTH_TOKEN)
+    fi
+  else
+    echo "Claude auth not found: $HOME/.claude/.credentials.json is missing and CLAUDE_CODE_OAUTH_TOKEN is not set (create one with claude setup-token)." >&2
+    exit 2
+  fi
+  if [[ "$AUTH_ONLY" != 1 ]]; then
+    add_optional_file_mount "$HOME/.claude/settings.json" "/host-home/claude/settings.json"
+    add_optional_file_mount "$HOME/.claude/settings.local.json" "/host-home/claude/settings.local.json"
+  fi
 fi
 
 if [[ "$MOUNT_CURSOR_AUTH" == 1 ]]; then
   add_required_file_mount "$HOME/.cursor/auth.json" "/host-home/cursor/auth.json" "Cursor"
 fi
 
+if [[ "$HIDE_SOURCE" == 1 ]]; then
+  run_cmd+=(--user root)
+  volume_name="agent-runner-sandbox-$(timestamp)-$$"
+  volume_create_cmd=(docker volume create "$volume_name")
+  volume_remove_cmd=(docker volume rm "$volume_name")
+  build_container_cmd=(docker run --rm --init -w /workspace -e HOME=/workspace/home
+    -e AGENT_RUNNER_SOURCE_COMMIT -e AGENT_RUNNER_SOURCE_DIRTY
+    -v "$RUNNER_ROOT:/agent-runner-source:ro"
+    --mount "type=volume,source=$volume_name,target=/workspace/bin"
+    "$IMAGE" bash -lc "$bootstrap"$'\n''cp /agent-runner-source/scripts/sandbox-sync-home.sh /workspace/bin/sandbox-sync-home.sh')
+  run_cmd+=(--mount "type=volume,source=$volume_name,target=/workspace/bin")
+fi
 run_cmd+=("$IMAGE" "${container_command[@]}")
 
 if [[ "$DRY_RUN" == 1 ]]; then
@@ -371,9 +437,21 @@ if [[ "$DRY_RUN" == 1 ]]; then
     echo "sandbox-run: untagged build selected"
   fi
   print_command "${build_cmd[@]}"
+  if [[ "$HIDE_SOURCE" == 1 ]]; then
+    print_command "${volume_create_cmd[@]}"
+    print_command "${build_container_cmd[@]}"
+  fi
   print_command "${run_cmd[@]}"
+  if [[ "$HIDE_SOURCE" == 1 ]]; then
+    print_command "${volume_remove_cmd[@]}"
+  fi
   exit 0
 fi
 
 "${build_cmd[@]}"
+if [[ "$HIDE_SOURCE" == 1 ]]; then
+  "${volume_create_cmd[@]}" >/dev/null
+  trap '"${volume_remove_cmd[@]}" >/dev/null' EXIT
+  "${build_container_cmd[@]}"
+fi
 "${run_cmd[@]}"

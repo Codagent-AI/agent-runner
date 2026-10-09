@@ -32,7 +32,8 @@ type NestedStepState struct {
 	// LastAgent identifies the most recent completed agent execution in this
 	// scope by audit prefix and attempt, so it can be rebuilt from the audit
 	// log after an interruption between the agent step and a later check.
-	LastAgent *ExecutionRef `json:"lastAgent,omitempty"`
+	LastAgent    *ExecutionRef       `json:"lastAgent,omitempty"`
+	PreviousStep *PreviousStepRecord `json:"previousStep,omitempty"`
 	// Repair carries the in-progress repair frame for a check in this scope.
 	Repair *RepairFrame `json:"repair,omitempty"`
 }
@@ -62,7 +63,9 @@ type RepairFrame struct {
 	// StartedAt is when the owning check's step_start was emitted, so a
 	// terminal step_end emitted outside the check's own call (a replay that
 	// stops before the check reruns) reports the check's full duration.
-	StartedAt time.Time `json:"startedAt,omitempty"`
+	StartedAt          time.Time `json:"startedAt,omitempty"`
+	LastAttemptCrashed bool      `json:"lastAttemptCrashed,omitempty"`
+	LastCrashPrefix    string    `json:"lastCrashPrefix,omitempty"`
 }
 
 // RewindRequest asks the sequencer to resume execution from an earlier step
@@ -115,13 +118,14 @@ func (cs *CurrentStep) UnmarshalJSON(data []byte) error {
 
 // RunState is the serialized workflow execution state.
 type RunState struct {
-	RunID        string            `json:"runId,omitempty"`
-	WorkflowFile string            `json:"workflowFile"`
-	WorkflowName string            `json:"workflowName"`
-	CurrentStep  CurrentStep       `json:"currentStep"`
-	Params       map[string]string `json:"params"`
-	WorkflowHash string            `json:"workflowHash"`
-	ProfileSet   string            `json:"profileSet,omitempty"`
+	ExternalUser *ExternalUserSettings `json:"externalUser,omitempty"`
+	RunID        string                `json:"runId,omitempty"`
+	WorkflowFile string                `json:"workflowFile"`
+	WorkflowName string                `json:"workflowName"`
+	CurrentStep  CurrentStep           `json:"currentStep"`
+	Params       map[string]string     `json:"params"`
+	WorkflowHash string                `json:"workflowHash"`
+	ProfileSet   string                `json:"profileSet,omitempty"`
 	// IntakeHandoffContents and IntakeParentRunID are immutable provenance seeded
 	// from a frozen intake route and restored unchanged on resume.
 	IntakeHandoffContents  string         `json:"intakeHandoffContents,omitempty"`
@@ -138,12 +142,19 @@ type RunState struct {
 	// RunKind identifies special persisted runs without changing how ordinary
 	// callers load them. Empty means an ordinary workflow execution.
 	RunKind string `json:"runKind,omitempty"`
-	// FailureReason is the classified root failure reason for a failed run,
-	// written by the top-level runner from the failing check's FailureRecord.
-	FailureReason string `json:"failureReason,omitempty"`
+	// FailureReason is the classified root failure reason for a failed run.
+	FailureReason string        `json:"failureReason,omitempty"`
+	FailureKind   FailureKind   `json:"failureKind,omitempty"`
+	CrashObserved bool          `json:"crashObserved,omitempty"`
+	Crashes       []CrashRecord `json:"crashes,omitempty"`
 	// Audit records reciprocal audit linkage. It is intentionally data-only so
 	// untagged binaries can safely list and inspect development audit history.
 	Audit *AuditMetadata `json:"audit,omitempty"`
+}
+
+type ExternalUserSettings struct {
+	Dir     string `json:"dir"`
+	Timeout string `json:"timeout,omitempty"`
 }
 
 // AuditMetadata is the persisted, append-only linkage between a source run

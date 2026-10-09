@@ -39,11 +39,15 @@ type AgentProcessOptions struct {
 	DropEnv       []string
 	Workdir       string
 	Prefix        string
-	StdoutWrapper func(io.Writer) io.Writer
-	StderrWrapper func(io.Writer) io.Writer
-	Supervision   AgentProcessSupervision
-	OnStarted     func()
-	startedOnce   *sync.Once
+	// OutputCopySuffix, when set, asks runners that persist raw output to also
+	// keep this invocation's output under the prefix plus this suffix, outside
+	// the bounded archive rotation for the prefix.
+	OutputCopySuffix string
+	StdoutWrapper    func(io.Writer) io.Writer
+	StderrWrapper    func(io.Writer) io.Writer
+	Supervision      AgentProcessSupervision
+	OnStarted        func()
+	startedOnce      *sync.Once
 }
 
 // NotifyStarted reports successful process launch exactly once.

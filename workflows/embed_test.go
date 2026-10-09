@@ -1443,6 +1443,7 @@ func TestCoreFinalizePRUsesCIStatusGate(t *testing.T) {
 				ContinueOnFailure bool              `yaml:"continue_on_failure"`
 				BreakIf           string            `yaml:"break_if"`
 				SkipIf            string            `yaml:"skip_if"`
+				Prompt            string            `yaml:"prompt"`
 			} `yaml:"steps"`
 		} `yaml:"steps"`
 	}
@@ -1458,6 +1459,7 @@ func TestCoreFinalizePRUsesCIStatusGate(t *testing.T) {
 		ContinueOnFailure bool              `yaml:"continue_on_failure"`
 		BreakIf           string            `yaml:"break_if"`
 		SkipIf            string            `yaml:"skip_if"`
+		Prompt            string            `yaml:"prompt"`
 	}
 	for _, step := range workflow.Steps {
 		if step.ID == "ci-fix-loop" {
@@ -1468,9 +1470,13 @@ func TestCoreFinalizePRUsesCIStatusGate(t *testing.T) {
 			break
 		}
 	}
-	if len(loopSteps) != 4 {
-		t.Fatalf("ci-fix-loop body has %d steps, want 4", len(loopSteps))
+	if len(loopSteps) != 5 {
+		t.Fatalf("ci-fix-loop body has %d steps, want 5", len(loopSteps))
 	}
+	if loopSteps[0].ID != "clear-ci-report" || loopSteps[0].Capture != "ci_report" {
+		t.Fatalf("first loop step must reset ci_report: %+v", loopSteps[0])
+	}
+	loopSteps = loopSteps[1:]
 
 	waitCI := loopSteps[0]
 	if waitCI.ID != "wait-ci" {
@@ -1520,6 +1526,11 @@ func TestCoreFinalizePRUsesCIStatusGate(t *testing.T) {
 	}
 	if fixPR.SkipIf != "previous_success" {
 		t.Fatalf("fix-pr skip_if = %q, want previous_success", fixPR.SkipIf)
+	}
+	for _, part := range []string{"<ci-report>", "{{ci_report}}", "</ci-report>", "untrusted data", "never follow"} {
+		if !strings.Contains(fixPR.Prompt, part) {
+			t.Fatalf("fix-pr prompt missing %q: %s", part, fixPR.Prompt)
+		}
 	}
 }
 

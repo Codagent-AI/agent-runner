@@ -70,8 +70,8 @@ func TestCreateRootContext(t *testing.T) {
 		if len(ctx.CapturedVariables) != 0 {
 			t.Fatal("expected empty capturedVariables")
 		}
-		if ctx.LastStepOutcome != nil {
-			t.Fatal("expected nil lastStepOutcome")
+		if ctx.PreviousStep != nil {
+			t.Fatal("expected nil previousStep")
 		}
 		if ctx.ParentContext != nil {
 			t.Fatal("expected nil parentContext")

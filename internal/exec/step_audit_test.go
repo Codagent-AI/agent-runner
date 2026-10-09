@@ -44,6 +44,28 @@ func TestEmitStepEndAgentUsageFallbackUsesInvocationIdentity(t *testing.T) {
 	}
 }
 
+func TestEmitStepEndClassificationFields(t *testing.T) {
+	step := &model.Step{ID: "agent", Prompt: "work"}
+	recorder := &mockAuditLogger{}
+	ctx := &model.ExecutionContext{AuditLogger: recorder, Crashes: model.NewCrashLedger()}
+	origin := model.CrashRecord{StepID: "agent", Prefix: "[agent]", Path: []model.NestingSegment{{StepID: "agent"}}}
+	ctx.Crashes.Add(&origin)
+	ctx.StepFailure = model.StepFailure{Kind: model.FailureInfrastructure, Origin: &origin}
+	emitStepEnd(ctx, "[agent]", time.Now(), "failed", nil, step)
+	emitStepEnd(ctx, "[agent]", time.Now(), "success", nil, step)
+	emitStepEnd(ctx, "[agent]", time.Now(), "skipped", nil, step)
+	failed, success, skipped := recorder.events[0].Data, recorder.events[1].Data, recorder.events[2].Data
+	if failed["failure_kind"] != model.FailureInfrastructure || failed["crash_observed"] != true || failed["failure_origin"] == nil {
+		t.Fatalf("failed=%v", failed)
+	}
+	if success["crash_observed"] != true || success["failure_kind"] != nil {
+		t.Fatalf("success=%v", success)
+	}
+	if _, ok := skipped["crash_observed"]; ok {
+		t.Fatalf("skipped=%v", skipped)
+	}
+}
+
 func TestPrelaunchAgentFailureReportsNotInvokedUsage(t *testing.T) {
 	tests := []struct {
 		name     string

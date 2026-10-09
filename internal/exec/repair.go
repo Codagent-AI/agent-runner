@@ -237,6 +237,10 @@ func commitCheckCapture(step *model.Step, ctx *model.ExecutionContext, result Pr
 // and one terminal step_end for the check and runs the inline or rerun
 // repair cycle around it.
 func ExecuteCheckStep(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, log Logger) (StepOutcome, error) {
+	ctx.Crashes.PruneReexecuted(stepPath(ctx, step), ctx.ExecutionSessionID)
+	if ctx.ExternalUser != nil && step.Command != "" && step.Mode == model.ModeInteractive {
+		return ExecuteShellStep(step, ctx, runner, log)
+	}
 	if step.Repair == nil {
 		if step.Command != "" {
 			return ExecuteShellStep(step, ctx, runner, log)
@@ -372,10 +376,18 @@ func runInlineRepairIteration(
 ) (outcome StepOutcome, done bool, checkResult ProcessResult, err error) {
 	frame := ctx.RepairFrame
 	frame.Phase = model.RepairPhaseRepairing
+	frame.LastAttemptCrashed = false
+	frame.LastCrashPrefix = ""
+	ctx.StepFailure = model.StepFailure{}
 	flushState(ctx)
 
 	response, agentOutcome, runErr := runInlineRepairAgent(step, ctx, runner, log, attempt)
 	if runErr != nil {
+		if frame.LastAttemptCrashed {
+			frame.Attempts++
+			emitRepairAttemptEndRaw(ctx, owningPrefix, frame.Form, frame.Attempts, "failed", 0)
+			return "", false, lastResult, nil
+		}
 		emitStepEnd(ctx, owningPrefix, startTime, "failed", map[string]any{"error": runErr.Error()}, step)
 		return OutcomeFailed, true, lastResult, runErr
 	}
@@ -397,6 +409,9 @@ func runInlineRepairIteration(
 	}
 
 	frame.Phase = model.RepairPhaseChecking
+	frame.LastAttemptCrashed = false
+	frame.LastCrashPrefix = ""
+	ctx.StepFailure = model.StepFailure{}
 	flushState(ctx)
 
 	result, checkErr := runInternalCheck(step, ctx, runner, step.ID, attempt)
@@ -446,6 +461,8 @@ func continueRepairCycle(step *model.Step, ctx *model.ExecutionContext, runner P
 	if response, blocked := targetDeclaredBlocked(ctx, frame); blocked {
 		return terminalBlocked(step, ctx, owningPrefix, startTime, response)
 	}
+	frame.LastAttemptCrashed = false
+	frame.LastCrashPrefix = ""
 
 	result, checkErr := runInternalCheckAtCurrentNesting(step, ctx, runner)
 	if checkErr != nil {
@@ -498,6 +515,13 @@ func runInlineRepairAgent(step *model.Step, ctx *model.ExecutionContext, runner 
 	}
 
 	outcome, runErr := ExecuteAgentStep(agentStep, attemptCtx, runner, log)
+	if attemptCtx.StepFailure.Kind == model.FailureInfrastructure {
+		ctx.StepFailure = attemptCtx.StepFailure
+		ctx.RepairFrame.LastAttemptCrashed = true
+		if attemptCtx.StepFailure.Origin != nil {
+			ctx.RepairFrame.LastCrashPrefix = attemptCtx.StepFailure.Origin.Prefix
+		}
+	}
 	// LastSessionStepID is a plain string, not a shared map, so a session the
 	// repair attempt creates or resumes must be propagated back to the owner
 	// explicitly for a later "session: resume" in the owning scope to find it.
@@ -597,6 +621,7 @@ func emitRepairBlocked(ctx *model.ExecutionContext, prefix string, attempt int, 
 // this check.
 func terminalBlocked(step *model.Step, ctx *model.ExecutionContext, owningPrefix string, startTime time.Time, response string) (StepOutcome, error) {
 	frame := ctx.RepairFrame
+	ctx.StepFailure = model.StepFailure{Kind: model.FailureStep}
 	emitRepairBlocked(ctx, owningPrefix, frame.Attempts, response)
 	ctx.LastFailure.Blocked = true
 	ctx.LastFailure.BlockedBy = response
@@ -608,6 +633,13 @@ func terminalBlocked(step *model.Step, ctx *model.ExecutionContext, owningPrefix
 
 // terminalExhausted ends the cycle because the repair budget is used up.
 func terminalExhausted(step *model.Step, ctx *model.ExecutionContext, owningPrefix string, startTime time.Time, lastResult ProcessResult) (StepOutcome, error) {
+	frame := ctx.RepairFrame
+	ctx.StepFailure = model.StepFailure{Kind: model.FailureStep}
+	if frame.LastAttemptCrashed {
+		if origin := ctx.Crashes.FindPrefix(frame.LastCrashPrefix); origin != nil {
+			ctx.StepFailure = model.StepFailure{Kind: model.FailureInfrastructure, Origin: origin}
+		}
+	}
 	return terminalFailed(step, ctx, owningPrefix, startTime, lastResult, false)
 }
 

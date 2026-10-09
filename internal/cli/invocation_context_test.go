@@ -16,6 +16,7 @@ func TestInvocationContextHelpers(t *testing.T) {
 		headless    bool
 	}{
 		{name: "interactive", context: ContextInteractive, interactive: true},
+		{name: "external user", context: ContextExternalUser, headless: true},
 		{name: "autonomous headless", context: ContextAutonomousHeadless, autonomous: true, headless: true},
 		{name: "autonomous interactive", context: ContextAutonomousInteractive, autonomous: true},
 	}

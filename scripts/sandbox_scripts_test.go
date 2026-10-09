@@ -1,6 +1,7 @@
 package scripts_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -52,6 +53,92 @@ func TestSandboxRunDryRunShowsSafeDockerInvocation(t *testing.T) {
 	}
 	if strings.Contains(text, "test-key") {
 		t.Fatalf("dry-run output leaked env value:\n%s", text)
+	}
+}
+
+func TestSandboxRunAuthOnlyDryRunOmitsHostSettings(t *testing.T) {
+	home := t.TempDir()
+	for _, name := range []string{".codex/auth.json", ".claude/.credentials.json", ".claude/settings.json", ".claude/settings.local.json", ".cursor/auth.json"} {
+		path := filepath.Join(home, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("bash", "./sandbox-run.sh", "--dry-run", "--no-default-secrets", "--auth-only", "--mount-codex-auth", "--mount-claude-auth", "--mount-cursor-auth", "--artifact-dir", t.TempDir(), "--", "true")
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("auth-only dry run: %v\n%s", err, output)
+	}
+	for _, want := range []string{"target=/host-home/codex/auth.json", "target=/host-home/claude/.credentials.json", "target=/host-home/cursor/auth.json"} {
+		if !strings.Contains(string(output), want) {
+			t.Fatalf("missing %s:\n%s", want, output)
+		}
+	}
+	if strings.Contains(string(output), "target=/host-home/claude/settings") {
+		t.Fatalf("host settings mounted:\n%s", output)
+	}
+}
+
+func TestSandboxRunHideSourceDryRunSeparatesBuildAndCommandContainers(t *testing.T) {
+	output, err := exec.Command("bash", "./sandbox-run.sh", "--dry-run", "--no-default-secrets", "--hide-source", "--artifact-dir", t.TempDir(), "--", "agent-runner", "--help").CombinedOutput()
+	if err != nil {
+		t.Fatalf("hide-source dry run: %v\n%s", err, output)
+	}
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var runs []string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "docker run ") {
+			runs = append(runs, line)
+		}
+	}
+	if len(runs) != 2 {
+		t.Fatalf("want build and command docker runs, got %d:\n%s", len(runs), output)
+	}
+	if !strings.Contains(runs[0], ":/agent-runner-source:ro") || strings.Contains(runs[1], ":/agent-runner-source:ro") {
+		t.Fatalf("source mount must be build-only:\n%s", output)
+	}
+	if !strings.Contains(runs[0], "go build") || strings.Contains(runs[1], "/tmp/agent-runner-local") {
+		t.Fatalf("command container must use prebuilt binary:\n%s", output)
+	}
+	if strings.Count(runs[1], " -v ") != 1 || strings.Contains(runs[1], "type=bind") || !strings.Contains(runs[1], "type=volume") {
+		t.Fatalf("command container has unexpected mounts:\n%s", runs[1])
+	}
+	if !strings.Contains(string(output), "docker volume create ") || !strings.Contains(string(output), "docker volume rm ") {
+		t.Fatalf("missing named volume lifecycle:\n%s", output)
+	}
+}
+
+func TestSandboxRunRejectsHideSourceDevAudit(t *testing.T) {
+	output, err := exec.Command("bash", "./sandbox-run.sh", "--dry-run", "--no-default-secrets", "--hide-source", "--dev-audit", "--", "true").CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "--hide-source cannot be combined with --dev-audit") {
+		t.Fatalf("expected clear combination error, got %v:\n%s", err, output)
+	}
+}
+
+func TestSandboxRunHideSourceRealContainer(t *testing.T) {
+	if os.Getenv("RUN_DOCKER_SANDBOX_TEST") != "1" {
+		t.Skip("set RUN_DOCKER_SANDBOX_TEST=1 to exercise Docker sandbox")
+	}
+	home := t.TempDir()
+	for _, name := range []string{".claude/.credentials.json", ".claude/settings.json", ".claude/settings.local.json"} {
+		path := filepath.Join(home, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := `test ! -e /agent-runner-source && test ! -e /tmp/agent-runner-local && test ! -e "$HOME/.claude/settings.json" && test ! -e "$HOME/.claude/settings.local.json" && agent-runner --help 2>&1 | grep -q -- --external-user`
+	cmd := exec.Command("bash", "./sandbox-run.sh", "--no-default-secrets", "--auth-only", "--hide-source", "--mount-claude-auth", "--artifact-dir", t.TempDir(), "--", check)
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("isolated sandbox failed: %v\n%s", err, output)
 	}
 }
 
@@ -725,7 +812,7 @@ func TestSandboxSyncHomeRecoversStaleLock(t *testing.T) {
 	}
 
 	cmd := exec.Command("bash", "./sandbox-sync-home.sh")
-	cmd.Env = append(os.Environ(),
+	cmd.Env = sandboxSyncHomeTestEnv(
 		"HOME="+containerHome,
 		"SANDBOX_HOST_HOME_ROOT="+hostHome,
 		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
@@ -738,6 +825,83 @@ func TestSandboxSyncHomeRecoversStaleLock(t *testing.T) {
 	}
 	if _, err := os.Stat(lockDir); !os.IsNotExist(err) {
 		t.Fatalf("lock dir should be removed after sync, stat err=%v", err)
+	}
+}
+
+func TestSandboxSyncHomeLockDoesNotChangeLauncherGitConfig(t *testing.T) {
+	dir := t.TempDir()
+	hostHome := filepath.Join(dir, "host-home")
+	containerHome := filepath.Join(dir, "container-home")
+	lockDir := filepath.Join(dir, "stale.lock.d")
+	for _, path := range []string{hostHome, containerHome, lockDir} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(lockDir, "pid"), []byte("999999\n"), 0o600); err != nil {
+		t.Fatalf("write stale lock pid: %v", err)
+	}
+
+	launcherGitConfig := filepath.Join(t.TempDir(), "gitconfig")
+	wantLauncherConfig := []byte("[user]\n\tname = Launcher\n")
+	if err := os.WriteFile(launcherGitConfig, wantLauncherConfig, 0o600); err != nil {
+		t.Fatalf("write launcher git config: %v", err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", launcherGitConfig)
+
+	// The launcher's XDG git/config already holds the GitHub rewrites. The sync must
+	// still write its own copies into the container .gitconfig rather than treating
+	// the launcher's entries as present.
+	launcherXDGConfigHome := t.TempDir()
+	launcherXDGGitConfig := filepath.Join(launcherXDGConfigHome, "git", "config")
+	wantLauncherXDGConfig := []byte("[url \"https://github.com/\"]\n" +
+		"\tinsteadOf = git@github.com:\n" +
+		"\tinsteadOf = ssh://git@github.com/\n")
+	if err := os.MkdirAll(filepath.Dir(launcherXDGGitConfig), 0o700); err != nil {
+		t.Fatalf("mkdir launcher XDG git config dir: %v", err)
+	}
+	if err := os.WriteFile(launcherXDGGitConfig, wantLauncherXDGConfig, 0o600); err != nil {
+		t.Fatalf("write launcher XDG git config: %v", err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", launcherXDGConfigHome)
+
+	cmd := exec.Command("bash", "./sandbox-sync-home.sh")
+	cmd.Env = sandboxSyncHomeTestEnv(
+		"HOME="+containerHome,
+		"SANDBOX_HOST_HOME_ROOT="+hostHome,
+		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
+		"SANDBOX_SYNC_HOME_LOCK="+lockDir,
+		"SANDBOX_SYNC_HOME_LOCK_TIMEOUT=2",
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("sandbox-sync-home failed: %v\n%s", err, output)
+	}
+	gotLauncherConfig, err := os.ReadFile(launcherGitConfig)
+	if err != nil {
+		t.Fatalf("read launcher git config: %v", err)
+	}
+	if !bytes.Equal(gotLauncherConfig, wantLauncherConfig) {
+		t.Fatalf("launcher git config changed: got %q, want %q", gotLauncherConfig, wantLauncherConfig)
+	}
+	containerGitConfig, err := os.ReadFile(filepath.Join(containerHome, ".gitconfig"))
+	if err != nil {
+		t.Fatalf("read container git config: %v", err)
+	}
+	for _, want := range []string{
+		"github-credential-helper",
+		"insteadOf = git@github.com:",
+		"insteadOf = ssh://git@github.com/",
+	} {
+		if !strings.Contains(string(containerGitConfig), want) {
+			t.Fatalf("container git config missing %q:\n%s", want, containerGitConfig)
+		}
+	}
+	gotLauncherXDGConfig, err := os.ReadFile(launcherXDGGitConfig)
+	if err != nil {
+		t.Fatalf("read launcher XDG git config: %v", err)
+	}
+	if !bytes.Equal(gotLauncherXDGConfig, wantLauncherXDGConfig) {
+		t.Fatalf("launcher XDG git config changed: got %q, want %q", gotLauncherXDGConfig, wantLauncherXDGConfig)
 	}
 }
 
@@ -761,7 +925,7 @@ func TestSandboxSyncHomeRecoversOwnerlessLock(t *testing.T) {
 	}
 
 	cmd := exec.Command("bash", "./sandbox-sync-home.sh")
-	cmd.Env = append(os.Environ(),
+	cmd.Env = sandboxSyncHomeTestEnv(
 		"HOME="+containerHome,
 		"SANDBOX_HOST_HOME_ROOT="+hostHome,
 		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
@@ -837,7 +1001,7 @@ exec "$REAL_CP" "$@"
 		t.Fatalf("write cp wrapper: %v", err)
 	}
 
-	baseEnv := append(os.Environ(),
+	baseEnv := sandboxSyncHomeTestEnv(
 		"HOME="+containerHome,
 		"SANDBOX_HOST_HOME_ROOT="+hostHome,
 		"SANDBOX_WORKSPACE_BIN="+workspaceBin,
@@ -910,7 +1074,7 @@ func TestSandboxSyncHomeDoesNotReclaimWhenFlockFails(t *testing.T) {
 	}
 
 	cmd := exec.Command("bash", "./sandbox-sync-home.sh")
-	cmd.Env = append(os.Environ(),
+	cmd.Env = sandboxSyncHomeTestEnv(
 		"HOME="+containerHome,
 		"SANDBOX_HOST_HOME_ROOT="+hostHome,
 		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
@@ -954,7 +1118,7 @@ set -euo pipefail
 	}
 
 	cmd := exec.Command("bash", "./sandbox-sync-home.sh")
-	cmd.Env = append(os.Environ(),
+	cmd.Env = sandboxSyncHomeTestEnv(
 		"HOME="+containerHome,
 		"SANDBOX_HOST_HOME_ROOT="+hostHome,
 		"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
@@ -1283,19 +1447,92 @@ func sliceContainsSubstring(items []string, want string) bool {
 	return false
 }
 
+// sandboxSyncHomeTestEnv builds the environment for running sandbox-sync-home.sh
+// against a temporary HOME. Besides the host launcher variables, it drops an
+// inherited XDG_CONFIG_HOME so Git cannot treat the launcher's XDG git/config as
+// global config for the container home.
+func sandboxSyncHomeTestEnv(extra ...string) []string {
+	base := withoutHostLauncherEnv(os.Environ())
+	env := make([]string, 0, len(base)+len(extra))
+	for _, entry := range base {
+		if name, _, _ := strings.Cut(entry, "="); name == "XDG_CONFIG_HOME" {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return append(env, extra...)
+}
+
 // withoutHostLauncherEnv drops variables a host launcher (such as the agent factory's
-// fix wrapper) exports for its own processes. Inherited, they override the isolated
-// HOME a test sets up: a private GIT_CONFIG_GLOBAL replaces $HOME/.gitconfig, and
-// AGENT_RUNNER_NO_TUI switches a spawned runner onto its headless path.
+// fix wrapper) exports for its own processes. Inherited Git config paths and settings
+// can override the isolated HOME a test sets up, while AGENT_RUNNER_NO_TUI switches a
+// spawned runner onto its headless path.
 func withoutHostLauncherEnv(base []string) []string {
 	result := make([]string, 0, len(base))
 	for _, entry := range base {
 		name, _, _ := strings.Cut(entry, "=")
 		switch name {
-		case "AGENT_RUNNER_NO_TUI", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM":
+		case "AGENT_RUNNER_NO_TUI", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_SYSTEM":
 			continue
 		}
 		result = append(result, entry)
 	}
 	return result
+}
+
+func TestSandboxRunClaudeAuthFallsBackToOAuthToken(t *testing.T) {
+	home := t.TempDir()
+	cmd := exec.Command("bash", "./sandbox-run.sh", "--dry-run", "--no-default-secrets", "--auth-only", "--mount-claude-auth", "--artifact-dir", t.TempDir(), "--", "true")
+	cmd.Env = append(os.Environ(), "HOME="+home, "CLAUDE_CODE_OAUTH_TOKEN=token-value")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("token fallback dry run: %v\n%s", err, output)
+	}
+	text := string(output)
+	if strings.Count(text, "-e CLAUDE_CODE_OAUTH_TOKEN") != 1 {
+		t.Fatalf("expected one CLAUDE_CODE_OAUTH_TOKEN pass-through:\n%s", text)
+	}
+	if strings.Contains(text, "host-home/claude") || strings.Contains(text, "token-value") {
+		t.Fatalf("token fallback mounted a credentials file or leaked the token:\n%s", text)
+	}
+}
+
+func TestSandboxRunClaudeAuthPrefersCredentialsFile(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".claude", ".credentials.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "./sandbox-run.sh", "--dry-run", "--no-default-secrets", "--auth-only", "--mount-claude-auth", "--artifact-dir", t.TempDir(), "--", "true")
+	cmd.Env = append(os.Environ(), "HOME="+home, "CLAUDE_CODE_OAUTH_TOKEN=token-value")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("credentials file dry run: %v\n%s", err, output)
+	}
+	text := string(output)
+	if !strings.Contains(text, "target=/host-home/claude/.credentials.json") || strings.Contains(text, "CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Fatalf("expected the credentials file mount without the token:\n%s", text)
+	}
+}
+
+func TestSandboxRunClaudeAuthRequiresFileOrToken(t *testing.T) {
+	home := t.TempDir()
+	cmd := exec.Command("bash", "./sandbox-run.sh", "--dry-run", "--no-default-secrets", "--mount-claude-auth", "--artifact-dir", t.TempDir(), "--", "true")
+	env := []string{"HOME=" + home}
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "CLAUDE_CODE_OAUTH_TOKEN=") && !strings.HasPrefix(entry, "HOME=") {
+			env = append(env, entry)
+		}
+	}
+	cmd.Env = env
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected missing Claude auth to fail:\n%s", output)
+	}
+	if !strings.Contains(string(output), ".credentials.json") || !strings.Contains(string(output), "CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Fatalf("missing-auth error should name both sources:\n%s", output)
+	}
 }

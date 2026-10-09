@@ -40,6 +40,7 @@ const (
 
 // Options configures a workflow run.
 type Options struct {
+	ExternalUser *model.ExternalUserSettings
 	From         string
 	Until        string
 	WorkflowFile string
@@ -72,6 +73,8 @@ type Options struct {
 	// a resumed terminal failure before this is set.
 	RepairFrame        *model.RepairFrame
 	ChildState         *model.NestedStepState
+	PreviousStep       *model.PreviousStepRecord
+	Crashes            []model.CrashRecord
 	InteractiveAttempt *model.InteractiveAttemptMetadata
 	// NamedSessions and NamedSessionDecls are restored from state on --resume.
 	NamedSessions     map[string]string
@@ -548,6 +551,7 @@ func buildExecutionContext(
 		WorkingDir:               opts.WorkingDir,
 		AutonomousBackend:        string(settings.AutonomousBackend),
 		AutonomousPermissionMode: string(usersettings.EffectiveAutonomousPermissionMode(settings.AutonomousPermissionMode)),
+		ExternalUser:             opts.ExternalUser,
 		SessionDir:               sessionDir,
 		IntakeHandoffContents:    opts.IntakeHandoffContents,
 		IntakeHandoffDelivered:   opts.IntakeHandoffDelivered,
@@ -566,6 +570,8 @@ func buildExecutionContext(
 	if opts.ChildState != nil {
 		ctx.ResumeChildState = opts.ChildState
 	}
+	ctx.RestorePreviousStep(opts.PreviousStep)
+	ctx.Crashes.Restore(opts.Crashes)
 	if opts.LastSessionStepID != "" {
 		ctx.LastSessionStepID = opts.LastSessionStepID
 	}
@@ -635,6 +641,7 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 	steps := rs.workflow.Steps
 	basePath := rs.ctx.NestingPath
 	if err := exec.PrimeReplayResume(rs.ctx, basePath); err != nil {
+		rs.ctx.StepFailure = model.StepFailure{Kind: model.FailureStep}
 		rs.log.Printf("\nagent-runner: %v\n", err)
 		return ResultFailed
 	}
@@ -654,8 +661,9 @@ func executeSteps(rs *runState, startIndex int) WorkflowResult {
 }
 
 func executeTopLevelStep(rs *runState, step *model.Step, index int, steps []model.Step, basePath []model.NestingSegment) (result WorkflowResult, terminal, rewound bool, nextIndex int) {
-	skip, err := exec.ShouldSkipStep(step.SkipIf, rs.ctx.LastStepOutcome, rs.ctx, step.ID)
+	skip, err := exec.ShouldSkipStep(step.SkipIf, rs.ctx, step.ID)
 	if err != nil {
+		rs.ctx.StepFailure = model.StepFailure{Kind: model.FailureStep}
 		rs.log.Printf("\nagent-runner: step %q skip_if evaluation failed: %v\n", step.ID, err)
 		return ResultFailed, true, false, 0
 	}
@@ -669,6 +677,9 @@ func executeTopLevelStep(rs *runState, step *model.Step, index int, steps []mode
 
 	outcome, err := runAndPersistTopLevelStep(rs, step)
 	if err != nil {
+		if rs.ctx.StepFailure.Kind == "" {
+			rs.ctx.StepFailure = model.StepFailure{Kind: model.FailureStep}
+		}
 		rs.log.Printf("\nagent-runner: step %q error: %v\n", step.ID, err)
 		return ResultFailed, true, false, 0
 	}
@@ -694,8 +705,8 @@ func executeTopLevelStep(rs *runState, step *model.Step, index int, steps []mode
 		return result, terminal, false, 0
 	}
 
-	o := "success"
-	rs.ctx.LastStepOutcome = &o
+	exec.RecordPreviousStep(rs.ctx, step, exec.OutcomeSuccess)
+	persistPreviousStep(rs)
 	return ResultSuccess, stopAfterUntil(rs, step.ID, index), false, 0
 }
 
@@ -717,7 +728,7 @@ func runAndPersistTopLevelStep(rs *runState, step *model.Step) (exec.StepOutcome
 		// done: its repair frame (if any) must not be persisted as open.
 		rs.ctx.RepairFrame = nil
 	}
-	completed := err == nil && outcome != exec.OutcomeAborted && (outcome != exec.OutcomeFailed || warning)
+	completed := err == nil && outcome != exec.OutcomeAborted && (outcome != exec.OutcomeFailed || warning || step.ContinueOnFailure)
 	if !completed && rs.ctx.LastSubWorkflowChild == nil && resumeChild != nil {
 		// A resume can fail before any child step starts, for example when the
 		// persisted child ID no longer exists in a sub-workflow. Keep the prior
@@ -729,8 +740,8 @@ func runAndPersistTopLevelStep(rs *runState, step *model.Step) (exec.StepOutcome
 }
 
 func handleFailedTopLevelStep(rs *runState, step *model.Step, index int) (WorkflowResult, bool) {
-	o := string(exec.OutcomeFailed)
-	rs.ctx.LastStepOutcome = &o
+	exec.RecordPreviousStep(rs.ctx, step, exec.OutcomeFailed)
+	persistPreviousStep(rs)
 	if exec.IsWarningOutcome(step, exec.OutcomeFailed) {
 		rs.log.Printf("--- step %q failed (warning; workflow continued) ---\n\n", step.ID)
 		return ResultSuccess, stopAfterUntil(rs, step.ID, index)
@@ -741,6 +752,18 @@ func handleFailedTopLevelStep(rs *runState, step *model.Step, index int) (Workfl
 	}
 	rs.log.Printf("\nagent-runner: step %q failed. Stopping.\n", step.ID)
 	return ResultFailed, true
+}
+
+func persistPreviousStep(rs *runState) {
+	if err := updateState(rs.sessionDir, func(state *model.RunState) {
+		if state.CurrentStep.Nested != nil {
+			state.CurrentStep.Nested.PreviousStep = rs.ctx.PreviousStep
+		}
+		state.Crashes = rs.ctx.Crashes.Records()
+		state.CrashObserved = len(state.Crashes) > 0
+	}); err != nil {
+		rs.log.Printf("agent-runner: warning: could not persist previous-step state: %v\n", err)
+	}
 }
 
 func stopAfterUntil(rs *runState, stepID string, stepIndex int) bool {
@@ -807,8 +830,13 @@ func skippedStepUsage(step *model.Step) model.UsageRecord {
 
 func runStep(step *model.Step, rs *runState) (exec.StepOutcome, *exec.LoopResult, error) {
 	if step.Loop != nil && len(step.Steps) > 0 {
-		lr, err := exec.ExecuteLoopStep(step, rs.ctx, rs.runner, rs.glob, rs.log, exec.LoopExecuteOptions{})
-		return exec.MapLoopOutcomeForRunner(step, lr.Outcome), &lr, err
+		var lr exec.LoopResult
+		outcome, err := exec.RunClassified(rs.ctx, func() (exec.StepOutcome, error) {
+			var loopErr error
+			lr, loopErr = exec.ExecuteLoopStep(step, rs.ctx, rs.runner, rs.glob, rs.log, exec.LoopExecuteOptions{})
+			return exec.MapLoopOutcomeForRunner(step, lr.Outcome), loopErr
+		})
+		return outcome, &lr, err
 	}
 	outcome, err := exec.DispatchStep(step, rs.ctx, rs.runner, rs.glob, rs.log)
 	return outcome, nil, err
@@ -835,6 +863,16 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 			}
 		}
 	case ResultFailed:
+		if err := updateState(rs.sessionDir, func(state *model.RunState) {
+			state.FailureKind = rs.ctx.StepFailure.Kind
+			if state.FailureKind == "" {
+				state.FailureKind = model.FailureStep
+			}
+			state.Crashes = rs.ctx.Crashes.Records()
+			state.CrashObserved = len(state.Crashes) > 0
+		}); err != nil {
+			rs.log.Printf("agent-runner: warning: could not persist failed-run state: %v\n", err)
+		}
 		if failureReason != "" {
 			if err := writeStateFailureReason(rs.sessionDir, failureReason); err != nil {
 				rs.log.Printf("agent-runner: warning: could not record failure reason: %v\n", err)
@@ -880,14 +918,23 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 	runlock.Delete(rs.sessionDir)
 }
 
-// classifyRunFailure returns the classified root failure reason for a failed
-// run, derived from the failing check's FailureRecord. A nested check's
-// failure has already been copied onto rs.ctx by ExecutionContext.PropagateFailure
-// as its scope unwound, so rs.ctx.LastFailure always names the actual
-// failing check rather than a container. Returns "" when the run failed for
-// a reason other than a classified check failure (e.g. an agent step error),
-// so callers fall back to their own derivation.
+// classifyRunFailure uses the terminating crash origin for infrastructure
+// failures and the failing check's record for ordinary step failures.
 func classifyRunFailure(rs *runState) string {
+	if rs.ctx.StepFailure.Kind == model.FailureInfrastructure && rs.ctx.StepFailure.Origin != nil {
+		attempts := 0
+		if rs.ctx.RepairFrame != nil && rs.ctx.RepairFrame.LastAttemptCrashed {
+			attempts = rs.ctx.RepairFrame.Attempts
+		}
+		if attempts == 0 {
+			for _, segment := range rs.ctx.StepFailure.Origin.Path {
+				if segment.RepairAttempt != nil {
+					attempts = *segment.RepairAttempt
+				}
+			}
+		}
+		return exec.ClassifyCrash(rs.ctx.StepFailure.Origin, attempts)
+	}
 	if rs.ctx.LastFailure == nil {
 		return ""
 	}
@@ -915,10 +962,22 @@ func updateState(sessionDir string, mutate func(*model.RunState)) error {
 func runEndData(rs *runState, result WorkflowResult, totals *model.RunTotals, failureReason string) map[string]any {
 	data := map[string]any{
 		"outcome":                 string(result),
+		"completed":               result == ResultSuccess && !rs.untilLeavesRemaining,
 		"completed_with_warnings": result == ResultSuccess && rs.ctx.WarningOrigins.Count() > 0,
 		"warning_count":           rs.ctx.WarningOrigins.Count(),
 		"duration_ms":             time.Since(rs.runStartTime).Milliseconds(),
 		metrics.DataTotals:        *totals,
+		"crash_observed":          rs.ctx.Crashes.ObservedUnder(nil),
+	}
+	if result == ResultFailed {
+		kind := rs.ctx.StepFailure.Kind
+		if kind == "" {
+			kind = model.FailureStep
+		}
+		data["failure_kind"] = kind
+		if kind == model.FailureInfrastructure && rs.ctx.StepFailure.Origin != nil {
+			data["failure_origin"] = rs.ctx.StepFailure.Origin
+		}
 	}
 	if result == ResultFailed && failureReason != "" {
 		data["failure_reason"] = failureReason
@@ -933,6 +992,8 @@ func markStateCompleted(sessionDir string, warningCount int) error {
 	return updateState(sessionDir, func(state *model.RunState) {
 		state.Completed = true
 		state.WarningCount = warningCount
+		state.FailureKind = ""
+		state.FailureReason = ""
 	})
 }
 
@@ -996,6 +1057,7 @@ func initialRunState(workflow *model.Workflow, rs *runState, opts *Options) *mod
 		IntakeHandoffDelivered: rs.ctx.IntakeHandoffDelivered(),
 		IntakeParentRunID:      rs.ctx.IntakeParentRunID,
 		AgentOverride:          rs.ctx.AgentOverride,
+		ExternalUser:           rs.ctx.ExternalUser,
 		ProfileSet:             resolvedProfileSet(rs.ctx),
 	}
 	if stepID == "" {
@@ -1115,6 +1177,7 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		Child:              child,
 		InteractiveAttempt: ctx.InteractiveAttempt,
 		LastAgent:          ctx.LastAgentRef(),
+		PreviousStep:       ctx.PreviousStep,
 		Repair:             ctx.RepairFrame,
 	}
 
@@ -1129,7 +1192,10 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		IntakeHandoffDelivered: ctx.IntakeHandoffDelivered(),
 		IntakeParentRunID:      ctx.IntakeParentRunID,
 		AgentOverride:          ctx.AgentOverride,
+		ExternalUser:           ctx.ExternalUser,
 		ProfileSet:             resolvedProfileSet(ctx),
+		Crashes:                ctx.Crashes.Records(),
+		CrashObserved:          ctx.Crashes.ObservedUnder(nil),
 	}
 	_ = stateio.WriteState(&state, stateDir)
 }

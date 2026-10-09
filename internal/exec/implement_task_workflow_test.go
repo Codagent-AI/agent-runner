@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"github.com/codagent/agent-runner/internal/config"
 	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runlock"
@@ -148,6 +149,7 @@ type taskDeliveryRunner struct {
 	writeRecord bool
 	// validatorFailures is how many validator runs report a compliance failure.
 	validatorFailures int
+	crashGenerate     bool
 
 	events              []string
 	delivered           string
@@ -190,6 +192,9 @@ func (r *taskDeliveryRunner) RunAgent(options *AgentProcessOptions) (ProcessResu
 	switch {
 	case strings.Contains(prompt, "Implement the task described in"):
 		r.events = append(r.events, "generate-code")
+		if r.crashGenerate {
+			return ProcessResult{Started: true, ExitCode: 1, Stderr: "Selected model is at capacity"}, nil
+		}
 		if r.deliver {
 			r.generate()
 		}
@@ -335,6 +340,48 @@ func (f *taskDeliveryFixture) runImplementTask(t *testing.T, runner *taskDeliver
 		t.Fatalf("implement-task: %v (events %v)", err, runner.events)
 	}
 	return outcome
+}
+
+func TestBuiltinImplementTaskCrashReachesCaller(t *testing.T) {
+	f := newTaskDeliveryFixture(t)
+	runner := f.runner(t)
+	runner.crashGenerate = true
+	ctx := model.NewRootContext(&model.RootContextOptions{SessionDir: f.sessionDir, ProjectRoot: f.run, WorkingDir: f.run, ProfileStore: &config.Config{ActiveAgents: map[string]*config.Agent{"implementor": {CLI: "claude", DefaultMode: "autonomous"}}}})
+	step := &model.Step{ID: "implement", Workflow: implementTaskRef, Params: map[string]string{"task_file": filepath.Join(f.run, "01-task.md"), "skip_validator": "true", "run_session_report": "false"}}
+	outcome, err := DispatchStep(step, ctx, runner, &mockGlob{}, &mockLogger{})
+	if err != nil || outcome != OutcomeFailed {
+		t.Fatalf("outcome=%q err=%v events=%v", outcome, err, runner.events)
+	}
+	if ctx.StepFailure.Kind != model.FailureInfrastructure || ctx.StepFailure.Origin == nil || !ctx.Crashes.ObservedUnder([]model.NestingSegment{{StepID: "implement"}}) {
+		t.Fatalf("failure=%+v crashes=%+v", ctx.StepFailure, ctx.Crashes.Records())
+	}
+	RecordPreviousStep(ctx, step, outcome)
+	if vars := ctx.BuiltinVarsForStep("next"); vars["last_step_failure_kind"] != "infrastructure" || vars["last_step_crash_observed"] != "true" {
+		t.Fatalf("builtins=%v", vars)
+	}
+}
+
+// INT-002: a completed agent followed by a red validator is an ordinary failure.
+func TestBuiltinImplementTaskRedValidatorIsStepFailure(t *testing.T) {
+	f := newTaskDeliveryFixture(t)
+	runner := f.runner(t)
+	runner.validatorFailures = 100
+	ctx := model.NewRootContext(&model.RootContextOptions{SessionDir: f.sessionDir, ProjectRoot: f.run, WorkingDir: f.run, ProfileStore: &config.Config{ActiveAgents: map[string]*config.Agent{"implementor": {CLI: "claude", DefaultMode: "autonomous"}}}})
+	step := &model.Step{ID: "implement", Workflow: implementTaskRef, Params: map[string]string{"task_file": filepath.Join(f.run, "01-task.md"), "skip_validator": "false", "run_session_report": "false"}}
+	outcome, err := DispatchStep(step, ctx, runner, &mockGlob{}, &mockLogger{})
+	if err != nil || outcome != OutcomeFailed {
+		t.Fatalf("outcome=%q err=%v events=%v", outcome, err, runner.events)
+	}
+	if countEvents(runner.events, "generate-code") != 1 || countEvents(runner.events, "run-validator.sh") == 0 {
+		t.Fatalf("expected completed generation and red validator, events=%v", runner.events)
+	}
+	if runner.validatorFailures == 0 || runner.lastGate.ExitCode == 0 {
+		t.Fatalf("expected validator to stay red and task gate to fail: remaining validator failures=%d gate=%+v", runner.validatorFailures, runner.lastGate)
+	}
+	RecordPreviousStep(ctx, step, outcome)
+	if vars := ctx.BuiltinVarsForStep("next"); vars["last_step_failure_kind"] != "step" || vars["last_step_crash_observed"] != "false" {
+		t.Fatalf("builtins=%v", vars)
+	}
 }
 
 func countEvents(events []string, name string) int {

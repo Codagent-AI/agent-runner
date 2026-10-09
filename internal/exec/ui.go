@@ -15,6 +15,11 @@ func ExecuteUIStep(step *model.Step, ctx *model.ExecutionContext, log Logger) (S
 	startTime := time.Now()
 	emitStepStart(ctx, prefix, startTime, map[string]any{"title": step.Title})
 
+	if ctx.ExternalUser != nil {
+		err := fmt.Errorf("UI steps are not supported in external-user mode")
+		emitUIEnd(ctx, prefix, startTime, step, "failed", "", err)
+		return OutcomeFailed, err
+	}
 	request, err := buildUIRequest(step, ctx)
 	if err != nil {
 		emitUIEnd(ctx, prefix, startTime, step, "failed", "", err)
