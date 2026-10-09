@@ -2,6 +2,7 @@ package exec
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -143,6 +144,94 @@ func TestSettlementDeadlineAndCancelRaces(t *testing.T) {
 				if r.Status != response.Status {
 					t.Fatal("cancel disagreed with settlement")
 				}
+			}
+		})
+	}
+}
+
+func TestFinalizeExecutionEnsuresSettlement(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		launched         bool
+		exit             int
+		outcome          StepOutcome
+		status, exitKind string
+	}{
+		{"no invocation", false, 0, "", agentcall.StatusFailed, "not_launched"},
+		{"successful invocation", true, 0, OutcomeSuccess, agentcall.StatusSucceeded, "exited"},
+		{"failed invocation", true, 9, OutcomeFailed, agentcall.StatusFailed, "exited"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := testAgentCallOptions(t.TempDir(), &callTestRunner{}, &callTestAdapter{})
+			o.Git = func(context.Context, string, ...string) (string, error) { return "", errors.New("unavailable") }
+			h := NewAgentCallHandler(o)
+			resolved, failure := h.resolve([]byte(`{"agent":"implementor","prompt":"x"}`))
+			if failure != nil {
+				t.Fatal(failure)
+			}
+			record := &acceptedAgentCall{callID: "call", started: time.Now(), done: make(chan struct{})}
+			h.active = record
+			execution := agentCallExecution{invocation: AgentInvocationResult{CLILaunched: tc.launched, ExitCode: tc.exit, Outcome: tc.outcome, Response: "done"}}
+			h.finalizeExecution(record, resolved, &execution)
+			response := decodeCallResponse(t, record.response)
+			if response.Status != tc.status || response.Details == nil || response.Details.Exit != tc.exitKind {
+				t.Fatalf("%+v", response)
+			}
+			if tc.launched {
+				if response.Details.ExitCode == nil || *response.Details.ExitCode != tc.exit {
+					t.Fatalf("exit code: %+v", response.Details)
+				}
+			} else if response.Error == nil || response.Error.Code != agentcall.CodeExecutionFailed {
+				t.Fatalf("missing launch failure: %+v", response)
+			}
+			select {
+			case <-record.done:
+			default:
+				t.Fatal("terminal result not published")
+			}
+			if h.active != nil {
+				t.Fatal("active slot not released")
+			}
+		})
+	}
+}
+
+type canceledBeforeLaunchRunner struct{ callTestRunner }
+
+func (r *canceledBeforeLaunchRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, error) {
+	r.started <- *options
+	<-options.Context.Done()
+	return ProcessResult{}, options.Context.Err()
+}
+
+func TestCancellationSettlementSurvivesUnlaunchedRunnerResult(t *testing.T) {
+	for _, kind := range []string{"cancel", "timeout", "teardown"} {
+		t.Run(kind, func(t *testing.T) {
+			runner := &canceledBeforeLaunchRunner{callTestRunner: callTestRunner{started: make(chan AgentProcessOptions, 1)}}
+			o := pollingAgentCallOptions(t.TempDir(), runner, &callTestAdapter{})
+			o.Git = func(context.Context, string, ...string) (string, error) { return "", errors.New("unavailable") }
+			parent, cancelParent := context.WithCancel(context.Background())
+			defer cancelParent()
+			o.AttemptContext = parent
+			var fire func()
+			o.AfterFunc = func(_ time.Duration, f func()) *time.Timer { fire = f; return time.NewTimer(time.Hour) }
+			h := NewAgentCallHandler(o)
+			start := startAgentCall(t, h, control.AgentCallRequest{RequestID: "r", Payload: []byte(`{"agent":"implementor","prompt":"x","timeout":"1s"}`)})
+			<-runner.started
+			wantCode, wantStatus := agentcall.CodeCallCanceled, agentcall.StatusCanceled
+			switch kind {
+			case "cancel":
+				cancelAgentCall(t, h, start.CallID)
+			case "timeout":
+				fire()
+				wantCode = agentcall.CodeTimedOut
+				wantStatus = agentcall.StatusFailed
+			case "teardown":
+				cancelParent()
+			}
+			response := awaitAgentCall(t, h, start.CallID)
+			if response.Error == nil || response.Error.Code != wantCode || response.Status != wantStatus || response.Details == nil || response.Details.Exit != "terminated" {
+				t.Fatalf("unlaunched runner result changed settlement: %+v", response)
 			}
 		})
 	}

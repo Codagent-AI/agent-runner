@@ -13,7 +13,7 @@ import (
 const agentCallGitTimeout = 5 * time.Second
 
 func defaultAgentCallGit(ctx context.Context, dir string, args ...string) (string, error) {
-	out, err := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...).Output()
+	out, err := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...).Output() // #nosec G204 -- fixed executable; dir is the resolved workdir and args are Runner-built git operations/observed HEADs, passed without a shell.
 	return strings.TrimSpace(string(out)), err
 }
 func (h *AgentCallHandler) git(dir string, args ...string) (string, error) {

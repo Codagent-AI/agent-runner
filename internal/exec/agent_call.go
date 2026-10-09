@@ -335,6 +335,14 @@ func (h *AgentCallHandler) finishAccepted(ctx context.Context, record *acceptedA
 }
 
 func (h *AgentCallHandler) finalizeExecution(record *acceptedAgentCall, resolved *resolvedAgentCall, execution *agentCallExecution) {
+	// Finalization must publish a terminal result even if an execution path
+	// omitted settlement. An existing winner remains authoritative.
+	if execution.invocation.CLILaunched {
+		h.trySettle(record, settledExited, &execution.invocation.ExitCode)
+	} else {
+		h.trySettle(record, settledLaunchFailed, nil)
+	}
+
 	h.mu.Lock()
 	if record.deadline != nil {
 		record.deadline.Stop()

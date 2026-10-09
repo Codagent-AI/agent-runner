@@ -74,6 +74,10 @@ func (h *AgentCallHandler) applySettlement(r *acceptedAgentCall, c *resolvedAgen
 		}
 	case settledLaunchFailed:
 		e.invocation.Outcome = OutcomeFailed
+		if e.response.Error == nil {
+			code = agentcall.CodeExecutionFailed
+			message = "called agent did not launch"
+		}
 	}
 	if code != "" {
 		e.response = acceptedFailure(r, code, message, c.target)
