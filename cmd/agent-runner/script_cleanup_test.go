@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -17,13 +18,17 @@ const cleanupFixtureEnv = "AGENT_RUNNER_TESTSCRIPT_CLEANUP_FIXTURE"
 
 func TestSweepScriptTempDirs(t *testing.T) {
 	for _, tt := range []struct {
-		name       string
-		entry      string
-		marker     string
-		checkErr   error
-		file       bool
-		wantRemove bool
-		wantCheck  bool
+		name          string
+		entry         string
+		marker        string
+		worker        string
+		missingWorker bool
+		scope         string
+		missingScope  bool
+		checkErr      error
+		file          bool
+		wantRemove    bool
+		wantCheck     bool
 	}{
 		{name: "dead", marker: "12345", checkErr: syscall.ESRCH, wantRemove: true, wantCheck: true},
 		{name: "live", marker: "12345", wantCheck: true},
@@ -36,6 +41,12 @@ func TestSweepScriptTempDirs(t *testing.T) {
 		{name: "unknown error", marker: "12345", checkErr: syscall.EIO, wantCheck: true},
 		{name: "nonmatching", entry: "unrelated", marker: "12345", checkErr: syscall.ESRCH},
 		{name: "file", file: true},
+		{name: "orphan live worker", marker: "12345", worker: "12346", checkErr: syscall.ESRCH, wantCheck: true},
+		{name: "orphan self worker", marker: "12345", worker: strconv.Itoa(os.Getpid()), checkErr: syscall.ESRCH, wantCheck: true},
+		{name: "missing worker", marker: "12345", missingWorker: true, checkErr: syscall.ESRCH, wantCheck: true},
+		{name: "garbage worker", marker: "12345", worker: "garbage", checkErr: syscall.ESRCH, wantCheck: true},
+		{name: "foreign scope", marker: "12345", scope: "other-scope", checkErr: syscall.ESRCH},
+		{name: "missing scope", marker: "12345", missingScope: true, checkErr: syscall.ESRCH},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -53,14 +64,23 @@ func TestSweepScriptTempDirs(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if !tt.file && tt.marker != "" {
-				if err := os.WriteFile(filepath.Join(dir, scriptPIDMarker), []byte(tt.marker), 0o600); err != nil {
-					t.Fatal(err)
-				}
+			worker := tt.worker
+			if worker == "" && !tt.missingWorker {
+				worker = tt.marker
+			}
+			scope := tt.scope
+			if scope == "" && !tt.missingScope {
+				scope = "test-scope"
+			}
+			if !tt.file {
+				writeScriptSweepMarkers(t, dir, tt.marker, worker, scope)
 			}
 			checked := false
-			sweepScriptTempDirs(root, func(pid int) error {
+			sweepScriptTempDirs(root, "test-scope", func(pid int) error {
 				checked = true
+				if pid == 12346 {
+					return nil
+				}
 				if pid != 12345 {
 					t.Fatalf("checked pid = %d, want 12345", pid)
 				}
@@ -81,6 +101,100 @@ func TestSweepScriptTempDirs(t *testing.T) {
 	}
 }
 
+func writeScriptSweepMarkers(t *testing.T, dir, supervisor, worker, scope string) {
+	t.Helper()
+	for name, value := range map[string]string{
+		scriptPIDMarker:       supervisor,
+		scriptWorkerPIDMarker: worker,
+		scriptPIDScopeMarker:  scope,
+	} {
+		if value == "" {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestScriptSweepStartup(t *testing.T) {
+	scope := scriptPIDScope()
+	if scope == "" {
+		t.Skip("PID scope unavailable")
+	}
+	// Reap a real subprocess, then use its PID to exercise signal 0 via TestMain.
+	dead := exec.Command("true")
+	if err := dead.Run(); err != nil {
+		t.Fatal(err)
+	}
+	pid := strconv.Itoa(dead.Process.Pid)
+	root := t.TempDir()
+	stale := filepath.Join(root, "agent-runner-testscript-stale")
+	foreign := filepath.Join(root, "agent-runner-testscript-foreign")
+	for dir, ownerScope := range map[string]string{stale: scope, foreign: scope + "-foreign"} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		writeScriptSweepMarkers(t, dir, pid, pid, ownerScope)
+	}
+	child := startCleanupFixture(t, root, "normal")
+	if err := child.wait(t); err != nil {
+		t.Fatalf("startup fixture: %v, %s", err, child.output.String())
+	}
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("startup did not sweep stale directory: %v", err)
+	}
+	if _, err := os.Stat(foreign); err != nil {
+		t.Fatalf("startup removed foreign PID scope: %v", err)
+	}
+}
+
+func TestScriptSweepPreservesOrphanWorker(t *testing.T) {
+	root := t.TempDir()
+	live := startCleanupFixture(t, root, "terminate")
+	markers, err := filepath.Glob(filepath.Join(root, "agent-runner-testscript-*", scriptWorkerPIDMarker))
+	if err != nil || len(markers) != 1 {
+		t.Fatalf("worker marker: %v, %v", markers, err)
+	}
+	data, err := os.ReadFile(markers[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerPID, err := strconv.Atoi(string(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The worker owns its process group. Always terminate it even if an assertion fails.
+	t.Cleanup(func() { _ = syscall.Kill(-workerPID, syscall.SIGKILL) })
+	if err := live.cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !errors.Is(syscall.Kill(live.cmd.Process.Pid, 0), syscall.ESRCH) {
+		if time.Now().After(deadline) {
+			t.Fatal("supervisor was not reaped")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	other := startCleanupFixture(t, root, "normal")
+	if err := other.wait(t); err != nil {
+		t.Fatalf("startup fixture: %v, %s", err, other.output.String())
+	}
+	if err := syscall.Kill(workerPID, 0); err != nil {
+		t.Fatalf("orphan worker stopped before sweep: %v", err)
+	}
+	if _, err := os.Stat(markers[0]); err != nil {
+		t.Fatalf("startup swept a live orphan worker: %v", err)
+	}
+	if err := syscall.Kill(-workerPID, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	live.mode = "killed"
+	if err := live.wait(t); err == nil {
+		t.Fatal("expected killed supervisor")
+	}
+}
+
 // This test only performs the requested termination inside an isolated worker.
 func TestScriptCleanupFixture(t *testing.T) {
 	mode := os.Getenv(cleanupFixtureEnv)
@@ -93,6 +207,10 @@ func TestScriptCleanupFixture(t *testing.T) {
 	}
 	if got, want := string(marker), strconv.Itoa(os.Getppid()); got != want {
 		t.Fatalf("supervisor pid marker = %q, want %q", got, want)
+	}
+	workerMarker, err := os.ReadFile(filepath.Join(os.Getenv(scriptTempDirEnv), scriptWorkerPIDMarker))
+	if err != nil || string(workerMarker) != strconv.Itoa(os.Getpid()) {
+		t.Fatalf("worker pid marker = %q, error = %v", workerMarker, err)
 	}
 	for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
 		if got, want := os.Getenv(key), os.Getenv("AGENT_RUNNER_TESTSCRIPT_EXPECT_TEMP"); got != want {
