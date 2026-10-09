@@ -109,8 +109,8 @@ func Resolve(wd string, input Input, roots map[string]string) (map[string]string
 	result["location_instruction"] = fmt.Sprintf("Keep every OpenSpec definition and planning artifact under %#q in the OpenSpec project at %#q.", change+"/", resolved)
 	result["validate_instruction"] = fmt.Sprintf("When an approved artifact changed, run `openspec validate --type change %q` from %#q.", input.ChangeName, resolved)
 	result["accept_validate_instruction"] = fmt.Sprintf("If a specification changed, run `openspec validate --type change %q` from %#q.", input.ChangeName, resolved)
-	result["simple_validate_instruction"] = fmt.Sprintf("Validate OpenSpec change %q with `openspec validate --type change %q` run from `%s`.", input.ChangeName, input.ChangeName, resolved)
-	result["validation_failure_instruction"] = fmt.Sprintf("`openspec validate --type change %q` run from `%s` failed for OpenSpec change %q.", input.ChangeName, resolved, input.ChangeName)
+	result["simple_validate_instruction"] = fmt.Sprintf("Validate OpenSpec change %q with `openspec validate --type change %q` run from %#q.", input.ChangeName, input.ChangeName, resolved)
+	result["validation_failure_instruction"] = fmt.Sprintf("`openspec validate --type change %q` run from %#q failed for OpenSpec change %q.", input.ChangeName, resolved, input.ChangeName)
 	result["context_instruction"] = externalContext(wd, resolved, change)
 	return result, nil
 }
@@ -162,7 +162,7 @@ func selectRoot(wd, param string, roots map[string]string) (root, source string)
 }
 
 func externalContext(wd, resolved, change string) string {
-	context := fmt.Sprintf("The code root is `%s`; the OpenSpec spec root is `%s`. Definition, planning, task and acceptance artifacts belong under `%s/`. Code changes, code validation and commits belong in the code root. Never stage, commit or push spec-root files. Never write the spec-root path or paths under it into commit messages, the PR title or body, or any file in the code repository.", wd, resolved, change)
+	context := fmt.Sprintf("The code root is %#q; the OpenSpec spec root is %#q. Definition, planning, task and acceptance artifacts belong under %#q. Code changes, code validation and commits belong in the code root. Never stage, commit or push spec-root files. Never write the spec-root path or paths under it into commit messages, the PR title or body, or any file in the code repository.", wd, resolved, change+"/")
 	for _, name := range []string{"AGENTS.md", "CLAUDE.md", "openspec/config.yaml"} {
 		p := filepath.Join(resolved, name)
 		if info, e := os.Stat(p); e == nil && !info.IsDir() {
