@@ -181,6 +181,56 @@ func TestExternalUserLoop(t *testing.T) {
 	}
 }
 
+// gatedAckLogger holds the control server's completion_acknowledged audit
+// emit, which sits between the client acknowledgement and the completion's
+// delivery, until release is closed.
+type gatedAckLogger struct{ release chan struct{} }
+
+func (l *gatedAckLogger) Emit(event audit.Event) {
+	if event.Type == audit.EventCompletionAcknowledged {
+		<-l.release
+	}
+}
+
+// exitBeforeDeliveryRunner completes the step and exits while the server is
+// still between acknowledging the client and delivering the completion.
+type exitBeforeDeliveryRunner struct {
+	externalTestRunner
+	release chan struct{}
+}
+
+func (r *exitBeforeDeliveryRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, error) {
+	result, err := r.externalTestRunner.RunAgent(options)
+	time.AfterFunc(50*time.Millisecond, func() { close(r.release) })
+	return result, err
+}
+
+func TestExternalUserCompletionSurvivesExitBeforeDelivery(t *testing.T) {
+	exchange := t.TempDir()
+	runDir := t.TempDir()
+	if pid, err := runlock.Acquire(runDir); err != nil || pid != 0 {
+		t.Fatalf("lock pid=%d error=%v", pid, err)
+	}
+	defer runlock.Delete(runDir)
+	logger := &gatedAckLogger{release: make(chan struct{})}
+	ctx := model.NewRootContext(&model.RootContextOptions{SessionDir: runDir, AuditLogger: logger, ExternalUser: &model.ExternalUserSettings{Dir: exchange, Timeout: "1s"}})
+	step := &model.Step{ID: "proposal", Session: model.SessionNew, Workdir: t.TempDir()}
+	runner := &exitBeforeDeliveryRunner{externalTestRunner: externalTestRunner{completeAt: 1}, release: logger.release}
+	outcome, err := executeExternalUser(step, ctx, runner, &mockLogger{}, &externalTestAdapter{}, &config.ResolvedAgent{}, []string{"codex", "--", "initial"}, nil, "codex", "session", false, "[proposal]", time.Now(), nil, nil)
+	if server, ok := ctx.Control.(*control.ControlServer); ok {
+		defer server.Close()
+	}
+	if err != nil || outcome != OutcomeSuccess {
+		t.Fatalf("completed step read as a natural exit: outcome=%s err=%v", outcome, err)
+	}
+	if runner.turns != 1 {
+		t.Fatalf("turns = %d, want 1", runner.turns)
+	}
+	if paths, _ := filepath.Glob(filepath.Join(exchange, "*.request.json")); len(paths) != 0 {
+		t.Fatalf("completed step published a request: %v", paths)
+	}
+}
+
 func TestExternalUserUnsupportedSteps(t *testing.T) {
 	ctx := model.NewRootContext(&model.RootContextOptions{ExternalUser: &model.ExternalUserSettings{Dir: t.TempDir()}})
 	runner := &mockRunner{}

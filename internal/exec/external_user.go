@@ -146,12 +146,12 @@ func invokeExternalTurn(input *AgentInvocation, runner ProcessRunner, log Logger
 	case completion = <-server.Completions():
 	case out := <-done:
 		finished = &out
-		select {
-		case completion = <-server.Completions():
-		default:
+		accepted, ok := server.AwaitAcceptedCompletion(processCtx, attempt.ID)
+		if !ok {
 			out.result.Outcome = OutcomeFailed
 			return out.result, out.err
 		}
+		completion = accepted
 	case <-processCtx.Done():
 		cancel()
 		out := <-done
