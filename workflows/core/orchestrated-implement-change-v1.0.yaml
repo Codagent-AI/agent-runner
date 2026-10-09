@@ -117,6 +117,9 @@ steps:
 
   - id: session-report
     session: lead-agent
+    # Autonomous so the report is saved as output/*session-report*.out, which
+    # review-assumptions reads. The lead profile defaults to interactive.
+    mode: autonomous
     prompt: |
       Run the codagent:session-report skill for your own orchestration of {{change_label}} "{{change_name}}", treating the definition artifacts under `{{change_dir}}/` (proposal, specifications, design, and test plan) as the task specification. Then append every sub-agent's session report from your plan file under `{{session_dir}}/`, verbatim, each under a heading naming its slice. If a slice has no report, say so under its heading.
 
