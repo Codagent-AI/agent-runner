@@ -74,8 +74,6 @@ steps:
 
       Do not run Agent Validator (`agent-validator run`, `review`, or `check`) here, directly or through any skill, and tell your sub-agents the same. It runs explicitly in a later workflow step.
 
-      Run every sub-agent on an inexpensive model, such as Luna or Haiku.
-
       A later step audits this change's assumptions. Every brief must tell the sub-agent to finish its slice by running the codagent:session-report skill, treating the artifacts and requirements its brief covered as the task specification, and to include that report verbatim in its final response. Save each sub-agent's report verbatim, labeled with its slice, in your plan file as it arrives.
 
   - id: run-validator

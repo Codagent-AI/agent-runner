@@ -336,17 +336,16 @@ type definitionCheckWorkflow struct {
 	} `yaml:"steps"`
 }
 
-func readDefinitionCheckWorkflow(t *testing.T, ref string) (definitionCheckWorkflow, string) {
+func readDefinitionCheckWorkflow(t *testing.T, ref string) (workflow definitionCheckWorkflow, body string) {
 	t.Helper()
-	body, err := ReadFile(ref)
+	raw, err := ReadFile(ref)
 	if err != nil {
 		t.Fatalf("ReadFile(%s): %v", ref, err)
 	}
-	var workflow definitionCheckWorkflow
-	if err := yaml.Unmarshal(body, &workflow); err != nil {
+	if err := yaml.Unmarshal(raw, &workflow); err != nil {
 		t.Fatalf("unmarshal %s: %v", ref, err)
 	}
-	return workflow, string(body)
+	return workflow, string(raw)
 }
 
 func stepIndex(workflow definitionCheckWorkflow, id string) int {
