@@ -274,13 +274,17 @@ When the spec root is external, the archive workflow SHALL skip the repository-l
 - **WHEN** the external archive step fails with spec root `/work/specs` and the repair agent is invoked
 - **THEN** the repair prompt limits edits to `/work/specs/openspec/changes/<change>/`, forbids edits under `/work/specs/openspec/specs/`, and includes the spec project's context instruction
 
-### Requirement: OpenSpec entry workflows declare no engine
+### Requirement: Engine-bearing OpenSpec workflows receive the root before engine startup
 
-No built-in `openspec:*` entry workflow (`change`, `simple-change`, `plan-change`, `implement-change`) SHALL declare the OpenSpec engine. None of their own steps is an OpenSpec artifact step, so the engine would contribute no prompt enrichment or step validation, and its startup `openspec status` call would run before the spec root is resolved.
+No user-facing `openspec:*` entry workflow SHALL declare the OpenSpec engine at its top level. Engine-dependent steps SHALL run inside a hidden child workflow that declares the engine with `root_param: spec_root`. The entry workflow invokes that child after it has resolved the spec root, passing the resolved `spec_root` as a parameter. `openspec:simple-change` runs its `plan` step through the hidden `simple-change-plan` workflow. The user-facing logical workflow names SHALL remain unchanged.
 
-#### Scenario: Simple change starts without the engine
-- **WHEN** `openspec:simple-change change_name=foo` starts with the user setting pointing at external spec root `/work/specs`
-- **THEN** no `openspec` command runs in the code repository before `resolve-openspec-root` completes
+#### Scenario: Engine sees the external root
+- **WHEN** `openspec:simple-change change_name=foo` starts with only the user setting pointing at external spec root `/work/specs`
+- **THEN** no `openspec` command runs in the code repository before `resolve-openspec-root` completes, and the OpenSpec engine's `openspec` calls run in `/work/specs`
+
+#### Scenario: User-facing name unchanged
+- **WHEN** a user lists workflows
+- **THEN** `openspec:simple-change` is listed under that name, and its engine-bearing inner workflow is not listed
 
 ### Requirement: OpenSpec entry workflows keep their top-level phases
 

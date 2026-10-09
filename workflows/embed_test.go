@@ -857,6 +857,7 @@ func TestV2SimpleChangeWorkflowsShareCorePhases(t *testing.T) {
 		wantOpenSpecValidation bool
 		wantArchive            bool
 		discoverChangeDir      bool
+		wantPlanWorkflow       string
 	}{
 		{
 			ref:                    "builtin:openspec/simple-change-v2.0.yaml",
@@ -864,6 +865,7 @@ func TestV2SimpleChangeWorkflowsShareCorePhases(t *testing.T) {
 			wantValidationText:     "{{openspec.simple_validate_instruction}}",
 			wantOpenSpecValidation: true,
 			wantArchive:            true,
+			wantPlanWorkflow:       "simple-change-plan-v1.0.yaml",
 		},
 		{
 			ref:                "builtin:spec-driven/simple-change-v2.0.yaml",
@@ -914,8 +916,8 @@ func TestV2SimpleChangeWorkflowsShareCorePhases(t *testing.T) {
 			if got := steps["validate-feature-branch"].workflow; got != "../core/validate-feature-branch-v1.0.yaml" {
 				t.Errorf("branch guard workflow = %q", got)
 			}
-			if got := steps["plan"].workflow; got != "" {
-				t.Errorf("plan unexpectedly delegates to %q", got)
+			if got := steps["plan"].workflow; got != tt.wantPlanWorkflow {
+				t.Errorf("plan workflow = %q, want %q", got, tt.wantPlanWorkflow)
 			}
 			if got := steps["review-plan"].workflow; got != "" {
 				t.Errorf("review unexpectedly delegates to %q", got)

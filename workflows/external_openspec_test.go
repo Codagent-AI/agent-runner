@@ -38,6 +38,23 @@ func TestExternalEntryWiring(t *testing.T) {
 	}
 }
 
+func TestSimpleChangePlanRunsEngineOnResolvedRoot(t *testing.T) {
+	entry := readBuiltinWorkflowForTest(t, "builtin:openspec/simple-change-v2.0.yaml")
+	var plan *model.Step
+	for i := range entry.Steps {
+		if entry.Steps[i].ID == "plan" {
+			plan = &entry.Steps[i]
+		}
+	}
+	if plan == nil || plan.Workflow != "simple-change-plan-v1.0.yaml" || plan.Params["spec_root"] != "{{openspec.spec_root}}" {
+		t.Fatalf("plan step must call the engine-bearing body with the resolved root: %+v", plan)
+	}
+	body := readBuiltinWorkflowForTest(t, "builtin:openspec/simple-change-plan-v1.0.yaml")
+	if body.Engine == nil || body.Engine.Type != "openspec" || body.Engine.Extras["change_param"] != "change_name" || body.Engine.Extras["root_param"] != "spec_root" {
+		t.Fatalf("simple-change-plan engine: %+v", body.Engine)
+	}
+}
+
 func TestArchiveChangeKeepsRepoLocalPath(t *testing.T) {
 	w := readBuiltinWorkflowForTest(t, "builtin:openspec/archive-change-v1.0.yaml")
 	defaults := map[string]string{}
