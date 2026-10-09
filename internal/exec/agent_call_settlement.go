@@ -119,7 +119,6 @@ func (h *AgentCallHandler) resolveFollowUp(request *agentcall.Request) (*resolve
 	}
 	c := *source.resolved
 	c.sessionID = source.nativeSessionID
-	c.knownModel = source.knownModel
 	h.mu.Unlock()
 	c.request = *request
 	c.target = target

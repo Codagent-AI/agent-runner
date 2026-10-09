@@ -92,7 +92,6 @@ type acceptedAgentCall struct {
 	cancel          context.CancelCauseFunc
 	resolved        *resolvedAgentCall
 	nativeSessionID string
-	knownModel      string
 	settlement      *callSettlement
 	deadline        *time.Timer
 	activity        *activityTracker
@@ -212,7 +211,7 @@ func (h *AgentCallHandler) HandleAgentCall(ctx context.Context, envelope control
 	childCtx, cancel := context.WithCancelCause(context.WithoutCancel(parent))
 	record := &acceptedAgentCall{
 		callID: h.options.NewID(), requestID: envelope.RequestID, parentAttemptID: envelope.AttemptID, target: resolved.target,
-		resolved: resolved, knownModel: resolved.knownModel, activity: newActivityTracker(resolved.adapter, h.options.Now),
+		resolved: resolved, activity: newActivityTracker(resolved.adapter, h.options.Now),
 		started: h.options.Now(), status: agentcall.StatusAccepted, cancel: cancel, done: make(chan struct{}),
 	}
 	h.accepted[envelope.RequestID] = record
