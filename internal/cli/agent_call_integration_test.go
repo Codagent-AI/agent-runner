@@ -54,6 +54,17 @@ func TestRegisteredAdaptersProvisionAgentCallProcessLocally(t *testing.T) {
 
 				assertAgentCallApproval(t, adapterName, invocationContext, prepared)
 				assertAgentCallTimeout(t, adapterName, &registration)
+				if adapterName == "claude" {
+					count := 0
+					for _, entry := range prepared.env {
+						if entry == "MCP_TOOL_TIMEOUT=2147483647" {
+							count++
+						}
+					}
+					if count != 1 {
+						t.Fatalf("Claude env = %v; want exactly one raised MCP tool timeout", prepared.env)
+					}
+				}
 			})
 		}
 	}
@@ -336,6 +347,10 @@ type agentCallRegistrationView struct {
 
 func agentCallTestInput(t *testing.T, adapterName string, invocationContext InvocationContext) (Adapter, *BuildArgsInput) {
 	t.Helper()
+	t.Setenv("MCP_TOOL_TIMEOUT", "")
+	if err := os.Unsetenv("MCP_TOOL_TIMEOUT"); err != nil {
+		t.Fatal(err)
+	}
 	home := t.TempDir()
 	workdir := t.TempDir()
 	t.Setenv("HOME", home)

@@ -1,4 +1,4 @@
-- [ ] Implement the change described by these files using TDD, as `CLAUDE.md` requires. Satisfy every spec scenario and the `INT-001` obligation in the test plan.
+- [x] Implement the change described by these files using TDD, as `CLAUDE.md` requires. Satisfy every spec scenario and the `INT-001` obligation in the test plan.
 
   **Claude adapter**
   - In `internal/cli/claude.go`, restructure `ClaudeAdapter.SpawnEnv` as shown in `design.md` → Approach.

@@ -2389,6 +2389,10 @@ func TestSpawnEnvForInvocationDefaultsToNil(t *testing.T) {
 }
 
 func TestClaudeHeadlessSpawnEnvironment(t *testing.T) {
+	t.Setenv("MCP_TOOL_TIMEOUT", "")
+	if err := os.Unsetenv("MCP_TOOL_TIMEOUT"); err != nil {
+		t.Fatal(err)
+	}
 	adapter := &ClaudeAdapter{}
 	for _, tt := range []struct {
 		name       string
@@ -2428,6 +2432,10 @@ func TestClaudeHeadlessSpawnEnvironment(t *testing.T) {
 }
 
 func TestClaudeInteractiveSpawnEnvironment(t *testing.T) {
+	t.Setenv("MCP_TOOL_TIMEOUT", "")
+	if err := os.Unsetenv("MCP_TOOL_TIMEOUT"); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("BASH_DEFAULT_TIMEOUT_MS", "900000")
 	for _, context := range []InvocationContext{ContextInteractive, ContextAutonomousInteractive} {
 		env, err := SpawnEnvForInvocation(&ClaudeAdapter{}, &BuildArgsInput{Context: context})
@@ -2558,5 +2566,52 @@ func writeCursorChatMeta(t *testing.T, home, workspaceHash, chatID string, creat
 	meta := fmt.Sprintf(`{"schemaVersion":1,"createdAtMs":%d,"cwd":%q}`, createdAt.UnixMilli(), workdir)
 	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(meta), 0o600); err != nil {
 		t.Fatalf("write cursor meta.json: %v", err)
+	}
+}
+
+func TestClaudeAgentCallSpawnEnvironment(t *testing.T) {
+	for _, ctx := range []InvocationContext{ContextInteractive, ContextAutonomousInteractive, ContextAutonomousHeadless, ContextExternalUser} {
+		t.Run(string(ctx), func(t *testing.T) {
+			adapter, input := agentCallTestInput(t, "claude", ctx)
+			t.Setenv("BASH_DEFAULT_TIMEOUT_MS", "")
+			if err := os.Unsetenv("BASH_DEFAULT_TIMEOUT_MS"); err != nil {
+				t.Fatal(err)
+			}
+			var headless []string
+			if ctx.IsHeadless() {
+				headless = []string{"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1", "BASH_DEFAULT_TIMEOUT_MS=600000"}
+			}
+			env, err := SpawnEnvForInvocation(adapter, input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := append(append([]string(nil), headless...), "MCP_TOOL_TIMEOUT=2147483647")
+			if diff := cmp.Diff(want, env); diff != "" {
+				t.Fatalf("spawn env mismatch (-want +got):\n%s", diff)
+			}
+			if _, defined := os.LookupEnv("MCP_TOOL_TIMEOUT"); defined {
+				t.Fatal("runner timeout was defined")
+			}
+			for _, inherited := range []string{"60000", ""} {
+				t.Setenv("MCP_TOOL_TIMEOUT", inherited)
+				env, err = SpawnEnvForInvocation(adapter, input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if diff := cmp.Diff(headless, env); diff != "" {
+					t.Fatalf("inherited timeout env mismatch (-want +got):\n%s", diff)
+				}
+				if got, defined := os.LookupEnv("MCP_TOOL_TIMEOUT"); !defined || got != inherited {
+					t.Fatalf("runner timeout = %q, %v; want %q, true", got, defined, inherited)
+				}
+			}
+			input.RunnerIntegration.AgentCall.Executable = "relative/runner"
+			if _, err := SpawnEnvForInvocation(adapter, input); err == nil || !strings.Contains(err.Error(), "claude: prepare agent-call integration:") {
+				t.Fatalf("invalid descriptor error = %v", err)
+			}
+		})
+	}
+	if env, err := (&ClaudeAdapter{}).SpawnEnv(nil); env != nil || err != nil {
+		t.Fatalf("nil input = %v, %v; want nil, nil", env, err)
 	}
 }

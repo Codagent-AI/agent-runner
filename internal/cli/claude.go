@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/codagent/agent-runner/internal/model"
@@ -168,15 +169,28 @@ func (a *ClaudeAdapter) DropSpawnEnvVars() []string {
 }
 
 // SpawnEnv keeps background work in the lifetime of a headless Claude turn.
-// The default Bash timeout accommodates long foreground checks; an inherited
-// timeout remains the user's choice.
+// The default Bash timeout accommodates long foreground checks. Agent-call
+// integrations receive a raised MCP tool timeout in every invocation context.
+// Inherited Bash and MCP tool timeouts remain the user's choice.
 func (a *ClaudeAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
-	if input == nil || !input.InvocationContext().IsHeadless() {
+	if input == nil {
 		return nil, nil
 	}
-	env := []string{"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1"}
-	if _, defined := os.LookupEnv("BASH_DEFAULT_TIMEOUT_MS"); !defined {
-		env = append(env, "BASH_DEFAULT_TIMEOUT_MS=600000")
+	agentCall, err := validatedAgentCall(input)
+	if err != nil {
+		return nil, fmt.Errorf("claude: prepare agent-call integration: %w", err)
+	}
+	var env []string
+	if input.InvocationContext().IsHeadless() {
+		env = append(env, "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1")
+		if _, defined := os.LookupEnv("BASH_DEFAULT_TIMEOUT_MS"); !defined {
+			env = append(env, "BASH_DEFAULT_TIMEOUT_MS=600000")
+		}
+	}
+	if agentCall != nil {
+		if _, defined := os.LookupEnv("MCP_TOOL_TIMEOUT"); !defined {
+			env = append(env, "MCP_TOOL_TIMEOUT="+strconv.FormatInt(agentCallTimeoutMilliseconds, 10))
+		}
 	}
 	return env, nil
 }
