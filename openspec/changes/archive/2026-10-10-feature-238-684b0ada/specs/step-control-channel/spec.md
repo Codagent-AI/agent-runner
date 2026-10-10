@@ -1,8 +1,5 @@
-# step-control-channel Specification
+## MODIFIED Requirements
 
-## Purpose
-Define authenticated out-of-band completion and turn-durability behavior for interactive agent steps.
-## Requirements
 ### Requirement: Private per-run control endpoint
 
 Before the first parent agent step that receives runner control integration spawns, Agent Runner SHALL lazily create a local Unix socket in a user-private directory and retain it for the run. The directory SHALL be accessible only to the local user and the socket SHALL be readable and writable only by that user. The run directory SHALL point to the socket. Endpoint creation failure SHALL fail the step before spawn; normal run exit SHALL close and unlink it; stale cleanup SHALL require proof of the run lock. Interactive and autonomous-headless parent agent processes SHALL receive the control context required by their enabled runner tools. For autonomous parents, agent-call control eligibility SHALL be derived solely from the validated tool declaration. Agents started by `call_agent` MUST NOT receive usable parent control context.
@@ -35,59 +32,15 @@ Before the first parent agent step that receives runner control integration spaw
 - **WHEN** the control endpoint exists for a run
 - **THEN** its directory and socket are accessible only to the local user who started the run
 
-### Requirement: In-session completion client
+## REMOVED Requirements
 
-The binary SHALL expose `agent-runner step complete`. It SHALL read endpoint and credential data only from the inherited control environment, send a completion event with a unique request ID, and exit nonzero with guidance when that environment is absent. It SHALL NOT accept run, step, socket, or token overrides on the command line. Prompt instructions SHALL use the absolute executable path. CLI-native completion commands SHALL invoke this same client.
+### Requirement: Fresh authenticated attempt
 
-#### Scenario: Agent completes the active step
-- **WHEN** the agent runs the exact absolute-path client inside its interactive session
-- **THEN** the active attempt receives an authenticated completion request
+**Reason**: Its scenario "Lost agent-call client cancels leased execution" no longer matches the code. An accepted agent call is leased to the parent attempt, so losing the client connection does not cancel the child. A MODIFIED block cannot drop that scenario name, so the requirement is replaced.
 
-#### Scenario: Command runs outside a session
-- **WHEN** the control environment is absent
-- **THEN** the client exits nonzero and does not target any run
+**Migration**: Replaced by "Fresh authenticated attempt credential", which keeps the same authentication rules and states that a lost client connection leaves the child running.
 
-### Requirement: Acknowledgement precedes termination
-
-Completion acceptance SHALL be an intermediate state, not success. The server SHALL capture the adapter's accept-time durability checkpoint, record `completion_requested` and `completion_acknowledged`, and return the acknowledgement before sending any termination signal. Early committed-turn hook events that arrive before acceptance SHALL be acknowledged and ignored rather than failing the agent turn.
-
-#### Scenario: Tool call returns before shutdown
-- **WHEN** a valid completion request is accepted
-- **THEN** its client receives a success acknowledgement before CLI termination begins
-
-#### Scenario: Hook fires before completion acceptance
-- **WHEN** a native turn hook sends `turn_committed` with no accepted completion
-- **THEN** the server acknowledges and ignores it without failing or advancing the step
-
-### Requirement: Semantic turn durability
-
-After acknowledgement, Agent Runner SHALL wait up to 30 seconds of active runtime for semantic evidence that a completed assistant turn was recorded after the checkpoint. Evidence MAY be an authenticated native post-turn event or an adapter probe of an explicit completed-turn record; modification time, file quiescence, and fixed sleeps are insufficient. The clock SHALL pause while the child is suspended.
-
-On confirmation, the step SHALL become `success` and the CLI group SHALL be terminated gracefully. On timeout or probe failure, Agent Runner SHALL record `durability_failure` with CLI, session ID, bound, inspected artifact, and cause; terminate the CLI; record `failed`; and stop the workflow. If the child exits after acceptance, store inspection SHALL continue for the remaining bound. A resumed workflow SHALL retry with a new credential.
-
-#### Scenario: Completing turn is resumable
-- **WHEN** an interactive step succeeds through the control channel and a later step resumes its session
-- **THEN** the resumed session contains the turn that invoked completion
-
-#### Scenario: Durability cannot be proven
-- **WHEN** the active-runtime bound expires without semantic committed-turn evidence
-- **THEN** the step fails visibly rather than advancing on an assumption
-
-#### Scenario: Child exits during durability wait
-- **WHEN** the CLI exits after acceptance but before confirmation
-- **THEN** Agent Runner continues inspecting its native store until confirmation or the remaining bound expires
-
-### Requirement: Completion integration preserves supervision
-
-Adapters MAY pre-approve only the exact absolute-path completion command with fixed `step complete` arguments. A CLI that cannot express this safely SHALL keep its normal interactive approval prompt rather than broaden permissions. Process-local native commands and hooks SHALL be injected for the spawned process without requiring global user installation or project-file changes. Failure to prepare a required integration SHALL fail before spawn.
-
-#### Scenario: Unrelated commands remain supervised
-- **WHEN** an interactive agent runs a command other than exact completion
-- **THEN** the CLI's normal approval behavior is unchanged
-
-#### Scenario: Native command is process-local
-- **WHEN** Agent Runner adds an adapter-native completion command or hook
-- **THEN** it is available to the spawned CLI without global installation or project mutation
+## ADDED Requirements
 
 ### Requirement: Fresh authenticated attempt credential
 
@@ -176,4 +129,3 @@ For every interactive or autonomous-interactive agent step backed by a CLI whose
 #### Scenario: Blocked autonomous-interactive completion fails early
 - **WHEN** an autonomous-interactive Cursor step starts outside `yolo` permission mode and a user or project Cursor deny rule covers the completion command
 - **THEN** the step fails before spawn with an explanation naming the deny rule instead of hanging while awaiting approval
-
