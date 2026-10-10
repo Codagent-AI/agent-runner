@@ -103,6 +103,5 @@ The folder holds only `.openspec.yaml`: no artifacts and no deltas. It is archiv
    - A note that an exact `step submit-route` command is also pre-approved (`internal/cli/adapter.go:127-145`).
 7. Main-spec mismatches seen outside this reconciliation's scope:
    - `view-run` "r is ignored on failed run" (the code resumes failed runs).
-   - `cli-adapter` says every adapter supports interactive mode, but OpenCode refuses interactive steps.
    - The `lightweight-audit-reporting` note checks are only deterministic. The spec now states this; broader semantic filtering would be new work.
 8. The new main specs `call-agent-skill`, `workflow-discovery`, and `workflow-param-form` get `Purpose: TBD` when archived, like 26 existing main specs. Filling in a purpose is optional cleanup.

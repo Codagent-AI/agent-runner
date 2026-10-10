@@ -1,5 +1,25 @@
 ## ADDED Requirements
 
+### Requirement: Adapter invocation context support
+
+Every registered CLI adapter SHALL support autonomous-headless invocation. Every registered adapter except OpenCode SHALL support interactive and autonomous-interactive invocation. OpenCode SHALL fail interactive and autonomous-interactive steps before spawning the CLI, with an explanatory error identifying the unsupported context.
+
+#### Scenario: Autonomous-headless step succeeds for any registered CLI
+- **WHEN** an agent step runs in autonomous-headless context with any registered `cli`
+- **THEN** the runner spawns the CLI without emitting an unsupported-context error
+
+#### Scenario: Interactive step succeeds for non-OpenCode CLIs
+- **WHEN** an agent step runs in interactive context with any registered `cli` except OpenCode
+- **THEN** the runner spawns the CLI without emitting an unsupported-context error
+
+#### Scenario: Autonomous-interactive step succeeds for non-OpenCode CLIs
+- **WHEN** an agent step runs in autonomous-interactive context with any registered `cli` except OpenCode
+- **THEN** the runner spawns the CLI without emitting an unsupported-context error
+
+#### Scenario: OpenCode interactive step is rejected before spawn
+- **WHEN** an agent step uses OpenCode in interactive or autonomous-interactive context
+- **THEN** the runner fails the step before spawning the CLI and reports an explanatory error that OpenCode does not support interactive steps
+
 ### Requirement: Headless Claude runs without background tasks
 
 When the Claude adapter builds a headless invocation, it SHALL contribute `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` to the spawned process's environment. It SHALL also contribute `BASH_DEFAULT_TIMEOUT_MS=600000` unless the runner's own environment already defines `BASH_DEFAULT_TIMEOUT_MS`, in which case the inherited value SHALL be left unchanged. These entries SHALL apply to every headless Claude invocation the runner spawns, including workflow agent steps, inline repair agents, and `call_agent` children. They SHALL apply only to the spawned process and MUST NOT modify the runner's own environment or any user, project, or global Claude configuration. Interactive and autonomous-interactive Claude invocations SHALL NOT receive these entries.
@@ -94,3 +114,10 @@ When a supported CLI exposes process-local control over MCP tool-execution timeo
 #### Scenario: Host that aborts long tool requests still supports long children
 - **WHEN** an enabled parent uses a CLI whose MCP client aborts a long tool request regardless of configuration (Cursor) and the child is still running
 - **THEN** `call_agent` returns the `call_id` with a non-terminal status before the host abort, the child keeps running, and `get_agent_call` collects the later result
+
+## REMOVED Requirements
+
+### Requirement: Adapter mode coverage
+
+**Reason**: OpenCode rejects interactive and autonomous-interactive steps before spawn, so universal support and the two interactive scenarios are false. Current code wins over the older spec.
+**Migration**: Use "Adapter invocation context support" for the supported contexts and OpenCode's rejection behavior.

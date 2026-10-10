@@ -127,3 +127,13 @@
   - A rerun is not permitted by the token. The next push triggers CI again.
   - Recorded in the acceptance ledger.
   - Decision-bearing: no.
+
+## pr-review (attempt 2)
+
+- **Decision:** Current code wins: raising a host's process-local MCP tool-execution timeout is MAY, not SHALL. Codex raises `tool_timeout_sec` (`internal/cli/completion_plugin.go`), and Copilot sets `agentCallTimeoutMilliseconds` (`internal/cli/copilot.go`). Claude and the plugin path configure no timeout (`standardAgentCallMCPConfig(..., 0, ...)` in `internal/cli/agent_call_integration.go`). Long child execution must not depend on timeout elevation, an open MCP request, or progress notifications. The main and archived agent-calls specs now agree with cli-adapter "Long-running tool controls".
+  - Alternatives: add timeout configuration to Claude (rejected: this change is spec-only and the issue requires code to win).
+  - Decision-bearing: no.
+- **Decision:** Retire "Adapter mode coverage" with REMOVED plus ADDED "Adapter invocation context support". All registered adapters support autonomous-headless; adapters other than OpenCode support interactive and autonomous-interactive. OpenCode rejects both interactive contexts before spawn with an explanation. The replacement includes a rejection scenario, and follow-up 7 no longer lists this resolved mismatch. "No permission loosening in interactive mode" and all later requirements remain untouched for PR #232.
+  - Alternatives: keep false interactive scenario names (rejected: they promise unsupported OpenCode behavior).
+  - Decision-bearing: no.
+- **Verification:** `openspec validate --specs --strict --no-interactive` passes all 83 specs. Focused existing CLI tests (`TestRegisteredAdaptersProvisionAgentCallProcessLocally` and `TestOpenCodeRejectsInteractiveMode`) pass. Content checks confirmed matching main/archive requirement bodies and unchanged cli-adapter text from "No permission loosening in interactive mode" onward. No Go code changed. Acceptance was not re-run; its existing evidence remains tied to `7fe2fbb`.

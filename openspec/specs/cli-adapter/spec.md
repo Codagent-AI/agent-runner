@@ -129,21 +129,25 @@ When the session ID is known at spawn time — either because the runner pre-gen
 - **WHEN** a fresh Codex step spawns the CLI process and no pre-generated ID exists
 - **THEN** the runner does not pre-flush a session ID; post-exit discovery via `DiscoverSessionID` remains the sole persistence point
 
-### Requirement: Adapter mode coverage
+### Requirement: Adapter invocation context support
 
-Every registered CLI adapter SHALL support all three invocation contexts: interactive, autonomous-headless, and autonomous-interactive. The runner SHALL NOT reject any invocation context for any registered `cli`.
-
-#### Scenario: Interactive step succeeds for any registered CLI
-- **WHEN** an agent step runs in interactive context with any registered `cli`
-- **THEN** the runner spawns the CLI without emitting an unsupported-context error
+Every registered CLI adapter SHALL support autonomous-headless invocation. Every registered adapter except OpenCode SHALL support interactive and autonomous-interactive invocation. OpenCode SHALL fail interactive and autonomous-interactive steps before spawning the CLI, with an explanatory error identifying the unsupported context.
 
 #### Scenario: Autonomous-headless step succeeds for any registered CLI
 - **WHEN** an agent step runs in autonomous-headless context with any registered `cli`
 - **THEN** the runner spawns the CLI without emitting an unsupported-context error
 
-#### Scenario: Autonomous-interactive step succeeds for any registered CLI
-- **WHEN** an agent step runs in autonomous-interactive context with any registered `cli`
+#### Scenario: Interactive step succeeds for non-OpenCode CLIs
+- **WHEN** an agent step runs in interactive context with any registered `cli` except OpenCode
 - **THEN** the runner spawns the CLI without emitting an unsupported-context error
+
+#### Scenario: Autonomous-interactive step succeeds for non-OpenCode CLIs
+- **WHEN** an agent step runs in autonomous-interactive context with any registered `cli` except OpenCode
+- **THEN** the runner spawns the CLI without emitting an unsupported-context error
+
+#### Scenario: OpenCode interactive step is rejected before spawn
+- **WHEN** an agent step uses OpenCode in interactive or autonomous-interactive context
+- **THEN** the runner fails the step before spawning the CLI and reports an explanatory error that OpenCode does not support interactive steps
 
 ### Requirement: No permission loosening in interactive mode
 

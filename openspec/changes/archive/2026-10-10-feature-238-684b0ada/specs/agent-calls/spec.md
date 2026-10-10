@@ -231,10 +231,10 @@ The called child SHALL receive its resolved profile system prompt and the suppli
 
 ### Requirement: Long-running MCP execution
 
-Agent Runner MUST NOT impose a fixed duration limit on a valid agent call. After acceptance, a child's survival MUST NOT depend on any MCP request staying open, on host MCP tool-execution timeout configuration, or on progress notifications. When a supported host exposes a process-local MCP tool-execution timeout control, the adapter SHALL raise that timeout for the Runner-owned server so the host's generic short default does not end a waiting `call_agent` request for a long child. Where a host enforces an unconfigurable `tools/call` abort, its parents SHALL receive a wait budget shorter than that abort and reach the result by polling `get_agent_call`. When an MCP client supplies a progress token on `call_agent`, the bridge SHALL emit rate-limited progress notifications while that request remains open. Progress notifications MUST NOT be treated as a substitute for either the raised timeout or polling.
+Agent Runner MUST NOT impose a fixed duration limit on a valid agent call. After acceptance, a child's survival MUST NOT depend on any MCP request staying open, on host MCP tool-execution timeout configuration, or on progress notifications. When a supported host exposes a process-local MCP tool-execution timeout control, the adapter MAY raise that timeout for the Runner-owned server; a long child MUST NOT depend on it (see the wait-budget and polling clauses). Where a host enforces an unconfigurable `tools/call` abort, its parents SHALL receive a wait budget shorter than that abort and reach the result by polling `get_agent_call`. When an MCP client supplies a progress token on `call_agent`, the bridge SHALL emit rate-limited progress notifications while that request remains open. Progress notifications MUST NOT be treated as a substitute for polling or for any host timeout configuration.
 
 #### Scenario: Configurable host timeout does not bound the call
-- **WHEN** a supported host exposes a process-local MCP tool-execution timeout control
+- **WHEN** an adapter that configures its host's process-local timeout control (Codex, Copilot) provisions the agent-call tools
 - **THEN** Agent Runner provisions the agent-call tools so the host's generic short default does not terminate a waiting `call_agent` request for an otherwise active child
 
 #### Scenario: Requested progress is reported
