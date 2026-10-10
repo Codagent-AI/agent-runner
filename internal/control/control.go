@@ -380,6 +380,14 @@ func (s *ControlServer) Deactivate() {
 func (s *ControlServer) Completions() <-chan CompletionRequest { return s.completions }
 func (s *ControlServer) CommittedTurns() <-chan CommittedTurn  { return s.turns }
 
+// CompletionAccepted reports acceptance independently of channel delivery,
+// which may still be pending after the client receives its acknowledgement.
+func (s *ControlServer) CompletionAccepted(attemptID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.active != nil && s.active.ID == attemptID && s.active.completionAccepted
+}
+
 // SubscribeCommittedTurn returns evidence scoped to one attempt. The
 // unsubscribe function removes a waiter whose durability was confirmed by a
 // different source, so it cannot consume or retain a later attempt's event.
