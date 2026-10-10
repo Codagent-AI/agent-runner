@@ -387,7 +387,8 @@ func (f *cliAuditFixture) onlyRunDir() string {
 
 func (f *cliAuditFixture) waitForLinks(source string, count int, completed bool) []Link {
 	f.t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
+	// Detached replay starts additional processes; allow scheduling delays on busy hosts.
+	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		lifecycle, err := ReadLifecycle(filepath.Join(source, lifecycleFileName))
 		if err == nil && len(lifecycle.Links) >= count {

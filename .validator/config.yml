@@ -17,7 +17,8 @@ entry_points:
       - duplication:
           command: ./.validator/duplication.sh
       - test:
-          command: ./.validator/go-offline.sh go test -tags dev_audit ./...
+          # Limit package concurrency so process-heavy fixtures can meet their deadlines.
+          command: ./.validator/go-offline.sh go test -p 2 -tags dev_audit ./...
           # Avoid competing with build/lint gates while integration tests compile binaries.
           parallel: false
           # The workflow suite alone takes several minutes; allow cold builds too.

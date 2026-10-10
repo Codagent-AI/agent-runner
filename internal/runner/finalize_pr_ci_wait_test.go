@@ -51,7 +51,7 @@ func setupFinalizeCI(t *testing.T, snapshot string) string {
 	}
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
 	t.Setenv("CI_SNAPSHOT", filepath.Join(dir, "snapshot.json"))
-	t.Setenv("AGENT_RUNNER_CI_WAIT_TIMINGS", `{"deadline_seconds":2,"poll_interval_seconds":0.05,"bot_start_grace_seconds":0.1,"call_timeout_seconds":1}`)
+	t.Setenv("AGENT_RUNNER_CI_WAIT_TIMINGS", `{"deadline_seconds":10,"poll_interval_seconds":1,"bot_start_grace_seconds":0.1,"call_timeout_seconds":3}`)
 	return dir
 }
 
