@@ -53,18 +53,7 @@ func TestRegisteredAdaptersProvisionAgentCallProcessLocally(t *testing.T) {
 				}
 
 				assertAgentCallApproval(t, adapterName, invocationContext, prepared)
-				assertAgentCallTimeout(t, adapterName, &registration)
-				if adapterName == "claude" {
-					count := 0
-					for _, entry := range prepared.env {
-						if entry == "MCP_TOOL_TIMEOUT=2147483647" {
-							count++
-						}
-					}
-					if count != 1 {
-						t.Fatalf("Claude env = %v; want exactly one raised MCP tool timeout", prepared.env)
-					}
-				}
+				assertAgentCallTimeout(t, adapterName, &registration, prepared)
 			})
 		}
 	}
@@ -598,7 +587,7 @@ func assertAgentCallApproval(t *testing.T, adapterName string, invocationContext
 	}
 }
 
-func assertAgentCallTimeout(t *testing.T, adapterName string, registration *agentCallRegistrationView) {
+func assertAgentCallTimeout(t *testing.T, adapterName string, registration *agentCallRegistrationView, prepared agentCallPreparedInvocation) {
 	t.Helper()
 	switch adapterName {
 	case "codex":
@@ -612,6 +601,17 @@ func assertAgentCallTimeout(t *testing.T, adapterName string, registration *agen
 	default:
 		if registration.timeout != 0 {
 			t.Fatalf("%s unexpectedly sets a Runner tool timeout: %d", adapterName, registration.timeout)
+		}
+	}
+	if adapterName == "claude" {
+		count := 0
+		for _, entry := range prepared.env {
+			if entry == "MCP_TOOL_TIMEOUT=2147483647" {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("Claude env = %v; want exactly one raised MCP tool timeout", prepared.env)
 		}
 	}
 }
