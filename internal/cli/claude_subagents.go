@@ -206,7 +206,7 @@ func (a *ClaudeAdapter) ExtractUsageWithContext(stdout string, uc UsageContext) 
 			reason.note(model.UnavailableSubagentSpanUnavailable)
 		} else {
 			defer func() { _ = transcripts.Close() }()
-			spanSpawns, spanFailed, spanReason := scanClaudeParentSpan(transcripts, parentRel, claudeSpanSelector{uuids: evidence.uuids})
+			spanSpawns, spanFailed, spanReason := scanClaudeParentSpan(transcripts, parentRel, evidence.uuids)
 			reason.note(spanReason)
 			for id := range spanSpawns {
 				spawns[id] = true
@@ -230,19 +230,10 @@ func (a *ClaudeAdapter) ExtractUsageWithContext(stdout string, uc UsageContext) 
 }
 
 // scanClaudeParentSpan streams the parent session transcript and returns the
-// direct spawns selected by stdout UUID bounds or a pre-launch byte offset. An invalid entry inside the span, or immediately after
+// direct spawns written between the first and last entries this invocation
+// reported on stdout. An invalid entry inside the span, or immediately after
 // it, could hide a spawn and makes collection partial.
-type claudeSpanSelector struct {
-	uuids  map[string]bool
-	offset *int64
-}
-
-func scanClaudeParentSpan(root *os.Root, parentRel string, selector claudeSpanSelector) (spawns, failed map[string]bool, reason model.UnavailableReason) {
-	if selector.offset != nil {
-		span := readClaudeInteractiveSpan(root, parentRel, *selector.offset, true)
-		return span.spawns, span.failed, span.reason
-	}
-	uuids := selector.uuids
+func scanClaudeParentSpan(root *os.Root, parentRel string, uuids map[string]bool) (spawns, failed map[string]bool, reason model.UnavailableReason) {
 	f, err := root.Open(parentRel)
 	if err != nil {
 		return nil, nil, model.UnavailableSubagentSpanUnavailable
