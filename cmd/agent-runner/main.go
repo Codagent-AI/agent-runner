@@ -1588,6 +1588,7 @@ func spawnAgentResume(cliName, sessionID string) error {
 // path so it works even when agent-runner is not in PATH. If projectDir is
 // non-empty, the process chdirs there first so that resolveResumeStatePath
 // looks in the correct project tree when the run belongs to a different project.
+// List-only relaunches keep the current cwd if the original directory is unusable.
 func execRunnerResume(runID, projectDir string) int {
 	return execRunnerResumeWithProfile(runID, projectDir, "")
 }
@@ -1595,8 +1596,11 @@ func execRunnerResume(runID, projectDir string) int {
 func execRunnerResumeWithProfile(runID, projectDir, profile string) int {
 	if projectDir != "" {
 		if err := os.Chdir(projectDir); err != nil {
-			fmt.Fprintf(os.Stderr, "agent-runner: chdir %s: %v\n", projectDir, err)
-			return 1
+			if runID != "" {
+				fmt.Fprintf(os.Stderr, "agent-runner: chdir %s: %v\n", projectDir, err)
+				return 1
+			}
+			fmt.Fprintf(os.Stderr, "agent-runner: warning: cannot return to original directory %s: %v; opening run list in current directory\n", projectDir, err)
 		}
 	}
 	args := []string{"--resume"}

@@ -13,12 +13,8 @@ import (
 
 func TestPostRunEscapeRelaunchCwd(t *testing.T) {
 	for _, path := range []string{"switcher", "live"} {
-		for _, recorded := range []bool{true, false} {
-			name := path + "/unknown origin"
-			if recorded {
-				name = path + "/recorded origin"
-			}
-			t.Run(name, func(t *testing.T) {
+		for _, originCase := range []string{"recorded origin", "unknown origin", "deleted origin", "file origin"} {
+			t.Run(path+"/"+originCase, func(t *testing.T) {
 				current := t.TempDir()
 				t.Chdir(current)
 				project := t.TempDir()
@@ -31,8 +27,22 @@ func TestPostRunEscapeRelaunchCwd(t *testing.T) {
 				}
 				origin := ""
 				wantCwd := current
-				if recorded {
+				switch originCase {
+				case "recorded origin":
 					origin, wantCwd = project, project
+				case "deleted origin":
+					origin = filepath.Join(project, "deleted-worktree")
+					if err := os.Mkdir(origin, 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Remove(origin); err != nil {
+						t.Fatal(err)
+					}
+				case "file origin":
+					origin = filepath.Join(project, "file")
+					if err := os.WriteFile(origin, nil, 0o600); err != nil {
+						t.Fatal(err)
+					}
 				}
 				meta, err := json.Marshal(map[string]string{"path": origin})
 				if err != nil {
@@ -88,5 +98,20 @@ func TestPostRunEscapeRelaunchCwd(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestResumeRunRejectsUnusableProjectDir(t *testing.T) {
+	t.Chdir(t.TempDir())
+	originalExec := execProcess
+	t.Cleanup(func() { execProcess = originalExec })
+	called := false
+	execProcess = func(_ string, _ []string, _ []string) error { called = true; return nil }
+	missing := filepath.Join(t.TempDir(), "missing")
+	if code := execRunnerResumeWithProfile("run-123", missing, "copilot"); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if called {
+		t.Fatal("run resume must not exec from an incorrect working directory")
 	}
 }
