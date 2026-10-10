@@ -915,6 +915,41 @@ func TestCodexAdapter(t *testing.T) {
 	})
 }
 
+func TestDiscoverCopilotSessionToleratesCoarseMtime(t *testing.T) {
+	const sessionID = "copilot-session"
+	for _, tt := range []struct {
+		name string
+		lag  time.Duration
+		want string
+	}{
+		{name: "coarse clock lag", lag: 5 * time.Millisecond, want: sessionID},
+		{name: "recent prior session", lag: 100 * time.Millisecond, want: ""},
+		{name: "stale session", lag: time.Minute, want: ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			workdir := t.TempDir()
+			spawnTime := time.Now()
+			sessionDir := filepath.Join(home, ".copilot", "session-state", sessionID)
+			if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(sessionDir, "workspace.yaml"), []byte("cwd: "+workdir+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			modTime := spawnTime.Add(-tt.lag)
+			if err := os.Chtimes(sessionDir, modTime, modTime); err != nil {
+				t.Fatal(err)
+			}
+
+			if diff := cmp.Diff(tt.want, discoverCopilotSession(spawnTime, workdir)); diff != "" {
+				t.Errorf("session ID mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestCopilotAdapter(t *testing.T) {
 	adapter := &CopilotAdapter{}
 
