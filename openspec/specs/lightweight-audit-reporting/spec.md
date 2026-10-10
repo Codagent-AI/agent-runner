@@ -67,17 +67,18 @@ Judge totals whose coverage is `none` SHALL be written empty, never `0`. A pendi
 
 The `project` field SHALL be a sanitized Git hosting `owner/repository` slug derived from the source repository's configured remote when available, without its host, protocol, credentials, query, or path. When no suitable remote exists, it SHALL use only the source repository root's basename. It MUST NOT contain an absolute local path.
 
-The optional note SHALL be a single line of no more than 280 Unicode characters. The reporter SHALL reject a note containing a URL, local path, secret-like value, or evidence excerpt rather than export that detail.
+The optional note SHALL be a single line of no more than 280 Unicode characters. Value validation SHALL apply these deterministic note checks: a note longer than 280 characters or containing a line break is unsafe, and a note containing `://`, `/`, `\`, or (case-insensitively) `ghp_`, `sk-`, or `token=` is unsafe as detailed evidence. When a proposed note fails these checks, validation SHALL omit only that note before any row is written, SHALL retain the otherwise validated categorical observation, and SHALL record a reason-only diagnostic in the local report that does not reproduce the note text. These checks are the only automated note filtering; keeping a note free of other detail, such as evidence excerpts or transcript-like content, rests on the judge's instructions and is not enforced by the reporter.
 
-The reporter MUST NOT write transcripts, transcript summaries, prompts, responses, tool calls, command output, source code, diffs, artifact contents, evidence excerpts, filenames or paths, private URLs, or other detailed run material. The optional note SHALL remain a short high-level judgment and MUST NOT summarize a transcript or reproduce detailed evidence.
+Apart from optional note text that passes the checks above, the reporter MUST NOT write transcripts, transcript summaries, prompts, responses, tool calls, command output, source code, diffs, artifact contents, evidence excerpts, filenames or paths, private URLs, or other detailed run material. The judge's instructions SHALL limit the optional note to a bounded statement of the concrete contribution or harm and SHALL tell the judge not to include a transcript, a transcript summary, or paths.
 
 #### Scenario: Local report contains detailed evidence
 - **WHEN** the local observation includes consulted diffs, output, paths, or evidence references
 - **THEN** the spreadsheet projection omits those fields and writes only allowlisted high-level values
 
 #### Scenario: Note contains prohibited detail
-- **WHEN** a proposed note contains a local path, evidence excerpt, or transcript-like content
-- **THEN** validation omits the optional note while retaining the validated categorical observation
+- **WHEN** a proposed note contains a URL, a path separator, or a recognized secret marker (`ghp_`, `sk-`, or `token=`), or is multi-line or longer than 280 characters
+- **THEN** validation omits the optional note before any row is written while retaining the validated categorical observation
+- **AND** the local report records a reason-only diagnostic without the rejected note text
 
 #### Scenario: Rejected optional note does not block an audit
 - **WHEN** an otherwise valid model observation contains a note rejected by the evidence-safety checks
@@ -127,7 +128,7 @@ A completed audit SHALL append one row per executed-leaf-step observation. Repla
 
 ### Requirement: Reporting failure is local and non-blocking
 
-The complete validated audit report SHALL be committed locally before external reporting begins. A validation, authentication, API, rate-limit, or write failure SHALL retain that report for retry, record a reporting warning on the audit, and SHALL NOT change the source workflow's result. The pending local report SHALL retain a non-secret delivery error independently of audit-stage warnings; successful retry SHALL clear only the reporting failure.
+The complete validated audit report SHALL be committed locally before external reporting begins. A validation, authentication, API, rate-limit, or write failure SHALL retain that report for retry, record a reporting warning on the audit, and SHALL NOT change the source workflow's result. The pending local report SHALL retain a non-secret delivery error independently of audit-stage warnings, and completing the audit after a reporting failure SHALL NOT erase that delivery error or the audit's reporting warning. A successful retry SHALL mark the report delivered and clear only its delivery error, while retaining the original observations, their identities, and any audit-stage warning.
 
 #### Scenario: Google API is unavailable
 - **WHEN** the local audit report is complete but the Sheets API request fails
@@ -140,4 +141,28 @@ The complete validated audit report SHALL be committed locally before external r
 #### Scenario: Reporting later succeeds
 - **WHEN** reporting is retried after a transient failure
 - **THEN** the original validated observations are written without rerunning the model audit
+
+#### Scenario: Completion follows reporting failure
+- **WHEN** external delivery fails before the audit workflow completes
+- **THEN** after completion the local report remains pending with its delivery error, and the audit link keeps both its reporting warning and its separate audit-stage warning
+
+#### Scenario: Retry succeeds
+- **WHEN** a pending report is later delivered successfully
+- **THEN** the report is marked delivered and its delivery error is cleared without rerunning audit models or changing observation identity
+
+### Requirement: Audit issue bodies are durable and repairable
+
+GitHub issue publication SHALL pass the redacted issue body to the GitHub CLI on stdin through the explicit `--body-file -` option. A development-audit build SHALL provide a development-only repair operation, `audit repair-issues <audit-session-dir>`, that reads only the findings that audit's local report records as created. For each such finding, it SHALL restore the intended redacted body and durable markers only when GitHub reports that the linked issue in `Codagent-AI/agent-runner` has an `[auto-audit]` title prefix and a body that is exactly the historical `-` placeholder. It SHALL leave every other issue unchanged.
+
+#### Scenario: Issue is published with an explicit stdin body
+- **WHEN** the correctness stage creates an issue for a confirmed defect
+- **THEN** it invokes `gh issue create` with `--body-file -` and supplies the redacted body, including its durable markers, on stdin
+
+#### Scenario: Historical placeholder issue is repaired
+- **WHEN** a locally recorded created finding points to an `[auto-audit]` GitHub issue with body `-`
+- **THEN** the repair operation replaces that body with the redacted finding body and durable markers
+
+#### Scenario: Edited issue is protected
+- **WHEN** the linked issue has a body other than `-` or is not an auto-audit issue
+- **THEN** the repair operation leaves it unchanged
 
