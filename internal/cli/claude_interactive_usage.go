@@ -401,12 +401,7 @@ func reportMatches(r *ClaudeStatusReport, m *claudeSpanMessage) bool {
 	if err != nil || !complete || !m.complete || r.RecordedAt.IsZero() || m.timestamp.IsZero() || r.RecordedAt.Before(m.timestamp) {
 		return false
 	}
-	for _, key := range claudeTokenFields {
-		if tokens[key] != m.tokens[key] {
-			return false
-		}
-	}
-	return true
+	return claudeUsageKey(tokens) == claudeUsageKey(m.tokens)
 }
 
 func interactiveClaudeCost(p *InteractiveUsagePlan, s *claudeInteractiveSpan, reports []ClaudeStatusReport, settled bool) (*float64, model.UnavailableReason) {
