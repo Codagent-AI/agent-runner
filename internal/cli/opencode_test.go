@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestOpenCodeAdapter(t *testing.T) {
@@ -203,7 +205,7 @@ func TestOpenCodeAdapter(t *testing.T) {
 
 	t.Run("discover interactive session ID from opencode database", func(t *testing.T) {
 		spawnTime := time.UnixMilli(1_700_000_000_000)
-		id := discoverOpenCodeDatabaseSession(spawnTime, "/repo", func(query string) ([]byte, error) {
+		id := discoverOpenCodeDatabaseSession(spawnTime, "/repo", nil, func(query string) ([]byte, error) {
 			if !strings.Contains(query, "time_created >= 1700000000000") {
 				t.Fatalf("database query does not filter by spawn time: %s", query)
 			}
@@ -363,6 +365,46 @@ func TestOpenCodeAdapter(t *testing.T) {
 			t.Fatalf("expected stored write error on subsequent Write, got %v", err)
 		}
 	})
+}
+
+func TestOpenCodeDiscoveryExcludesCalledChild(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	spawnTime := time.Now().Add(-10 * time.Second)
+	writeOpenCodeSessionDiff(t, home, "ses_parent", spawnTime.Add(time.Second))
+	writeOpenCodeSessionDiff(t, home, "ses_child", spawnTime.Add(2*time.Second))
+	got := (&OpenCodeAdapter{}).DiscoverSessionID(&DiscoverOptions{
+		SpawnTime: spawnTime, ExcludeSessionIDs: []string{"ses_child"},
+	})
+	if diff := cmp.Diff("ses_parent", got); diff != "" {
+		t.Fatalf("session ID mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestOpenCodeAdapterDatabaseDiscoveryExcludesCalledChild(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	binDir := t.TempDir()
+	t.Setenv("PATH", binDir)
+	script := "#!/bin/sh\nprintf '%s\\n' '[{\"id\":\"ses_child\"},{\"id\":\"ses_parent\"}]'\n"
+	if err := os.WriteFile(filepath.Join(binDir, "opencode"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	got := (&OpenCodeAdapter{}).DiscoverSessionID(&DiscoverOptions{
+		SpawnTime: time.Now(), Workdir: "/repo", ExcludeSessionIDs: []string{"ses_child"},
+	})
+	if diff := cmp.Diff("ses_parent", got); diff != "" {
+		t.Fatalf("session ID mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestOpenCodeDatabaseDiscoveryExcludesCalledChild(t *testing.T) {
+	got := discoverOpenCodeDatabaseSession(time.Now(), "/repo", []string{"ses_child"}, func(query string) ([]byte, error) {
+		return []byte(`[{"id":"ses_child"},{"id":"ses_parent"}]`), nil
+	})
+	if diff := cmp.Diff("ses_parent", got); diff != "" {
+		t.Fatalf("session ID mismatch (-want +got):\n%s", diff)
+	}
 }
 
 func writeOpenCodeSessionDiff(t *testing.T, home, sessionID string, modTime time.Time) {

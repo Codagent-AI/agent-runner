@@ -974,17 +974,6 @@ func discoverCursorMetadataSession(rootFS fs.FS, spawnTime time.Time, workdir st
 	return matches[0]
 }
 
-func excludedSessionIDSet(ids []string) map[string]struct{} {
-	excluded := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		id = strings.TrimSpace(id)
-		if id != "" {
-			excluded[id] = struct{}{}
-		}
-	}
-	return excluded
-}
-
 func cursorStoreContains(rootFS fs.FS, path string, needle []byte) (bool, error) {
 	file, err := rootFS.Open(path)
 	if err != nil {
