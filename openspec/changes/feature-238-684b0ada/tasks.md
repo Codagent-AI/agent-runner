@@ -1,4 +1,4 @@
-- [ ] Archive the seven completed OpenSpec changes left on `main`, without applying their deltas, following `design.md` "Approach". This is a spec-only change, so there is no TDD: do not change code, tests, workflow YAML, or anything under `openspec/specs/`. This change's own deltas under `specs/` are applied later, by the factory archive step.
+- [x] Archive the seven completed OpenSpec changes left on `main`, without applying their deltas, following `design.md` "Approach". This is a spec-only change, so there is no TDD: do not change code, tests, workflow YAML, or anything under `openspec/specs/`. This change's own deltas under `specs/` are applied later, by the factory archive step.
 
   **Mark start-run complete**
   - Check the three boxes in `openspec/changes/start-run/tasks.md`. `reconciliation.md` records the evidence that each task is implemented on `main`.
