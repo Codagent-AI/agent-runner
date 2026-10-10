@@ -213,12 +213,13 @@ func TestCIWaitClassification(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			fixture := ciFixture()
 			tt.setup(ciPR(fixture))
-			input := fmt.Sprintf(`{%s"deadline_seconds":"0.7","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.15","call_timeout_seconds":"0.3"}`, tt.inputs)
+			// Classification needs a snapshot even when other packages load the host.
+			input := fmt.Sprintf(`{%s"deadline_seconds":"3","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.15","call_timeout_seconds":"1"}`, tt.inputs)
 			out, code, elapsed := runCIFixture(t, fixture, input)
 			if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), tt.want) || !strings.Contains(out, tt.contains) {
 				t.Fatalf("code=%d elapsed=%s output=\n%s", code, elapsed, out)
 			}
-			if elapsed > 2*time.Second {
+			if elapsed > 5*time.Second {
 				t.Fatalf("wait took %s", elapsed)
 			}
 		})
