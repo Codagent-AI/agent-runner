@@ -59,7 +59,9 @@ steps:
 			}
 			cmd := exec.Command(runner, "--headless", "--profile", "smoke_test", "interactive-usage")
 			cmd.Dir = work
-			cmd.Env = smokeCommandEnv(os.Environ(), "HOME="+home, "CLAUDE_CONFIG_DIR="+filepath.Join(home, ".claude"), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "AGENT_RUNNER_NO_TUI=1", "AGENT_RUNNER_USAGE_FIXTURE="+mode)
+			// This PTY captures bytes but does not emulate terminal query replies.
+			// Keep background-color probes from racing the fixture stdin reader.
+			cmd.Env = smokeCommandEnv(os.Environ(), "TERM=dumb", "HOME="+home, "CLAUDE_CONFIG_DIR="+filepath.Join(home, ".claude"), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "AGENT_RUNNER_NO_TUI=1", "AGENT_RUNNER_USAGE_FIXTURE="+mode)
 			start := time.Now()
 			out, err := runCommandInPTY(cmd, 30*time.Second)
 			if err != nil {

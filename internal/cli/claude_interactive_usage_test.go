@@ -603,3 +603,62 @@ func TestInteractiveSpanAfterOversizedLine(t *testing.T) {
 		t.Fatalf("later usage lost: %+v", got.Usage)
 	}
 }
+
+func TestWaitForInteractiveFinalReportAfterMalformedLine(t *testing.T) {
+	f := newInteractiveUsageFixture(t)
+	f.write(f.path, promptFixture(), assistantFixture("m", "opus", 8, 10))
+	f.write(f.p.ReportPath, "broken report")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	done := make(chan struct{})
+	go func() { f.a.WaitForFinalReport(ctx, f.p); close(done) }()
+	select {
+	case <-done:
+		t.Fatal("malformed report ended final-report wait")
+	case <-time.After(50 * time.Millisecond):
+	}
+	raw, err := json.Marshal(reportFixture(f.session, "prompt", 0.42, 8))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(f.p.ReportPath, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if _, err = file.Write(append(raw, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+		if ctx.Err() != nil {
+			t.Fatal("wait reached deadline instead of matching report")
+		}
+	case <-ctx.Done():
+		t.Fatal("valid final report after malformed line did not unblock")
+	}
+}
+
+func TestClaudeJSONLConsumerErrorRecovery(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stream")
+	if err := os.WriteFile(path, []byte("bad\ngood\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := openClaudeScopedFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	r := claudeJSONLReader{file: file}
+	err = r.read(context.Background(), false, func([]byte, int64) error { return fmt.Errorf("rejected line") })
+	if err == nil {
+		t.Fatal("consumer error was lost")
+	}
+	var got string
+	if err = r.read(context.Background(), false, func(line []byte, _ int64) error { got = string(line); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got != "good\n" || r.offset != 9 {
+		t.Fatalf("recovery mixed consumed lines: %q offset=%d", got, r.offset)
+	}
+}

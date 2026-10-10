@@ -52,10 +52,11 @@ func (r *claudeJSONLReader) read(ctx context.Context, final bool, consume func([
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if err := consume(r.pending, r.offset); err != nil {
+			err := consume(r.pending, r.offset)
+			r.pending = nil
+			if err != nil {
 				return err
 			}
-			r.pending = nil
 		}
 		if readErr == io.EOF {
 			return nil

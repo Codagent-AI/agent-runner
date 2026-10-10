@@ -343,7 +343,7 @@ type claudeReportIndex struct {
 func (reports *claudeReportIndex) consume(line []byte, _ int64) error {
 	var report ClaudeStatusReport
 	if err := json.Unmarshal(line, &report); err != nil {
-		return err
+		return nil
 	}
 	if report.SessionID != reports.session {
 		return nil
