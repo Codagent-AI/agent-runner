@@ -862,6 +862,75 @@ func TestCodexAdapter(t *testing.T) {
 	})
 }
 
+func TestCodexDiscoveryExcludesCalledChild(t *testing.T) {
+	for _, metadataID := range []bool{true, false} {
+		t.Run(fmt.Sprintf("metadata ID %t", metadataID), func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			cwd, err := os.Getwd()
+			if err != nil {
+				t.Fatal(err)
+			}
+			spawnTime := time.Now().Add(-10 * time.Second)
+			ids := []string{"019df0c7-daf4-7120-b587-0731815d36cb", "019df0c7-daf4-7120-b587-0731815d36cc"}
+			dir := filepath.Join(home, ".codex", "sessions", "2026", "10", "10")
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for i, id := range ids {
+				path := filepath.Join(dir, "rollout-2026-10-10T12-00-00-"+id+".jsonl")
+				payload := map[string]string{"cwd": cwd}
+				if metadataID {
+					payload["id"] = id
+				}
+				data, err := json.Marshal(map[string]any{"type": "session_meta", "payload": payload})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				modTime := spawnTime.Add(time.Duration(i+1) * time.Second)
+				if err := os.Chtimes(path, modTime, modTime); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := (&CodexAdapter{}).DiscoverSessionID(&DiscoverOptions{
+				SpawnTime: spawnTime, ExcludeSessionIDs: []string{ids[1]},
+			})
+			if diff := cmp.Diff(ids[0], got); diff != "" {
+				t.Fatalf("session ID mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestCopilotDiscoveryExcludesCalledChild(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workdir := t.TempDir()
+	spawnTime := time.Now().Add(-10 * time.Second)
+	for i, id := range []string{"parent", "child"} {
+		dir := filepath.Join(home, ".copilot", "session-state", id)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "workspace.yaml"), []byte("cwd: "+workdir+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		modTime := spawnTime.Add(time.Duration(i+1) * time.Second)
+		if err := os.Chtimes(dir, modTime, modTime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := (&CopilotAdapter{}).DiscoverSessionID(&DiscoverOptions{
+		SpawnTime: spawnTime, Workdir: workdir, ExcludeSessionIDs: []string{"child"},
+	})
+	if diff := cmp.Diff("parent", got); diff != "" {
+		t.Fatalf("session ID mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestDiscoverCopilotSessionToleratesCoarseMtime(t *testing.T) {
 	const sessionID = "copilot-session"
 	for _, tt := range []struct {
@@ -890,7 +959,7 @@ func TestDiscoverCopilotSessionToleratesCoarseMtime(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if diff := cmp.Diff(tt.want, discoverCopilotSession(spawnTime, workdir)); diff != "" {
+			if diff := cmp.Diff(tt.want, discoverCopilotSession(spawnTime, workdir, nil)); diff != "" {
 				t.Errorf("session ID mismatch (-want +got):\n%s", diff)
 			}
 		})

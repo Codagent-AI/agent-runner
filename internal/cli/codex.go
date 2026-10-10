@@ -174,7 +174,7 @@ func (a *CodexAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
 	if opts.PresetID != "" {
 		return normalizeCodexSessionID(opts.PresetID)
 	}
-	return discoverCodexInteractiveSession(opts.SpawnTime)
+	return discoverCodexInteractiveSession(opts.SpawnTime, opts.ExcludeSessionIDs)
 }
 
 // discoverCodexHeadlessSession parses the thread_id from the first JSONL event
@@ -467,7 +467,7 @@ func isCodexIgnoredStderrLine(line string, state *codexIgnoredStderrState) bool 
 // discoverCodexInteractiveSession scans ~/.codex/sessions/YYYY/MM/DD/ for the
 // most recent .jsonl file created after spawn time, matching CWD from the
 // session_meta payload.
-func discoverCodexInteractiveSession(spawnTime time.Time) string {
+func discoverCodexInteractiveSession(spawnTime time.Time, excludeIDs []string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
@@ -502,12 +502,17 @@ func discoverCodexInteractiveSession(spawnTime time.Time) string {
 		return candidates[i].modTime.After(candidates[j].modTime)
 	})
 
+	excluded := excludedSessionIDSet(excludeIDs)
 	for _, c := range candidates {
 		if matchesSessionCwd(c.path, cwd) {
-			if id := codexSessionID(c.path); id != "" {
-				return id
+			id := codexSessionID(c.path)
+			if id == "" {
+				id = normalizeCodexSessionID(strings.TrimSuffix(filepath.Base(c.path), ".jsonl"))
 			}
-			return normalizeCodexSessionID(strings.TrimSuffix(filepath.Base(c.path), ".jsonl"))
+			if _, skip := excluded[id]; skip {
+				continue
+			}
+			return id
 		}
 	}
 
