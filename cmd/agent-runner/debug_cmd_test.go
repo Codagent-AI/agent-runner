@@ -12,6 +12,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/codagent/agent-runner/internal/audit"
+	"github.com/codagent/agent-runner/internal/loader"
 	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/stateio"
 	builtinworkflows "github.com/codagent/agent-runner/workflows"
@@ -473,4 +474,39 @@ func auditLineForDebugTest(t *testing.T, event audit.Event) string {
 		prefix = " " + event.Prefix
 	}
 	return event.Timestamp + prefix + " " + string(event.Type) + " " + string(data) + "\n"
+}
+
+// Scenario "Workflow is hidden but runnable": the hidden composed workflow
+// still resolves for `run` and `debug --show-workflow`.
+func TestPlanAndImplementChangeResolvesForRunAndDebug(t *testing.T) {
+	setupLogicalLaunchDirs(t)
+	const name = "core:plan-and-implement-change"
+	const ref = "builtin:core/plan-and-implement-change-v1.0.yaml"
+
+	got, err := resolveWorkflowArg(name)
+	if err != nil {
+		t.Fatalf("resolveWorkflowArg(%s): %v", name, err)
+	}
+	if got != ref {
+		t.Fatalf("resolveWorkflowArg(%s) = %q, want %q", name, got, ref)
+	}
+	workflow, err := loader.LoadWorkflow(got, loader.Options{})
+	if err != nil {
+		t.Fatalf("LoadWorkflow(%s): %v", got, err)
+	}
+	if workflow.Name != "plan-and-implement-change" || !workflow.Hidden {
+		t.Fatalf("loaded workflow name=%q hidden=%v, want hidden plan-and-implement-change", workflow.Name, workflow.Hidden)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := handleDebug([]string{"--show-workflow", name}, &stdout, &stderr); code != 0 {
+		t.Fatalf("handleDebug(--show-workflow %s) = %d, stderr: %s", name, code, stderr.String())
+	}
+	want, err := builtinworkflows.ReadFile(ref)
+	if err != nil {
+		t.Fatalf("read builtin: %v", err)
+	}
+	if diff := cmp.Diff(string(want), stdout.String()); diff != "" {
+		t.Fatalf("stdout mismatch (-want +got):\n%s", diff)
+	}
 }
