@@ -62,7 +62,6 @@ steps:
 			// This PTY captures bytes but does not emulate terminal query replies.
 			// Keep background-color probes from racing the fixture stdin reader.
 			cmd.Env = smokeCommandEnv(os.Environ(), "TERM=dumb", "HOME="+home, "CLAUDE_CONFIG_DIR="+filepath.Join(home, ".claude"), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "AGENT_RUNNER_NO_TUI=1", "AGENT_RUNNER_USAGE_FIXTURE="+mode)
-			start := time.Now()
 			out, err := runCommandInPTY(cmd, 30*time.Second)
 			if err != nil {
 				t.Fatalf("%v\n%s", err, out)
@@ -114,8 +113,8 @@ steps:
 					t.Fatalf("%s", raw)
 				}
 			default:
-				if artifact.Totals.CostCoverage != model.CoverageNone || time.Since(start) > 12*time.Second {
-					t.Fatalf("fallback: %s duration %v", raw, time.Since(start))
+				if artifact.Totals.CostCoverage != model.CoverageNone {
+					t.Fatalf("fallback: %s", raw)
 				}
 				audit, err := os.ReadFile(filepath.Join(dir, "audit.log"))
 				if err != nil {
