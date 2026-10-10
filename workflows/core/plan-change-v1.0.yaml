@@ -11,12 +11,21 @@ params:
     required: true
   - name: change_kind
     required: true
+  - name: skip_validator
+    required: false
+    default: "false"
 
 sessions:
   - name: planning-agent
     agent: lead
 
 steps:
+  - id: validate-skip-validator
+    script: validate-boolean-param.sh
+    script_inputs:
+      name: skip_validator
+      value: "{{skip_validator}}"
+
   - id: check-definition
     continue_on_failure: true
     loop:
@@ -95,6 +104,7 @@ steps:
     script_inputs:
       change_name: "{{change_name}}"
       change_dir: "{{change_dir}}"
+      skip_validator: "{{skip_validator}}"
     skip_if: 'sh: test {{change_kind}} = spec-driven'
     repair:
       session: planning-agent
