@@ -29,7 +29,9 @@ const (
 // planAndImplementRunner executes core:plan-and-implement-change against a
 // temporary repository. Shell commands and bundled scripts run for real, with
 // fake openspec and agent-validator executables on PATH. Agents are faked by
-// what their prompts ask for, and only the GitHub-facing scripts are stubbed.
+// the leaf step id in their execution prefix, so rewording a prompt or nesting
+// a step under another sub-workflow does not change which fake runs. Only the
+// GitHub-facing scripts are stubbed.
 type planAndImplementRunner struct {
 	t          *testing.T
 	repo       string
@@ -60,18 +62,12 @@ func (r *planAndImplementRunner) RunScript(path string, stdin []byte, _ bool, wo
 }
 
 func (r *planAndImplementRunner) RunAgent(options *exec.AgentProcessOptions) (exec.ProcessResult, error) {
-	prompt := strings.Join(options.Args, "\n")
-	event := ""
-	switch {
-	case strings.Contains(prompt, "did not pass deterministic planning validation"):
-		event = "repair-definition"
-	case strings.Contains(prompt, "Create the implementation task breakdown"):
-		event = "tasks"
+	event := leafStepID(options.Prefix)
+	switch event {
+	case "repair-definition", "review-tasks", "session-report", "simplify", "open-draft-pr":
+	case "tasks":
 		r.writeTaskPlan()
-	case strings.Contains(prompt, "independent task-plan review"):
-		event = "review-tasks"
-	case strings.Contains(prompt, "Implement the task described in"):
-		event = "generate-code"
+	case "generate-code":
 		if r.failGenerateCode > 0 {
 			r.failGenerateCode--
 			r.events = append(r.events, event+" (failed)")
@@ -80,33 +76,31 @@ func (r *planAndImplementRunner) RunAgent(options *exec.AgentProcessOptions) (ex
 		r.writeRepoFile("feature.txt", "implemented\n")
 		gitRun(r.t, r.repo, "add", "feature.txt")
 		gitRun(r.t, r.repo, "commit", "-q", "-m", "feat: implement the task")
-	case strings.Contains(prompt, "codagent:session-report"):
-		event = "session-report"
-	case strings.Contains(prompt, "Every implementation task for"):
-		event = "complete-task-index"
+	case "complete-task-index":
 		index := filepath.Join(planAndImplementDir, "tasks.md")
 		r.writeRepoFile(index, strings.ReplaceAll(r.readRepoFile(index), "- [ ]", "- [x]"))
 		gitRun(r.t, r.repo, "commit", "-q", "-m", "chore: check task index", "--", index)
-	case strings.Contains(prompt, "Audit the risky and notable assumptions"):
-		event = "review-assumptions"
+	case "review-assumptions":
 		r.writeEvidence("acceptance-assumptions.md", "No unresolved assumptions or context gaps.\n")
-	case strings.Contains(prompt, "maintainability pass"):
-		event = "simplify"
-	case strings.Contains(prompt, "create or update its pull request"):
-		event = "open-draft-pr"
-	case strings.Contains(prompt, "independent acceptance tester"):
-		event = "acceptance-test"
+	case "acceptance-test":
 		head := gitRun(r.t, r.repo, "rev-parse", "HEAD")
 		r.writeEvidence("exploration-log.md", "explored "+head+"\n")
 		r.writeEvidence("acceptance-tested-revision.txt", head+"\n")
 		r.writeEvidence("acceptance-handoff.md", "ready "+head+"\n")
 		r.writeEvidence("acceptance-round-status.txt", "READY "+head+"\n")
 	default:
-		r.t.Errorf("unexpected agent step %s:\n%s", options.Prefix, prompt)
+		r.t.Errorf("unexpected agent step %s:\n%s", options.Prefix, strings.Join(options.Args, "\n"))
 		return exec.ProcessResult{Started: true, ExitCode: 1}, nil
 	}
 	r.events = append(r.events, event)
 	return exec.ProcessResult{Started: true, Stdout: claudeAgentOutput("done")}, nil
+}
+
+// leafStepID returns the innermost step id of an agent execution prefix such
+// as "[plan, sub:plan-change, check-definition:0, repair-definition]".
+func leafStepID(prefix string) string {
+	segments := strings.Split(strings.Trim(prefix, "[]"), ", ")
+	return segments[len(segments)-1]
 }
 
 func (r *planAndImplementRunner) exec(cmd *osexec.Cmd, stdin []byte, workdir string) (exec.ProcessResult, error) {
