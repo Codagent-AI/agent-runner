@@ -112,6 +112,14 @@ type claudeSettlement struct {
 
 func readClaudeInteractiveSpan(root *os.Root, path string, offset int64, main bool) claudeInteractiveSpan {
 	s := claudeInteractiveSpan{messages: map[string]claudeSpanMessage{}, spawns: map[string]bool{}, failed: map[string]bool{}, settled: map[string]claudeSettlement{}}
+	if main {
+		var reason model.UnavailableReason
+		s.spawns, s.failed, reason = scanClaudeParentSpan(root, path, claudeParentSpanSelector{startOffset: &offset, onEntry: s.consumeMetadata})
+		if reason != "" {
+			s.reason = reason
+		}
+		return s
+	}
 	f, err := root.Open(path)
 	if err != nil {
 		s.reason = model.UnavailableTranscriptMissing
@@ -447,10 +455,6 @@ func interactiveClaudeCost(p *InteractiveUsagePlan, s *claudeInteractiveSpan, re
 }
 
 func (s *claudeInteractiveSpan) consume(e *claudeEntry, position int64) {
-	if e.Type == "user" && !s.firstUserSeen {
-		s.firstPrompt = e.PromptID
-		s.firstUserSeen = true
-	}
 	ids, failed, bad := claudeTools(e)
 	if bad {
 		s.reason = model.UnavailableTranscriptInvalid
@@ -460,6 +464,14 @@ func (s *claudeInteractiveSpan) consume(e *claudeEntry, position int64) {
 	}
 	for id := range failed {
 		s.failed[id] = true
+	}
+	s.consumeMetadata(e, position)
+}
+
+func (s *claudeInteractiveSpan) consumeMetadata(e *claudeEntry, position int64) {
+	if e.Type == "user" && !s.firstUserSeen {
+		s.firstPrompt = e.PromptID
+		s.firstUserSeen = true
 	}
 	for _, id := range claudeCompletedTools(e) {
 		s.settled[id] = claudeSettlement{position, e.Timestamp}
