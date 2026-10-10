@@ -3,6 +3,7 @@ package exec
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -64,9 +65,10 @@ type AgentInvocationResult struct {
 	DiscoveredSessionID string
 	SessionResumed      bool
 
-	Usage            model.UsageRecord
-	EstimatedCostUSD *float64
-	UsageError       error
+	Usage                 model.UsageRecord
+	EstimatedCostUSD      *float64
+	CostUnavailableReason model.UnavailableReason
+	UsageError            error
 
 	StartedAt   time.Time
 	FinishedAt  time.Time
@@ -139,6 +141,8 @@ func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logge
 		invocationCopy.onStarted = processOptions.NotifyStarted
 		direct = &invocationCopy
 	}
+	usageContext := cli.UsageContext{Workdir: input.Workdir, Env: BuildAgentEnvironment(os.Environ(), dropEnv, input.Env)}
+	prepareInvocationUsage(input, &processOptions, direct, &usageContext)
 	outcome, processResult, launched, crashed, runErr := runAgentProcess(
 		runner, input.Adapter, &processOptions, input.InvocationContext, log,
 		input.SuspendHook, input.ResumeHook, direct,
@@ -151,7 +155,7 @@ func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logge
 		outcome = OutcomeFailed
 		crashed = true
 	}
-	extraction, usageErr := extractAgentUsage(input.Adapter, input.CLI, input.InvocationContext, processResult.Stdout, cli.UsageContext{Workdir: input.Workdir, Env: BuildAgentEnvironment(os.Environ(), dropEnv, input.Env)})
+	extraction, usageErr := extractAgentUsage(input.Adapter, input.CLI, input.InvocationContext, processResult.Stdout, usageContext)
 	attachInvocationIdentity(&extraction.Usage, input.CLI, input.Model, input.Effort)
 	result := AgentInvocationResult{
 		Outcome: outcome, Stdout: processResult.Stdout, Stderr: processResult.Stderr,
@@ -159,7 +163,8 @@ func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logge
 		ExitCode: processResult.ExitCode, CLI: input.CLI, Model: input.Model,
 		SessionID: input.SessionID, SessionResumed: input.SessionResumed,
 		Usage: extraction.Usage, EstimatedCostUSD: extraction.EstimatedCostUSD,
-		UsageError: usageErr, StartedAt: startedAt, CLILaunched: launched,
+		CostUnavailableReason: extraction.CostUnavailableReason,
+		UsageError:            usageErr, StartedAt: startedAt, CLILaunched: launched,
 	}
 	if runErr != nil {
 		result.CrashError = runErr.Error()
@@ -241,4 +246,39 @@ func invocationProvider(cliName, modelName string) string {
 		}
 	}
 	return ""
+}
+
+func prepareInvocationUsage(input *AgentInvocation, processOptions *AgentProcessOptions, direct *directInvocation, usageContext *cli.UsageContext) {
+	if input.InvocationContext != cli.ContextAutonomousInteractive {
+		return
+	}
+	collector, ok := input.Adapter.(cli.InteractiveUsageCollector)
+	if !ok {
+		return
+	}
+	if direct != nil && direct.ctx != nil {
+		usageContext.StateDir = direct.ctx.SessionDir
+		if input.Prefix != "" {
+			identity := executionIdentity(direct.ctx, &model.Step{ID: direct.stepID}, "step", 0, true, input.CLI, input.SessionID)
+			prefix := strings.NewReplacer("/", "-", `\`, "-").Replace(input.Prefix)
+			reportName := fmt.Sprintf("%s-%d.statusline.jsonl", prefix, max(1, attemptForIdentity(direct.ctx, &identity)))
+			usageContext.ReportName = &reportName
+		}
+	}
+	plan, err := collector.PrepareInteractiveUsage(input.SessionID, input.SessionResumed, *usageContext)
+	if err != nil {
+		plan.PrepareErr = model.UnavailableTranscriptSpanUnavailable
+		plan.ReportEnabled = false
+	}
+	usageContext.InteractivePlan = &plan
+	if executable, err := agentRunnerExecutable(); err == nil {
+		processOptions.Args = cli.MergeInteractiveUsageSettings(processOptions.Args, &plan, executable)
+	} else {
+		plan.ReportEnabled = false
+		plan.ReportReason = model.UnavailableCostReportUnavailable
+	}
+	if direct != nil {
+		direct.usageCollector = collector
+		direct.usagePlan = plan
+	}
 }

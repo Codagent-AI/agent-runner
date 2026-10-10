@@ -1,4 +1,4 @@
-- [ ] Implement the change described by these files using TDD, as `CLAUDE.md` requires. Satisfy every spec scenario and every `INT-*` and `E2E-*` obligation in the test plan. Finish with `make fmt`, `make test`, and `make lint` passing:
+- [x] Implement the change described by these files using TDD, as `CLAUDE.md` requires. Satisfy every spec scenario and every `INT-*` and `E2E-*` obligation in the test plan. Finish with `make fmt`, `make test`, and `make lint` passing:
   - [proposal.md](proposal.md)
   - [specs/interactive-claude-usage/spec.md](specs/interactive-claude-usage/spec.md)
   - [specs/agent-usage-collection/spec.md](specs/agent-usage-collection/spec.md)

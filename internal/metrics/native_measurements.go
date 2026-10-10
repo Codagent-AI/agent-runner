@@ -222,10 +222,10 @@ func (n *NativeMeasurement) addAllocations(u *model.UsageRecord, legacy bool) {
 		}
 		n.Allocations = append(n.Allocations, nativeAllocation(a, u.CLI, legacy, ref))
 	}
-	if u.SubagentCollection != model.CompletenessPartial {
+	if !partialClaudeTranscript(u) {
 		return
 	}
-	reason := strings.ReplaceAll(string(u.SubagentCollectionReason), "-", "_")
+	reason := claudePartialReason(u)
 	for key, value := range n.Tokens {
 		if value.Value != nil {
 			value.Availability = "partial"
@@ -284,4 +284,24 @@ func (n *NativeMeasurement) collectReportedCost(step *StepRecord, legacy bool) {
 			n.Limitations = append(n.Limitations, "legacy_cost_scope_unavailable")
 		}
 	}
+}
+
+func partialClaudeTranscript(u *model.UsageRecord) bool {
+	return u.SubagentCollection == model.CompletenessPartial || (u.Source == "claude:session-transcript" && u.Completeness == model.CompletenessPartial)
+}
+func claudePartialReason(u *model.UsageRecord) string {
+	reason := u.SubagentCollectionReason
+	if reason == "" {
+		reason = u.Reason
+	}
+	if reason == "" {
+		for i := range u.Allocations {
+			a := &u.Allocations[i]
+			if a.Kind == "main" && a.Reason != "" {
+				reason = a.Reason
+				break
+			}
+		}
+	}
+	return strings.ReplaceAll(string(reason), "-", "_")
 }

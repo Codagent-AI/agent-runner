@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/codagent/agent-runner/internal/model"
 )
@@ -26,6 +27,16 @@ func claudeTokenTotals(tokens model.TokenCounts) *model.TokenTotals {
 }
 
 type claudeEntry struct {
+	Timestamp     time.Time `json:"timestamp"`
+	PromptID      string    `json:"promptId"`
+	ToolUseResult struct {
+		IsAsync bool   `json:"isAsync"`
+		Status  string `json:"status"`
+	} `json:"toolUseResult"`
+	Attachment struct {
+		Type   string `json:"type"`
+		Prompt string `json:"prompt"`
+	} `json:"attachment"`
 	UUID            string `json:"uuid"`
 	Type            string `json:"type"`
 	SessionID       string `json:"session_id"`
@@ -195,7 +206,7 @@ func (a *ClaudeAdapter) ExtractUsageWithContext(stdout string, uc UsageContext) 
 			reason.note(model.UnavailableSubagentSpanUnavailable)
 		} else {
 			defer func() { _ = transcripts.Close() }()
-			spanSpawns, spanFailed, spanReason := scanClaudeParentSpan(transcripts, parentRel, evidence.uuids)
+			spanSpawns, spanFailed, spanReason := scanClaudeParentSpan(transcripts, parentRel, claudeSpanSelector{uuids: evidence.uuids})
 			reason.note(spanReason)
 			for id := range spanSpawns {
 				spawns[id] = true
@@ -219,10 +230,19 @@ func (a *ClaudeAdapter) ExtractUsageWithContext(stdout string, uc UsageContext) 
 }
 
 // scanClaudeParentSpan streams the parent session transcript and returns the
-// direct spawns written between the first and last entries this invocation
-// reported on stdout. An invalid entry inside the span, or immediately after
+// direct spawns selected by stdout UUID bounds or a pre-launch byte offset. An invalid entry inside the span, or immediately after
 // it, could hide a spawn and makes collection partial.
-func scanClaudeParentSpan(root *os.Root, parentRel string, uuids map[string]bool) (spawns, failed map[string]bool, reason model.UnavailableReason) {
+type claudeSpanSelector struct {
+	uuids  map[string]bool
+	offset *int64
+}
+
+func scanClaudeParentSpan(root *os.Root, parentRel string, selector claudeSpanSelector) (spawns, failed map[string]bool, reason model.UnavailableReason) {
+	if selector.offset != nil {
+		span := readClaudeInteractiveSpan(root, parentRel, *selector.offset, true)
+		return span.spawns, span.failed, span.reason
+	}
+	uuids := selector.uuids
 	f, err := root.Open(parentRel)
 	if err != nil {
 		return nil, nil, model.UnavailableSubagentSpanUnavailable
@@ -242,14 +262,7 @@ func scanClaudeParentSpan(root *os.Root, parentRel string, uuids map[string]bool
 			continue
 		}
 		started = true
-		entryInvalid := parseErr != nil
-		var ids []string
-		var errs map[string]bool
-		if parseErr == nil && e.ParentToolUseID == "" && !e.IsSidechain {
-			var badTool bool
-			ids, errs, badTool = claudeTools(&e)
-			entryInvalid = badTool || (e.Type == "assistant" && len(e.Message.Content) == 0)
-		}
+		ids, errs, entryInvalid := claudeParentTools(&e, parseErr)
 		pendingSpawns = append(pendingSpawns, ids...)
 		for id := range errs {
 			pendingFailed[id] = true
@@ -281,6 +294,17 @@ func scanClaudeParentSpan(root *os.Root, parentRel string, uuids map[string]bool
 		return spawns, failed, model.UnavailableSubagentParentInvalid
 	}
 	return spawns, failed, ""
+}
+
+func claudeParentTools(e *claudeEntry, parseErr error) (ids []string, failed map[string]bool, invalid bool) {
+	if parseErr != nil {
+		return nil, nil, true
+	}
+	if e.ParentToolUseID != "" || e.IsSidechain {
+		return nil, nil, false
+	}
+	ids, failed, invalid = claudeTools(e)
+	return ids, failed, invalid || (e.Type == "assistant" && len(e.Message.Content) == 0)
 }
 
 type claudeSidecarFile struct {
@@ -554,7 +578,7 @@ func claudeTranscriptPaths(session string, uc UsageContext) (projectsRoot, paren
 		return "", "", "", model.UnavailableSubagentSpanUnavailable
 	}
 	project := claudePathUnsafeRe.ReplaceAllString(abs, "-")
-	if _, err := os.Stat(filepath.Join(projects, project, session+".jsonl")); err != nil {
+	{ // Check every location, including an exact project match, for ambiguity.
 		// Claude shortens and hashes long project directory names. List the
 		// projects directory rather than globbing, since root can contain glob
 		// metacharacters.
@@ -571,7 +595,9 @@ func claudeTranscriptPaths(session string, uc UsageContext) (projectsRoot, paren
 		case len(matches) > 1:
 			return "", "", "", model.UnavailableTranscriptAmbiguous
 		}
-		project = matches[0]
+		if project != matches[0] {
+			project = matches[0]
+		}
 	}
 	return projects, filepath.Join(project, session+".jsonl"), filepath.Join(project, session, "subagents"), ""
 }

@@ -92,15 +92,16 @@ func (f *lineBufferedWriter) writeDownstream(p []byte) error {
 
 // BuildArgsInput provides the parameters needed to construct CLI invocation args.
 type BuildArgsInput struct {
-	Prompt          string
-	SystemPrompt    string // Content to deliver as a system prompt (for adapters that support it)
-	SessionID       string // Session ID to pass to the CLI (pre-generated for new, or existing for resume)
-	Resume          bool   // True when resuming an existing session, false for fresh sessions
-	Model           string
-	Effort          string // Effort level (low, medium, high, xhigh) — empty means unset
-	Context         InvocationContext
-	PermissionMode  usersettings.AutonomousPermissionMode
-	DisallowedTools []string // Tool names to block (e.g. "AskUserQuestion"); adapter translates to CLI flags where supported
+	InteractiveUsage *InteractiveUsagePlan
+	Prompt           string
+	SystemPrompt     string // Content to deliver as a system prompt (for adapters that support it)
+	SessionID        string // Session ID to pass to the CLI (pre-generated for new, or existing for resume)
+	Resume           bool   // True when resuming an existing session, false for fresh sessions
+	Model            string
+	Effort           string // Effort level (low, medium, high, xhigh) — empty means unset
+	Context          InvocationContext
+	PermissionMode   usersettings.AutonomousPermissionMode
+	DisallowedTools  []string // Tool names to block (e.g. "AskUserQuestion"); adapter translates to CLI flags where supported
 	// Workdir is the step's working directory ("" means the runner's own cwd).
 	// Adapters use it to discover project-level CLI configuration such as
 	// Cursor's <project>/.cursor/cli.json permissions.
@@ -386,10 +387,11 @@ type OutputFilter interface {
 }
 
 // UsageExtraction contains the structured usage and optional CLI-reported USD
-// cost extracted from a headless invocation's raw stdout.
+// cost extracted from an invocation's stdout or native transcripts.
 type UsageExtraction struct {
-	Usage            model.UsageRecord
-	EstimatedCostUSD *float64
+	Usage                 model.UsageRecord
+	EstimatedCostUSD      *float64
+	CostUnavailableReason model.UnavailableReason
 }
 
 // UsageExtractor is an optional adapter capability for CLIs whose headless
@@ -398,9 +400,32 @@ type UsageExtractor interface {
 	ExtractUsage(rawStdout string) (UsageExtraction, error)
 }
 
+// InteractiveUsagePlan snapshots invocation boundaries independently of cost-channel availability.
+type InteractiveUsagePlan struct {
+	SessionID      string
+	TranscriptPath string
+	StartOffset    int64
+	ReportPath     string
+	ReportEnabled  bool
+	ReportReason   model.UnavailableReason
+	PrepareErr     model.UnavailableReason
+	StatusLine     map[string]any
+	Context        UsageContext
+}
+
+// InteractiveUsageCollector is implemented only by adapters with attributable interactive transcripts.
+type InteractiveUsageCollector interface {
+	PrepareInteractiveUsage(sessionID string, resume bool, uc UsageContext) (InteractiveUsagePlan, error)
+	WaitForFinalReport(ctx context.Context, plan InteractiveUsagePlan)
+	ExtractInteractiveUsage(plan InteractiveUsagePlan, uc UsageContext) UsageExtraction
+}
+
 type UsageContext struct {
-	Workdir string
-	Env     []string
+	StateDir        string
+	ReportName      *string // nil uses an isolated temporary report (standalone collectors)
+	InteractivePlan *InteractiveUsagePlan
+	Workdir         string
+	Env             []string
 }
 
 type ContextualUsageExtractor interface {
