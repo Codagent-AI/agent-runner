@@ -1,11 +1,13 @@
 package builtinworkflows
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -71,6 +73,50 @@ func writeCIPage(t *testing.T, page string) string {
 	return path
 }
 
+// ciFixtureClock isolates collector timing from process startup and scheduling.
+// Healthy gh calls still run as subprocesses, with wall-clock headroom; hung
+// calls retain their requested timeout and advance the collector clock on expiry.
+const ciFixtureClock = `import importlib.util
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+from types import SimpleNamespace
+
+root = Path(__file__).parent
+spec = importlib.util.spec_from_file_location("collector", root / "ci_wait_collector.py")
+collector = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(collector)
+started = time.time()
+elapsed = 0.0
+
+def advance(seconds):
+    global elapsed
+    elapsed += seconds
+
+collector.now = lambda: started + elapsed
+collector.time = SimpleNamespace(sleep=advance)
+communicate = subprocess.Popen.communicate
+
+def fixture_communicate(self, input=None, timeout=None):
+    wall_timeout = timeout
+    if timeout is not None and os.environ.get("CI_FAKE_GH_MODE") != "hang":
+        wall_timeout = max(5, timeout)
+    try:
+        return communicate(self, input=input, timeout=wall_timeout)
+    except subprocess.TimeoutExpired:
+        advance(timeout)
+        raise
+
+subprocess.Popen.communicate = fixture_communicate
+try:
+    sys.exit(collector.main())
+finally:
+    (root / "elapsed").write_text(str(round(elapsed * 1_000_000_000)))
+`
+
+// elapsed is collector time, excluding shell startup and OS scheduling delays.
 func runCIFixture(t *testing.T, fixture map[string]any, inputs string) (output string, exitCode int, elapsed time.Duration) {
 	t.Helper()
 	dir := t.TempDir()
@@ -79,9 +125,15 @@ func runCIFixture(t *testing.T, fixture map[string]any, inputs string) (output s
 		if err != nil {
 			t.Fatal(err)
 		}
+		if name == "ci_wait.py" {
+			name = "ci_wait_collector.py"
+		}
 		if err := os.WriteFile(filepath.Join(dir, name), data, 0o700); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ci_wait.py"), []byte(ciFixtureClock), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	data, err := json.Marshal(fixture)
 	if err != nil {
@@ -91,6 +143,7 @@ func runCIFixture(t *testing.T, fixture map[string]any, inputs string) (output s
 		t.Fatal(err)
 	}
 	stub := `#!/bin/sh
+if [ "$CI_FAKE_GH_MODE" = delayed ]; then sleep 0.35; fi
 if [ "$CI_FAKE_GH_MODE" = hang ]; then sleep 10; fi
 if [ "$CI_FAKE_GH_MODE" = no_pr ] && [ "$1" = pr ]; then echo 'no pull requests found' >&2; exit 1; fi
 if [ "$CI_FAKE_GH_MODE" = auth ] && [ "$1" = api ]; then echo 'HTTP 401 Bad credentials' >&2; exit 1; fi
@@ -119,11 +172,15 @@ esac
 	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(stub), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("sh", filepath.Join(dir, "ci-wait.sh"))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", filepath.Join(dir, "ci-wait.sh"))
 	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "CI_SNAPSHOT="+filepath.Join(dir, "snapshot.json"))
 	cmd.Stdin = strings.NewReader(inputs)
-	start := time.Now()
 	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("CI fixture exceeded wall-clock timeout: %v\n%s", ctx.Err(), out)
+	}
 	code := 0
 	if err != nil {
 		if exit, ok := err.(*exec.ExitError); ok {
@@ -132,7 +189,23 @@ esac
 			t.Fatal(err)
 		}
 	}
-	return string(out), code, time.Since(start)
+	clockData, err := os.ReadFile(filepath.Join(dir, "elapsed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nanos, err := strconv.ParseInt(string(clockData), 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out), code, time.Duration(nanos)
+}
+
+func TestCIWaitFixtureToleratesSubprocessSchedulingDelay(t *testing.T) {
+	t.Setenv("CI_FAKE_GH_MODE", "delayed")
+	out, code, _ := runCIFixture(t, ciFixture(), `{"deadline_seconds":"0.7","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1","call_timeout_seconds":"0.3"}`)
+	if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), "CI_PASSED") {
+		t.Fatalf("code=%d report=%s", code, out)
+	}
 }
 
 func TestCIWaitClassification(t *testing.T) {
