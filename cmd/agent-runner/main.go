@@ -1142,20 +1142,8 @@ func runSwitcherWithProfile(sw *switcher, profile string) int {
 		if !ok {
 			return 0
 		}
-		if final.resumeRunID != "" {
-			return execRunnerResumeWithProfile(final.resumeRunID, final.resumeRunProjectDir, profile)
-		}
-		if final.launchDebugRunID != "" || final.launchDebugSessionDir != "" {
-			return execRunnerDebug(final.launchDebugRunID, final.launchDebugSessionDir, final.launchDebugProjectDir)
-		}
-		if final.startRunReady && final.startRunEntry != nil {
-			return execStartRun(final.startRunEntry, final.startRunParams)
-		}
-		if final.startIntakeReady {
-			return execStartIntake()
-		}
-		if final.resumeListProjectDir != "" {
-			return execRunnerResumeWithProfile("", final.resumeListProjectDir, profile)
+		if code, handled := terminalSwitcherResult(final, profile); handled {
+			return code
 		}
 		if final.resumeSessionID == "" {
 			return 0
@@ -1168,6 +1156,26 @@ func runSwitcherWithProfile(sw *switcher, profile string) int {
 			return 1
 		}
 	}
+}
+
+// terminalSwitcherResult handles process handoffs after the switcher exits.
+func terminalSwitcherResult(final *switcher, profile string) (int, bool) {
+	if final.resumeRunID != "" {
+		return execRunnerResumeWithProfile(final.resumeRunID, final.resumeRunProjectDir, profile), true
+	}
+	if final.launchDebugRunID != "" || final.launchDebugSessionDir != "" {
+		return execRunnerDebug(final.launchDebugRunID, final.launchDebugSessionDir, final.launchDebugProjectDir), true
+	}
+	if final.startRunReady && final.startRunEntry != nil {
+		return execStartRun(final.startRunEntry, final.startRunParams), true
+	}
+	if final.startIntakeReady {
+		return execStartIntake(), true
+	}
+	if final.resumeList {
+		return execRunnerResumeWithProfile("", final.resumeListProjectDir, profile), true
+	}
+	return 0, false
 }
 
 // switcherForReentry rebuilds a switcher around a fresh runview Model after a
@@ -1325,7 +1333,7 @@ func runLiveTUIWithResult(h *runner.RunHandle, opts liveTUIOptions) liveTUIResul
 			return liveTUIResult{exitRequested: true, sessionDir: h.SessionDir}
 		}
 		if rv.ResumeToList() {
-			return liveTUIResult{exitCode: execRunnerResume("", h.ProjectDir), sessionDir: h.SessionDir}
+			return liveTUIResult{exitCode: execRunnerResume("", rv.OriginCwd()), sessionDir: h.SessionDir}
 		}
 		if rv.LaunchDebugRunID() != "" || rv.LaunchDebugSessionDir() != "" {
 			return liveTUIResult{exitCode: execRunnerDebug(rv.LaunchDebugRunID(), rv.LaunchDebugSessionDir(), rv.LaunchDebugProjectDir()), sessionDir: h.SessionDir}
@@ -1343,7 +1351,7 @@ func terminalLiveTUIResult(rv *runview.Model, resultCh <-chan runner.WorkflowRes
 	}
 	if rv.ResumeToList() {
 		<-resultCh
-		return liveTUIResult{exitCode: execRunnerResume("", projectDir), sessionDir: sessionDir}, true
+		return liveTUIResult{exitCode: execRunnerResume("", rv.OriginCwd()), sessionDir: sessionDir}, true
 	}
 	if rv.LaunchDebugRunID() != "" || rv.LaunchDebugSessionDir() != "" {
 		<-resultCh
@@ -1712,6 +1720,7 @@ type switcher struct {
 	launchDebugRunID      string
 	launchDebugSessionDir string
 	launchDebugProjectDir string
+	resumeList            bool
 	resumeListProjectDir  string
 	startRunEntry         *discovery.WorkflowEntry
 	startRunParams        map[string]string
@@ -1843,8 +1852,9 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return s, tea.Quit
 
 	case runview.ResumeListMsg:
+		s.resumeList = true
 		if s.runview != nil {
-			s.resumeListProjectDir = s.runview.ProjectDir()
+			s.resumeListProjectDir = s.runview.OriginCwd()
 		}
 		return s, tea.Quit
 
