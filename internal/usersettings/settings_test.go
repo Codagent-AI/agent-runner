@@ -8,6 +8,8 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestPathResolvesSettingsFileUnderHome(t *testing.T) {
@@ -33,7 +35,7 @@ func TestLoadMissingFileReturnsEmptySettingsAndDoesNotCreateParent(t *testing.T)
 	if err != nil {
 		t.Fatalf("Load() returned error: %v", err)
 	}
-	if got != (Settings{}) {
+	if !cmp.Equal(got, Settings{}, cmp.AllowUnexported(Settings{})) {
 		t.Fatalf("Load() = %#v, want empty settings", got)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".agent-runner")); !errors.Is(err, os.ErrNotExist) {
@@ -403,7 +405,7 @@ func TestSaveCreatesParentAndWritesMode0600(t *testing.T) {
 		t.Fatalf("stat settings dir: %v", err)
 	}
 	if got := dirInfo.Mode().Perm(); got != 0o755 {
-		t.Fatalf("settings dir mode = %v, want 0755", got)
+		t.Fatalf("settings dir mode = %v, want 0o755", got)
 	}
 
 	fileInfo, err := os.Stat(settingsPath)
@@ -411,7 +413,7 @@ func TestSaveCreatesParentAndWritesMode0600(t *testing.T) {
 		t.Fatalf("stat settings file: %v", err)
 	}
 	if got := fileInfo.Mode().Perm(); got != 0o600 {
-		t.Fatalf("settings file mode = %v, want 0600", got)
+		t.Fatalf("settings file mode = %v, want 0o600", got)
 	}
 }
 
@@ -432,7 +434,7 @@ func TestSaveLeavesExistingParentModeUntouched(t *testing.T) {
 		t.Fatalf("stat settings dir: %v", err)
 	}
 	if got := info.Mode().Perm(); got != 0o700 {
-		t.Fatalf("existing settings dir mode = %v, want 0700", got)
+		t.Fatalf("existing settings dir mode = %v, want 0o700", got)
 	}
 }
 
@@ -549,5 +551,35 @@ func writeSettingsFile(t *testing.T, home, body string) {
 	}
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write settings file: %v", err)
+	}
+}
+
+func TestOpenSpecRootsPreserved(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	path, err := Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "openspec_roots:\n  /work/code: ~/specs\n  /work/bad: 123\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(settings.OpenSpecRoots) != 1 || settings.OpenSpecRoots["/work/code"] != "~/specs" {
+		t.Fatal(settings.OpenSpecRoots)
+	}
+	settings.Theme = ThemeDark
+	if err := Save(settings); err != nil {
+		t.Fatal(err)
+	}
+	settings, err = Load()
+	if err != nil || settings.OpenSpecRoots["/work/code"] != "~/specs" {
+		t.Fatal(settings, err)
 	}
 }

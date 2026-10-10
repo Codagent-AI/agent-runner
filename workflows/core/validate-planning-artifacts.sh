@@ -27,7 +27,11 @@ if not all(isinstance(item, str) for item in items):
     )
     sys.exit(2)
 
-print(*items, sep="\n")
+spec_root = value.get("spec_root") or "."
+if not isinstance(spec_root,str):
+    print("validate-planning-artifacts: spec_root must be a string", file=sys.stderr)
+    sys.exit(2)
+print(*items, spec_root, sep="\n")
 PY
 )
 
@@ -35,6 +39,8 @@ change_name=$(printf '%s\n' "$parsed" | sed -n '1p')
 change_dir=$(printf '%s\n' "$parsed" | sed -n '2p')
 change_kind=$(printf '%s\n' "$parsed" | sed -n '3p')
 require_tasks=$(printf '%s\n' "$parsed" | sed -n '4p')
+
+spec_root=$(printf '%s\n' "$parsed" | sed -n '5p')
 
 case "$change_name" in
   ""|[!a-z0-9]*|*[!a-z0-9-]*)
@@ -46,6 +52,7 @@ esac
 case "$change_kind" in
   openspec)
     expected_dir="openspec/changes/$change_name"
+    if [ "$spec_root" != "." ]; then expected_dir="$spec_root/$expected_dir"; fi
     ;;
   spec-driven)
     ;;
@@ -60,7 +67,7 @@ if [ -z "$change_dir" ]; then
   exit 1
 fi
 
-if [ "$change_kind" = "openspec" ] && [ "$change_dir" != "$expected_dir" ]; then
+if [ "$change_kind" = "openspec" ] && [ "$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$change_dir")" != "$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$expected_dir")" ]; then
   printf 'validate-planning-artifacts: change_dir must be %s for %s: %s\n' "$expected_dir" "$change_kind" "$change_dir" >&2
   exit 1
 fi
@@ -75,7 +82,7 @@ case "$require_tasks" in
 esac
 
 if [ "$change_kind" = "openspec" ]; then
-  openspec validate --type change "$change_name"
+  (cd "$spec_root" && openspec validate --type change "$change_name")
 fi
 
 VALIDATION_CHANGE_DIR="$change_dir" \

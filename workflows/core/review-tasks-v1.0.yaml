@@ -3,6 +3,9 @@ description: "Independent review and autonomous correction of a change task plan
 hidden: true
 
 params:
+  - name: context_instruction
+    required: false
+    default: ""
   - name: change_name
     required: true
   - name: change_dir
@@ -32,3 +35,4 @@ steps:
       After material task-plan corrections, you may use codagent:call-agent once more with a fresh `agent: crosscheck` to verify the current task files against the same immutable definition. Use at most two crosscheck calls total. Fix any valid task-only issue from the verification response yourself; do not create another crosscheck loop.
 
       Continue to the next step only after the task index and detailed task files form a complete, faithful, self-contained execution contract for the approved proposal, specifications, design, and test plan. Do not write a status marker or terminal token.
+      {{context_instruction}}

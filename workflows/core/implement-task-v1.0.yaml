@@ -3,6 +3,9 @@ description: "Implement a single task, require committed progress, and optionall
 hidden: true
 
 params:
+  - name: context_instruction
+    required: false
+    default: ""
   - name: task_file
     required: true
   - name: run_session_report
@@ -57,9 +60,12 @@ steps:
 
       Do not run Agent Validator (`agent-validator run`, `review`, or `check`) here, directly or through any skill. This gets called explicitly in a later workflow step.
 
+      {{context_instruction}}
+
   - id: run-validator
     workflow: run-validator-v1.0.yaml
     params:
+      context_instruction: "{{context_instruction}}"
       task_file: "{{task_file}}"
     # skip_if parameters are shell-quoted by InterpolateShellSafeTyped. The
     # validation step above additionally constrains this value to true|false.
@@ -75,6 +81,8 @@ steps:
       There are uncommitted changes leftover after implementing the task described in {{task_file}}. Run git status and git diff to review them. Only stage and commit files that are related to this task and appropriate to check into git — ignore unrelated changes, generated artifacts, or files that should be gitignored. Follow the project's commit message conventions and prepend [{{step_id}}]. Summarize which files you committed and which you left out, and why.
 
       Do not run Agent Validator (`agent-validator run`, `review`, or `check`) here, directly or through any skill. This gets called explicitly in a later workflow step.
+      {{context_instruction}}
+
     skip_if: previous_success
 
   - id: verify-task-commit
@@ -105,12 +113,16 @@ steps:
 
         Never declare success yourself; the check that runs after you decides.
 
+        {{context_instruction}}
+
   - id: session-report
     session: resume
     prompt: |
       Run the codagent:session-report skill against the task file {{task_file}}.
 
       After the session report, check if validator_logs/report.txt exists and contains unresolved failures. If it does, include a ⚠️ VALIDATOR WARNING section at the end of your output summarizing the unresolved violations and recommending next steps. If the report shows all checks passed, skip this section. Only read the existing report. Do not run Agent Validator (`agent-validator run`, `review`, or `check`) here, directly or through any skill. This gets called explicitly in a later workflow step.
+      {{context_instruction}}
+
     # sh: skip_if values are interpolated with shell quoting; leave the placeholder
     # unquoted here so a literal true compares as true after interpolation.
     skip_if: 'sh: test {{run_session_report}} != true'

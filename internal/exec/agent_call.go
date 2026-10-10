@@ -800,8 +800,13 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 	if !call.resume {
 		prompt = autonomyPreamble + prompt
 	}
+	callContext := *h.options.Context
+	if err := evaluateWorkspaceDirs(&callContext, "call_agent"); err != nil {
+		return h.preLaunchFailure(record, call, err.Error())
+	}
 	input := cli.BuildArgsInput{
-		Prompt: prompt, SessionID: sessionID, Resume: call.resume,
+		AdditionalDirs: callContext.WorkspaceDirs,
+		Prompt:         prompt, SessionID: sessionID, Resume: call.resume,
 		Model: call.model, Effort: call.profile.Effort,
 		Context:         cli.ContextAutonomousHeadless,
 		PermissionMode:  usersettings.AutonomousPermissionMode(h.options.Context.AutonomousPermissionMode),

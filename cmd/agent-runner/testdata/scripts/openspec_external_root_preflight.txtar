@@ -1,0 +1,46 @@
+# Public preflight and create use the external project and capture the root.
+env PATH=$WORK/bin:$PATH
+env LOG=$WORK/openspec.log
+chmod 755 bin/openspec
+chmod 755 bin/agent-validator
+mkdir specs/openspec other/openspec plain
+exec git init -b main code
+exec git -C code config user.name Test
+exec git -C code config user.email test@example.com
+exec git -C code commit --allow-empty -m initial
+exec git -C code checkout -b feature
+exec sh -c 'printf "openspec_roots:\n  %s/code: %s/missing\n" "$PWD" "$PWD" > .agent-runner/settings.yaml'
+cd code
+! exec agent-runner run openspec:change change_name=missing --until resolve-openspec-root
+stdout 'from setting.*does not exist'
+! exec agent-runner run openspec:change change_name=plain --param spec_root=$WORK/plain --until resolve-openspec-root
+stdout 'not an OpenSpec project'
+exec sh -c 'printf "openspec_roots:\n  %s/code: %s/specs\n" "$HOME" "$HOME" > "$HOME/.agent-runner/settings.yaml"'
+exec agent-runner run openspec:change change_name=foo --until resolve-openspec-root
+exec sh -c 'cat "$HOME"/.agent-runner/projects/*/runs/*/state.json'
+stdout 'spec_root.*specs'
+exec agent-runner run openspec:change change_name=bar --param spec_root=$WORK/other --until resolve-openspec-root
+exec agent-runner run openspec:change change_name=foo --until create
+exists $WORK/specs/openspec/changes/foo
+! exists openspec
+exec cat $WORK/openspec.log
+stdout 'specs new change foo'
+
+-- bin/openspec --
+#!/bin/sh
+set -eu
+printf '%s %s\n' "$PWD" "$*" >> "$LOG"
+if [ "$1" = new ]; then mkdir -p "openspec/changes/$3"; fi
+-- bin/agent-validator --
+#!/bin/sh
+exit 2
+-- .agent-runner/settings.yaml --
+{}
+-- .agent-runner/config.yaml --
+profiles:
+  default:
+    agents:
+      lead: {cli: claude, default_mode: autonomous}
+      implementor: {cli: claude, default_mode: autonomous}
+      crosscheck: {cli: claude, default_mode: autonomous}
+      tester: {cli: claude, default_mode: autonomous}

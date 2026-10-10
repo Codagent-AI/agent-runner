@@ -155,6 +155,10 @@ func (s *PullRequestCaptureState) Mark(url string) bool {
 
 // ExecutionContext carries state through workflow execution.
 type ExecutionContext struct {
+	WorkspaceDirs         []string
+	WorkspaceDirTemplates []string
+	// InheritedWorkspaceDirs retains the parent union separately from this workflow's lazy values.
+	InheritedWorkspaceDirs []string
 	// ExecutionSessionID identifies this one Agent Runner invocation. It is
 	// deliberately distinct from SessionIDs, which are agent CLI sessions.
 	ExecutionSessionID string
@@ -287,6 +291,7 @@ type ExecutionContext struct {
 
 // RootContextOptions configures a new root execution context.
 type RootContextOptions struct {
+	WorkspaceDirTemplates    []string
 	ExecutionSessionID       string
 	Params                   map[string]string
 	WorkflowFile             string
@@ -353,6 +358,7 @@ func NewRootContext(opts *RootContextOptions) *ExecutionContext {
 		CapturedVariables:        capturedVars,
 		NestingPath:              []NestingSegment{},
 		ParentContext:            nil,
+		WorkspaceDirTemplates:    opts.WorkspaceDirTemplates,
 		WorkflowFile:             opts.WorkflowFile,
 		WorkflowName:             opts.WorkflowName,
 		WorkflowDescription:      opts.WorkflowDescription,
@@ -503,6 +509,9 @@ func NewLoopIterationContext(parent *ExecutionContext, opts LoopIterationOptions
 		LastSessionStepID:        parent.LastSessionStepID,
 		NestingPath:              nestingPath,
 		ParentContext:            parent,
+		WorkspaceDirs:            append([]string(nil), parent.WorkspaceDirs...),
+		InheritedWorkspaceDirs:   append([]string(nil), parent.InheritedWorkspaceDirs...),
+		WorkspaceDirTemplates:    parent.WorkspaceDirTemplates,
 		WorkflowFile:             parent.WorkflowFile,
 		WorkflowName:             parent.WorkflowName,
 		WorkflowDescription:      parent.WorkflowDescription,
@@ -562,6 +571,9 @@ func NewRepairAttemptContext(owner *ExecutionContext, checkID string, attempt in
 		LastSessionStepID:        owner.LastSessionStepID,
 		NestingPath:              nestingPath,
 		ParentContext:            owner,
+		WorkspaceDirs:            append([]string(nil), owner.WorkspaceDirs...),
+		InheritedWorkspaceDirs:   append([]string(nil), owner.InheritedWorkspaceDirs...),
+		WorkspaceDirTemplates:    owner.WorkspaceDirTemplates,
 		WorkflowFile:             owner.WorkflowFile,
 		WorkflowName:             owner.WorkflowName,
 		WorkflowDescription:      owner.WorkflowDescription,
@@ -650,6 +662,8 @@ func NewSubWorkflowContext(parent *ExecutionContext, opts *SubWorkflowContextOpt
 		LastSessionStepID:        parent.LastSessionStepID,
 		NestingPath:              nestingPath,
 		ParentContext:            parent,
+		WorkspaceDirs:            append([]string(nil), parent.WorkspaceDirs...),
+		InheritedWorkspaceDirs:   append([]string(nil), parent.WorkspaceDirs...),
 		WorkflowFile:             opts.WorkflowFile,
 		WorkflowName:             parent.WorkflowName,
 		WorkflowDescription:      parent.WorkflowDescription,

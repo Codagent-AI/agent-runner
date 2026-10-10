@@ -717,6 +717,7 @@ func buildAdapterInput(
 	}
 
 	input := cli.BuildArgsInput{
+		AdditionalDirs: ctx.WorkspaceDirs,
 		SessionID:      sessionID,
 		Resume:         isResume,
 		Model:          profile.Model,
@@ -1205,6 +1206,12 @@ func buildStepPrefix(stepID string, ctx *model.ExecutionContext, workflowResumed
 }
 
 func buildAgentPrompt(step *model.Step, ctx *model.ExecutionContext, includeIntakeHandoff bool) (prompt, enrichment string, err error) {
+	if err := evaluateWorkspaceDirs(ctx, step.ID); err != nil {
+		return "", "", err
+	}
+	if binder, ok := ctx.EngineRef.(engine.ContextBinder); ok && !binder.Bound() {
+		return "", "", fmt.Errorf("engine context is unbound; required root_param context is missing")
+	}
 	prompt, err = textfmt.InterpolateTyped(step.Prompt, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
 	if err != nil {
 		return "", "", err

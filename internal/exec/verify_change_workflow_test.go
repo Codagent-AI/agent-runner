@@ -239,6 +239,7 @@ func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator string, ready
 	}
 	ctx := model.NewRootContext(&model.RootContextOptions{
 		Params: map[string]string{
+			"context_instruction":             "",
 			"change_name":                     "add-export",
 			"change_dir":                      "changes/add-export",
 			"change_label":                    "change",

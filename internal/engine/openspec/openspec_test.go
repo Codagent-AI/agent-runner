@@ -16,7 +16,7 @@ type mockCmdRunner struct {
 	errors  map[string]error
 }
 
-func (m *mockCmdRunner) Run(args []string) (string, error) {
+func (m *mockCmdRunner) Run(_ string, args []string) (string, error) {
 	m.calls = append(m.calls, args)
 	key := strings.Join(args, " ")
 	if err, ok := m.errors[key]; ok {
@@ -212,4 +212,30 @@ func TestOpenSpecEngine(t *testing.T) {
 			t.Fatal("expected valid for non-artifact step")
 		}
 	})
+}
+
+func TestRootBinding(t *testing.T) {
+	root := t.TempDir()
+	eng := NewEngineWithRunner(map[string]any{"change_param": "change_name", "root_param": "spec_root"}, &mockCmdRunner{})
+	binder := eng.(engine.ContextBinder)
+	if binder.Bound() {
+		t.Fatal("bound before initialization")
+	}
+	for _, value := range []string{"", "relative", root + "/missing"} {
+		if err := binder.BindContext(map[string]string{"spec_root": value}); err == nil {
+			t.Fatal("invalid context accepted", value)
+		}
+	}
+	if err := binder.BindContext(map[string]string{"spec_root": root}); err != nil {
+		t.Fatal(err)
+	}
+	if !binder.Bound() {
+		t.Fatal("not bound")
+	}
+}
+
+func TestMissingChangeParamConfiguration(t *testing.T) {
+	if _, err := engine.Create(map[string]any{"type": "openspec"}); err == nil || !strings.Contains(err.Error(), "change_param") {
+		t.Fatal(err)
+	}
 }

@@ -60,6 +60,10 @@ func (a *CodexAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, erro
 		args = append(args, "--sandbox", sandbox)
 	}
 
+	for _, dir := range input.AdditionalDirs {
+		args = append(args, "--add-dir", dir)
+	}
+
 	if context.IsHeadless() {
 		args = append(args, "exec", "--skip-git-repo-check")
 		if resuming {
@@ -600,3 +604,5 @@ func matchesSessionCwd(sessionFile, cwd string) bool {
 	}
 	return false
 }
+
+func (a *CodexAdapter) AdditionalDirSupport() DirSupport { return DirFlag }

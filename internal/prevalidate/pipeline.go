@@ -450,7 +450,7 @@ func checkReferences(path, stepID, field, value string, params map[string]string
 		if paramNames[ref] {
 			continue
 		}
-		if captured[ref] || isBuiltin(ref) {
+		if captured[strings.SplitN(ref, ".", 2)[0]] || isBuiltin(ref) {
 			continue
 		}
 		if allowUnboundParams {
@@ -607,6 +607,12 @@ func (s *walkState) resolveSubWorkflow(parentFile string, step *model.Step, para
 		capturedValues[key] = key
 	}
 	for k, v := range step.Params {
+		// Capture fields are only known at runtime; bind their names as placeholders.
+		for _, ref := range placeholders(v) {
+			if captured[strings.SplitN(ref, ".", 2)[0]] {
+				capturedValues[ref] = ref
+			}
+		}
 		interpolated, err := textfmt.Interpolate(v, interpolationParams, capturedValues, builtinNamesMap())
 		if err != nil {
 			return "", nil, ValidationError{File: parentFile, StepID: step.ID, Field: "params", Value: v, Message: err.Error()}
@@ -675,7 +681,7 @@ func (s *walkState) resolveWorkflowField(parentFile string, step *model.Step, pa
 	return resolved, true, nil
 }
 
-var placeholderRe = regexp.MustCompile(`\{\{(\w+)\}\}`)
+var placeholderRe = regexp.MustCompile(`\{\{(\w+(?:\.\w+)?)\}\}`)
 
 func placeholders(s string) []string {
 	matches := placeholderRe.FindAllStringSubmatch(s, -1)

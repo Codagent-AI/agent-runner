@@ -23,6 +23,9 @@ if [ "$status" -ne 2 ]; then
   exit "$status"
 fi
 
+spec_root=$(PAYLOAD="$payload" python3 -c 'import json,os; print(json.loads(os.environ["PAYLOAD"]).get("spec_root", ""))')
+if [ -n "$spec_root" ]; then cd "$spec_root"; fi
+
 change_dir="openspec/changes/$change_name"
 if [ -e "$change_dir" ]; then
   printf "OpenSpec change '%s' already exists at %s/%s\n" "$change_name" "$(pwd -P)" "$change_dir" >&2

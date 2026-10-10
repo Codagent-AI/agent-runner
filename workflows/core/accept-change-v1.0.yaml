@@ -3,6 +3,9 @@ description: "Resolve undecided assumptions, support human review and testing, a
 hidden: true
 
 params:
+  - name: context_instruction
+    required: false
+    default: ""
   - name: change_name
     required: true
   - name: change_dir
@@ -35,6 +38,8 @@ steps:
 
       Continue to next step when the unresolved items and their resulting work are complete and the user says to move on.
 
+      {{context_instruction}}
+
   - id: review-and-refine
     session: lead-agent
     mode: interactive
@@ -55,6 +60,8 @@ steps:
 
       Continue to next step only after the user has reviewed or tested the change and says the requested refinements are complete and the change is ready for final validation. Your own judgement that nothing needs fixing, silence, or a bare acknowledgement is not that confirmation. Ask when you are unsure whether the user is finished.
 
+      {{context_instruction}}
+
   - id: recommend-reacceptance-testing
     session: lead-agent
     mode: interactive
@@ -65,8 +72,12 @@ steps:
 
       Continue to next step when the user accepts or declines the recommendation.
 
+      {{context_instruction}}
+
   - id: run-validator
     workflow: ../core/run-validator-v1.0.yaml
+    params:
+      context_instruction: "{{context_instruction}}"
 
   - id: run-reacceptance-testing
     session: lead-agent
@@ -102,6 +113,8 @@ steps:
 
       For a failed result, preserve and report the remaining findings without claiming that re-acceptance passed.
 
+      {{context_instruction}}
+
   - id: reacceptance-gate
     loop:
       max: 3
@@ -136,6 +149,8 @@ steps:
           Follow codagent:call-agent's independent-verification and result-accounting rules. A finding where the tester reproduced behavior that contradicts the approved specs, or that an ordinary user would clearly consider broken, may not be dismissed as "not a defect": fix it, or present it to the user as a decision, with your reasoning. If testing finds an actionable product defect, fix it, add practical regression coverage, run relevant checks and the full Validator, commit with the `[recover-reacceptance-testing]` prefix, push the draft pull request, and resume the same tester against the resulting diff.
 
           Preserve `REACCEPTANCE_FAILED` and the honest handoff while any defect or impediment remains. Overwrite `{{session_dir}}/output/reacceptance-status.txt` with exactly `REACCEPTANCE_COMPLETE` only after the tester reports no remaining finding for the current revision. Request completion of this interactive step only after that file and the acceptance handoff agree.
+
+          {{context_instruction}}
 
       - id: verify-reacceptance-status
         script: reacceptance-status-gate.sh
