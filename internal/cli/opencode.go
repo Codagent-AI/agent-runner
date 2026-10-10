@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -175,13 +174,20 @@ func (a *OpenCodeAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
 	if id := discoverOpenCodeInteractiveSession(opts.SpawnTime); id != "" {
 		return id
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), openCodeDiscoveryQueryTimeout)
+	defer cancel()
 	if id := discoverOpenCodeDatabaseSession(opts.SpawnTime, opts.Workdir, func(query string) ([]byte, error) {
-		return exec.Command("opencode", "db", query, "--format", "json").Output() // #nosec G204 -- fixed executable; query is one argv value, not shell-expanded
+		return a.queryOpenCodeDB(ctx, query)
 	}); id != "" {
 		return id
 	}
 	return ""
 }
+
+// openCodeDiscoveryQueryTimeout bounds the `opencode db` session lookup so a
+// hung subprocess cannot stall agent-call finalization, which waits for the
+// discovery probe to finish.
+const openCodeDiscoveryQueryTimeout = 10 * time.Second
 
 func (a *OpenCodeAdapter) FilterOutput(stdout string) string {
 	return extractOpenCodeText(stdout)

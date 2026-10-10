@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"log"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestOpenCodeAdapter(t *testing.T) {
@@ -393,5 +396,32 @@ func TestOpenCodeRejectsInteractiveMode(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("InteractiveModeError() = %q, want it to mention %q", err.Error(), want)
 		}
+	}
+}
+
+func TestOpenCodeDiscoverSessionIDBoundsDatabaseQuery(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var queryCtx context.Context
+	var remaining time.Duration
+	adapter := &OpenCodeAdapter{runDBQuery: func(ctx context.Context, _ string) ([]byte, error) {
+		queryCtx = ctx
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("OpenCode discovery database query has no deadline")
+		}
+		remaining = time.Until(deadline)
+		return []byte(`[{"id":"ses_database"}]`), nil
+	}}
+
+	id := adapter.DiscoverSessionID(&DiscoverOptions{SpawnTime: time.Now(), Workdir: "/repo"})
+
+	if diff := cmp.Diff("ses_database", id); diff != "" {
+		t.Fatalf("DiscoverSessionID() mismatch (-want +got):\n%s", diff)
+	}
+	if remaining <= 0 || remaining > openCodeDiscoveryQueryTimeout {
+		t.Fatalf("query deadline in %v, want within (0, %v]", remaining, openCodeDiscoveryQueryTimeout)
+	}
+	if queryCtx.Err() == nil {
+		t.Fatal("query context still live after DiscoverSessionID returned")
 	}
 }
