@@ -130,6 +130,8 @@ func externalReplyArgs(step *model.Step, ctx *model.ExecutionContext, profile *c
 	return cli.BuildInvocationArgs(adapter, &input)
 }
 
+const externalCompletionDeliveryGrace = time.Second
+
 func invokeExternalTurn(input *AgentInvocation, runner ProcessRunner, log Logger, server *control.ControlServer, attempt *control.Attempt, probe cli.TurnDurabilityProbe, resolveSession func() string, ctx *model.ExecutionContext) (AgentInvocationResult, error) {
 	processCtx, cancel := context.WithCancel(input.Context)
 	defer cancel()
@@ -153,8 +155,15 @@ func invokeExternalTurn(input *AgentInvocation, runner ProcessRunner, log Logger
 				out.result.Outcome = OutcomeFailed
 				return out.result, out.err
 			}
+			// Acceptance can outlive a stalled checkpoint or failed acknowledgement.
+			// Give channel delivery time to catch up without waiting indefinitely.
+			timer := time.NewTimer(externalCompletionDeliveryGrace)
+			defer timer.Stop()
 			select {
 			case completion = <-server.Completions():
+			case <-timer.C:
+				out.result.Outcome = OutcomeFailed
+				return out.result, errors.New("timed out waiting for accepted completion delivery after agent exit")
 			case <-processCtx.Done():
 				out.result.Outcome = OutcomeFailed
 				return out.result, processCtx.Err()

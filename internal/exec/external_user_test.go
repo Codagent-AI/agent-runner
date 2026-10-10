@@ -2,6 +2,7 @@ package exec
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,57 +94,77 @@ func (g externalCompletionGate) Emit(event audit.Event) {
 	}
 }
 
-func TestExternalTurnExitsBeforeCompletionDelivery(t *testing.T) {
-	release := make(chan struct{})
-	started := make(chan struct{})
-	ctx := model.NewRootContext(&model.RootContextOptions{SessionDir: t.TempDir()})
-	if pid, err := runlock.Acquire(ctx.SessionDir); err != nil || pid != 0 {
-		t.Fatalf("lock pid=%d error=%v", pid, err)
-	}
-	defer runlock.Delete(ctx.SessionDir)
-	ctx.AuditLogger = externalCompletionGate{started: started, release: release}
-	server, err := controlServerForContext(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer server.Close()
-	defer func() {
-		select {
-		case <-release:
-		default:
-			close(release)
-		}
-	}()
-	runCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	adapter := &externalTestAdapter{}
-	attempt := server.ActivateAttempt(runCtx, "proposal", control.AttemptOptions{CompletionEligible: true})
-	defer server.Deactivate()
-	input := &AgentInvocation{Context: runCtx, Adapter: adapter, Args: []string{"codex", "initial"}, Env: attempt.Environment(), CLI: "codex", SessionID: "session", InvocationContext: cli.ContextExternalUser}
-	done := make(chan struct{})
-	var result AgentInvocationResult
-	go func() {
-		result, err = invokeExternalTurn(input, &externalTestRunner{completeAt: 1}, &mockLogger{}, server, &attempt, adapter, func() string { return "session" }, ctx)
-		close(done)
-	}()
-	select {
-	case <-started:
-	case <-runCtx.Done():
-		t.Fatal("completion was not acknowledged")
-	}
-	select {
-	case <-done:
-		t.Fatal("turn finished before accepted completion was delivered")
-	case <-time.After(50 * time.Millisecond):
-	}
-	close(release)
-	select {
-	case <-done:
-		if err != nil || result.Outcome != OutcomeSuccess {
-			t.Fatalf("acknowledged completion lost when process exited: outcome=%s err=%v", result.Outcome, err)
-		}
-	case <-runCtx.Done():
-		t.Fatal("accepted completion did not finish the turn")
+func TestExternalTurnCompletionDelivery(t *testing.T) {
+	for _, scenario := range []string{"delayed", "stalled", "cancelled"} {
+		t.Run(scenario, func(t *testing.T) {
+			release := make(chan struct{})
+			started := make(chan struct{})
+			ctx := model.NewRootContext(&model.RootContextOptions{SessionDir: t.TempDir()})
+			if pid, err := runlock.Acquire(ctx.SessionDir); err != nil || pid != 0 {
+				t.Fatalf("lock pid=%d error=%v", pid, err)
+			}
+			defer runlock.Delete(ctx.SessionDir)
+			ctx.AuditLogger = externalCompletionGate{started: started, release: release}
+			server, err := controlServerForContext(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer server.Close()
+			defer func() {
+				select {
+				case <-release:
+				default:
+					close(release)
+				}
+			}()
+			runCtx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			adapter := &externalTestAdapter{}
+			attempt := server.ActivateAttempt(runCtx, "proposal", control.AttemptOptions{CompletionEligible: true})
+			defer server.Deactivate()
+			input := &AgentInvocation{Context: runCtx, Adapter: adapter, Args: []string{"codex", "initial"}, Env: attempt.Environment(), CLI: "codex", SessionID: "session", InvocationContext: cli.ContextExternalUser}
+			done := make(chan struct{})
+			var result AgentInvocationResult
+			go func() {
+				result, err = invokeExternalTurn(input, &externalTestRunner{completeAt: 1}, &mockLogger{}, server, &attempt, adapter, func() string { return "session" }, ctx)
+				close(done)
+			}()
+			select {
+			case <-started:
+			case <-time.After(3 * time.Second):
+				t.Fatal("completion was not acknowledged")
+			}
+			select {
+			case <-done:
+				t.Fatal("turn finished before accepted completion was delivered")
+			case <-time.After(50 * time.Millisecond):
+			}
+			if scenario == "delayed" {
+				close(release)
+			} else if scenario == "cancelled" {
+				cancel()
+			}
+			select {
+			case <-done:
+				if scenario == "delayed" {
+					if err != nil || result.Outcome != OutcomeSuccess {
+						t.Fatalf("acknowledged completion lost when process exited: outcome=%s err=%v", result.Outcome, err)
+					}
+				} else {
+					if result.Outcome != OutcomeFailed || err == nil {
+						t.Fatalf("undelivered completion must fail: outcome=%s err=%v", result.Outcome, err)
+					}
+					if scenario == "stalled" && !strings.Contains(err.Error(), "completion delivery") {
+						t.Fatalf("missing delivery timeout diagnostic: %v", err)
+					}
+					if scenario == "cancelled" && !errors.Is(err, context.Canceled) {
+						t.Fatalf("missing cancellation: %v", err)
+					}
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("accepted completion wait was not bounded")
+			}
+		})
 	}
 }
 
