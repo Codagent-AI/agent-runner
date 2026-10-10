@@ -338,7 +338,7 @@ func TestInteractiveClaudeSettingsINT005(t *testing.T) {
 	f.write(filepath.Join(root, ".claude", "settings.local.json"), setting("printf ROOT", 3))
 	f.write(filepath.Join(sub, ".claude", "settings.local.json"), setting("printf LEGACY", 4))
 	f.write(filepath.Join(sub, ".claude", "settings.json"), setting("printf SHARED", 5))
-	_, config := claudeConfigHome(f.uc)
+	_, config, _ := claudeConfigHome(f.uc)
 	f.write(filepath.Join(config, "settings.json"), setting("printf USER", 6))
 	for _, tc := range []struct {
 		work, command string
@@ -419,7 +419,7 @@ func TestWaitForInteractiveFinalReport(t *testing.T) {
 
 func TestInteractiveClaudeExactLocationAmbiguous(t *testing.T) {
 	f := newInteractiveUsageFixture(t)
-	_, config := claudeConfigHome(f.uc)
+	_, config, _ := claudeConfigHome(f.uc)
 	project := claudePathUnsafeRe.ReplaceAllString(f.uc.Workdir, "-")
 	f.write(filepath.Join(config, "projects", project, f.session+".jsonl"), assistantFixture("m", "opus", 8, 10))
 	f.write(f.path, assistantFixture("m", "opus", 8, 10))

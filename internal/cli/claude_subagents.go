@@ -536,25 +536,9 @@ func claudeTranscriptPaths(session string, uc UsageContext) (projectsRoot, paren
 	if validateSessionID(session) != nil || strings.Contains(session, `\`) {
 		return "", "", "", model.UnavailableSubagentSpanUnavailable
 	}
-	root := ""
-	home := ""
-	for _, entry := range uc.Env {
-		if value, ok := strings.CutPrefix(entry, "CLAUDE_CONFIG_DIR="); ok {
-			root = value
-		}
-		if value, ok := strings.CutPrefix(entry, "HOME="); ok {
-			home = value
-		}
-	}
-	if root == "" {
-		if home == "" {
-			var err error
-			home, err = os.UserHomeDir()
-			if err != nil {
-				return "", "", "", model.UnavailableSubagentSpanUnavailable
-			}
-		}
-		root = filepath.Join(home, ".claude")
+	_, root, err := claudeConfigHome(uc)
+	if err != nil {
+		return "", "", "", model.UnavailableSubagentSpanUnavailable
 	}
 	work := uc.Workdir
 	if work == "" {

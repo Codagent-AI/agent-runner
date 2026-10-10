@@ -13,24 +13,6 @@ import (
 	"time"
 )
 
-func claudeConfigHome(uc UsageContext) (home, config string) {
-	for _, entry := range uc.Env {
-		if v, ok := strings.CutPrefix(entry, "HOME="); ok {
-			home = v
-		}
-		if v, ok := strings.CutPrefix(entry, "CLAUDE_CONFIG_DIR="); ok {
-			config = v
-		}
-	}
-	if home == "" {
-		home, _ = os.UserHomeDir()
-	}
-	if config == "" {
-		config = filepath.Join(home, ".claude")
-	}
-	return home, config
-}
-
 func ownedClaudePath(path string) (bool, error) {
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
@@ -113,7 +95,7 @@ func resolveClaudeStatusLine(uc UsageContext) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	home, config := claudeConfigHome(uc)
+	home, config, _ := claudeConfigHome(uc)
 	env := uc.Env
 	if env == nil {
 		env = os.Environ()
