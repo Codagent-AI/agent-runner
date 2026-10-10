@@ -315,15 +315,19 @@ func (a *CopilotAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error)
 	}}, nil
 }
 
+// copilotSpawnTimeSkew allows for coarse filesystem clocks that lag time.Now().
+const copilotSpawnTimeSkew = time.Second
+
 // DiscoverSessionID returns the session ID after a copilot process exits by
 // scanning ~/.copilot/session-state/ for the most recently modified directory
-// created after spawn time, matching on CWD from workspace.yaml.
+// modified since spawn time with a small clock tolerance, matching on CWD from workspace.yaml.
 func (a *CopilotAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
 	return discoverCopilotSession(opts.SpawnTime, opts.Workdir)
 }
 
 // discoverCopilotSession scans ~/.copilot/session-state/ for the most recently
-// modified session directory created after spawnTime, matching on CWD from workspace.yaml.
+// modified session directory since spawnTime with a small clock tolerance,
+// matching on CWD from workspace.yaml.
 // workdir is the effective CWD of the Copilot process; when empty, os.Getwd() is used.
 func discoverCopilotSession(spawnTime time.Time, workdir string) string {
 	home, err := os.UserHomeDir()
@@ -360,7 +364,7 @@ func discoverCopilotSession(spawnTime time.Time, workdir string) string {
 		if err != nil {
 			continue
 		}
-		if info.ModTime().Before(spawnTime) {
+		if info.ModTime().Before(spawnTime.Add(-copilotSpawnTimeSkew)) {
 			continue
 		}
 		candidates = append(candidates, candidate{id: entry.Name(), modTime: info.ModTime()})
