@@ -139,9 +139,10 @@ func TestExternalTurnCompletionDelivery(t *testing.T) {
 				t.Fatal("turn finished before accepted completion was delivered")
 			case <-time.After(50 * time.Millisecond):
 			}
-			if scenario == "delayed" {
+			switch scenario {
+			case "delayed":
 				close(release)
-			} else if scenario == "cancelled" {
+			case "cancelled":
 				cancel()
 			}
 			select {
@@ -150,16 +151,16 @@ func TestExternalTurnCompletionDelivery(t *testing.T) {
 					if err != nil || result.Outcome != OutcomeSuccess {
 						t.Fatalf("acknowledged completion lost when process exited: outcome=%s err=%v", result.Outcome, err)
 					}
-				} else {
-					if result.Outcome != OutcomeFailed || err == nil {
-						t.Fatalf("undelivered completion must fail: outcome=%s err=%v", result.Outcome, err)
-					}
-					if scenario == "stalled" && !strings.Contains(err.Error(), "completion delivery") {
-						t.Fatalf("missing delivery timeout diagnostic: %v", err)
-					}
-					if scenario == "cancelled" && !errors.Is(err, context.Canceled) {
-						t.Fatalf("missing cancellation: %v", err)
-					}
+					return
+				}
+				if result.Outcome != OutcomeFailed || err == nil {
+					t.Fatalf("undelivered completion must fail: outcome=%s err=%v", result.Outcome, err)
+				}
+				if scenario == "stalled" && !strings.Contains(err.Error(), "completion delivery") {
+					t.Fatalf("missing delivery timeout diagnostic: %v", err)
+				}
+				if scenario == "cancelled" && !errors.Is(err, context.Canceled) {
+					t.Fatalf("missing cancellation: %v", err)
 				}
 			case <-time.After(3 * time.Second):
 				t.Fatal("accepted completion wait was not bounded")
