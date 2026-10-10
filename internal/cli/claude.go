@@ -188,6 +188,8 @@ func (a *ClaudeAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
 		}
 	}
 	if agentCall != nil {
+		// Preserve any explicitly defined value, including an empty string,
+		// as required by the agent-call timeout policy.
 		if _, defined := os.LookupEnv("MCP_TOOL_TIMEOUT"); !defined {
 			env = append(env, "MCP_TOOL_TIMEOUT="+strconv.FormatInt(agentCallTimeoutMilliseconds, 10))
 		}
