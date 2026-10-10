@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestInteractiveClaudeSpan(t *testing.T) {
@@ -386,6 +387,15 @@ func TestInteractiveClaudeSettingsINT005(t *testing.T) {
 	p, _ = f.a.PrepareInteractiveUsage(f.session, false, uc)
 	if p.ReportEnabled {
 		t.Fatal("broken git injected a statusLine")
+	}
+}
+
+func TestInteractiveUsageSettingsNull(t *testing.T) {
+	args := []string{"claude", "--settings", "null", "--", "prompt"}
+	plan := InteractiveUsagePlan{ReportEnabled: true, ReportPath: "/tmp/report"}
+	got := MergeInteractiveUsageSettings(args, &plan, "/bin/echo")
+	if diff := cmp.Diff(args, got); diff != "" {
+		t.Fatalf("null settings changed (-want +got):\n%s", diff)
 	}
 }
 

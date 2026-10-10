@@ -179,7 +179,7 @@ func MergeInteractiveUsageSettings(args []string, p *InteractiveUsagePlan, execu
 			break
 		}
 		if result[i] == "--settings" {
-			if json.Unmarshal([]byte(result[i+1]), &settings) != nil {
+			if json.Unmarshal([]byte(result[i+1]), &settings) != nil || settings == nil {
 				return args
 			}
 			settings["statusLine"] = line
