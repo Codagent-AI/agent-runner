@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -2507,5 +2508,65 @@ func TestExecuteAgentStepCoordinatesIntakeHandoffAcrossConcurrentContexts(t *tes
 	}
 	if count != 1 {
 		t.Fatalf("intake handoff delivery count = %d, want 1; calls: %#v", count, runner.calls)
+	}
+}
+
+// INT-001 exercises step tool declarations through the real Claude adapter.
+func TestBuildStepInvocationClaudeAgentCallTimeout(t *testing.T) {
+	t.Setenv("AGENT_RUNNER_EXECUTABLE", writeExecutableFixture(t))
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	for _, ctx := range []cli.InvocationContext{cli.ContextInteractive, cli.ContextAutonomousHeadless} {
+		t.Run(string(ctx), func(t *testing.T) {
+			for _, enabled := range []bool{true, false} {
+				for _, inherited := range []bool{false, true} {
+					t.Run(fmt.Sprintf("call_agent=%v/inherited=%v", enabled, inherited), func(t *testing.T) {
+						t.Setenv("MCP_TOOL_TIMEOUT", "")
+						if inherited {
+							t.Setenv("MCP_TOOL_TIMEOUT", "60000")
+						} else if err := os.Unsetenv("MCP_TOOL_TIMEOUT"); err != nil {
+							t.Fatal(err)
+						}
+						step := &model.Step{ID: "parent", Workdir: t.TempDir()}
+						if enabled {
+							step.Tools = model.RunnerTools{model.RunnerToolCallAgent}
+						}
+						args, env, _, err := buildStepInvocation(step, &model.ExecutionContext{}, &config.ResolvedAgent{}, &cli.ClaudeAdapter{}, "prompt", "", "", false, ctx)
+						if err != nil {
+							t.Fatal(err)
+						}
+						count := 0
+						for _, entry := range env {
+							if strings.HasPrefix(entry, "MCP_TOOL_TIMEOUT=") {
+								count++
+								if entry != "MCP_TOOL_TIMEOUT=2147483647" {
+									t.Fatalf("unexpected timeout: %q", entry)
+								}
+							}
+							if ctx == cli.ContextInteractive && strings.HasPrefix(entry, "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=") {
+								t.Fatalf("interactive background setting: %q", entry)
+							}
+						}
+						wantCount := 0
+						if enabled && !inherited {
+							wantCount = 1
+						}
+						if count != wantCount {
+							t.Fatalf("timeout entries = %d, want %d; env=%v", count, wantCount, env)
+						}
+						if enabled && !slices.Contains(args, "--plugin-dir") {
+							t.Fatalf("agent-call args missing --plugin-dir: %v", args)
+						}
+						if inherited {
+							if got := os.Getenv("MCP_TOOL_TIMEOUT"); got != "60000" {
+								t.Fatalf("runner timeout changed to %q", got)
+							}
+						} else if _, defined := os.LookupEnv("MCP_TOOL_TIMEOUT"); defined {
+							t.Fatal("runner timeout was defined")
+						}
+					})
+				}
+			}
+		})
 	}
 }

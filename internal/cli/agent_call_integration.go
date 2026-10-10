@@ -11,8 +11,11 @@ import (
 )
 
 const (
-	agentCallMCPServerName       = "agent-runner"
-	agentCallTimeoutSeconds      = 30 * 24 * 60 * 60
+	agentCallMCPServerName  = "agent-runner"
+	agentCallTimeoutSeconds = 30 * 24 * 60 * 60
+	// agentCallTimeoutMilliseconds is shared by Copilot's per-server timeout
+	// and Claude's MCP_TOOL_TIMEOUT. Keep it at or below the Node.js 32-bit
+	// timer maximum to avoid overflow into an immediate timeout.
 	agentCallTimeoutMilliseconds = int64(2_147_483_647)
 )
 
