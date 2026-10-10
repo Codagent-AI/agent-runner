@@ -97,3 +97,47 @@ func TestInteractiveCostDiagnosticInTerminalAudit(t *testing.T) {
 		t.Fatalf("cost diagnostics missing: %+v", end.Data)
 	}
 }
+
+func TestPrepareInvocationUsageExecutableFailure(t *testing.T) {
+	original := osExecutableFn
+	t.Cleanup(func() { osExecutableFn = original })
+	t.Setenv("AGENT_RUNNER_EXECUTABLE", "")
+	osExecutableFn = func() (string, error) { return "", errors.New("executable unavailable") }
+	for _, invalidSettings := range []bool{false, true} {
+		t.Run(fmt.Sprint(invalidSettings), func(t *testing.T) {
+			config := t.TempDir()
+			if invalidSettings {
+				if err := os.WriteFile(filepath.Join(config, "settings.json"), []byte("invalid"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			uc := cli.UsageContext{Workdir: t.TempDir(), StateDir: t.TempDir(), Env: []string{"CLAUDE_CONFIG_DIR=" + config}}
+			input := &AgentInvocation{Adapter: &cli.ClaudeAdapter{}, SessionID: "11111111-1111-1111-1111-111111111111", InvocationContext: cli.ContextAutonomousInteractive}
+			options := &AgentProcessOptions{Args: []string{"claude"}}
+			direct := &directInvocation{}
+			prepareInvocationUsage(input, options, direct, &uc)
+			plan := uc.InteractivePlan
+			if plan == nil || plan.ReportEnabled || plan.ReportReason != model.UnavailableCostReportUnavailable {
+				t.Fatalf("plan: %+v", plan)
+			}
+			wantDiagnostic := "executable unavailable"
+			if invalidSettings {
+				wantDiagnostic = filepath.Join(config, "settings.json")
+			}
+			if !strings.Contains(plan.ReportError, wantDiagnostic) {
+				t.Errorf("diagnostic lost: %+v; want %q", plan, wantDiagnostic)
+			}
+			if !invalidSettings && plan.ReportPath == "" {
+				t.Fatal("expected prepared report path")
+			}
+			if plan.ReportPath != "" {
+				if _, err := os.Stat(plan.ReportPath); !os.IsNotExist(err) {
+					t.Errorf("disabled report still exists: %v", err)
+				}
+			}
+			if direct.usagePlan.ReportError != plan.ReportError || direct.usagePlan.ReportEnabled {
+				t.Errorf("direct plan differs: %+v", direct.usagePlan)
+			}
+		})
+	}
+}

@@ -662,15 +662,14 @@ func TestWaitForInteractiveFinalReportAfterMalformedLine(t *testing.T) {
 	}
 }
 
-// A line that cannot be parsed cannot be shown to name the step's session or
-// to precede the baseline, so the whole report file is rejected for cost.
-func TestInteractiveClaudeCostRejectsMalformedReport(t *testing.T) {
+// A torn report must not discard intact baseline and final-report evidence.
+func TestInteractiveClaudeCostToleratesMalformedReport(t *testing.T) {
 	f := newInteractiveUsageFixture(t)
 	f.write(f.path, promptFixture(), assistantFixture("m", "opus", 8, 10))
 	f.write(f.p.ReportPath, reportFixture(f.session, "", 0, 0), "broken report", reportFixture(f.session, "prompt", 1.5, 8))
 	got := f.a.ExtractInteractiveUsage(f.p, f.uc)
-	if got.EstimatedCostUSD != nil || got.CostUnavailableReason != model.UnavailableCostReportUnavailable {
-		t.Fatalf("malformed report must null cost: %+v", got)
+	if got.EstimatedCostUSD == nil || *got.EstimatedCostUSD != 1.5 || got.CostUnavailableReason != "" {
+		t.Fatalf("intact reports must retain cost: %+v", got)
 	}
 	if got.Usage.Tokens[model.TokenOutput] != 8 {
 		t.Fatalf("tokens changed: %+v", got.Usage)
@@ -698,5 +697,26 @@ func TestClaudeJSONLConsumerErrorRecovery(t *testing.T) {
 	}
 	if got != "good\n" || r.offset != 9 {
 		t.Fatalf("recovery mixed consumed lines: %q offset=%d", got, r.offset)
+	}
+}
+
+func TestInteractiveClaudeMalformedReportGuards(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		baseline any
+		reason   model.UnavailableReason
+	}{
+		{"missing baseline", "broken baseline", model.UnavailableCostBaselineMissing},
+		{"wrong session", reportFixture("other-session", "", 0, 0), model.UnavailableCostSessionMismatch},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newInteractiveUsageFixture(t)
+			f.write(f.path, promptFixture(), assistantFixture("m", "opus", 8, 10))
+			f.write(f.p.ReportPath, tc.baseline, "broken report", reportFixture(f.session, "prompt", 1.5, 8))
+			got := f.a.ExtractInteractiveUsage(f.p, f.uc)
+			if got.EstimatedCostUSD != nil || got.CostUnavailableReason != tc.reason {
+				t.Fatalf("report guards: %+v", got)
+			}
+		})
 	}
 }

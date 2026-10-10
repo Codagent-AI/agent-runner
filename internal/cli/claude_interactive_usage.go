@@ -393,7 +393,7 @@ func readClaudeReports(path string) []ClaudeStatusReport {
 	for scanner.Scan() {
 		var r ClaudeStatusReport
 		if json.Unmarshal(scanner.Bytes(), &r) != nil {
-			return nil
+			continue
 		}
 		reports = append(reports, r)
 	}

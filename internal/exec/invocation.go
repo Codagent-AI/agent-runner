@@ -279,7 +279,12 @@ func prepareInvocationUsage(input *AgentInvocation, processOptions *AgentProcess
 	} else {
 		plan.ReportEnabled = false
 		plan.ReportReason = model.UnavailableCostReportUnavailable
-		plan.ReportError = err.Error()
+		if plan.ReportError == "" {
+			plan.ReportError = err.Error()
+		}
+		if plan.ReportPath != "" {
+			_ = os.Remove(plan.ReportPath) // #nosec G703 -- path is the invocation's freshly created report file.
+		}
 	}
 	if direct != nil {
 		direct.usageCollector = collector

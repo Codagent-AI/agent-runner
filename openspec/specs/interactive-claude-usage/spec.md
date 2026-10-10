@@ -97,6 +97,8 @@ When the step's transcript evidence is missing, ambiguous, or damaged, Agent Run
 
 Agent Runner SHALL record an autonomous-interactive Claude step's `estimated_api_cost_usd` only from a USD cost that Claude Code itself reports to its status line during the step's process. It SHALL record the value without price math. The step's cost SHALL be the final report's cost minus the cost in the process's first report. It SHALL be computed this way whether Claude's counter starts at zero or carries cost from before the process. It SHALL NOT depend on cost recorded for earlier steps on the same session.
 
+Malformed report lines SHALL be skipped without discarding intact reports. Cost attribution SHALL still require an intact startup baseline, an intact matching final report, and matching session identities; malformed lines SHALL NOT supply any of that evidence.
+
 The first report SHALL be used as the baseline only when there is positive evidence that Claude Code made it before processing the step's prompt. The absence of a matching last-response usage SHALL NOT count as such evidence. Without that evidence, the step's cost SHALL be null.
 
 A report SHALL be accepted as final only when both of the following hold:
