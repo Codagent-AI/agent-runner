@@ -870,6 +870,7 @@ func TestDiscoverCopilotSessionToleratesCoarseMtime(t *testing.T) {
 		want string
 	}{
 		{name: "coarse clock lag", lag: 5 * time.Millisecond, want: sessionID},
+		{name: "recent prior session", lag: 100 * time.Millisecond, want: ""},
 		{name: "stale session", lag: time.Minute, want: ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

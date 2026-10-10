@@ -315,8 +315,9 @@ func (a *CopilotAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error)
 	}}, nil
 }
 
-// copilotSpawnTimeSkew allows for coarse filesystem clocks that lag time.Now().
-const copilotSpawnTimeSkew = time.Second
+// copilotSpawnTimeSkew allows for millisecond-scale filesystem clock lag while
+// limiting the chance of selecting a prior session in the same workdir.
+const copilotSpawnTimeSkew = 10 * time.Millisecond
 
 // DiscoverSessionID returns the session ID after a copilot process exits by
 // scanning ~/.copilot/session-state/ for the most recently modified directory
