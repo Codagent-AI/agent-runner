@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
 )
 
@@ -76,10 +77,12 @@ steps:
 			}
 			var artifact struct {
 				Steps []struct {
+					ID    string            `json:"id"`
 					Usage model.UsageRecord `json:"usage"`
 					Cost  *float64          `json:"estimated_api_cost_usd"`
 				} `json:"steps"`
-				Totals model.RunTotals `json:"totals"`
+				Totals             model.RunTotals             `json:"totals"`
+				NativeMeasurements []metrics.NativeMeasurement `json:"native_measurements"`
 			}
 			if err = json.Unmarshal(raw, &artifact); err != nil {
 				t.Fatal(err)
@@ -95,6 +98,30 @@ steps:
 				t.Fatalf("metrics: %s", raw)
 			}
 			for i, step := range artifact.Steps {
+				var native *metrics.NativeMeasurement
+				for j := range artifact.NativeMeasurements {
+					candidate := &artifact.NativeMeasurements[j]
+					if candidate.Attribution.StepID == step.ID {
+						native = candidate
+						break
+					}
+				}
+				if native == nil {
+					t.Fatalf("missing native measurement for %s: %s", step.ID, raw)
+				}
+				if mode == "final" {
+					want := []float64{0.42, 0.30}[i]
+					if len(native.Costs) != 1 {
+						t.Fatalf("native costs for %s: %+v", step.ID, native.Costs)
+					}
+					cost := native.Costs[0]
+					if cost.ID != "reported-cost" || cost.Scope != "attempt" || cost.Coverage != "full" || cost.Overlap != "established" || cost.Amount.Value == nil || *cost.Amount.Value != want {
+						t.Fatalf("native cost for %s: %+v", step.ID, cost)
+					}
+				} else if len(native.Costs) != 0 {
+					t.Fatalf("expected no native costs for %s: %+v", step.ID, native.Costs)
+				}
+
 				if step.Usage.Source != "claude:session-transcript" || len(step.Usage.Allocations) != 2 || step.Usage.Tokens[model.TokenOutput] != 17 {
 					t.Fatalf("step %d: %s", i, raw)
 				}

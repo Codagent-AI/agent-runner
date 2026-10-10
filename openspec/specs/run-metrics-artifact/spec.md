@@ -53,6 +53,13 @@ Schema v4 SHALL retain each accepted producer invocation and model-attempt recor
 
 The authoritative per-field v4 aggregates SHALL retain known subtotals and available/partial/unavailable states, precision, and contributing/partial/missing attempt coverage. A partial value SHALL retain its reason and MUST NOT become a complete value merely because numeric. Categories MAY overlap; a grand total SHALL require established non-overlapping semantics. Per-model allocations, unallocated evidence, allocation/identity joins, and provider-reported cost scope/currency/coverage/overlap SHALL survive unchanged. Scalar USD views SHALL use only unambiguous full attempt-level reported USD evidence and MUST NOT promote partial, allocation-only, or overlapping costs to full attempt cost. Source versions and aggregate interpretation SHALL be explicit; unsupported or conflicting actual heads SHALL not contribute numerically or be replaced by older compatible heads.
 
+Native measurements SHALL carry attempt-scoped `reported-cost` evidence for captured costs from `claude:result-event`, interactive Claude `claude:session-transcript`, and `opencode:step_finish`. These costs SHALL have full coverage and established overlap; the interactive Claude cost SHALL use the attributable CLI-reported delta defined by `cost-capture`.
+
+#### Scenario: Interactive Claude reported cost
+- **WHEN** an autonomous-interactive Claude attempt has an attributable reported USD cost
+- **THEN** its native measurement contains exactly one `reported-cost` with scope `attempt`, coverage `full`, and overlap `established`
+- **AND** it does not gain a `legacy_cost_scope_unavailable` limitation
+
 #### Scenario: Agent step record content
 - **WHEN** an autonomous-headless agent step completes with usage and cost collected
 - **THEN** its record in `run-metrics.json` carries role/tool and requested/resolved/observed identity, step identifier, prefix, type, outcome, duration, token categories with provenance and availability, and the reported cost evidence

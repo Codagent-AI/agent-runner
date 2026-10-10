@@ -92,16 +92,15 @@ func (f *lineBufferedWriter) writeDownstream(p []byte) error {
 
 // BuildArgsInput provides the parameters needed to construct CLI invocation args.
 type BuildArgsInput struct {
-	InteractiveUsage *InteractiveUsagePlan
-	Prompt           string
-	SystemPrompt     string // Content to deliver as a system prompt (for adapters that support it)
-	SessionID        string // Session ID to pass to the CLI (pre-generated for new, or existing for resume)
-	Resume           bool   // True when resuming an existing session, false for fresh sessions
-	Model            string
-	Effort           string // Effort level (low, medium, high, xhigh) — empty means unset
-	Context          InvocationContext
-	PermissionMode   usersettings.AutonomousPermissionMode
-	DisallowedTools  []string // Tool names to block (e.g. "AskUserQuestion"); adapter translates to CLI flags where supported
+	Prompt          string
+	SystemPrompt    string // Content to deliver as a system prompt (for adapters that support it)
+	SessionID       string // Session ID to pass to the CLI (pre-generated for new, or existing for resume)
+	Resume          bool   // True when resuming an existing session, false for fresh sessions
+	Model           string
+	Effort          string // Effort level (low, medium, high, xhigh) — empty means unset
+	Context         InvocationContext
+	PermissionMode  usersettings.AutonomousPermissionMode
+	DisallowedTools []string // Tool names to block (e.g. "AskUserQuestion"); adapter translates to CLI flags where supported
 	// Workdir is the step's working directory ("" means the runner's own cwd).
 	// Adapters use it to discover project-level CLI configuration such as
 	// Cursor's <project>/.cursor/cli.json permissions.

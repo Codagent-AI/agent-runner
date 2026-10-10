@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+var ownedClaudePathFn = ownedClaudePath
+
 func ownedClaudePath(path string) (bool, error) {
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
@@ -75,7 +77,7 @@ func claudeSettingsRoot(work, home string, env []string) (string, error) {
 		return work, nil
 	}
 	for _, path := range []string{root, filepath.Join(root, ".git"), filepath.Join(root, ".claude")} {
-		owned, err := ownedClaudePath(path)
+		owned, err := ownedClaudePathFn(path)
 		if err != nil {
 			return "", err
 		}

@@ -275,10 +275,11 @@ func accumulateFields(fields map[string]FieldAggregate, tokens map[string]measur
 
 func (n *NativeMeasurement) collectReportedCost(step *StepRecord, legacy bool) {
 	// These adapters obtain this compatibility field directly from their
-	// structured provider result; Runner does no price estimation. Legacy or
-	// unknown sources retain uncertainty instead of acquiring a new cost scope.
+	// structured provider result or interactive status-line report; Runner does
+	// no price estimation. Legacy or unknown sources retain uncertainty instead
+	// of acquiring a new cost scope.
 	if step.EstimatedAPICostUSD != nil {
-		if !legacy && (n.SourceFormat == "claude:result-event" || n.SourceFormat == "opencode:step_finish") {
+		if !legacy && (n.SourceFormat == "claude:result-event" || n.SourceFormat == "claude:session-transcript" || n.SourceFormat == "opencode:step_finish") {
 			n.Costs = append(n.Costs, measurements.Cost{ID: "reported-cost", Scope: "attempt", Coverage: "full", Overlap: "established", Source: "provider_usage", Currency: measurements.StringEvidence{Availability: "available", Value: pointer("USD")}, Amount: measurements.Value{Availability: "available", Value: pointer(*step.EstimatedAPICostUSD), Source: pointer("provider_usage"), Origin: pointer("observed"), Precision: pointer("exact")}})
 		} else {
 			n.Limitations = append(n.Limitations, "legacy_cost_scope_unavailable")

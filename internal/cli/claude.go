@@ -146,11 +146,6 @@ func (a *ClaudeAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, err
 		args = append(args, "--plugin-dir", pluginDir)
 	}
 
-	if input.InteractiveUsage != nil && context == ContextAutonomousInteractive {
-		if completion := completionRunnerCommand(input); completion != nil {
-			args = MergeInteractiveUsageSettings(args, input.InteractiveUsage, completion.Executable)
-		}
-	}
 	if input.Prompt != "" {
 		// Use "--" to terminate flags before the positional prompt. Without
 		// this, variadic flags like --disallowedTools consume the trailing

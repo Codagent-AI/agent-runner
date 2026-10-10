@@ -355,10 +355,11 @@ func TestInteractiveClaudeSettingsINT005(t *testing.T) {
 			if !p.ReportEnabled {
 				t.Fatalf("disabled: %+v", p)
 			}
-			args, err := f.a.BuildArgsWithError(&BuildArgsInput{Context: ContextAutonomousInteractive, SessionID: f.session, CompletionCommand: &CompletionCommand{Executable: "/bin/echo", Args: []string{"step", "complete"}}, InteractiveUsage: &p})
+			args, err := f.a.BuildArgsWithError(&BuildArgsInput{Context: ContextAutonomousInteractive, SessionID: f.session, CompletionCommand: &CompletionCommand{Executable: "/bin/echo", Args: []string{"step", "complete"}}})
 			if err != nil {
 				t.Fatal(err)
 			}
+			args = MergeInteractiveUsageSettings(args, &p, "/bin/echo")
 			var settings map[string]any
 			for i, arg := range args {
 				if arg == "--settings" {
