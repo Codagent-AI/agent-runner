@@ -359,8 +359,7 @@ func (reports *claudeReportIndex) consume(line []byte, _ int64) error {
 }
 
 func (reports *claudeReportIndex) matches(m *claudeSpanMessage) bool {
-	recorded := reports.latest[claudeUsageKey(m.tokens)]
-	return m.complete && !m.timestamp.IsZero() && !recorded.IsZero() && !recorded.Before(m.timestamp)
+	return m.reportIsFreshAt(reports.latest[claudeUsageKey(m.tokens)])
 }
 
 func claudeUsageKey(tokens model.TokenCounts) [4]int64 {
@@ -398,10 +397,11 @@ func readClaudeReports(path string) []ClaudeStatusReport {
 
 func reportMatches(r *ClaudeStatusReport, m *claudeSpanMessage) bool {
 	tokens, complete, err := tokenCountsFromObject(r.CurrentUsage, claudeTokenFields)
-	if err != nil || !complete || !m.complete || r.RecordedAt.IsZero() || m.timestamp.IsZero() || r.RecordedAt.Before(m.timestamp) {
-		return false
-	}
-	return claudeUsageKey(tokens) == claudeUsageKey(m.tokens)
+	return err == nil && complete && m.reportIsFreshAt(r.RecordedAt) && claudeUsageKey(tokens) == claudeUsageKey(m.tokens)
+}
+
+func (m *claudeSpanMessage) reportIsFreshAt(recorded time.Time) bool {
+	return m.complete && !m.timestamp.IsZero() && !recorded.IsZero() && !recorded.Before(m.timestamp)
 }
 
 func interactiveClaudeCost(p *InteractiveUsagePlan, s *claudeInteractiveSpan, reports []ClaudeStatusReport, settled bool) (*float64, model.UnavailableReason) {
