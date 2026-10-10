@@ -327,11 +327,11 @@ For a Claude agent step that spawned subagents, `run-metrics.json` SHALL expose 
 - **WHEN** a run contains one Claude step with 10,000 main-thread tokens and 4,000 subagent tokens and one Codex step with 5,000 tokens
 - **THEN** the run-level canonical overall total is 19,000, and the Claude step counts once in the usage and canonical-total coverage denominators
 
-### Requirement: Partial subagent collection affects coverage
+### Requirement: Partial Claude transcript collection affects coverage
 
-When a Claude step's subagent collection is partial, the step SHALL count as partial for run-level and session-level usage coverage and canonical-total coverage. Its known subtotal SHALL still contribute to the totals. As a result, coverage SHALL be `partial`, not `complete`, even if every other agent step is complete. The corresponding native token fields SHALL carry partial availability with the reason. Cost coverage SHALL be determined independently, by whether the step reported an eligible full USD cost.
+When a Claude step's subagent collection is partial, or an autonomous-interactive Claude step's main-thread transcript collection is partial, the step SHALL count as partial for run-level and session-level usage coverage and canonical-total coverage. Its known subtotal SHALL still contribute to the totals. As a result, coverage SHALL be `partial`, not `complete`, even if every other agent step is complete. The corresponding native token fields SHALL carry partial availability with the reason. Cost coverage SHALL be determined independently, by whether the step reported an eligible full USD cost.
 
-This rule SHALL apply only to partial subagent collection. Usage records that are partial for other reasons, such as nested Validator projections or a missing expected category, SHALL keep their existing coverage treatment.
+This rule SHALL apply only to partial subagent collection and partial main-thread transcript collection. Usage records that are partial for other reasons, such as nested Validator projections or a missing expected category, SHALL keep their existing coverage treatment.
 
 #### Scenario: Other partial records keep existing coverage
 - **WHEN** a run contains a nested Validator attempt whose usage record is partial, and a Claude step whose subagent collection is complete
@@ -348,4 +348,12 @@ This rule SHALL apply only to partial subagent collection. Usage records that ar
 #### Scenario: Session rollup mirrors partial coverage
 - **WHEN** an execution session contains a Claude step with partial subagent collection
 - **THEN** that session's rollup reports `partial` usage and canonical-total coverage and includes the known subtotal
+
+#### Scenario: Partial main-thread transcript yields partial coverage
+- **WHEN** a run's only agent step is an autonomous-interactive Claude step whose session transcript span contains an unparseable line among valid assistant messages
+- **THEN** the run-level token totals equal the known subtotal, and usage coverage and canonical-total coverage are `partial`
+
+#### Scenario: Collected autonomous-interactive step counts as complete
+- **WHEN** a run contains one headless Codex step with reported usage and one autonomous-interactive Claude step whose main thread and subagents were all collected from transcripts
+- **THEN** usage coverage and canonical-total coverage are `complete`, and the run-level totals include both steps once
 

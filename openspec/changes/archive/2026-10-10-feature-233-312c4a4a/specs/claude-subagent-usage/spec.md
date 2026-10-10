@@ -21,7 +21,7 @@ After an autonomous-headless or autonomous-interactive Claude agent step's CLI p
 - **WHEN** a headless Claude step spawns a subagent and then exits with a nonzero code
 - **THEN** the subagent's usage is collected and included in the step's measurement and in run-level aggregates
 
-#### Scenario: Human-interactive Claude step is not scanned
+#### Scenario: Interactive Claude step is not scanned
 - **WHEN** a Claude agent step runs in a human-interactive context
 - **THEN** no subagent transcripts are read and the step's usage remains unavailable with reason `interactive-context`
 
