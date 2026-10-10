@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/codagent/agent-runner/internal/model"
 )
@@ -26,6 +28,16 @@ func claudeTokenTotals(tokens model.TokenCounts) *model.TokenTotals {
 }
 
 type claudeEntry struct {
+	Timestamp     time.Time `json:"timestamp"`
+	PromptID      string    `json:"promptId"`
+	ToolUseResult struct {
+		IsAsync bool   `json:"isAsync"`
+		Status  string `json:"status"`
+	} `json:"toolUseResult"`
+	Attachment struct {
+		Type   string `json:"type"`
+		Prompt string `json:"prompt"`
+	} `json:"attachment"`
 	UUID            string `json:"uuid"`
 	Type            string `json:"type"`
 	SessionID       string `json:"session_id"`
@@ -195,7 +207,7 @@ func (a *ClaudeAdapter) ExtractUsageWithContext(stdout string, uc UsageContext) 
 			reason.note(model.UnavailableSubagentSpanUnavailable)
 		} else {
 			defer func() { _ = transcripts.Close() }()
-			spanSpawns, spanFailed, spanReason := scanClaudeParentSpan(transcripts, parentRel, evidence.uuids)
+			spanSpawns, spanFailed, spanReason := scanClaudeParentSpan(transcripts, parentRel, claudeParentSpanSelector{uuids: evidence.uuids})
 			reason.note(spanReason)
 			for id := range spanSpawns {
 				spawns[id] = true
@@ -218,69 +230,124 @@ func (a *ClaudeAdapter) ExtractUsageWithContext(stdout string, uc UsageContext) 
 	return result, nil
 }
 
-// scanClaudeParentSpan streams the parent session transcript and returns the
-// direct spawns written between the first and last entries this invocation
-// reported on stdout. An invalid entry inside the span, or immediately after
-// it, could hide a spawn and makes collection partial.
-func scanClaudeParentSpan(root *os.Root, parentRel string, uuids map[string]bool) (spawns, failed map[string]bool, reason model.UnavailableReason) {
+// claudeParentSpanSelector selects UUID bounds for headless invocations or
+// [startOffset, EOF) for interactive invocations. onEntry observes selected,
+// valid main-thread entries with their ending byte positions.
+type claudeParentSpanSelector struct {
+	uuids       map[string]bool
+	startOffset *int64
+	onEntry     func(*claudeEntry, int64)
+}
+
+// tools collects only direct parent tools, preserving the headless format's
+// stricter content requirement while allowing interactive usage-only entries.
+func (span *claudeParentSpanSelector) tools(e *claudeEntry, parseErr error, position int64) (ids []string, failed map[string]bool, invalid bool) {
+	if span.startOffset == nil {
+		return claudeParentTools(e, parseErr)
+	}
+	if parseErr != nil {
+		return nil, nil, true
+	}
+	if e.IsSidechain || e.ParentToolUseID != "" {
+		return nil, nil, false
+	}
+	if span.onEntry != nil {
+		span.onEntry(e, position)
+	}
+	return claudeTools(e)
+}
+
+type claudeParentSpanScan struct {
+	span                                                            claudeParentSpanSelector
+	spawns, failed                                                  map[string]bool
+	pendingSpawns                                                   []string
+	pendingFailed                                                   map[string]bool
+	started, pendingInvalid, invalid, invalidAfterMatch, afterMatch bool
+}
+
+func (s *claudeParentSpanScan) consume(line []byte, position int64) error {
+	e, parseErr := parseClaudeEntry(line)
+	matched := s.span.startOffset != nil || (parseErr == nil && e.UUID != "" && s.span.uuids[e.UUID])
+	if !s.started && !matched {
+		return nil
+	}
+	s.started = true
+	ids, errs, entryInvalid := s.span.tools(&e, parseErr, position)
+	s.pendingSpawns = append(s.pendingSpawns, ids...)
+	for id := range errs {
+		s.pendingFailed[id] = true
+	}
+	s.pendingInvalid = s.pendingInvalid || entryInvalid
+	if s.afterMatch && parseErr != nil {
+		s.invalidAfterMatch = true
+	}
+	s.afterMatch = matched
+	if matched {
+		s.commitPending()
+	}
+	return nil
+}
+
+func (s *claudeParentSpanScan) commitPending() {
+	s.invalidAfterMatch = false
+	for _, id := range s.pendingSpawns {
+		s.spawns[id] = true
+	}
+	for id := range s.pendingFailed {
+		s.failed[id] = true
+	}
+	s.invalid = s.invalid || s.pendingInvalid
+	s.pendingSpawns, s.pendingFailed, s.pendingInvalid = nil, map[string]bool{}, false
+}
+
+// scanClaudeParentSpan collects direct spawns and failures in the selected span.
+// UUID bounds retain entries until a later match confirms membership, including
+// the historical invalid-entry check immediately after the final match.
+func scanClaudeParentSpan(root *os.Root, parentRel string, span claudeParentSpanSelector) (spawns, failed map[string]bool, reason model.UnavailableReason) {
 	f, err := root.Open(parentRel)
 	if err != nil {
+		if span.startOffset != nil {
+			return nil, nil, model.UnavailableTranscriptMissing
+		}
 		return nil, nil, model.UnavailableSubagentSpanUnavailable
 	}
 	defer func() { _ = f.Close() }()
-	spawns, failed = map[string]bool{}, map[string]bool{}
-	// Entries after the latest stdout match are held until the next match
-	// confirms they lie inside the span.
-	var pendingSpawns []string
-	pendingFailed := map[string]bool{}
-	started, pendingInvalid, invalid, invalidAfterMatch, afterMatch := false, false, false, false, false
+	s := claudeParentSpanScan{span: span, spawns: map[string]bool{}, failed: map[string]bool{}, pendingFailed: map[string]bool{}}
+	if span.startOffset != nil {
+		reader := claudeJSONLReader{file: f, offset: *span.startOffset}
+		if err := reader.read(context.Background(), true, s.consume); err != nil {
+			return s.spawns, s.failed, model.UnavailableTranscriptSpanUnavailable
+		}
+		if s.invalid {
+			return s.spawns, s.failed, model.UnavailableTranscriptInvalid
+		}
+		return s.spawns, s.failed, ""
+	}
 	scanner := newStreamScanner(f)
 	for scanner.Scan() {
-		e, parseErr := parseClaudeEntry(scanner.Bytes())
-		matched := parseErr == nil && e.UUID != "" && uuids[e.UUID]
-		if !started && !matched {
-			continue
-		}
-		started = true
-		entryInvalid := parseErr != nil
-		var ids []string
-		var errs map[string]bool
-		if parseErr == nil && e.ParentToolUseID == "" && !e.IsSidechain {
-			var badTool bool
-			ids, errs, badTool = claudeTools(&e)
-			entryInvalid = badTool || (e.Type == "assistant" && len(e.Message.Content) == 0)
-		}
-		pendingSpawns = append(pendingSpawns, ids...)
-		for id := range errs {
-			pendingFailed[id] = true
-		}
-		pendingInvalid = pendingInvalid || entryInvalid
-		if afterMatch && parseErr != nil {
-			invalidAfterMatch = true
-		}
-		afterMatch = matched
-		if matched {
-			invalidAfterMatch = false
-			for _, id := range pendingSpawns {
-				spawns[id] = true
-			}
-			for id := range pendingFailed {
-				failed[id] = true
-			}
-			invalid = invalid || pendingInvalid
-			pendingSpawns, pendingFailed, pendingInvalid = nil, map[string]bool{}, false
-		}
+		_ = s.consume(scanner.Bytes(), 0)
 	}
 	if scanner.Err() != nil {
-		invalid = true
+		s.invalid = true
 	}
 	switch {
-	case !started:
-		return spawns, failed, model.UnavailableSubagentSpanUnavailable
-	case invalid || invalidAfterMatch:
-		return spawns, failed, model.UnavailableSubagentParentInvalid
+	case !s.started:
+		return s.spawns, s.failed, model.UnavailableSubagentSpanUnavailable
+	case s.invalid || s.invalidAfterMatch:
+		return s.spawns, s.failed, model.UnavailableSubagentParentInvalid
 	}
-	return spawns, failed, ""
+	return s.spawns, s.failed, ""
+}
+
+func claudeParentTools(e *claudeEntry, parseErr error) (ids []string, failed map[string]bool, invalid bool) {
+	if parseErr != nil {
+		return nil, nil, true
+	}
+	if e.ParentToolUseID != "" || e.IsSidechain {
+		return nil, nil, false
+	}
+	ids, failed, invalid = claudeTools(e)
+	return ids, failed, invalid || (e.Type == "assistant" && len(e.Message.Content) == 0)
 }
 
 type claudeSidecarFile struct {
@@ -521,25 +588,9 @@ func claudeTranscriptPaths(session string, uc UsageContext) (projectsRoot, paren
 	if validateSessionID(session) != nil || strings.Contains(session, `\`) {
 		return "", "", "", model.UnavailableSubagentSpanUnavailable
 	}
-	root := ""
-	home := ""
-	for _, entry := range uc.Env {
-		if value, ok := strings.CutPrefix(entry, "CLAUDE_CONFIG_DIR="); ok {
-			root = value
-		}
-		if value, ok := strings.CutPrefix(entry, "HOME="); ok {
-			home = value
-		}
-	}
-	if root == "" {
-		if home == "" {
-			var err error
-			home, err = os.UserHomeDir()
-			if err != nil {
-				return "", "", "", model.UnavailableSubagentSpanUnavailable
-			}
-		}
-		root = filepath.Join(home, ".claude")
+	_, root, err := claudeConfigHome(uc)
+	if err != nil {
+		return "", "", "", model.UnavailableSubagentSpanUnavailable
 	}
 	work := uc.Workdir
 	if work == "" {
@@ -554,7 +605,7 @@ func claudeTranscriptPaths(session string, uc UsageContext) (projectsRoot, paren
 		return "", "", "", model.UnavailableSubagentSpanUnavailable
 	}
 	project := claudePathUnsafeRe.ReplaceAllString(abs, "-")
-	if _, err := os.Stat(filepath.Join(projects, project, session+".jsonl")); err != nil {
+	{ // Check every location, including an exact project match, for ambiguity.
 		// Claude shortens and hashes long project directory names. List the
 		// projects directory rather than globbing, since root can contain glob
 		// metacharacters.
@@ -571,7 +622,9 @@ func claudeTranscriptPaths(session string, uc UsageContext) (projectsRoot, paren
 		case len(matches) > 1:
 			return "", "", "", model.UnavailableTranscriptAmbiguous
 		}
-		project = matches[0]
+		if project != matches[0] {
+			project = matches[0]
+		}
 	}
 	return projects, filepath.Join(project, session+".jsonl"), filepath.Join(project, session, "subagents"), ""
 }

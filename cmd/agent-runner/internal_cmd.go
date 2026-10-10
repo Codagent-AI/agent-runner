@@ -72,6 +72,8 @@ func handleInternalWithIO(args []string, stdin io.Reader, stderr io.Writer) int 
 		return handleLaunchIntakeRoute(args[1:], stderr)
 	case "watchdog":
 		return handleWatchdog(args[1:], stdin, stderr)
+	case "statusline-record":
+		return handleStatuslineRecord(args[1:], stdin, os.Stdout, stderr)
 	case "turn-committed":
 		return handleTurnCommitted(args, stderr)
 	case "call-agent-mcp":

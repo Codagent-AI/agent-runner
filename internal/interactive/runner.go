@@ -50,6 +50,9 @@ type DirectOptions struct {
 	TTY              *os.File
 	Foreground       bool
 
+	UsageCollector     cli.InteractiveUsageCollector
+	UsagePlan          cli.InteractiveUsagePlan
+	FinalReportTimeout time.Duration
 	DurabilityTimeout  time.Duration
 	TerminationGrace   time.Duration
 	WatchdogExecutable string
@@ -69,6 +72,8 @@ type DirectResult struct {
 type DirectRunner struct{ options *DirectOptions }
 
 func NewDirectRunner(options *DirectOptions) *DirectRunner { return &DirectRunner{options: options} }
+
+const DefaultFinalReportTimeout = 3 * time.Second
 
 const (
 	freshSessionResolveTimeout  = 2 * time.Second
@@ -357,6 +362,18 @@ func finishDirectCompletion(ctx context.Context, options *DirectOptions, attempt
 		Completed:        durability.Outcome == CompletionSuccess,
 		DurabilityFailed: durability.Outcome == CompletionFailed,
 		DurabilityError:  durability.Err,
+	}
+	if result.Completed && ctx.Err() == nil && options.UsageCollector != nil && options.UsagePlan.ReportEnabled {
+		reportCtx, cancel := context.WithTimeout(ctx, durationOrDefault(options.FinalReportTimeout, DefaultFinalReportTimeout))
+		done := make(chan struct{})
+		go func() { options.UsageCollector.WaitForFinalReport(reportCtx, options.UsagePlan); close(done) }()
+		// Filesystem inspection may block despite cancellation; terminal reclaim
+		// must still respect the deadline.
+		select {
+		case <-done:
+		case <-reportCtx.Done():
+		}
+		cancel()
 	}
 	if err := supervisor.Terminate(options.TerminationGrace); err != nil {
 		return result, err

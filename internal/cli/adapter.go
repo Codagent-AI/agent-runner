@@ -386,10 +386,12 @@ type OutputFilter interface {
 }
 
 // UsageExtraction contains the structured usage and optional CLI-reported USD
-// cost extracted from a headless invocation's raw stdout.
+// cost extracted from an invocation's stdout or native transcripts.
 type UsageExtraction struct {
-	Usage            model.UsageRecord
-	EstimatedCostUSD *float64
+	Usage                 model.UsageRecord
+	EstimatedCostUSD      *float64
+	CostUnavailableReason model.UnavailableReason
+	CostReportError       string
 }
 
 // UsageExtractor is an optional adapter capability for CLIs whose headless
@@ -398,9 +400,33 @@ type UsageExtractor interface {
 	ExtractUsage(rawStdout string) (UsageExtraction, error)
 }
 
+// InteractiveUsagePlan snapshots invocation boundaries independently of cost-channel availability.
+type InteractiveUsagePlan struct {
+	SessionID      string
+	TranscriptPath string
+	StartOffset    int64
+	ReportPath     string
+	ReportEnabled  bool
+	ReportReason   model.UnavailableReason
+	ReportError    string
+	PrepareErr     model.UnavailableReason
+	StatusLine     map[string]any
+	Context        UsageContext
+}
+
+// InteractiveUsageCollector is implemented only by adapters with attributable interactive transcripts.
+type InteractiveUsageCollector interface {
+	PrepareInteractiveUsage(sessionID string, resume bool, uc UsageContext) (InteractiveUsagePlan, error)
+	WaitForFinalReport(ctx context.Context, plan InteractiveUsagePlan)
+	ExtractInteractiveUsage(plan InteractiveUsagePlan, uc UsageContext) UsageExtraction
+}
+
 type UsageContext struct {
-	Workdir string
-	Env     []string
+	StateDir        string
+	ReportName      *string // nil uses an isolated temporary report (standalone collectors)
+	InteractivePlan *InteractiveUsagePlan
+	Workdir         string
+	Env             []string
 }
 
 type ContextualUsageExtractor interface {

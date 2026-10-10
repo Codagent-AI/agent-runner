@@ -40,6 +40,8 @@ type directRunOptions struct {
 }
 
 type directInvocation struct {
+	usageCollector    cli.InteractiveUsageCollector
+	usagePlan         cli.InteractiveUsagePlan
 	ctx               *model.ExecutionContext
 	stepID            string
 	cliName           string
@@ -290,7 +292,7 @@ func finishAgentStep(
 	}
 	identity := executionIdentity(ctx, step, "step", 0, invocation.CLILaunched, cliName, resolvedSessionID)
 	attempt := attemptForIdentity(ctx, &identity)
-	extraction := cli.UsageExtraction{Usage: invocation.Usage, EstimatedCostUSD: invocation.EstimatedCostUSD}
+	extraction := cli.UsageExtraction{Usage: invocation.Usage, EstimatedCostUSD: invocation.EstimatedCostUSD, CostUnavailableReason: invocation.CostUnavailableReason, CostReportError: invocation.CostReportError}
 	if invocation.Crashed {
 		recordAgentCrash(ctx, step, prefix, attempt, invocation, runErr)
 	}
@@ -867,6 +869,7 @@ func runDirectInteractive(args []string, options directRunOptions) (interactive.
 		return interactive.DirectResult{}, fmt.Errorf("resolve watchdog executable: %w", err)
 	}
 	direct := interactive.NewDirectRunner(&interactive.DirectOptions{
+		UsageCollector: invocation.usageCollector, UsagePlan: invocation.usagePlan,
 		Args: args, Workdir: options.workdir, StepID: invocation.stepID,
 		SessionID: invocation.sessionID, CLI: invocation.cliName,
 		Env: invocation.spawnEnv, DropEnv: invocation.dropEnv,
@@ -1124,6 +1127,12 @@ func emitAgentEnd(
 		"usage":                  extraction.Usage,
 		"estimated_api_cost_usd": extraction.EstimatedCostUSD,
 	}
+	if extraction.CostUnavailableReason != "" {
+		data["cost_unavailable_reason"] = extraction.CostUnavailableReason
+	}
+	if extraction.CostReportError != "" {
+		data["cost_report_error"] = extraction.CostReportError
+	}
 	if stdout != "" {
 		data["stdout"] = stdout
 	}
@@ -1144,6 +1153,15 @@ func emitAgentEnd(
 
 func extractAgentUsage(adapter cli.Adapter, cliName string, invocationContext cli.InvocationContext, rawStdout string, usageContext cli.UsageContext) (cli.UsageExtraction, error) {
 	if !invocationContext.IsHeadless() {
+		if invocationContext == cli.ContextAutonomousInteractive {
+			if collector, ok := adapter.(cli.InteractiveUsageCollector); ok {
+				plan := cli.InteractiveUsagePlan{PrepareErr: model.UnavailableTranscriptSpanUnavailable}
+				if usageContext.InteractivePlan != nil {
+					plan = *usageContext.InteractivePlan
+				}
+				return collector.ExtractInteractiveUsage(plan, usageContext), nil
+			}
+		}
 		return cli.UsageExtraction{Usage: defaultAgentUsage(cliName, false)}, nil
 	}
 	extractor, ok := adapter.(cli.UsageExtractor)

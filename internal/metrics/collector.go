@@ -560,9 +560,9 @@ func totalsForRecords(records []StepRecord, activeDuration int64) model.RunTotal
 		}
 		agents++
 		if step.Usage != nil && step.Usage.Status == model.UsageCollected {
-			// Only partial subagent collection lowers coverage; other partial
+			// Partial Claude transcript collection lowers coverage; other partial
 			// records, such as nested Validator projections, count as reported.
-			partial := step.Usage.SubagentCollection == model.CompletenessPartial
+			partial := partialClaudeTranscript(step.Usage)
 			if partial {
 				usagePartial++
 			} else {
