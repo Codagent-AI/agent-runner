@@ -309,17 +309,20 @@ func TestV2NamespaceAdaptersConfigureSharedCorePhases(t *testing.T) {
 	}
 }
 
-func TestCorePlanChangeUsesDeterministicValidation(t *testing.T) {
-	body, err := ReadFile("builtin:core/plan-change-v1.0.yaml")
-	if err != nil {
-		t.Fatalf("ReadFile(core plan-change): %v", err)
-	}
-
-	var workflow struct {
-		Params []struct {
-			Name string `yaml:"name"`
-		} `yaml:"params"`
-		Steps []struct {
+type definitionCheckWorkflow struct {
+	Steps []struct {
+		ID                string            `yaml:"id"`
+		Script            string            `yaml:"script"`
+		Prompt            string            `yaml:"prompt"`
+		Workflow          string            `yaml:"workflow"`
+		ScriptInputs      map[string]string `yaml:"script_inputs"`
+		Capture           string            `yaml:"capture"`
+		CaptureStderr     bool              `yaml:"capture_stderr"`
+		ContinueOnFailure bool              `yaml:"continue_on_failure"`
+		BreakIf           string            `yaml:"break_if"`
+		SkipIf            string            `yaml:"skip_if"`
+		Loop              map[string]int    `yaml:"loop"`
+		Steps             []struct {
 			ID                string            `yaml:"id"`
 			Script            string            `yaml:"script"`
 			Prompt            string            `yaml:"prompt"`
@@ -329,43 +332,76 @@ func TestCorePlanChangeUsesDeterministicValidation(t *testing.T) {
 			ContinueOnFailure bool              `yaml:"continue_on_failure"`
 			BreakIf           string            `yaml:"break_if"`
 			SkipIf            string            `yaml:"skip_if"`
-			Loop              map[string]int    `yaml:"loop"`
-			Steps             []struct {
-				ID                string            `yaml:"id"`
-				Script            string            `yaml:"script"`
-				Prompt            string            `yaml:"prompt"`
-				ScriptInputs      map[string]string `yaml:"script_inputs"`
-				Capture           string            `yaml:"capture"`
-				CaptureStderr     bool              `yaml:"capture_stderr"`
-				ContinueOnFailure bool              `yaml:"continue_on_failure"`
-				BreakIf           string            `yaml:"break_if"`
-				SkipIf            string            `yaml:"skip_if"`
-			} `yaml:"steps"`
 		} `yaml:"steps"`
-	}
-	if err := yaml.Unmarshal(body, &workflow); err != nil {
-		t.Fatalf("unmarshal core plan-change: %v", err)
-	}
+	} `yaml:"steps"`
+}
 
-	if strings.Contains(string(body), "PLANNING_READY") ||
-		strings.Contains(string(body), "definition_validation_checklist") ||
-		strings.Contains(string(body), "planning-status-gate.sh") {
-		t.Fatalf("core plan-change still contains agent-owned validation protocol:\n%s", body)
+func readDefinitionCheckWorkflow(t *testing.T, ref string) (workflow definitionCheckWorkflow, body string) {
+	t.Helper()
+	raw, err := ReadFile(ref)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", ref, err)
 	}
+	if err := yaml.Unmarshal(raw, &workflow); err != nil {
+		t.Fatalf("unmarshal %s: %v", ref, err)
+	}
+	return workflow, string(raw)
+}
 
-	var checkDefinition, verifyDefinition, checkPlan = -1, -1, -1
+func stepIndex(workflow definitionCheckWorkflow, id string) int {
 	for index := range workflow.Steps {
-		switch workflow.Steps[index].ID {
-		case "check-definition":
-			checkDefinition = index
-		case "verify-definition":
-			verifyDefinition = index
-		case "check-plan":
-			checkPlan = index
+		if workflow.Steps[index].ID == id {
+			return index
 		}
 	}
-	if checkDefinition < 0 || verifyDefinition < 0 || checkPlan < 0 {
-		t.Fatalf("core plan-change validation steps = check-definition:%d verify-definition:%d check-plan:%d", checkDefinition, verifyDefinition, checkPlan)
+	return -1
+}
+
+func TestCoreDefinitionCheckCallersUseSharedWorkflow(t *testing.T) {
+	for _, tt := range []struct {
+		ref    string
+		before string
+	}{
+		{ref: "builtin:core/plan-change-v1.0.yaml", before: "tasks"},
+		{ref: "builtin:core/orchestrated-implement-change-v1.0.yaml", before: "commit-definition"},
+	} {
+		t.Run(tt.ref, func(t *testing.T) {
+			workflow, body := readDefinitionCheckWorkflow(t, tt.ref)
+			if strings.Contains(body, "PLANNING_READY") ||
+				strings.Contains(body, "definition_validation_checklist") ||
+				strings.Contains(body, "planning-status-gate.sh") {
+				t.Fatalf("%s still contains agent-owned validation protocol:\n%s", tt.ref, body)
+			}
+			check, next := stepIndex(workflow, "check-definition"), stepIndex(workflow, tt.before)
+			if check < 0 || next < 0 || check > next {
+				t.Fatalf("%s steps = check-definition:%d %s:%d, want definition check first", tt.ref, check, tt.before, next)
+			}
+			if got := workflow.Steps[check].Workflow; got != "check-definition-v1.0.yaml" {
+				t.Fatalf("%s check-definition workflow = %q, want shared check-definition-v1.0.yaml", tt.ref, got)
+			}
+		})
+	}
+
+	plan, _ := readDefinitionCheckWorkflow(t, "builtin:core/plan-change-v1.0.yaml")
+	checkPlan := stepIndex(plan, "check-plan")
+	if checkPlan < 0 {
+		t.Fatal("core plan-change has no check-plan step")
+	}
+	finalPlanCheck := plan.Steps[checkPlan]
+	if finalPlanCheck.Script != "validate-planning-artifacts.sh" || finalPlanCheck.ScriptInputs["require_tasks"] != "true" {
+		t.Errorf("check-plan = %+v, want deterministic task-plan validation", finalPlanCheck)
+	}
+}
+
+func TestCoreCheckDefinitionUsesDeterministicValidation(t *testing.T) {
+	workflow, body := readDefinitionCheckWorkflow(t, "builtin:core/check-definition-v1.0.yaml")
+	if strings.Contains(body, "PLANNING_READY") || strings.Contains(body, "planning-status-gate.sh") {
+		t.Fatalf("core check-definition contains agent-owned validation protocol:\n%s", body)
+	}
+
+	checkDefinition, verifyDefinition := stepIndex(workflow, "check-definition"), stepIndex(workflow, "verify-definition")
+	if checkDefinition < 0 || verifyDefinition < 0 || checkDefinition > verifyDefinition {
+		t.Fatalf("core check-definition steps = check-definition:%d verify-definition:%d", checkDefinition, verifyDefinition)
 	}
 
 	retry := workflow.Steps[checkDefinition]
@@ -394,10 +430,6 @@ func TestCorePlanChangeUsesDeterministicValidation(t *testing.T) {
 		finalDefinitionCheck.ScriptInputs["require_tasks"] != "false" ||
 		finalDefinitionCheck.SkipIf != "previous_success" {
 		t.Errorf("verify-definition = %+v, want final deterministic verification after retry exhaustion", finalDefinitionCheck)
-	}
-	finalPlanCheck := workflow.Steps[checkPlan]
-	if finalPlanCheck.Script != "validate-planning-artifacts.sh" || finalPlanCheck.ScriptInputs["require_tasks"] != "true" {
-		t.Errorf("check-plan = %+v, want deterministic task-plan validation", finalPlanCheck)
 	}
 }
 
