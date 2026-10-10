@@ -17,11 +17,7 @@ entry_points:
       - duplication:
           command: ./.validator/duplication.sh
       - test:
-          # CLI integration tests need time for cold builds and subprocesses.
-          # Avoid competing Go checks and package-level load on timing-sensitive tests.
-          command: ./.validator/go-offline.sh go test -p=1 -tags dev_audit ./...
-          parallel: false
-          timeout: 900
+          command: ./.validator/go-offline.sh go test -tags dev_audit ./...
       - security-code:
           command: ./.validator/go-offline.sh gosec -tags=dev_audit -exclude-dir=.claude -exclude-dir=.validator -exclude-dir=worktrees ./...
     reviews:
