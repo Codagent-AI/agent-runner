@@ -347,10 +347,7 @@ type agentCallRegistrationView struct {
 
 func agentCallTestInput(t *testing.T, adapterName string, invocationContext InvocationContext) (Adapter, *BuildArgsInput) {
 	t.Helper()
-	t.Setenv("MCP_TOOL_TIMEOUT", "")
-	if err := os.Unsetenv("MCP_TOOL_TIMEOUT"); err != nil {
-		t.Fatal(err)
-	}
+	unsetTestEnv(t, "MCP_TOOL_TIMEOUT")
 	home := t.TempDir()
 	workdir := t.TempDir()
 	t.Setenv("HOME", home)
@@ -740,5 +737,14 @@ func assertConfigSentinelUnchanged(t *testing.T, path string, before configSenti
 	after := readConfigSentinel(t, path)
 	if after != before {
 		t.Fatalf("config %s changed: before=%+v after=%+v", path, before, after)
+	}
+}
+
+// unsetTestEnv restores the original value (or absence) when the test finishes.
+func unsetTestEnv(t *testing.T, key string) {
+	t.Helper()
+	t.Setenv(key, "")
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -2389,10 +2389,7 @@ func TestSpawnEnvForInvocationDefaultsToNil(t *testing.T) {
 }
 
 func TestClaudeHeadlessSpawnEnvironment(t *testing.T) {
-	t.Setenv("MCP_TOOL_TIMEOUT", "")
-	if err := os.Unsetenv("MCP_TOOL_TIMEOUT"); err != nil {
-		t.Fatal(err)
-	}
+	unsetTestEnv(t, "MCP_TOOL_TIMEOUT")
 	adapter := &ClaudeAdapter{}
 	for _, tt := range []struct {
 		name       string
@@ -2408,10 +2405,7 @@ func TestClaudeHeadlessSpawnEnvironment(t *testing.T) {
 			if tt.timeout != "" {
 				t.Setenv("BASH_DEFAULT_TIMEOUT_MS", tt.timeout)
 			} else {
-				t.Setenv("BASH_DEFAULT_TIMEOUT_MS", "")
-				if err := os.Unsetenv("BASH_DEFAULT_TIMEOUT_MS"); err != nil {
-					t.Fatal(err)
-				}
+				unsetTestEnv(t, "BASH_DEFAULT_TIMEOUT_MS")
 			}
 			t.Setenv("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", tt.background)
 			env, err := SpawnEnvForInvocation(adapter, &BuildArgsInput{Context: ContextAutonomousHeadless})
@@ -2432,10 +2426,7 @@ func TestClaudeHeadlessSpawnEnvironment(t *testing.T) {
 }
 
 func TestClaudeInteractiveSpawnEnvironment(t *testing.T) {
-	t.Setenv("MCP_TOOL_TIMEOUT", "")
-	if err := os.Unsetenv("MCP_TOOL_TIMEOUT"); err != nil {
-		t.Fatal(err)
-	}
+	unsetTestEnv(t, "MCP_TOOL_TIMEOUT")
 	t.Setenv("BASH_DEFAULT_TIMEOUT_MS", "900000")
 	for _, context := range []InvocationContext{ContextInteractive, ContextAutonomousInteractive} {
 		env, err := SpawnEnvForInvocation(&ClaudeAdapter{}, &BuildArgsInput{Context: context})
@@ -2573,10 +2564,7 @@ func TestClaudeAgentCallSpawnEnvironment(t *testing.T) {
 	for _, ctx := range []InvocationContext{ContextInteractive, ContextAutonomousInteractive, ContextAutonomousHeadless, ContextExternalUser} {
 		t.Run(string(ctx), func(t *testing.T) {
 			adapter, input := agentCallTestInput(t, "claude", ctx)
-			t.Setenv("BASH_DEFAULT_TIMEOUT_MS", "")
-			if err := os.Unsetenv("BASH_DEFAULT_TIMEOUT_MS"); err != nil {
-				t.Fatal(err)
-			}
+			unsetTestEnv(t, "BASH_DEFAULT_TIMEOUT_MS")
 			var headless []string
 			if ctx.IsHeadless() {
 				headless = []string{"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1", "BASH_DEFAULT_TIMEOUT_MS=600000"}
