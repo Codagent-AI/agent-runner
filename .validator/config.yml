@@ -18,6 +18,10 @@ entry_points:
           command: ./.validator/duplication.sh
       - test:
           command: ./.validator/go-offline.sh go test -tags dev_audit ./...
+          # Avoid competing with build/lint gates while integration tests compile binaries.
+          parallel: false
+          # The workflow suite alone takes several minutes; allow cold builds too.
+          timeout: 600
       - security-code:
           command: ./.validator/go-offline.sh gosec -tags=dev_audit -exclude-dir=.claude -exclude-dir=.validator -exclude-dir=worktrees ./...
     reviews:

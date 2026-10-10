@@ -443,13 +443,15 @@ func TestCIWaitDiscoveredBotFailureIsCI(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			first, second := makeSnapshot("PENDING"), makeSnapshot("FAILURE")
 			useCISequence(t, first, second)
-			input := fmt.Sprintf(`{%s"deadline_seconds":"0.8","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`, tt.bots)
+			input := fmt.Sprintf(`{%s"deadline_seconds":"5","poll_interval_seconds":"1","bot_start_grace_seconds":"0.1","call_timeout_seconds":"2"}`, tt.bots)
 			out, code, elapsed := runCIFixture(t, first, input)
 			if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), tt.want) || !strings.Contains(out, tt.detail) {
 				t.Fatalf("code=%d elapsed=%s report=%s", code, elapsed, out)
 			}
-			if tt.name == "discovered" && elapsed >= 700*time.Millisecond {
-				t.Fatalf("failure waited until deadline: %s", elapsed)
+			// A discovered CI failure must stop on the second snapshot, without
+			// beginning another wait cycle. Wall time also includes process startup.
+			if tt.name == "discovered" && strings.Count(out, "ci-wait: poll ") != 1 {
+				t.Fatalf("failure did not stop polling immediately: %s", out)
 			}
 		})
 	}
