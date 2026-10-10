@@ -38,7 +38,7 @@ Commit `d7724a12` had already hand-edited most of these into the main specs, und
 | interactive-shell-steps | Direct terminal execution with TUI suspend and resume | REFLECTED under new names | — |
 | live-run-view | Interactive agent steps suspend the TUI | REFLECTED | — |
 | workflow-execution | Agent step execution dispatch | REFLECTED | — |
-| audit-log-entries | Event types | REFLECTED; main's list corrected to match `internal/audit/types.go` | MODIFIED |
+| audit-log-entries | Event types | REFLECTED. Main's list was corrected to the event types production code writes, as defined in `internal/audit/types.go`, with one deliberate omission: `nested_agent_end`. Its only emitter was removed in `4f04880b` (2026-09-08). Today `internal/metrics/collector.go` only reads it, from audit logs written between 2026-08-28 and 2026-09-08. Whether the list should also name read-only legacy types is an open question in the acceptance ledger | MODIFIED |
 | cli-adapter | No permission loosening in interactive mode; Adapters honor autonomous permission mode | Not written: PR #232 owns both (see follow-ups 6 and 7) | — |
 | cli-adapter | Capture forces autonomous-headless | REFLECTED | — |
 | step-control-channel | Per-run control endpoint | REFLECTED (privacy scenario added) | MODIFIED "Private per-run control endpoint" |

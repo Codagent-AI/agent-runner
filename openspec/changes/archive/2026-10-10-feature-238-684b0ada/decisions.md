@@ -112,3 +112,18 @@
 - **Decision:** One task covers the whole change: check off start-run, archive the seven old changes with `--skip-specs`, run the baseline drift check, verify (validation, the temp-copy archive dry run with a diff review, and `make test`), and commit.
   - Alternatives: split into separate tasks (rejected: the step asks for exactly one task, and the work is one atomic file move).
   - Decision-bearing: no.
+
+## acceptance-fix (round 0)
+
+- **Finding 1, `nested_agent_end` missing from the `audit-log-entries` event list: applied as a record fix; the spec content is unchanged.**
+  - The approved spec deliberately listed only event types that production code writes.
+  - `nested_agent_end` has had no emitter since `4f04880b` (2026-09-08); `internal/metrics/collector.go` only reads it, from older audit logs.
+  - The defect was that `reconciliation.md` claimed the list matched `internal/audit/types.go` without noting this omission. The row now records it with evidence.
+  - Whether the spec should also name read-only legacy types is left as a decision in the acceptance ledger.
+  - Alternatives: add `nested_agent_end` to the list (not chosen silently, because it changes approved spec scope; it is offered as an option in the ledger).
+  - Decision-bearing: yes (left to the human).
+- **CI `TestExternalUserLoop/pending-reply` failure: not fixed here.**
+  - It is a pre-existing flake in an unrelated test: the same test failed on `factory/feature-231-fccced8f` in run 38001979089 (subtest `pending-request`), it passes locally on this SHA, and this branch changes no Go code.
+  - A rerun is not permitted by the token. The next push triggers CI again.
+  - Recorded in the acceptance ledger.
+  - Decision-bearing: no.
