@@ -639,6 +639,21 @@ func TestWaitForInteractiveFinalReportAfterMalformedLine(t *testing.T) {
 	}
 }
 
+// A line that cannot be parsed cannot be shown to name the step's session or
+// to precede the baseline, so the whole report file is rejected for cost.
+func TestInteractiveClaudeCostRejectsMalformedReport(t *testing.T) {
+	f := newInteractiveUsageFixture(t)
+	f.write(f.path, promptFixture(), assistantFixture("m", "opus", 8, 10))
+	f.write(f.p.ReportPath, reportFixture(f.session, "", 0, 0), "broken report", reportFixture(f.session, "prompt", 1.5, 8))
+	got := f.a.ExtractInteractiveUsage(f.p, f.uc)
+	if got.EstimatedCostUSD != nil || got.CostUnavailableReason != model.UnavailableCostReportUnavailable {
+		t.Fatalf("malformed report must null cost: %+v", got)
+	}
+	if got.Usage.Tokens[model.TokenOutput] != 8 {
+		t.Fatalf("tokens changed: %+v", got.Usage)
+	}
+}
+
 func TestClaudeJSONLConsumerErrorRecovery(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "stream")
 	if err := os.WriteFile(path, []byte("bad\ngood\n"), 0o600); err != nil {
