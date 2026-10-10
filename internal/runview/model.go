@@ -182,6 +182,10 @@ func (m *Model) SessionDir() string { return m.sessionDir }
 // ProjectDir returns the project directory the Model was constructed for.
 func (m *Model) ProjectDir() string { return m.projectDir }
 
+// OriginCwd returns the run's original working directory from meta.json,
+// or an empty string when it is unknown.
+func (m *Model) OriginCwd() string { return m.originCwd }
+
 // Entered returns the entry path used to construct the Model.
 func (m *Model) Entered() Entered { return m.entered }
 
