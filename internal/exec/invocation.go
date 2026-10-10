@@ -68,6 +68,7 @@ type AgentInvocationResult struct {
 	Usage                 model.UsageRecord
 	EstimatedCostUSD      *float64
 	CostUnavailableReason model.UnavailableReason
+	CostReportError       string
 	UsageError            error
 
 	StartedAt   time.Time
@@ -164,6 +165,7 @@ func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logge
 		SessionID: input.SessionID, SessionResumed: input.SessionResumed,
 		Usage: extraction.Usage, EstimatedCostUSD: extraction.EstimatedCostUSD,
 		CostUnavailableReason: extraction.CostUnavailableReason,
+		CostReportError:       extraction.CostReportError,
 		UsageError:            usageErr, StartedAt: startedAt, CLILaunched: launched,
 	}
 	if runErr != nil {
@@ -269,6 +271,7 @@ func prepareInvocationUsage(input *AgentInvocation, processOptions *AgentProcess
 	if err != nil {
 		plan.PrepareErr = model.UnavailableTranscriptSpanUnavailable
 		plan.ReportEnabled = false
+		plan.ReportError = err.Error()
 	}
 	usageContext.InteractivePlan = &plan
 	if executable, err := agentRunnerExecutable(); err == nil {
@@ -276,6 +279,7 @@ func prepareInvocationUsage(input *AgentInvocation, processOptions *AgentProcess
 	} else {
 		plan.ReportEnabled = false
 		plan.ReportReason = model.UnavailableCostReportUnavailable
+		plan.ReportError = err.Error()
 	}
 	if direct != nil {
 		direct.usageCollector = collector

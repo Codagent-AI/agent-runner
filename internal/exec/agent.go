@@ -292,7 +292,7 @@ func finishAgentStep(
 	}
 	identity := executionIdentity(ctx, step, "step", 0, invocation.CLILaunched, cliName, resolvedSessionID)
 	attempt := attemptForIdentity(ctx, &identity)
-	extraction := cli.UsageExtraction{Usage: invocation.Usage, EstimatedCostUSD: invocation.EstimatedCostUSD, CostUnavailableReason: invocation.CostUnavailableReason}
+	extraction := cli.UsageExtraction{Usage: invocation.Usage, EstimatedCostUSD: invocation.EstimatedCostUSD, CostUnavailableReason: invocation.CostUnavailableReason, CostReportError: invocation.CostReportError}
 	if invocation.Crashed {
 		recordAgentCrash(ctx, step, prefix, attempt, invocation, runErr)
 	}
@@ -1129,6 +1129,9 @@ func emitAgentEnd(
 	}
 	if extraction.CostUnavailableReason != "" {
 		data["cost_unavailable_reason"] = extraction.CostUnavailableReason
+	}
+	if extraction.CostReportError != "" {
+		data["cost_report_error"] = extraction.CostReportError
 	}
 	if stdout != "" {
 		data["stdout"] = stdout

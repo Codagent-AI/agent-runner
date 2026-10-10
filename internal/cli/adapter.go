@@ -392,6 +392,7 @@ type UsageExtraction struct {
 	Usage                 model.UsageRecord
 	EstimatedCostUSD      *float64
 	CostUnavailableReason model.UnavailableReason
+	CostReportError       string
 }
 
 // UsageExtractor is an optional adapter capability for CLIs whose headless
@@ -408,6 +409,7 @@ type InteractiveUsagePlan struct {
 	ReportPath     string
 	ReportEnabled  bool
 	ReportReason   model.UnavailableReason
+	ReportError    string
 	PrepareErr     model.UnavailableReason
 	StatusLine     map[string]any
 	Context        UsageContext

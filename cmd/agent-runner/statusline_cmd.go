@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -32,6 +33,7 @@ func handleStatuslineRecord(args []string, stdin io.Reader, stdout, stderr io.Wr
 		return 0
 	}
 	cmd := exec.Command("sh", "-c", *delegate) // #nosec G204 -- user's configured status-line command
+	cmd.WaitDelay = time.Second
 	cmd.Stdin = bytes.NewReader(payload)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
@@ -83,7 +85,12 @@ func recordClaudeStatusline(path string, payload []byte) {
 	if err != nil {
 		return
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return
+	}
+	defer func() { _ = root.Close() }()
+	f, err := root.OpenFile(filepath.Base(path), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}

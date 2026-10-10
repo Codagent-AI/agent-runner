@@ -5,7 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/codagent/agent-runner/internal/audit"
 
 	"github.com/codagent/agent-runner/internal/interactive"
 
@@ -59,14 +63,37 @@ func TestInteractiveClaudeUsageRetainedAfterProcessOutcome(t *testing.T) {
 				}
 				return interactive.DirectResult{Started: true, DurabilityFailed: true, ExitCode: 3, DurabilityError: errors.New("failed")}, nil
 			}
+			if err := os.WriteFile(filepath.Join(config, "settings.json"), []byte("invalid"), 0o600); err != nil {
+				t.Fatal(err)
+			}
 			ctx := &model.ExecutionContext{SessionDir: t.TempDir()}
 			result, _ := InvokeAgent(&AgentInvocation{Adapter: &cli.ClaudeAdapter{}, Args: []string{"claude"}, CLI: "claude", SessionID: session, InvocationContext: cli.ContextAutonomousInteractive, Workdir: work, Env: []string{"CLAUDE_CONFIG_DIR=" + config}, direct: &directInvocation{ctx: ctx}}, nil, &mockLogger{})
 			if result.Usage.Status != model.UsageCollected || result.Usage.Tokens[model.TokenOutput] != 8 {
 				t.Fatalf("%+v", result)
 			}
+			if !strings.Contains(result.CostReportError, filepath.Join(config, "settings.json")) {
+				t.Fatalf("invocation lost settings diagnostic: %+v", result)
+			}
 			if (result.Outcome == OutcomeSuccess) != completed {
 				t.Fatalf("%+v", result)
 			}
 		})
+	}
+}
+
+func TestInteractiveCostDiagnosticInTerminalAudit(t *testing.T) {
+	ctx := makeCtx()
+	logger := &recordingAuditLogger{}
+	ctx.AuditLogger = logger
+	step := model.Step{ID: "interactive", Mode: model.ModeAutonomous}
+	detail := "invalid Claude settings /project/.claude/settings.json"
+	invocation := AgentInvocationResult{Outcome: OutcomeSuccess, CLILaunched: true, CostUnavailableReason: model.UnavailableCostReportUnavailable, CostReportError: detail}
+	_, err := finishAgentStep(ctx, "interactive", time.Now(), &step, "claude", "session", cli.ContextAutonomousInteractive, false, &invocation, nil, &mockLogger{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	end := findAuditEvent(logger.events, audit.EventStepEnd)
+	if end.Data["cost_report_error"] != detail || end.Data["cost_unavailable_reason"] != model.UnavailableCostReportUnavailable {
+		t.Fatalf("cost diagnostics missing: %+v", end.Data)
 	}
 }

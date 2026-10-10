@@ -489,3 +489,117 @@ func TestInteractiveClaudeHomeRepositoryUsesWorkdirLocal(t *testing.T) {
 		t.Fatalf("home repository selected: %+v", line)
 	}
 }
+
+func TestInteractiveSpanExactPositions(t *testing.T) {
+	for _, ending := range []string{"\r\n", ""} {
+		t.Run(fmt.Sprintf("ending-%q", ending), func(t *testing.T) {
+			dir := t.TempDir()
+			raw, err := json.Marshal(assistantFixture("m", "opus", 8, 1))
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw = append(raw, ending...)
+			if err = os.WriteFile(filepath.Join(dir, "span"), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			root, err := os.OpenRoot(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer root.Close()
+			s := readClaudeInteractiveSpan(root, "span", 0, true)
+			if s.messages["m"].position != int64(len(raw)) {
+				t.Fatalf("position=%d want %d", s.messages["m"].position, len(raw))
+			}
+		})
+	}
+}
+
+func TestInteractiveReportRetry(t *testing.T) {
+	f := newInteractiveUsageFixture(t)
+	name := "same-attempt.statusline.jsonl"
+	f.uc.ReportName = &name
+	first, err := f.a.PrepareInteractiveUsage(f.session, false, f.uc)
+	if err != nil || !first.ReportEnabled {
+		t.Fatalf("first plan: %+v %v", first, err)
+	}
+	f.write(first.ReportPath, reportFixture(f.session, "", 2, 0))
+	second, err := f.a.PrepareInteractiveUsage(f.session, false, f.uc)
+	if err != nil || !second.ReportEnabled || second.ReportPath == first.ReportPath {
+		t.Fatalf("retry plan: %+v %v", second, err)
+	}
+	if len(readClaudeReports(first.ReportPath)) != 1 || len(readClaudeReports(second.ReportPath)) != 0 {
+		t.Fatal("retry reused or damaged the startup baseline")
+	}
+}
+
+func TestInteractiveReportDiagnostic(t *testing.T) {
+	f := newInteractiveUsageFixture(t)
+	path := filepath.Join(f.uc.Workdir, ".claude", "settings.json")
+	f.write(path, "invalid settings")
+	p, err := f.a.PrepareInteractiveUsage(f.session, false, f.uc)
+	if err != nil || p.ReportEnabled || !strings.Contains(p.ReportError, path) {
+		t.Fatalf("plan diagnostic: %+v %v", p, err)
+	}
+	got := f.a.ExtractInteractiveUsage(p, f.uc)
+	if got.CostReportError != p.ReportError {
+		t.Fatalf("lost diagnostic: %+v", got)
+	}
+}
+
+func TestClaudeJSONLIncrementalAndCancellation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stream")
+	if err := os.WriteFile(path, []byte("first\r\npartial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := openClaudeScopedFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	r := claudeJSONLReader{file: file}
+	var lines []string
+	consume := func(line []byte, _ int64) error { lines = append(lines, string(line)); return nil }
+	if err = r.read(context.Background(), false, consume); err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 1 || lines[0] != "first\r\n" || r.offset != 14 {
+		t.Fatalf("first read: %q offset=%d", lines, r.offset)
+	}
+	if err = r.read(context.Background(), false, consume); err != nil || len(lines) != 1 {
+		t.Fatalf("reread old bytes: %q %v", lines, err)
+	}
+	appendFile, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer appendFile.Close()
+	if _, err = appendFile.WriteString(" tail\nnext\n"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err = r.read(ctx, false, func(line []byte, position int64) error {
+		lines = append(lines, string(line))
+		if position != 20 {
+			t.Fatalf("position=%d", position)
+		}
+		cancel()
+		return nil
+	})
+	if err != context.Canceled || len(lines) != 2 || lines[1] != "partial tail\n" {
+		t.Fatalf("cancellation: %q %v", lines, err)
+	}
+	if err = r.read(context.Background(), false, consume); err != nil || len(lines) != 3 || lines[2] != "next\n" {
+		t.Fatalf("remaining data: %q %v", lines, err)
+	}
+}
+
+func TestInteractiveSpanAfterOversizedLine(t *testing.T) {
+	f := newInteractiveUsageFixture(t)
+	f.write(f.path, `{"type":"user","text":"`+strings.Repeat("x", 17*1024*1024)+`"}`, assistantFixture("m", "opus", 8, 1))
+	got := f.a.ExtractInteractiveUsage(f.p, f.uc)
+	if got.Usage.Tokens[model.TokenOutput] != 8 {
+		t.Fatalf("later usage lost: %+v", got.Usage)
+	}
+}

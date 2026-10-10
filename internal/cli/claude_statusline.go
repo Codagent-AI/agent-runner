@@ -50,7 +50,7 @@ func claudeSettingsRoot(work, home string, env []string) (string, error) {
 	run := func(arg string) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, "git", "rev-parse", arg)
+		cmd := exec.CommandContext(ctx, "git", "rev-parse", arg) // #nosec G204 -- arg is one of two fixed rev-parse options supplied below
 		cmd.Dir = work
 		cmd.Env = append(append([]string(nil), env...), "LC_ALL=C")
 		out, err := cmd.Output()
@@ -141,12 +141,20 @@ func resolveClaudeStatusLine(uc UsageContext) (map[string]any, error) {
 }
 
 func readClaudeStatusLine(path string) (map[string]any, error) {
-	raw, err := os.ReadFile(path)
+	root, err := os.OpenRoot(filepath.Dir(path))
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("claude settings %s: %w", path, err)
+	}
+	defer func() { _ = root.Close() }()
+	raw, err := root.ReadFile(filepath.Base(path))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("claude settings %s: %w", path, err)
 	}
 	var settings map[string]json.RawMessage
 	if json.Unmarshal(raw, &settings) != nil || settings == nil {

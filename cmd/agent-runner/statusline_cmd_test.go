@@ -109,3 +109,74 @@ func TestStatuslineRecorderBinaryINT002(t *testing.T) {
 		t.Fatalf("unexpected persisted fields: %s", data)
 	}
 }
+
+// The escaped child keeps both inherited pipes open after the delegate group is
+// killed. The recorder must still drain with a deadline and return its signal code.
+func TestStatuslineSignalWithEscapedPipes(t *testing.T) {
+	pidfile := filepath.Join(t.TempDir(), "escaped.pid")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(executable, "-test.run=^TestStatuslinePipeHelper$")
+	cmd.Env = append(os.Environ(), "STATUSLINE_PIPE_HELPER=recorder", "STATUSLINE_PIPE_PID="+pidfile)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill() }()
+	deadline := time.Now().Add(3 * time.Second)
+	var raw []byte
+	for time.Now().Before(deadline) {
+		raw, _ = os.ReadFile(pidfile)
+		if len(raw) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("escaped child never started: %q %v", raw, err)
+	}
+	defer syscall.Kill(pid, syscall.SIGKILL)
+	if err = cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err = <-done:
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 143 {
+			t.Fatalf("signal exit: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		_ = cmd.Process.Kill()
+		<-done
+		t.Fatal("recorder hung draining escaped child's pipes")
+	}
+}
+
+func TestStatuslinePipeHelper(t *testing.T) {
+	switch os.Getenv("STATUSLINE_PIPE_HELPER") {
+	case "recorder":
+		var out, errout bytes.Buffer
+		executable, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		delegate := "exec '" + strings.ReplaceAll(executable, "'", "'\\''") + "' -test.run=^TestStatuslinePipeHelper$"
+		_ = os.Setenv("STATUSLINE_PIPE_HELPER", "delegate")
+		os.Exit(handleStatuslineRecord([]string{"--report", os.Getenv("STATUSLINE_PIPE_PID") + ".report", "--delegate", delegate}, strings.NewReader("{}"), &out, &errout))
+	case "delegate":
+		child := exec.Command("sleep", "30")
+		child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		child.Stdout, child.Stderr = os.Stdout, os.Stderr
+		if err := child.Start(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(os.Getenv("STATUSLINE_PIPE_PID"), []byte(strconv.Itoa(child.Process.Pid)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_ = child.Wait()
+	}
+}

@@ -3,8 +3,8 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,23 +30,32 @@ func (a *ClaudeAdapter) PrepareInteractiveUsage(sessionID string, _ bool, uc Usa
 		}
 	}
 	line, err := resolveClaudeStatusLine(uc)
-	if err != nil || uc.StateDir == "" {
+	if err != nil {
+		p.ReportError = err.Error()
+		return p, nil
+	}
+	if uc.StateDir == "" {
+		p.ReportError = "interactive usage state directory is empty"
 		return p, nil
 	}
 	dir := filepath.Join(uc.StateDir, "usage")
 	if err = os.MkdirAll(dir, 0o700); err != nil {
+		p.ReportError = err.Error()
 		return p, nil
 	}
 	f, err := createClaudeReport(dir, uc.ReportName)
 	if err != nil {
+		p.ReportError = err.Error()
 		return p, nil
 	}
 	p.ReportPath = f.Name()
 	if err = f.Chmod(0o600); err != nil {
+		p.ReportError = err.Error()
 		_ = f.Close()
 		return p, nil
 	}
 	if err = f.Close(); err != nil {
+		p.ReportError = err.Error()
 		return p, nil
 	}
 	p.ReportEnabled = true
@@ -64,7 +73,16 @@ func createClaudeReport(dir string, name *string) (*os.File, error) {
 	if filepath.Base(*name) != *name || strings.Contains(*name, `\`) {
 		return nil, fmt.Errorf("invalid interactive usage report name")
 	}
-	return os.OpenFile(filepath.Join(dir, *name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	f, err := root.OpenFile(*name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return os.CreateTemp(dir, "interactive-*.statusline.jsonl")
+	}
+	return f, err
 }
 
 type claudeSpanMessage struct {
@@ -100,33 +118,27 @@ func readClaudeInteractiveSpan(root *os.Root, path string, offset int64, main bo
 		return s
 	}
 	defer func() { _ = f.Close() }()
-	stat, err := f.Stat()
-	if err != nil || stat.Size() < offset {
+	reader := claudeJSONLReader{file: f, offset: offset}
+	if err = reader.read(context.Background(), true, func(line []byte, position int64) error {
+		s.consumeLine(line, position, main)
+		return nil
+	}); err != nil {
 		s.reason = model.UnavailableTranscriptSpanUnavailable
-		return s
 	}
-	if _, err = f.Seek(offset, io.SeekStart); err != nil {
-		s.reason = model.UnavailableTranscriptSpanUnavailable
-		return s
-	}
-	scanner := newStreamScanner(f)
-	position := offset
-	for scanner.Scan() {
-		position += int64(len(scanner.Bytes()) + 1)
-		e, err := parseClaudeEntry(scanner.Bytes())
-		if err != nil {
-			s.reason = model.UnavailableTranscriptInvalid
-			continue
-		}
-		if main && (e.IsSidechain || e.ParentToolUseID != "") {
-			continue
-		}
-		s.consume(&e, position)
-	}
-	if scanner.Err() != nil {
-		s.reason = model.UnavailableTranscriptInvalid
-	}
+
 	return s
+}
+
+func (s *claudeInteractiveSpan) consumeLine(line []byte, position int64, main bool) {
+	e, err := parseClaudeEntry(line)
+	if err != nil {
+		s.reason = model.UnavailableTranscriptInvalid
+		return
+	}
+	if main && (e.IsSidechain || e.ParentToolUseID != "") {
+		return
+	}
+	s.consume(&e, position)
 }
 
 func interactiveMainAllocations(s *claudeInteractiveSpan) []model.UsageAllocation {
@@ -192,8 +204,6 @@ func resolveInteractiveSpan(p *InteractiveUsagePlan, uc UsageContext) (store *os
 		return nil, "", "", empty
 	}
 	span := readClaudeInteractiveSpan(r, parent, p.StartOffset, true)
-	// Both invocation modes use the same explicit span selector for discovery.
-	span.spawns, span.failed, _ = scanClaudeParentSpan(r, parent, claudeSpanSelector{offset: &p.StartOffset})
 	return r, parent, subs, span
 }
 
@@ -241,7 +251,7 @@ func (a *ClaudeAdapter) ExtractInteractiveUsage(p InteractiveUsagePlan, uc Usage
 		u.Model = u.Allocations[0].Model
 	}
 	cost, costReason := interactiveClaudeCost(&p, &s, reports, settled)
-	return UsageExtraction{Usage: u, EstimatedCostUSD: cost, CostUnavailableReason: costReason}
+	return UsageExtraction{Usage: u, EstimatedCostUSD: cost, CostUnavailableReason: costReason, CostReportError: p.ReportError}
 }
 
 // WaitForFinalReport observes causal usage evidence, never file quietness.
@@ -251,26 +261,110 @@ func (a *ClaudeAdapter) WaitForFinalReport(ctx context.Context, p InteractiveUsa
 	if !p.ReportEnabled {
 		return
 	}
+	if ctx.Err() != nil || p.PrepareErr != "" {
+		return
+	}
+	reportFile, err := openClaudeScopedFile(p.ReportPath)
+	if err != nil {
+		return
+	}
+	defer func() { _ = reportFile.Close() }()
+	reportReader := claudeJSONLReader{file: reportFile}
+	var transcript *claudeJSONLReader
+	defer func() {
+		if transcript != nil {
+			_ = transcript.file.Close()
+		}
+	}()
+	span := claudeInteractiveSpan{messages: map[string]claudeSpanMessage{}, spawns: map[string]bool{}, failed: map[string]bool{}, settled: map[string]claudeSettlement{}}
+	reports := claudeReportIndex{session: p.SessionID, latest: map[[4]int64]time.Time{}}
 	ticker := time.NewTicker(durabilityPollInterval)
 	defer ticker.Stop()
 	for {
-		root, _, _, s := resolveInteractiveSpan(&p, p.Context)
-		if root != nil {
-			_ = root.Close()
+		if ctx.Err() != nil {
+			return
 		}
-		if m, ok := s.messages[s.final]; ok && m.tokens != nil {
-			for _, r := range readClaudeReports(p.ReportPath) {
-				if r.SessionID == p.SessionID && reportMatches(&r, &m) {
-					return
-				}
+		if transcript == nil {
+			transcript, err = openInteractiveClaudeTranscript(&p)
+			if err != nil {
+				return
 			}
 		}
+		if transcript != nil && transcript.read(ctx, false, func(line []byte, position int64) error {
+			span.consumeLine(line, position, true)
+			return nil
+		}) != nil {
+			return
+		}
+		if err = reportReader.read(ctx, false, reports.consume); err != nil {
+			return
+		}
+		if m, ok := span.messages[span.final]; ok && reports.matches(&m) {
+			return
+		}
+
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
 	}
+}
+
+func openInteractiveClaudeTranscript(p *InteractiveUsagePlan) (*claudeJSONLReader, error) {
+	root, parent, _, reason := claudeTranscriptPaths(p.SessionID, p.Context)
+	if reason == model.UnavailableTranscriptAmbiguous {
+		return nil, errors.New("ambiguous Claude transcript")
+	}
+	if root == "" {
+		return nil, nil
+	}
+	path := filepath.Join(root, parent)
+	if p.TranscriptPath != "" && p.TranscriptPath != path {
+		return nil, errors.New("claude transcript path changed")
+	}
+	file, err := openClaudeScopedFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &claudeJSONLReader{file: file, offset: p.StartOffset}, nil
+}
+
+// Only the newest matching tuple matters for readiness. Keep session identity
+// outside the key because each index belongs to one invocation.
+type claudeReportIndex struct {
+	session string
+	latest  map[[4]int64]time.Time
+}
+
+func (reports *claudeReportIndex) consume(line []byte, _ int64) error {
+	var report ClaudeStatusReport
+	if err := json.Unmarshal(line, &report); err != nil {
+		return err
+	}
+	if report.SessionID != reports.session {
+		return nil
+	}
+	tokens, complete, err := tokenCountsFromObject(report.CurrentUsage, claudeTokenFields)
+	if err == nil && complete {
+		key := claudeUsageKey(tokens)
+		if report.RecordedAt.After(reports.latest[key]) {
+			reports.latest[key] = report.RecordedAt
+		}
+	}
+	return nil
+}
+
+func (reports *claudeReportIndex) matches(m *claudeSpanMessage) bool {
+	recorded := reports.latest[claudeUsageKey(m.tokens)]
+	return m.complete && !m.timestamp.IsZero() && !recorded.IsZero() && !recorded.Before(m.timestamp)
+}
+
+func claudeUsageKey(tokens model.TokenCounts) [4]int64 {
+	return [4]int64{tokens[model.TokenInput], tokens[model.TokenCachedInput], tokens[model.TokenCacheWrite], tokens[model.TokenOutput]}
 }
 
 type ClaudeStatusReport struct {
@@ -282,7 +376,7 @@ type ClaudeStatusReport struct {
 }
 
 func readClaudeReports(path string) []ClaudeStatusReport {
-	f, err := os.Open(path)
+	f, err := openClaudeScopedFile(path)
 	if err != nil {
 		return nil
 	}
