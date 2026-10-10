@@ -390,6 +390,18 @@ func TestInteractiveClaudeSettingsINT005(t *testing.T) {
 	}
 }
 
+func TestInteractiveClaudeMissingHomeDisablesReports(t *testing.T) {
+	t.Setenv("HOME", "")
+	uc := UsageContext{Workdir: t.TempDir(), Env: []string{"HOME="}, StateDir: t.TempDir()}
+	plan, err := (&ClaudeAdapter{}).PrepareInteractiveUsage("11111111-1111-1111-1111-111111111111", false, uc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.ReportEnabled || plan.ReportError == "" || plan.ReportReason != model.UnavailableCostReportUnavailable {
+		t.Fatalf("missing home must disable cost capture with a diagnostic: %+v", plan)
+	}
+}
+
 func TestInteractiveUsageSettingsNull(t *testing.T) {
 	args := []string{"claude", "--settings", "null", "--", "prompt"}
 	plan := InteractiveUsagePlan{ReportEnabled: true, ReportPath: "/tmp/report"}

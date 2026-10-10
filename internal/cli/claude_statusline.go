@@ -95,7 +95,10 @@ func resolveClaudeStatusLine(uc UsageContext) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	home, config, _ := claudeConfigHome(uc)
+	home, config, err := claudeConfigHome(uc)
+	if err != nil {
+		return nil, err
+	}
 	env := uc.Env
 	if env == nil {
 		env = os.Environ()
