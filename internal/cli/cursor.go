@@ -1009,3 +1009,5 @@ func readerContains(r io.Reader, needle []byte) (bool, error) {
 		}
 	}
 }
+
+func (a *CursorAdapter) AdditionalDirSupport() DirSupport { return DirUnsupported }

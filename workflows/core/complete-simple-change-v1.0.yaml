@@ -3,6 +3,9 @@ description: "Implement, flow-test, and interactively review a small structured 
 hidden: true
 
 params:
+  - name: context_instruction
+    required: false
+    default: ""
   - name: change_name
     required: true
   - name: change_dir
@@ -20,6 +23,7 @@ steps:
   - id: implement
     workflow: implement-task-v1.0.yaml
     params:
+      context_instruction: "{{context_instruction}}"
       task_file: "{{change_dir}}/tasks.md"
       run_session_report: "true"
       skip_validator: "false"
@@ -35,6 +39,8 @@ steps:
 
       Read the approved artifacts under `{{change_dir}}/` and relevant implementation evidence under `{{session_dir}}/output/`. Exercise representative public flows proportionally to this small change. Write a concise evidence report to `{{session_dir}}/output/test-flows.md` and place any UI screenshots beneath that output directory. Preserve material findings, evidence, ambiguities, and limitations accurately. Do not modify tracked files or fix findings.
 
+      {{context_instruction}}
+
   - id: review
     session: lead-agent
     mode: interactive
@@ -49,3 +55,4 @@ steps:
       After tracked changes, run relevant targeted checks, invoke validator-run, and commit related changes that belong to the current project repository following project conventions with the `[{{step_id}}]` prefix. Leave artifacts outside the repository uncommitted. If a changed public flow warrants another hands-on check, recommend targeted verification. When the user agrees, create the scratch folder with `mkdir -p "{{session_dir}}/scratch/test-flows"`, then resume `flow-tester` with the prior finding, affected flow, and direct dependencies; require codagent:test-flows in targeted scope rather than a new broad pass, and pass `scratch_dir`: `{{session_dir}}/scratch/test-flows` as a named input. All temporary files, clones, build outputs, and servers' working directories must go under `scratch_dir`. Never use `/tmp`, `/private/tmp`, or `$TMPDIR` for them. Present the tester's exact result. Address approved actionable findings and repeat targeted verification when warranted until the user says review is complete. Do not create status files or hide an unresolved result behind a success claim.
 
       Continue to the next step only when the user says testing and review are complete.
+      {{context_instruction}}

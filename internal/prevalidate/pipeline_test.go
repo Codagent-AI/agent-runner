@@ -623,3 +623,29 @@ func writeWorkflow(t *testing.T, dir, name, content string) string {
 	}
 	return path
 }
+
+func TestPipelineResolvesCapturedMapSubWorkflowParams(t *testing.T) {
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "child-v1.0.yaml", `name: child
+params:
+  - name: directory
+steps:
+  - id: use
+    command: echo {{directory}}
+`)
+	root := writeWorkflow(t, dir, "root-v1.0.yaml", `name: root
+workspace_dirs: ["{{result.directory}}"]
+steps:
+  - id: resolve
+    script: resolve.sh
+    capture: result
+    capture_format: json
+  - id: child
+    workflow: child-v1.0.yaml
+    params: {directory: "{{result.directory}}"}
+`)
+	opts, _, _ := fakeOptions(t, &config.Config{})
+	if _, err := Pipeline(root, nil, Strict, opts); err != nil {
+		t.Fatal(err)
+	}
+}

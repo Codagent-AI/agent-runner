@@ -1,11 +1,25 @@
 name: change
-description: "Use for a substantial or higher-risk change in an OpenSpec project when you need the full proposal, specification, design, test plan, task breakdown, and acceptance lifecycle. It manages repository-local OpenSpec artifacts while guiding implementation, evidence-based acceptance, human review, archival, and pull-request finalization."
+description: "Use for a substantial or higher-risk change in an OpenSpec project when you need the full proposal, specification, design, test plan, task breakdown, and acceptance lifecycle. It manages OpenSpec artifacts in the configured project while guiding implementation, evidence-based acceptance, human review, archival, and pull-request finalization."
 
 params:
   - name: change_name
     required: true
+  - name: spec_root
+    required: false
+    default: ""
+
+workspace_dirs: ["{{openspec.spec_root}}"]
 
 steps:
+  - id: resolve-openspec-root
+    script: resolve-openspec-root.sh
+    script_inputs:
+      change_name: "{{change_name}}"
+      spec_root: "{{spec_root}}"
+      operation: create
+    capture: openspec
+    capture_format: json
+
   - id: validate-feature-branch
     workflow: ../core/validate-feature-branch-v1.0.yaml
     params:
@@ -14,46 +28,66 @@ steps:
   - id: create
     script: create-change.sh
     script_inputs:
+      spec_root: "{{openspec.spec_root}}"
       change_name: "{{change_name}}"
 
   - id: define
     workflow: ../core/define-change-v1.0.yaml
     params:
+      context_instruction: "{{openspec.context_instruction}}"
       change_name: "{{change_name}}"
-      change_dir: "openspec/changes/{{change_name}}"
+      change_dir: "{{openspec.change_dir}}"
       change_label: "OpenSpec change"
-      artifact_location_instruction: "Keep every OpenSpec definition and planning artifact under the repository-local `openspec/changes/{{change_name}}/` directory."
+      artifact_location_instruction: "{{openspec.location_instruction}}"
 
   - id: plan
     workflow: ../core/plan-change-v1.0.yaml
     params:
+      context_instruction: "{{openspec.context_instruction}}"
       change_name: "{{change_name}}"
-      change_dir: "openspec/changes/{{change_name}}"
+      change_dir: "{{openspec.change_dir}}"
       change_label: "OpenSpec change"
       change_kind: "openspec"
+      spec_root: "{{openspec.spec_root}}"
+      commit_plan: "{{openspec.commit_plan}}"
 
   - id: implement
     workflow: ../core/implement-change-v1.0.yaml
     params:
+      context_instruction: "{{openspec.context_instruction}}"
       change_name: "{{change_name}}"
-      change_dir: "openspec/changes/{{change_name}}"
+      change_dir: "{{openspec.change_dir}}"
       change_label: "OpenSpec change"
       change_kind: "openspec"
-      artifact_validation_instruction: 'When an approved artifact changed, run `openspec validate --type change "{{change_name}}"`.'
+      spec_root: "{{openspec.spec_root}}"
+      artifact_validation_instruction: "{{openspec.validate_instruction}}"
       skip_validator: "false"
 
   - id: accept
     workflow: ../core/accept-change-v1.0.yaml
     params:
+      context_instruction: "{{openspec.context_instruction}}"
       change_name: "{{change_name}}"
-      change_dir: "openspec/changes/{{change_name}}"
+      change_dir: "{{openspec.change_dir}}"
       change_label: "OpenSpec change"
-      artifact_validation_instruction: 'If a specification changed, run `openspec validate --type change "{{change_name}}"`.'
+      artifact_validation_instruction: "{{openspec.accept_validate_instruction}}"
 
   - id: archive
     workflow: archive-change-v1.0.yaml
     params:
+      spec_root: "{{openspec.spec_root}}"
+      spec_external: "{{openspec.external}}"
+      context_instruction: "{{openspec.context_instruction}}"
       change_name: "{{change_name}}"
 
   - id: finalize
     workflow: ../core/finalize-pr-v1.0.yaml
+    params:
+      context_instruction: "{{openspec.context_instruction}}"
+
+  - id: report-spec-changes
+    script: report-spec-changes.sh
+    script_inputs:
+      spec_root: "{{openspec.spec_root}}"
+      change_name: "{{change_name}}"
+    skip_if: 'sh: test {{openspec.external}} = false'

@@ -480,3 +480,5 @@ func (f *openCodeStreamFilter) processLine(line []byte) error {
 	}
 	return f.writeDownstream([]byte(text))
 }
+
+func (a *OpenCodeAdapter) AdditionalDirSupport() DirSupport { return DirUnconfined }

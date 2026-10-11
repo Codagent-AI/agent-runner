@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+
 	"github.com/codagent/agent-runner/internal/usersettings"
 )
 
@@ -59,7 +62,7 @@ func TestLoadSplashSettingsForListFallsBackOnLoadError(t *testing.T) {
 		return usersettings.Settings{Splash: usersettings.SplashSettings{Dismissed: "2026-05-24T00:00:00Z"}}, errors.New("permission denied")
 	}, &stderr)
 
-	if settings != (usersettings.Settings{}) {
+	if !cmp.Equal(settings, usersettings.Settings{}, cmpopts.IgnoreUnexported(usersettings.Settings{})) {
 		t.Fatalf("settings = %#v, want empty fallback", settings)
 	}
 	if got := stderr.String(); !strings.Contains(got, "warning: could not load settings for splash") || !strings.Contains(got, "permission denied") {

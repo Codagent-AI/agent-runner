@@ -3,6 +3,9 @@ description: "Review implementation assumptions, validate, open a draft pull req
 hidden: true
 
 params:
+  - name: context_instruction
+    required: false
+    default: ""
   - name: change_name
     required: true
   - name: change_dir
@@ -54,12 +57,16 @@ steps:
 
       Do not run Agent Validator (`agent-validator run`, `review`, or `check`) here, directly or through any skill. This gets called explicitly in a later workflow step.
 
+      {{context_instruction}}
+
   - id: verify-assumptions-handoff
     command: test -s "{{session_dir}}/output/acceptance-assumptions.md"
     repair:
       session: lead-agent
       prompt: |
         `{{session_dir}}/output/acceptance-assumptions.md` is missing or empty. Write it now: list every unresolved finding or context gap concisely, with its source task or session report, why it is undecided, the decision needed from the user, and the likely impact of each option. If none remain, write an explicit `No unresolved assumptions or context gaps.` statement. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
+
+        {{context_instruction}}
 
   - id: simplify
     agent: implementor
@@ -78,9 +85,12 @@ steps:
 
       Commit each cleanup and each defect fix separately, following the project's commit message conventions and prepending [{{step_id}}]. Do not run Agent Validator or push.
 
+      {{context_instruction}}
+
   - id: run-validator
     workflow: run-validator-v1.0.yaml
     params:
+      context_instruction: "{{context_instruction}}"
       result_file: "{{session_dir}}/output/verify-change-validator-result.txt"
     # skip_if parameters are shell-quoted by InterpolateShellSafeTyped. The
     # validation step above additionally constrains this value to true|false.
@@ -103,6 +113,8 @@ steps:
       prompt: |
         There are uncommitted changes leftover after implementing and validating {{change_label}} "{{change_name}}". Run git status and git diff to review them. Only stage and commit files that are related to this change and appropriate to check into git — ignore unrelated changes, generated artifacts, or files that should be gitignored. Follow the project's commit message conventions. Summarize which files you committed and which you left out, and why. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
 
+        {{context_instruction}}
+
   - id: open-draft-pr
     session: lead-agent
     mode: autonomous
@@ -121,6 +133,8 @@ steps:
       Verify the final state by querying the open pull request for the current head branch. Do not signal completion unless it is open, its base branch is non-empty, it is a draft, its head SHA equals local `HEAD`, and its body contains the regenerated marked block. Report the pull request URL and actual base branch.
 
       If pushing or opening the pull request is blocked by a missing credential, an insufficient permission or token scope, or a decision only a human can make, do not retry indefinitely. Explain exactly what is blocked and what a human must do, then end your response with the line `REPAIR_BLOCKED`.
+
+      {{context_instruction}}
 
   - id: verify-draft-pr
     script: check-draft-pr.sh
@@ -175,6 +189,8 @@ steps:
 
           Finally, overwrite `{{session_dir}}/output/acceptance-round-status.txt` with exactly one line. Write `READY <sha>`, where `<sha>` is the full 40-character output of `git rev-parse HEAD`, only when `exploration-log.md` records this pass, `acceptance-tested-revision.txt` and `acceptance-handoff.md` in the evidence directory name that revision, current-head CI passed or is explicitly absent, and no clear defect or impediment remains. Otherwise write `NOT_READY`. The workflow checks this line together with the evidence files to decide whether acceptance testing has converged.
 
+          {{context_instruction}}
+
       - id: acceptance-gate
         script: acceptance-gate.sh
         script_inputs:
@@ -206,12 +222,15 @@ steps:
 
           If a finding needs a decision only a human can make, record it in the assumptions ledger and fix what you safely can.
 
+          {{context_instruction}}
+
       - id: acceptance-validator
         workflow: run-validator-v1.0.yaml
         # The result is recorded for callers and does not gate the loop: a red
         # validator warns and the round continues. Each round overwrites the
         # file, so it describes the head the next tester round tests.
         params:
+          context_instruction: "{{context_instruction}}"
           result_file: "{{session_dir}}/output/acceptance-validator-result.txt"
         # The validation step before the loop constrains skip_validator to true|false.
         skip_if: 'sh: test {{skip_validator}} = true'
@@ -223,6 +242,8 @@ steps:
           prompt: |
             Pushing the acceptance fixes for {{change_label}} "{{change_name}}" failed. Diagnose the failure from the check output. Commit any tracked change related to the acceptance fixes following the project's commit message conventions, then push the current branch without force-pushing. Do not change product contents to make the push succeed. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, such as a missing credential, an insufficient permission or token scope, or diverged remote history, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
 
+            {{context_instruction}}
+
       - id: verify-acceptance-pr
         script: check-draft-pr.sh
         script_inputs:
@@ -232,6 +253,8 @@ steps:
           session: lead-agent
           prompt: |
             After pushing the acceptance fixes for {{change_label}} "{{change_name}}", the current branch does not have exactly one open draft pull request whose head SHA equals local `HEAD`. Align it without force-pushing or changing product contents: push any unpushed commit, and convert the pull request back to draft with `gh pr ready --undo` if it is not a draft. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
+
+            {{context_instruction}}
 
   - id: write-acceptance-status
     script: acceptance-gate.sh

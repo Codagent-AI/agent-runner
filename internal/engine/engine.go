@@ -50,5 +50,17 @@ func Create(engineConfig map[string]any) (Engine, error) {
 		}
 	}
 
-	return ctor(rest), nil
+	eng := ctor(rest)
+	if validator, ok := eng.(interface{ ValidateConfig() error }); ok {
+		if err := validator.ValidateConfig(); err != nil {
+			return nil, err
+		}
+	}
+	return eng, nil
+}
+
+// ContextBinder initializes context before engine hooks or agent spawning.
+type ContextBinder interface {
+	BindContext(params map[string]string) error
+	Bound() bool
 }

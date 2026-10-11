@@ -5,12 +5,36 @@ hidden: true
 params:
   - name: change_name
     required: true
+  - name: spec_root
+    required: false
+    default: ""
+
+workspace_dirs: ["{{openspec.spec_root}}"]
 
 steps:
+  - id: resolve-openspec-root
+    script: resolve-openspec-root.sh
+    script_inputs:
+      change_name: "{{change_name}}"
+      spec_root: "{{spec_root}}"
+      operation: continue
+    capture: openspec
+    capture_format: json
+
   - id: plan
     workflow: ../core/plan-change-v1.0.yaml
     params:
+      context_instruction: "{{openspec.context_instruction}}"
       change_name: "{{change_name}}"
-      change_dir: "openspec/changes/{{change_name}}"
+      change_dir: "{{openspec.change_dir}}"
       change_label: "OpenSpec change"
       change_kind: "openspec"
+      spec_root: "{{openspec.spec_root}}"
+      commit_plan: "{{openspec.commit_plan}}"
+
+  - id: report-spec-changes
+    script: report-spec-changes.sh
+    script_inputs:
+      spec_root: "{{openspec.spec_root}}"
+      change_name: "{{change_name}}"
+    skip_if: 'sh: test {{openspec.external}} = false'

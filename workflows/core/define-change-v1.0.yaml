@@ -3,6 +3,9 @@ description: "Interactively define a structured change through proposal, specifi
 hidden: true
 
 params:
+  - name: context_instruction
+    required: false
+    default: ""
   - name: change_name
     required: true
   - name: change_dir
@@ -32,6 +35,8 @@ steps:
 
       Keep this phase interactive through the proposal review. Once the user approves the final proposal content or tells you to write it, complete the approved edits and continue to the next step without asking them to review the written artifact again.
 
+      {{context_instruction}}
+
   - id: specs
     session: lead-agent
     mode: interactive
@@ -39,6 +44,8 @@ steps:
       Help the user write the specifications for {{change_label}} "{{change_name}}". You MUST use the codagent:spec skill and write the specifications under `{{change_dir}}/specs/`.
 
       Keep this phase interactive while developing the specifications. Once the user approves the content or tells you to write it, complete the specification artifacts and continue to the next step without asking them to review the written artifacts again.
+
+      {{context_instruction}}
 
   - id: design
     session: lead-agent
@@ -48,6 +55,8 @@ steps:
 
       Keep this phase interactive while developing the design. Once the user approves the content or tells you to write it, complete the design artifact and continue to the next step without asking them to review the written artifact again.
 
+      {{context_instruction}}
+
   - id: test-plan
     session: lead-agent
     mode: interactive
@@ -55,6 +64,8 @@ steps:
       Use the codagent:test-plan skill to collaboratively create `{{change_dir}}/test-plan.md`.
 
       Keep this phase interactive while developing the test plan. Once the user approves the content or tells you to write it, complete the test plan and continue to the next step without asking them to review the written artifact again.
+
+      {{context_instruction}}
 
   - id: approach-review
     session: lead-agent
@@ -70,3 +81,4 @@ steps:
       Follow codagent:call-agent's verification and user-facing reporting rules. Discuss every consequential finding with the user. Do not modify the proposal, specifications, design, test plan, or any other file until you have presented your assessment and received the user's explicit confirmation about which changes to make. Apply only the changes the user confirms.
 
       Keep this phase interactive through the review discussion. Once the user approves the resulting changes, apply them and continue to the next step without asking them to review the updated artifacts again.
+      {{context_instruction}}

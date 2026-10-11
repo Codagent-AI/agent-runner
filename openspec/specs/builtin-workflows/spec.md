@@ -218,3 +218,83 @@ Each builtin namespace directory `workflows/<ns>/` MAY contain a metadata file n
 - **THEN** discovery reports the namespace with default display name and empty description
 - **AND** the namespace's workflows are still discovered and runnable
 
+### Requirement: OpenSpec workflows use the resolved spec root
+
+The current version of each built-in `openspec:*` workflow (`change-v2.0`, `simple-change-v2.0`, `plan-change-v2.0`, `implement-change-v2.0`, and the nested `archive-change-v1.0`) SHALL derive every OpenSpec path from the run's recorded spec root. Those paths are the change directory, task files, the archive directory, and canonical specs. Every `openspec` CLI invocation these workflows make (`new`, `validate`, `status`, `instructions`, `archive`) SHALL run with the spec root as its working directory. When the spec root is external, no step SHALL read, write, or validate the code repository's `openspec/` paths. Implementation, validator, Git, and PR steps SHALL continue to run in the code repository. These versioned files were edited in place; runs of them saved before the edit are not guaranteed to resume. The older `v1.0` entry workflows keep their repository-local behavior. When `archive-change` is invoked with only `change_name`, as a caller that pins it does, it SHALL keep its repository-local behavior unchanged. `openspec:scaffold` is excluded because it creates a new OpenSpec project in the working directory.
+
+#### Scenario: Change created in the external root
+- **WHEN** `openspec:change change_name=foo` runs with external spec root `/work/specs`
+- **THEN** the change is created at `/work/specs/openspec/changes/foo/` and the code repository gains no `openspec/changes/foo/`
+
+#### Scenario: Validation runs against the external project
+- **WHEN** a step of an `openspec:*` workflow runs `openspec validate --type change foo` with external spec root `/work/specs`
+- **THEN** the command runs with `/work/specs` as its working directory and validates against `/work/specs/openspec/specs/`
+
+#### Scenario: Task loop reads tasks from the external root
+- **WHEN** `openspec:implement-change change_name=foo` runs with external spec root `/work/specs`
+- **THEN** the task loop iterates over task files under `/work/specs/openspec/changes/foo/tasks/` while implementation commits land in the code repository
+
+#### Scenario: Default root is unchanged
+- **WHEN** an `openspec:*` workflow runs with no spec root configured
+- **THEN** it uses `openspec/changes/<change>/`, `openspec/changes/archive/`, and `openspec/specs/` relative to the code repository, and runs `openspec` there, exactly as before this change
+
+#### Scenario: Archive invoked directly without a spec root
+- **WHEN** `archive-change-v1.0` is invoked with only `change_name`
+- **THEN** it runs the repository-local archive transition, verifies the archive commit, and advances the Validator baseline exactly as before external spec roots were supported
+
+### Requirement: OpenSpec plan commit with an external spec root
+
+When the spec root is external, the plan-commit step of the built-in OpenSpec workflows SHALL NOT stage or commit the change directory or `openspec/config.yaml` in the code repository. It SHALL NOT commit in the spec repository. It SHALL succeed without creating a code-repository commit for planning artifacts. When the spec root is not external, the plan-commit step SHALL keep today's behavior.
+
+#### Scenario: Plan committed with an external root
+- **WHEN** planning finishes for change `foo` with an external spec root
+- **THEN** the plan-commit step succeeds, the code repository's HEAD does not change for planning artifacts, and the spec repository's HEAD does not change
+
+#### Scenario: Plan committed with the default root
+- **WHEN** planning finishes for change `foo` with no spec root configured
+- **THEN** the plan-commit step commits `openspec/changes/foo/` in the code repository as it does today
+
+### Requirement: OpenSpec archive with an external spec root
+
+When the spec root is external, the archive workflow SHALL skip the repository-local transition, commit verification, and Validator baseline steps, and SHALL instead archive the change by running `openspec validate --type change <change>` and then `openspec archive <change> --yes` with the spec root as the working directory. It SHALL NOT create, verify, or require a commit in either repository. Before running `openspec`, it SHALL check the change name, that the spec root is absolute, and that the spec root contains `openspec/`. If a dated archive directory `openspec/changes/archive/<date>-<change>` exists and the active change directory does not, the step SHALL report that the change is already archived and succeed without running `openspec`, so a retried or resumed run completes. If both exist, the step SHALL fail and name both. Its repair prompt SHALL name the absolute spec-root paths that the agent may edit. When the spec root is not external, archive SHALL keep today's code-repository commit verification.
+
+#### Scenario: External archive succeeds without a commit
+- **WHEN** archive runs for change `foo` with external spec root `/work/specs` and `openspec archive` moves the change
+- **THEN** `/work/specs/openspec/changes/foo/` no longer exists, `/work/specs/openspec/changes/archive/<date>-foo/` exists, the step succeeds, and neither repository gains a commit
+
+#### Scenario: Resume after the archive completed
+- **WHEN** archive runs again for `foo` after `/work/specs/openspec/changes/foo/` was already moved to `/work/specs/openspec/changes/archive/<date>-foo/`
+- **THEN** the step reports that `foo` is already archived, does not run `openspec`, and succeeds
+
+#### Scenario: Active change and archive both exist
+- **WHEN** archive runs for `foo` and both `/work/specs/openspec/changes/foo/` and `/work/specs/openspec/changes/archive/<date>-foo/` exist
+- **THEN** the step fails before running `openspec`, naming both directories
+
+#### Scenario: External archive repair targets spec-root paths
+- **WHEN** the external archive step fails with spec root `/work/specs` and the repair agent is invoked
+- **THEN** the repair prompt limits edits to `/work/specs/openspec/changes/<change>/`, forbids edits under `/work/specs/openspec/specs/`, and includes the spec project's context instruction
+
+### Requirement: Engine-bearing OpenSpec workflows receive the root before engine startup
+
+No user-facing `openspec:*` entry workflow SHALL declare the OpenSpec engine at its top level. Engine-dependent steps SHALL run inside a hidden child workflow that declares the engine with `root_param: spec_root`. The entry workflow invokes that child after it has resolved the spec root, passing the resolved `spec_root` as a parameter. `openspec:simple-change` runs its `plan` step through the hidden `simple-change-plan` workflow. The user-facing logical workflow names SHALL remain unchanged.
+
+#### Scenario: Engine sees the external root
+- **WHEN** `openspec:simple-change change_name=foo` starts with only the user setting pointing at external spec root `/work/specs`
+- **THEN** no `openspec` command runs in the code repository before `resolve-openspec-root` completes, and the OpenSpec engine's `openspec` calls run in `/work/specs`
+
+#### Scenario: User-facing name unchanged
+- **WHEN** a user lists workflows
+- **THEN** `openspec:simple-change` is listed under that name, and its engine-bearing inner workflow is not listed
+
+### Requirement: OpenSpec entry workflows keep their top-level phases
+
+The latest `openspec:*` entry workflows SHALL keep their existing lifecycle phases as top-level steps with their existing step IDs, so that `--until <phase>` and capped resume behave as before. They SHALL add a first top-level step, `resolve-openspec-root`, and a closing top-level step, `report-spec-changes`, which runs only for an external spec root.
+
+#### Scenario: Run capped at plan
+- **WHEN** a user runs `agent-runner run openspec:change change_name=foo --until plan` with or without an external spec root
+- **THEN** the run resolves the root, executes the phases through `plan`, and stops successfully without dispatching `implement`
+
+#### Scenario: Resolver runs before every other step
+- **WHEN** any latest `openspec:*` entry workflow starts
+- **THEN** its first executed step is `resolve-openspec-root`, and no agent step runs before it completes
+

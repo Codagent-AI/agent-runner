@@ -333,6 +333,11 @@ func initRunState(workflow *model.Workflow, params map[string]string, opts *Opti
 	}
 
 	if opts.Engine != nil {
+		if binder, ok := opts.Engine.(engine.ContextBinder); ok {
+			if err := binder.BindContext(params); err != nil {
+				return nil, err
+			}
+		}
 		if err := opts.Engine.ValidateWorkflow(workflow, params, opts.WorkflowFile); err != nil {
 			return nil, err
 		}
@@ -547,6 +552,7 @@ func buildExecutionContext(
 		WorkflowFile:             opts.WorkflowFile,
 		WorkflowName:             workflow.Name,
 		WorkflowDescription:      workflow.Description,
+		WorkspaceDirTemplates:    workflow.WorkspaceDirs,
 		ProjectRoot:              opts.ProjectRoot,
 		WorkingDir:               opts.WorkingDir,
 		AutonomousBackend:        string(settings.AutonomousBackend),

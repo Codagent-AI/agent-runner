@@ -33,6 +33,7 @@ const (
 )
 
 type Settings struct {
+	OpenSpecRoots            map[string]string
 	Theme                    Theme
 	AutonomousBackend        AutonomousBackend
 	AutonomousPermissionMode AutonomousPermissionMode
@@ -123,6 +124,15 @@ func Load() (Settings, error) {
 
 func parseSettingPair(settings *Settings, key, value *yaml.Node) error {
 	switch key.Value {
+	case "openspec_roots":
+		settings.OpenSpecRoots = make(map[string]string)
+		if value.Kind == yaml.MappingNode {
+			for i := 0; i+1 < len(value.Content); i += 2 {
+				if v := value.Content[i+1]; v.Kind == yaml.ScalarNode && v.Tag == "!!str" {
+					settings.OpenSpecRoots[value.Content[i].Value] = v.Value
+				}
+			}
+		}
 	case "theme":
 		if theme := parseTheme(value); theme != "" {
 			settings.Theme = theme

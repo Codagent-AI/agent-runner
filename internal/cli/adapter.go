@@ -92,6 +92,7 @@ func (f *lineBufferedWriter) writeDownstream(p []byte) error {
 
 // BuildArgsInput provides the parameters needed to construct CLI invocation args.
 type BuildArgsInput struct {
+	AdditionalDirs  []string
 	Prompt          string
 	SystemPrompt    string // Content to deliver as a system prompt (for adapters that support it)
 	SessionID       string // Session ID to pass to the CLI (pre-generated for new, or existing for resume)
@@ -456,6 +457,12 @@ type ArgsBuilderWithError interface {
 // ArgsBuilderWithError. Adapters without a fallible path never return an
 // error.
 func BuildInvocationArgs(adapter Adapter, input *BuildArgsInput) ([]string, error) {
+	if len(input.AdditionalDirs) > 0 {
+		supporter, ok := adapter.(AdditionalDirSupporter)
+		if !ok || supporter.AdditionalDirSupport() == DirUnsupported {
+			return nil, fmt.Errorf("CLI %T cannot add workspace directory %s", adapter, input.AdditionalDirs[0])
+		}
+	}
 	if builder, ok := adapter.(ArgsBuilderWithError); ok {
 		return builder.BuildArgsWithError(input)
 	}
@@ -558,3 +565,14 @@ func KnownCLIs() []string {
 	}
 	return names
 }
+
+// DirSupport describes filesystem access for additional workspaces.
+type DirSupport int
+
+const (
+	DirUnsupported DirSupport = iota
+	DirFlag
+	DirUnconfined
+)
+
+type AdditionalDirSupporter interface{ AdditionalDirSupport() DirSupport }

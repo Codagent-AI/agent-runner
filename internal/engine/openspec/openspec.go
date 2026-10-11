@@ -40,14 +40,15 @@ type instructionsOutput struct {
 
 // CmdRunner abstracts running openspec CLI commands for testability.
 type CmdRunner interface {
-	Run(args []string) (string, error)
+	Run(dir string, args []string) (string, error)
 }
 
 // realCmdRunner runs openspec via os/exec.
 type realCmdRunner struct{}
 
-func (r *realCmdRunner) Run(args []string) (string, error) {
+func (r *realCmdRunner) Run(dir string, args []string) (string, error) {
 	cmd := exec.Command("openspec", args...) // #nosec G204 -- openspec CLI is invoked with controlled arguments
+	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -63,6 +64,9 @@ func (r *realCmdRunner) Run(args []string) (string, error) {
 }
 
 type openSpecEngine struct {
+	rootParam   string
+	rootDir     string
+	bound       bool
 	changeParam string
 	cmdRunner   CmdRunner
 	artifactIDs map[string]bool
@@ -80,7 +84,10 @@ func getChangeName(changeParam string, params map[string]string) (string, error)
 }
 
 func (e *openSpecEngine) loadArtifactIDs(changeName string) (map[string]bool, error) {
-	raw, err := e.cmdRunner.Run([]string{"status", "--change", changeName, "--json"})
+	if !e.Bound() {
+		return nil, fmt.Errorf("openspec engine param %q has not been bound", e.rootParam)
+	}
+	raw, err := e.cmdRunner.Run(e.rootDir, []string{"status", "--change", changeName, "--json"})
 	if err != nil {
 		return nil, err
 	}
@@ -150,6 +157,9 @@ func (e *openSpecEngine) NeedsDeferredValidation() bool {
 }
 
 func (e *openSpecEngine) EnrichPrompt(stepID string, params map[string]string, opts engine.EnrichOptions) string {
+	if !e.Bound() {
+		return ""
+	}
 	changeName, err := getChangeName(e.changeParam, params)
 	if err != nil {
 		return ""
@@ -159,7 +169,7 @@ func (e *openSpecEngine) EnrichPrompt(stepID string, params map[string]string, o
 		return ""
 	}
 
-	raw, err := e.cmdRunner.Run([]string{"instructions", stepID, "--change", changeName, "--json"})
+	raw, err := e.cmdRunner.Run(e.rootDir, []string{"instructions", stepID, "--change", changeName, "--json"})
 	if err != nil {
 		return ""
 	}
@@ -173,6 +183,9 @@ func (e *openSpecEngine) EnrichPrompt(stepID string, params map[string]string, o
 }
 
 func (e *openSpecEngine) ValidateStep(stepID string, params map[string]string) (bool, error) {
+	if !e.Bound() {
+		return false, fmt.Errorf("openspec engine param %q has not been bound", e.rootParam)
+	}
 	changeName, err := getChangeName(e.changeParam, params)
 	if err != nil {
 		return false, err
@@ -185,7 +198,7 @@ func (e *openSpecEngine) ValidateStep(stepID string, params map[string]string) (
 		return true, nil
 	}
 
-	raw, err := e.cmdRunner.Run([]string{"status", "--change", changeName, "--json"})
+	raw, err := e.cmdRunner.Run(e.rootDir, []string{"status", "--change", changeName, "--json"})
 	if err != nil {
 		return false, err
 	}
@@ -248,10 +261,9 @@ func NewEngine(config map[string]any) engine.Engine {
 // NewEngineWithRunner creates an OpenSpec engine with an injected CLI runner.
 func NewEngineWithRunner(config map[string]any, cmdRunner CmdRunner) engine.Engine {
 	changeParam, _ := config["change_param"].(string)
-	if changeParam == "" {
-		changeParam = "change_name"
-	}
+	rootParam, _ := config["root_param"].(string)
 	return &openSpecEngine{
+		rootParam:   rootParam,
 		changeParam: changeParam,
 		cmdRunner:   cmdRunner,
 	}
@@ -259,4 +271,31 @@ func NewEngineWithRunner(config map[string]any, cmdRunner CmdRunner) engine.Engi
 
 func init() {
 	engine.Register("openspec", NewEngine)
+}
+
+func (e *openSpecEngine) Bound() bool { return e.rootParam == "" || e.bound }
+func (e *openSpecEngine) BindContext(params map[string]string) error {
+	if e.rootParam == "" {
+		return nil
+	}
+	e.bound = false
+	dir := params[e.rootParam]
+	if dir == "" || !filepath.IsAbs(dir) {
+		return fmt.Errorf("openspec engine param %q must name an absolute existing directory", e.rootParam)
+	}
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("openspec engine param %q is not an existing directory: %s", e.rootParam, dir)
+	}
+	e.rootDir, e.bound = dir, true
+	e.artifactIDs = nil
+	return nil
+}
+
+// ValidateConfig rejects incomplete engine declarations before lifecycle hooks.
+func (e *openSpecEngine) ValidateConfig() error {
+	if e.changeParam == "" {
+		return fmt.Errorf("openspec engine requires change_param")
+	}
+	return nil
 }

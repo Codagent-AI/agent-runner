@@ -3,6 +3,9 @@ description: "Push changes, mark a draft PR ready, and fix CI or review failures
 hidden: true
 
 params:
+  - name: context_instruction
+    required: false
+    default: ""
   - name: ci_fix_cycles
     required: false
     default: "3"
@@ -22,6 +25,8 @@ steps:
       Invoke codagent:push-pr to commit any appropriate remaining changes, push them, and create or update the pull request. Follow the project's commit message conventions and prepend [{{step_id}}] when a commit is needed.
 
       If there is an existing pull request and it is a draft, mark it as ready for review.
+
+      {{context_instruction}}
 
   - id: record-pull-request
     capture: pr_url
@@ -57,6 +62,8 @@ steps:
             Diagnose why the wait failed. Fix what you can in the workspace: push the current branch if it has no upstream or is behind, create the pull request with codagent:push-pr if none exists for the branch, or mark a draft PR ready.
 
             Do not change code to satisfy CI here. If the cause is a missing or invalid credential, insufficient permission or token scope, or a missing tool (gh or python3), explain it and end with the line REPAIR_BLOCKED. Never declare success; the rerun check decides.
+            {{context_instruction}}
+
         script_inputs:
           review_bots: "{{review_bots}}"
 
@@ -90,6 +97,8 @@ steps:
 
           This workflow boundary overrides any more permissive default in the skill: do not silently treat a requirement, design, or scope change as ordinary review feedback. If a requested fix would change approved product behavior, requirements, design decisions, or materially expand scope, do not make it. Leave the finding unresolved and report that the change must return to its acceptance or planning workflow before finalization can continue.
 
+          {{context_instruction}}
+
   - id: reuse-ci-report
     script: ci-reuse-report.sh
     capture: final_ci_report
@@ -112,6 +121,8 @@ steps:
         Diagnose why the wait failed. Fix what you can in the workspace: push the current branch if it has no upstream or is behind, create the pull request with codagent:push-pr if none exists for the branch, or mark a draft PR ready.
 
         Do not change code to satisfy CI here. If the cause is a missing or invalid credential, insufficient permission or token scope, or a missing tool (gh or python3), explain it and end with the line REPAIR_BLOCKED. Never declare success; the rerun check decides.
+        {{context_instruction}}
+
     script_inputs:
       review_bots: "{{review_bots}}"
 

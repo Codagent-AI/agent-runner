@@ -45,6 +45,9 @@ func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 // process-local completion command cannot be materialized.
 func (a *ClaudeAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, error) {
 	args := []string{"claude"}
+	for _, dir := range input.AdditionalDirs {
+		args = append(args, "--add-dir", dir)
+	}
 	context := input.InvocationContext()
 	agentCall, err := validatedAgentCall(input)
 	if err != nil {
@@ -352,3 +355,5 @@ func (a *ClaudeAdapter) SessionExists(sessionID, workdir string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
 }
+
+func (a *ClaudeAdapter) AdditionalDirSupport() DirSupport { return DirFlag }

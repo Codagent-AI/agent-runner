@@ -699,13 +699,14 @@ type EngineConfig struct {
 
 // Workflow defines a complete workflow.
 type Workflow struct {
-	Name        string        `yaml:"name" json:"name"`
-	Description string        `yaml:"description,omitempty" json:"description,omitempty"`
-	Hidden      bool          `yaml:"hidden,omitempty" json:"hidden,omitempty"`
-	Params      []Param       `yaml:"params,omitempty" json:"params,omitempty"`
-	Sessions    []SessionDecl `yaml:"sessions,omitempty" json:"sessions,omitempty"`
-	Steps       []Step        `yaml:"steps" json:"steps"`
-	Engine      *EngineConfig `yaml:"engine,omitempty" json:"engine,omitempty"`
+	WorkspaceDirs []string      `yaml:"workspace_dirs,omitempty" json:"workspace_dirs,omitempty"`
+	Name          string        `yaml:"name" json:"name"`
+	Description   string        `yaml:"description,omitempty" json:"description,omitempty"`
+	Hidden        bool          `yaml:"hidden,omitempty" json:"hidden,omitempty"`
+	Params        []Param       `yaml:"params,omitempty" json:"params,omitempty"`
+	Sessions      []SessionDecl `yaml:"sessions,omitempty" json:"sessions,omitempty"`
+	Steps         []Step        `yaml:"steps" json:"steps"`
+	Engine        *EngineConfig `yaml:"engine,omitempty" json:"engine,omitempty"`
 }
 
 // ApplyDefaults sets default values for Workflow fields.

@@ -17,6 +17,7 @@ import (
 	iexec "github.com/codagent/agent-runner/internal/exec"
 	"github.com/codagent/agent-runner/internal/intakeroute"
 	"github.com/codagent/agent-runner/internal/interactive"
+	"github.com/codagent/agent-runner/internal/openspecroot"
 	"github.com/codagent/agent-runner/internal/profilewrite"
 	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/usersettings"
@@ -68,6 +69,8 @@ func handleInternalWithIO(args []string, stdin io.Reader, stderr io.Writer) int 
 		return 1
 	}
 	switch args[0] {
+	case "resolve-openspec-root":
+		return handleResolveOpenSpecRoot(args, stdin, stderr)
 	case "launch-intake-route":
 		return handleLaunchIntakeRoute(args[1:], stderr)
 	case "watchdog":
@@ -381,4 +384,36 @@ func writeSetting(key, value string) error {
 		return fmt.Errorf("unsupported setting key %q", key)
 	}
 	return usersettings.Save(settings)
+}
+
+func resolveOpenSpecRoot(stdin io.Reader, stdout io.Writer) error {
+	var input openspecroot.Input
+	if err := json.NewDecoder(stdin).Decode(&input); err != nil {
+		return err
+	}
+	settings, err := usersettings.Load()
+	if err != nil {
+		return err
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	result, err := openspecroot.Resolve(wd, input, settings.OpenSpecRoots)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(stdout).Encode(result)
+}
+
+func handleResolveOpenSpecRoot(args []string, stdin io.Reader, stderr io.Writer) int {
+	if len(args) != 1 {
+		_, _ = fmt.Fprintln(stderr, "resolve-openspec-root accepts no arguments")
+		return 1
+	}
+	if err := resolveOpenSpecRoot(stdin, os.Stdout); err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
 }
