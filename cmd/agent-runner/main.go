@@ -1757,7 +1757,7 @@ func (s *switcher) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.termHeight = msg.Height
 
 	case tea.KeyMsg:
-		if msg.String() == "q" || msg.String() == "ctrl+c" {
+		if msg.String() == "ctrl+c" {
 			return s, tea.Quit
 		}
 
