@@ -204,7 +204,9 @@ Credentials enter the sandbox only through explicit options:
   use `--no-default-secrets` to disable it.
 - `--mount-codex-auth` mounts `~/.codex/auth.json` read-only.
 - `--mount-claude-auth` mounts Claude credentials and available settings files
-  read-only. When `~/.claude/.credentials.json` does not exist, as with a macOS
+  read-only. The sandbox copies Claude settings without their `hooks`, because
+  the hook scripts live on the host and are not mounted.
+  When `~/.claude/.credentials.json` does not exist, as with a macOS
   Keychain login, it passes `CLAUDE_CODE_OAUTH_TOKEN` (from the environment or a
   secrets file; create one with `claude setup-token`) instead, and fails when
   neither is available. The token avoids sharing the host login's refresh token.
