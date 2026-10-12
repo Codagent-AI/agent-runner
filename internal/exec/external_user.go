@@ -142,20 +142,36 @@ func invokeExternalTurn(input *AgentInvocation, runner ProcessRunner, log Logger
 	go func() { result, err := InvokeAgent(input, runner, log); done <- response{result, err} }()
 	var finished *response
 	var completion control.CompletionRequest
-	select {
-	case completion = <-server.Completions():
-	case out := <-done:
-		finished = &out
-		accepted, ok := server.AwaitAcceptedCompletion(processCtx, attempt.ID)
-		if !ok {
-			out.result.Outcome = OutcomeFailed
-			return out.result, out.err
+	for {
+		if finished == nil {
+			select {
+			case completion = <-server.Completions():
+			case out := <-done:
+				finished = &out
+				continue
+			case <-processCtx.Done():
+				cancel()
+				out := <-done
+				return out.result, processCtx.Err()
+			}
+		} else {
+			accepted, ok := server.AwaitAcceptedCompletion(processCtx, attempt.ID)
+			if !ok {
+				finished.result.Outcome = OutcomeFailed
+				return finished.result, finished.err
+			}
+			completion = accepted
 		}
-		completion = accepted
-	case <-processCtx.Done():
-		cancel()
-		out := <-done
-		return out.result, processCtx.Err()
+		if completion.AttemptID != attempt.ID {
+			if ctx.AuditLogger != nil {
+				ctx.AuditLogger.Emit(audit.Event{Type: audit.EventWarning, Prefix: input.Prefix, Data: map[string]any{
+					"message": "discarded completion for a different attempt", "attempt_id": completion.AttemptID,
+					"active_attempt_id": attempt.ID, "request_id": completion.RequestID,
+				}})
+			}
+			continue
+		}
+		break
 	}
 	committed, unsubscribe := server.SubscribeCommittedTurn(attempt.ID)
 	defer unsubscribe()

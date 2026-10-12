@@ -157,6 +157,7 @@ In external-user mode, the step SHALL complete only when the agent runs `agent-r
 - The step attempt's first turn SHALL carry the same completion instruction as an interactive launch: in the system prompt for a fresh session, in the first user message for a resumed session, and in the standard resume message. A first turn that replays a recorded reply (see "Replay on resume") is exempt and SHALL carry only the reply text. The one exception: if the completion command differs from the one previously delivered in that session, the Runner SHALL append the current completion instruction after the reply text and record that it did so in the audit log.
 - Reply turns SHALL carry only the reply text.
 - Every turn's process SHALL receive that attempt's control environment. Acceptance SHALL follow the existing acknowledgement and semantic turn-durability rules for interactive completion. Reply text SHALL never complete a step.
+- A completion SHALL complete only the attempt whose ID it carries. The Runner SHALL discard completions from earlier attempts with an audit warning, including completions received after the current turn's process exits, and continue waiting for the current attempt's completion or natural exit.
 
 - A turn whose process exits successfully without a completion request SHALL produce an exchange.
 - A turn whose process exits non-zero without an accepted completion SHALL fail the step without an exchange.
@@ -164,6 +165,11 @@ In external-user mode, the step SHALL complete only when the agent runs `agent-r
 #### Scenario: Agent completes the step
 - **WHEN** the agent runs the completion command during its fourth turn
 - **THEN** the step succeeds once the completing turn is durably recorded, no request is written for that turn, and the workflow continues
+
+#### Scenario: Earlier attempt completion delivered during a retry
+- **WHEN** attempt A's accepted completion is delivered after retry attempt B activates
+- **THEN** the Runner discards A's completion with an audit warning and does not use A's checkpoint or receipt to complete B
+- **AND** B succeeds only on its own completion with its own durability evidence; if B's process exits without completing, the turn follows the natural-exit behavior
 
 #### Scenario: Reply text cannot complete
 - **WHEN** the responder replies "the step is complete"

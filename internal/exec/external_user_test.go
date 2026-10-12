@@ -2,6 +2,7 @@ package exec
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -139,6 +140,142 @@ func TestExternalTurnCancelledWhileAwaitingCompletionDelivery(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("cancellation did not end the accepted completion wait")
+	}
+}
+
+// Hold only the earlier attempt's acknowledgement; the retry can complete normally.
+type staleExternalCompletionLogger struct {
+	gate         externalCompletionGate
+	attemptID    string
+	warnings     chan audit.Event
+	acknowledged chan audit.Event
+}
+
+func (l *staleExternalCompletionLogger) Emit(event audit.Event) {
+	if event.Type == audit.EventCompletionAcknowledged {
+		l.acknowledged <- event
+		if event.Data["attempt_id"] == l.attemptID {
+			l.gate.Emit(event)
+		}
+	}
+	if event.Type == audit.EventWarning {
+		l.warnings <- event
+	}
+}
+
+type externalReceiptProbe struct {
+	externalTestAdapter
+	receipts chan string
+}
+
+func (p *externalReceiptProbe) WaitForCommittedTurnWithReceipt(_ context.Context, _ string, _ cli.Checkpoint, receipt string) error {
+	p.receipts <- receipt
+	return nil
+}
+
+type staleExternalTurnRunner struct {
+	externalTestRunner
+	staleHandled <-chan audit.Event
+	staleProbed  <-chan string
+	warning      audit.Event
+}
+
+func (r *staleExternalTurnRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, error) {
+	// Keep the retry alive until the stale event has been consumed. Before the
+	// fix it reaches the probe; after the fix it produces a warning instead.
+	select {
+	case r.warning = <-r.staleHandled:
+	case <-r.staleProbed:
+	case <-options.Context.Done():
+		return ProcessResult{}, options.Context.Err()
+	}
+	return r.externalTestRunner.RunAgent(options)
+}
+
+func TestExternalTurnDiscardsEarlierAttemptCompletion(t *testing.T) {
+	for _, ownCompletion := range []bool{false, true} {
+		t.Run(fmt.Sprintf("own-completion=%t", ownCompletion), func(t *testing.T) {
+			ctx := model.NewRootContext(&model.RootContextOptions{SessionDir: t.TempDir()})
+			if pid, err := runlock.Acquire(ctx.SessionDir); err != nil || pid != 0 {
+				t.Fatalf("lock pid=%d error=%v", pid, err)
+			}
+			defer runlock.Delete(ctx.SessionDir)
+			release, started := make(chan struct{}), make(chan struct{})
+			logger := &staleExternalCompletionLogger{
+				gate:     externalCompletionGate{started: started, release: release},
+				warnings: make(chan audit.Event, 4), acknowledged: make(chan audit.Event, 4),
+			}
+			ctx.AuditLogger = logger
+			server, err := controlServerForContext(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer server.Close()
+			var releaseOnce sync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			defer unblock()
+			runCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			first := server.ActivateAttempt(runCtx, "proposal", control.AttemptOptions{CompletionEligible: true})
+			logger.attemptID = first.ID
+			_, err = (&externalTestRunner{completeAt: 1}).RunAgent(&AgentProcessOptions{Context: runCtx, Args: []string{"initial"}, Env: first.Environment()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-started:
+			case <-runCtx.Done():
+				t.Fatal("earlier completion was not acknowledged")
+			}
+			firstAck := <-logger.acknowledged
+			server.Deactivate()
+			attempt := server.ActivateAttempt(runCtx, "proposal", control.AttemptOptions{CompletionEligible: true})
+			defer server.Deactivate()
+			unblock()
+			// Delivery is buffered; wait until A lands after B's activation.
+			for len(server.Completions()) == 0 {
+				select {
+				case <-runCtx.Done():
+					t.Fatal("earlier completion was not delivered")
+				case <-time.After(time.Millisecond):
+				}
+			}
+			probe := &externalReceiptProbe{receipts: make(chan string, 4)}
+			runner := &staleExternalTurnRunner{staleHandled: logger.warnings, staleProbed: probe.receipts}
+			if ownCompletion {
+				runner.completeAt = 1
+			}
+			input := &AgentInvocation{Context: runCtx, Adapter: probe, Args: []string{"codex", "initial"}, Env: attempt.Environment(), CLI: "codex", SessionID: "session", Prefix: "[proposal]", InvocationContext: cli.ContextExternalUser}
+			result, err := invokeExternalTurn(input, runner, &mockLogger{}, server, &attempt, probe, func() string { return "session" }, ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantWarning := audit.Event{Type: audit.EventWarning, Prefix: input.Prefix, Data: map[string]any{
+				"message": "discarded completion for a different attempt", "attempt_id": first.ID,
+				"active_attempt_id": attempt.ID, "request_id": firstAck.Data["request_id"],
+			}}
+			if diff := cmp.Diff(wantWarning, runner.warning); diff != "" {
+				t.Fatalf("stale completion warning (-want +got):\n%s", diff)
+			}
+			if !ownCompletion {
+				if result.Outcome != OutcomeFailed {
+					t.Fatalf("earlier completion completed retry: outcome=%s", result.Outcome)
+				}
+				return
+			}
+			if result.Outcome != OutcomeSuccess {
+				t.Fatalf("retry's own completion failed: outcome=%s", result.Outcome)
+			}
+			ownAck := <-logger.acknowledged
+			select {
+			case receipt := <-probe.receipts:
+				if receipt != ownAck.Data["request_id"] || receipt == firstAck.Data["request_id"] {
+					t.Fatalf("durability receipt=%s, want retry receipt=%v", receipt, ownAck.Data["request_id"])
+				}
+			default:
+				t.Fatal("retry's own completion never reached durability")
+			}
+		})
 	}
 }
 
