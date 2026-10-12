@@ -254,5 +254,15 @@ a trusted checkout, `--with-host-config` creates a derived configuration under
 read-only. Unlike the one-shot runner, the devcontainer mounts the checkout as a
 writable workspace for development.
 
+Devcontainer homes persist in named volumes: `agent-runner-dev-home` by default
+and `agent-runner-dev-home-host-auth` with `--with-host-config`. The sync script
+preserves existing Claude settings, so rebuilding a devcontainer does not
+remove host hooks copied before hook filtering was added. To refresh those
+settings, back up and delete `~/.claude/settings.json` and
+`~/.claude/settings.local.json` **inside the devcontainer**, then restart with
+`--with-host-config` to seed fresh copies without host hooks. If you want to
+keep sandbox edits, edit those files inside the devcontainer to remove only
+the host hook entries instead.
+
 Run `scripts/sandbox-run.sh --help` and
 `scripts/devcontainer-shell.sh --help` for all supported options.
