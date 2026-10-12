@@ -8,9 +8,11 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/codagent/agent-runner/internal/discovery"
+	"github.com/codagent/agent-runner/internal/listview"
 	"github.com/codagent/agent-runner/internal/model"
 	nativesetup "github.com/codagent/agent-runner/internal/onboarding/native"
 	"github.com/codagent/agent-runner/internal/paramform"
@@ -780,6 +782,80 @@ func writeRunState(t *testing.T, runsDir, sessionID, workflowFile string, comple
 		t.Fatalf("write state %s: %v", sessionID, err)
 	}
 	return sessionDir
+}
+
+func TestSwitcher_QInParamFormIsTypedNotQuit(t *testing.T) {
+	entry := discovery.WorkflowEntry{
+		CanonicalName: "deploy",
+		Params:        []model.Param{{Name: "task_file"}},
+	}
+	sw := &switcher{mode: showingParamForm, paramform: paramform.New(&entry)}
+
+	updated, cmd := sw.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd != nil {
+		if _, ok := cmd().(tea.QuitMsg); ok {
+			t.Error("typing q in a param field should not quit")
+		}
+	}
+	sw = updated.(*switcher)
+	if got := sw.paramform.InputValue(sw.paramform.FocusedIndex()); got != "q" {
+		t.Errorf("focused field value = %q, want q", got)
+	}
+}
+
+func TestSwitcher_QInNewTabSearchIsTypedNotQuit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Chdir(t.TempDir())
+	list, err := listview.New(listview.WithInitialTab(listview.InitialTabNew), listview.WithSplash(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sw := &switcher{mode: showingList, list: list}
+	sw.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	sw.Update(tea.KeyMsg{Type: tea.KeyUp}) // Move from the first row to the search box.
+
+	updated, cmd := sw.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd != nil {
+		if _, ok := cmd().(tea.QuitMsg); ok {
+			t.Error("typing q in the New tab search box should not quit")
+		}
+	}
+	if got := ansi.Strip(updated.View()); !strings.Contains(got, "🔍 q") {
+		t.Errorf("view should show q in the search box, got:\n%s", got)
+	}
+}
+
+func TestSwitcher_QInNormalListQuits(t *testing.T) {
+	sw := &switcher{mode: showingList, list: &listview.Model{}}
+	_, cmd := sw.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd == nil {
+		t.Fatal("q in normal list mode should produce a quit cmd")
+	}
+	if msg := cmd(); msg != (tea.QuitMsg{}) {
+		t.Fatalf("quit cmd returned %T, want tea.QuitMsg", msg)
+	}
+}
+
+func TestSwitcher_CtrlCQuitsFromEveryMode(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode switcherMode
+	}{
+		{name: "list", mode: showingList},
+		{name: "run view", mode: showingRunView},
+		{name: "param form", mode: showingParamForm},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sw := &switcher{mode: tc.mode}
+			_, cmd := sw.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+			if cmd == nil {
+				t.Fatal("ctrl+c should produce a quit cmd")
+			}
+			if msg := cmd(); msg != (tea.QuitMsg{}) {
+				t.Fatalf("quit cmd returned %T, want tea.QuitMsg", msg)
+			}
+		})
+	}
 }
 
 func TestSwitcher_StartRunWithParams_ShowsParamFormAndCancelRestoresList(t *testing.T) {

@@ -1,0 +1,74 @@
+# E2E-002: load-time errors also prevent execution.
+chmod 755 bin/claude
+env PATH=$WORK/bin:$PATH
+env CLAUDE_STUB_LOG=$WORK/claude-args.log
+env HOME=$WORK/home
+! exec agent-runner -validate .agent-runner/workflows/invalid-v1.0.yaml
+stderr 'invalid autonomous_backend "tty".*headless, interactive, interactive-claude'
+! exec agent-runner -validate .agent-runner/workflows/shell-v1.0.yaml
+stderr '"autonomous_backend" is only allowed on agent steps'
+! exec agent-runner -validate .agent-runner/workflows/interactive-v1.0.yaml
+stderr '"autonomous_backend" requires autonomous mode'
+! exec agent-runner -validate .agent-runner/workflows/capture-v1.0.yaml
+stderr '"capture" cannot be combined with an interactive "autonomous_backend"'
+exec agent-runner -validate .agent-runner/workflows/valid-v1.0.yaml
+! exec agent-runner capture
+stderr '"capture" cannot be combined with an interactive "autonomous_backend"'
+! exists claude-args.log
+
+-- bin/claude --
+#!/bin/sh
+echo "$@" >> "$CLAUDE_STUB_LOG"
+echo '{"type":"result","result":"captured-output"}'
+
+-- .agent-runner/config.yaml --
+profiles:
+  default:
+    agents:
+      worker:
+        default_mode: autonomous
+        cli: claude
+
+-- home/.agent-runner/settings.yaml --
+autonomous_backend: interactive
+
+-- .agent-runner/workflows/invalid-v1.0.yaml --
+name: invalid
+steps:
+  - id: invalid
+    agent: worker
+    prompt: work
+    mode: autonomous
+    autonomous_backend: tty
+-- .agent-runner/workflows/shell-v1.0.yaml --
+name: shell
+steps:
+  - id: invalid
+    command: echo hello
+    autonomous_backend: headless
+-- .agent-runner/workflows/interactive-v1.0.yaml --
+name: interactive
+steps:
+  - id: invalid
+    agent: worker
+    prompt: work
+    mode: interactive
+    autonomous_backend: headless
+-- .agent-runner/workflows/capture-v1.0.yaml --
+name: capture
+steps:
+  - id: invalid
+    agent: worker
+    prompt: work
+    mode: autonomous
+    autonomous_backend: interactive
+    capture: out
+-- .agent-runner/workflows/valid-v1.0.yaml --
+name: valid
+steps:
+  - id: valid
+    agent: worker
+    prompt: work
+    mode: autonomous
+    autonomous_backend: headless
+    capture: out

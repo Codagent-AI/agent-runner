@@ -38,7 +38,8 @@ inspection, not fresh execution.
 | `core:finalize-pr` | Push PR, wait for CI, fix failures, and repeat until green, with a maximum of three fix cycles. |
 | `core:implement-change` | Run the shared task implementation, validation, draft-PR, and acceptance-preparation phases. |
 | `core:implement-task` | Implement a single task with an agent step followed by a validator retry loop. The task must leave a commit in the run repository, or, when its work was delivered as pushed commits in another local repository, pass through an external delivery record that the gate verifies against that repository's git objects. Pushed state is judged from that clone's local remote-tracking refs without contacting the remote. |
-| `core:plan-change` | Run the shared definition validation, task planning, and task-review phases. |
+| `core:plan-and-implement-change` | Plan and implement an existing approved change in one run: run `core:plan-change`, then `core:implement-change`, sharing one run id, resume target, and `run-metrics.json`. It does not create, define, accept, archive, or finalize the change, and needs the `lead`, `crosscheck`, `implementor`, and `tester` agents. Setting `skip_validator` to `true` skips every workflow-owned Agent Validator call. |
+| `core:plan-change` | Run the shared definition validation, task planning, and task-review phases. Its optional `skip_validator` parameter (default `false`) commits the plan without advancing the Agent Validator baseline. |
 | `core:review-proposal` | Run adversarial proposal review, lead response, and up to three discussion rounds. |
 | `core:review-tasks` | Independently review and autonomously correct a structured task plan. |
 | `core:run-validator` | Run Agent Validator with a counted retry loop and fix-on-failure step. |

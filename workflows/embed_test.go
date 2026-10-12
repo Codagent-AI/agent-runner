@@ -309,17 +309,20 @@ func TestV2NamespaceAdaptersConfigureSharedCorePhases(t *testing.T) {
 	}
 }
 
-func TestCorePlanChangeUsesDeterministicValidation(t *testing.T) {
-	body, err := ReadFile("builtin:core/plan-change-v1.0.yaml")
-	if err != nil {
-		t.Fatalf("ReadFile(core plan-change): %v", err)
-	}
-
-	var workflow struct {
-		Params []struct {
-			Name string `yaml:"name"`
-		} `yaml:"params"`
-		Steps []struct {
+type definitionCheckWorkflow struct {
+	Steps []struct {
+		ID                string            `yaml:"id"`
+		Script            string            `yaml:"script"`
+		Prompt            string            `yaml:"prompt"`
+		Workflow          string            `yaml:"workflow"`
+		ScriptInputs      map[string]string `yaml:"script_inputs"`
+		Capture           string            `yaml:"capture"`
+		CaptureStderr     bool              `yaml:"capture_stderr"`
+		ContinueOnFailure bool              `yaml:"continue_on_failure"`
+		BreakIf           string            `yaml:"break_if"`
+		SkipIf            string            `yaml:"skip_if"`
+		Loop              map[string]int    `yaml:"loop"`
+		Steps             []struct {
 			ID                string            `yaml:"id"`
 			Script            string            `yaml:"script"`
 			Prompt            string            `yaml:"prompt"`
@@ -329,43 +332,76 @@ func TestCorePlanChangeUsesDeterministicValidation(t *testing.T) {
 			ContinueOnFailure bool              `yaml:"continue_on_failure"`
 			BreakIf           string            `yaml:"break_if"`
 			SkipIf            string            `yaml:"skip_if"`
-			Loop              map[string]int    `yaml:"loop"`
-			Steps             []struct {
-				ID                string            `yaml:"id"`
-				Script            string            `yaml:"script"`
-				Prompt            string            `yaml:"prompt"`
-				ScriptInputs      map[string]string `yaml:"script_inputs"`
-				Capture           string            `yaml:"capture"`
-				CaptureStderr     bool              `yaml:"capture_stderr"`
-				ContinueOnFailure bool              `yaml:"continue_on_failure"`
-				BreakIf           string            `yaml:"break_if"`
-				SkipIf            string            `yaml:"skip_if"`
-			} `yaml:"steps"`
 		} `yaml:"steps"`
-	}
-	if err := yaml.Unmarshal(body, &workflow); err != nil {
-		t.Fatalf("unmarshal core plan-change: %v", err)
-	}
+	} `yaml:"steps"`
+}
 
-	if strings.Contains(string(body), "PLANNING_READY") ||
-		strings.Contains(string(body), "definition_validation_checklist") ||
-		strings.Contains(string(body), "planning-status-gate.sh") {
-		t.Fatalf("core plan-change still contains agent-owned validation protocol:\n%s", body)
+func readDefinitionCheckWorkflow(t *testing.T, ref string) (workflow definitionCheckWorkflow, body string) {
+	t.Helper()
+	raw, err := ReadFile(ref)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", ref, err)
 	}
+	if err := yaml.Unmarshal(raw, &workflow); err != nil {
+		t.Fatalf("unmarshal %s: %v", ref, err)
+	}
+	return workflow, string(raw)
+}
 
-	var checkDefinition, verifyDefinition, checkPlan = -1, -1, -1
+func stepIndex(workflow definitionCheckWorkflow, id string) int {
 	for index := range workflow.Steps {
-		switch workflow.Steps[index].ID {
-		case "check-definition":
-			checkDefinition = index
-		case "verify-definition":
-			verifyDefinition = index
-		case "check-plan":
-			checkPlan = index
+		if workflow.Steps[index].ID == id {
+			return index
 		}
 	}
-	if checkDefinition < 0 || verifyDefinition < 0 || checkPlan < 0 {
-		t.Fatalf("core plan-change validation steps = check-definition:%d verify-definition:%d check-plan:%d", checkDefinition, verifyDefinition, checkPlan)
+	return -1
+}
+
+func TestCoreDefinitionCheckCallersUseSharedWorkflow(t *testing.T) {
+	for _, tt := range []struct {
+		ref    string
+		before string
+	}{
+		{ref: "builtin:core/plan-change-v1.0.yaml", before: "tasks"},
+		{ref: "builtin:core/orchestrated-implement-change-v1.0.yaml", before: "commit-definition"},
+	} {
+		t.Run(tt.ref, func(t *testing.T) {
+			workflow, body := readDefinitionCheckWorkflow(t, tt.ref)
+			if strings.Contains(body, "PLANNING_READY") ||
+				strings.Contains(body, "definition_validation_checklist") ||
+				strings.Contains(body, "planning-status-gate.sh") {
+				t.Fatalf("%s still contains agent-owned validation protocol:\n%s", tt.ref, body)
+			}
+			check, next := stepIndex(workflow, "check-definition"), stepIndex(workflow, tt.before)
+			if check < 0 || next < 0 || check > next {
+				t.Fatalf("%s steps = check-definition:%d %s:%d, want definition check first", tt.ref, check, tt.before, next)
+			}
+			if got := workflow.Steps[check].Workflow; got != "check-definition-v1.0.yaml" {
+				t.Fatalf("%s check-definition workflow = %q, want shared check-definition-v1.0.yaml", tt.ref, got)
+			}
+		})
+	}
+
+	plan, _ := readDefinitionCheckWorkflow(t, "builtin:core/plan-change-v1.0.yaml")
+	checkPlan := stepIndex(plan, "check-plan")
+	if checkPlan < 0 {
+		t.Fatal("core plan-change has no check-plan step")
+	}
+	finalPlanCheck := plan.Steps[checkPlan]
+	if finalPlanCheck.Script != "validate-planning-artifacts.sh" || finalPlanCheck.ScriptInputs["require_tasks"] != "true" {
+		t.Errorf("check-plan = %+v, want deterministic task-plan validation", finalPlanCheck)
+	}
+}
+
+func TestCoreCheckDefinitionUsesDeterministicValidation(t *testing.T) {
+	workflow, body := readDefinitionCheckWorkflow(t, "builtin:core/check-definition-v1.0.yaml")
+	if strings.Contains(body, "PLANNING_READY") || strings.Contains(body, "planning-status-gate.sh") {
+		t.Fatalf("core check-definition contains agent-owned validation protocol:\n%s", body)
+	}
+
+	checkDefinition, verifyDefinition := stepIndex(workflow, "check-definition"), stepIndex(workflow, "verify-definition")
+	if checkDefinition < 0 || verifyDefinition < 0 || checkDefinition > verifyDefinition {
+		t.Fatalf("core check-definition steps = check-definition:%d verify-definition:%d", checkDefinition, verifyDefinition)
 	}
 
 	retry := workflow.Steps[checkDefinition]
@@ -394,10 +430,6 @@ func TestCorePlanChangeUsesDeterministicValidation(t *testing.T) {
 		finalDefinitionCheck.ScriptInputs["require_tasks"] != "false" ||
 		finalDefinitionCheck.SkipIf != "previous_success" {
 		t.Errorf("verify-definition = %+v, want final deterministic verification after retry exhaustion", finalDefinitionCheck)
-	}
-	finalPlanCheck := workflow.Steps[checkPlan]
-	if finalPlanCheck.Script != "validate-planning-artifacts.sh" || finalPlanCheck.ScriptInputs["require_tasks"] != "true" {
-		t.Errorf("check-plan = %+v, want deterministic task-plan validation", finalPlanCheck)
 	}
 }
 
@@ -530,6 +562,249 @@ func TestCoreImplementChangeSkipValidatorControlsAllValidatorRuns(t *testing.T) 
 	if verifyChange.Workflow != "verify-change-v1.0.yaml" || verifyChange.Params["skip_validator"] != "{{skip_validator}}" {
 		t.Fatalf("verify-change step = %+v, want the verify-change workflow with skip_validator forwarded", verifyChange)
 	}
+}
+
+func TestCorePlanAndImplementChangeComposesPlanThenImplement(t *testing.T) {
+	ref, err := Resolve("core:plan-and-implement-change")
+	if err != nil {
+		t.Fatalf("Resolve(core:plan-and-implement-change): %v", err)
+	}
+	if ref != "builtin:core/plan-and-implement-change-v1.0.yaml" {
+		t.Fatalf("resolved ref = %q, want core plan-and-implement-change v1.0", ref)
+	}
+	workflow := readBuiltinWorkflowForTest(t, ref)
+	if workflow.Name != "plan-and-implement-change" || !workflow.Hidden {
+		t.Fatalf("workflow name=%q hidden=%v, want hidden plan-and-implement-change", workflow.Name, workflow.Hidden)
+	}
+	if len(workflow.Sessions) != 0 {
+		t.Fatalf("plan-and-implement-change declares sessions %+v, want none of its own", workflow.Sessions)
+	}
+
+	type param struct {
+		Name     string
+		Required bool
+		Default  string
+	}
+	var params []param
+	for i := range workflow.Params {
+		p := &workflow.Params[i]
+		params = append(params, param{Name: p.Name, Required: p.IsRequired(), Default: p.Default})
+	}
+	wantParams := []param{
+		{Name: "change_name", Required: true},
+		{Name: "change_dir", Required: true},
+		{Name: "change_label", Required: true},
+		{Name: "change_kind", Required: true},
+		{Name: "artifact_validation_instruction", Required: true},
+		{Name: "skip_validator", Default: "false"},
+	}
+	if diff := cmp.Diff(wantParams, params); diff != "" {
+		t.Errorf("plan-and-implement-change params mismatch (-want +got):\n%s", diff)
+	}
+
+	type step struct {
+		ID       string
+		Workflow string
+		Params   map[string]string
+	}
+	var steps []step
+	for i := range workflow.Steps {
+		s := &workflow.Steps[i]
+		if s.SkipIf != "" || s.ContinueOnFailure || s.Loop != nil || len(s.Steps) != 0 {
+			t.Errorf("step %q must run unconditionally and stop the run on failure: %+v", s.ID, s)
+		}
+		steps = append(steps, step{ID: s.ID, Workflow: s.Workflow, Params: s.Params})
+	}
+	wantSteps := []step{
+		{
+			ID:       "plan",
+			Workflow: "plan-change-v1.0.yaml",
+			Params: map[string]string{
+				"change_name":    "{{change_name}}",
+				"change_dir":     "{{change_dir}}",
+				"change_label":   "{{change_label}}",
+				"change_kind":    "{{change_kind}}",
+				"skip_validator": "{{skip_validator}}",
+			},
+		},
+		{
+			ID:       "implement",
+			Workflow: "implement-change-v1.0.yaml",
+			Params: map[string]string{
+				"change_name":                     "{{change_name}}",
+				"change_dir":                      "{{change_dir}}",
+				"change_label":                    "{{change_label}}",
+				"change_kind":                     "{{change_kind}}",
+				"artifact_validation_instruction": "{{artifact_validation_instruction}}",
+				"skip_validator":                  "{{skip_validator}}",
+			},
+		},
+	}
+	if diff := cmp.Diff(wantSteps, steps); diff != "" {
+		t.Errorf("plan-and-implement-change steps mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCorePlanChangeSkipValidatorReachesPlanCommit(t *testing.T) {
+	const ref = "builtin:core/plan-change-v1.0.yaml"
+	workflow := readBuiltinWorkflowForTest(t, ref)
+
+	var skipParam *model.Param
+	for i := range workflow.Params {
+		if workflow.Params[i].Name == "skip_validator" {
+			skipParam = &workflow.Params[i]
+		}
+	}
+	if skipParam == nil || skipParam.IsRequired() || skipParam.Default != "false" {
+		t.Fatalf("plan-change skip_validator param = %+v, want optional with default false", skipParam)
+	}
+
+	steps := workflow.Steps
+	indexes := stepIndexes(steps)
+	requireSkipValidatorValidation(t, ref, steps, indexes)
+	validateIndex := indexes["validate-skip-validator"]
+	for i := 0; i < validateIndex; i++ {
+		t.Errorf("step %q runs before skip_validator validation; validation must come first", steps[i].ID)
+	}
+	if checkDefinition, ok := indexes["check-definition"]; !ok || checkDefinition < validateIndex {
+		t.Fatal("skip_validator must be validated before definition checking")
+	}
+
+	commitIndex, ok := indexes["commit-plan"]
+	if !ok {
+		t.Fatal("plan-change has no commit-plan step")
+	}
+	commit := steps[commitIndex]
+	if commit.Script != "commit-change-plan.sh" || commit.ScriptInputs["skip_validator"] != "{{skip_validator}}" {
+		t.Fatalf("commit-plan = %+v, want commit-change-plan.sh with skip_validator forwarded", commit)
+	}
+	if commit.SkipIf != "sh: test {{change_kind}} = spec-driven" {
+		t.Fatalf("commit-plan skip_if = %q, want the change_kind condition unchanged", commit.SkipIf)
+	}
+
+	standalone := readBuiltinWorkflowForTest(t, "builtin:core/commit-change-plan-v1.0.yaml")
+	for i := range standalone.Steps {
+		if _, ok := standalone.Steps[i].ScriptInputs["skip_validator"]; ok {
+			t.Fatalf("core:commit-change-plan must not pass skip_validator: %+v", standalone.Steps[i])
+		}
+	}
+}
+
+func TestCoreCommitChangePlanSkipValidatorControlsValidatorBaseline(t *testing.T) {
+	script, err := ReadAsset("core/commit-change-plan.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(core/commit-change-plan.sh): %v", err)
+	}
+
+	cases := []struct {
+		name             string
+		skipField        string
+		alreadyCommitted bool
+		wantValidator    bool
+	}{
+		{name: "absent commits and advances baseline", wantValidator: true},
+		{name: "absent already committed advances baseline", alreadyCommitted: true, wantValidator: true},
+		{name: "false commits and advances baseline", skipField: `,"skip_validator":"false"`, wantValidator: true},
+		{name: "true commits without validator", skipField: `,"skip_validator":"true"`},
+		{name: "true already committed without validator", skipField: `,"skip_validator":"true"`, alreadyCommitted: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tempDir, run, validatorLog := newCommitChangePlanFixture(t, script)
+			payload := `{"change_name":"demo","change_dir":"openspec/changes/demo"` + tc.skipField + `}`
+			if tc.alreadyCommitted {
+				runGitOutput(t, tempDir, "add", "openspec/changes/demo")
+				runGitOutput(t, tempDir, "commit", "-m", "chore: pre-commit plan")
+			}
+			headBefore := strings.TrimSpace(string(runGitOutput(t, tempDir, "rev-parse", "HEAD")))
+
+			if out, err := run(payload); err != nil {
+				t.Fatalf("commit-change-plan: %v\n%s", err, out)
+			}
+
+			headAfter := strings.TrimSpace(string(runGitOutput(t, tempDir, "rev-parse", "HEAD")))
+			if tc.alreadyCommitted && headAfter != headBefore {
+				t.Fatalf("already-committed plan created a new commit")
+			}
+			if !tc.alreadyCommitted && headAfter == headBefore {
+				t.Fatalf("plan was not committed")
+			}
+			calls, err := os.ReadFile(validatorLog)
+			if err != nil && !os.IsNotExist(err) {
+				t.Fatalf("read validator log: %v", err)
+			}
+			wantCalls := ""
+			if tc.wantValidator {
+				wantCalls = "skip\n"
+			}
+			if got := string(calls); got != wantCalls {
+				t.Fatalf("agent-validator calls = %q, want %q", got, wantCalls)
+			}
+		})
+	}
+
+	t.Run("invalid value rejected before committing", func(t *testing.T) {
+		tempDir, run, validatorLog := newCommitChangePlanFixture(t, script)
+		headBefore := strings.TrimSpace(string(runGitOutput(t, tempDir, "rev-parse", "HEAD")))
+		out, err := run(`{"change_name":"demo","change_dir":"openspec/changes/demo","skip_validator":"yes"}`)
+		if err == nil {
+			t.Fatalf("invalid skip_validator succeeded:\n%s", out)
+		}
+		if !strings.Contains(out, "skip_validator") {
+			t.Fatalf("output = %q, want skip_validator error", out)
+		}
+		if headAfter := strings.TrimSpace(string(runGitOutput(t, tempDir, "rev-parse", "HEAD"))); headAfter != headBefore {
+			t.Fatal("invalid skip_validator created a commit")
+		}
+		if _, err := os.Stat(validatorLog); !os.IsNotExist(err) {
+			t.Fatalf("invalid skip_validator ran agent-validator (stat err %v)", err)
+		}
+	})
+}
+
+// newCommitChangePlanFixture creates a git repository with an uncommitted
+// openspec/changes/demo plan and a fake agent-validator that records its
+// arguments. It returns the repository, a script runner, and the log path.
+func newCommitChangePlanFixture(t *testing.T, script []byte) (repoDir string, run func(payload string) (string, error), validatorLog string) {
+	t.Helper()
+	repoDir = t.TempDir()
+	scriptPath := filepath.Join(t.TempDir(), "commit-change-plan.sh")
+	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	runGitOutput(t, repoDir, "init")
+	runGitOutput(t, repoDir, "config", "user.name", "Agent Runner Test")
+	runGitOutput(t, repoDir, "config", "user.email", "agent-runner@example.com")
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("fixture\n"), 0o600); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	runGitOutput(t, repoDir, "add", "README.md")
+	runGitOutput(t, repoDir, "commit", "-m", "chore: initialize fixture")
+
+	changeDir := filepath.Join(repoDir, "openspec", "changes", "demo")
+	if err := os.MkdirAll(changeDir, 0o755); err != nil {
+		t.Fatalf("create change directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(changeDir, "tasks.md"), []byte("tasks\n"), 0o600); err != nil {
+		t.Fatalf("write tasks: %v", err)
+	}
+
+	binDir := t.TempDir()
+	validatorLog = filepath.Join(t.TempDir(), "agent-validator.log")
+	fakeValidator := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + strconv.Quote(validatorLog) + "\n"
+	if err := os.WriteFile(filepath.Join(binDir, "agent-validator"), []byte(fakeValidator), 0o700); err != nil {
+		t.Fatalf("write fake agent-validator: %v", err)
+	}
+
+	run = func(payload string) (string, error) {
+		cmd := exec.Command("sh", scriptPath)
+		cmd.Dir = repoDir
+		cmd.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
+		cmd.Stdin = strings.NewReader(payload)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	return repoDir, run, validatorLog
 }
 
 // The acceptance-round validator gate is exercised by executing the loop in

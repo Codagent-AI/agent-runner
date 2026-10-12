@@ -6,6 +6,7 @@ payload=$(cat)
 if command -v jq >/dev/null 2>&1; then
   change_name=$(printf '%s' "$payload" | jq -er '.change_name | select(type == "string")')
   change_dir=$(printf '%s' "$payload" | jq -er '.change_dir | select(type == "string")')
+  skip_validator=$(printf '%s' "$payload" | jq -r 'if has("skip_validator") then .skip_validator | tostring else "false" end')
 else
   parsed=$(PAYLOAD="$payload" python3 - <<'PY'
 import json
@@ -22,13 +23,35 @@ change_dir = parsed.get("change_dir") if isinstance(parsed, dict) else None
 if not isinstance(change_name, str) or not isinstance(change_dir, str):
     print("commit-change-plan: change_name and change_dir must be strings", file=sys.stderr)
     sys.exit(2)
+skip_validator = parsed.get("skip_validator", "false")
+if not isinstance(skip_validator, str):
+    skip_validator = json.dumps(skip_validator)
 print(change_name)
 print(change_dir)
+print(skip_validator)
 PY
 )
   change_name=$(printf '%s\n' "$parsed" | sed -n '1p')
   change_dir=$(printf '%s\n' "$parsed" | sed -n '2p')
+  skip_validator=$(printf '%s\n' "$parsed" | sed -n '3p')
 fi
+
+# An absent skip_validator means false, so callers that omit it keep advancing
+# the Validator baseline.
+case "$skip_validator" in
+  true|false)
+    ;;
+  *)
+    printf 'commit-change-plan: skip_validator must be true or false, got: %s\n' "$skip_validator" >&2
+    exit 1
+    ;;
+esac
+
+advance_validator_baseline() {
+  if [ "$skip_validator" = "false" ]; then
+    agent-validator skip
+  fi
+}
 
 case "$change_name" in
   ""|[!a-z0-9]*|*[!a-z0-9-]*)
@@ -49,7 +72,7 @@ if git diff --cached --quiet -- "$change_dir" &&
    [ -z "$(git ls-files --others --exclude-standard -- "$change_dir")" ] &&
    git cat-file -e "HEAD:$change_dir" 2>/dev/null; then
   printf 'commit-change-plan: %s is already committed\n' "$change_name"
-  agent-validator skip
+  advance_validator_baseline
   exit 0
 fi
 
@@ -86,4 +109,4 @@ if [ -n "$openspec_config" ]; then
 else
   git commit -m "$commit_message" -- "$change_dir"
 fi
-agent-validator skip
+advance_validator_baseline
