@@ -1021,10 +1021,20 @@ func cleanupNewRealAgentRuns(t *testing.T, workdir, workflowName string) {
 // E2E-001 keeps the token out of the worktree until resume; transcript and
 // audit identities distinguish genuine continuity from a fresh-call reply.
 func TestClaudeFollowUpHeadlessRealAgentE2E(t *testing.T) {
+	runChildFollowUpHeadlessRealAgentE2E(t, "claude")
+}
+
+func TestCodexChildFollowUpHeadlessRealAgentE2E(t *testing.T) {
+	runChildFollowUpHeadlessRealAgentE2E(t, "codex")
+}
+
+func runChildFollowUpHeadlessRealAgentE2E(t *testing.T, childCLI string) {
+	t.Helper()
+	requireRealAgentChild(t, childCLI)
 	_, dir, bin := prepareRealAgentE2E(t, "claude")
 	home := t.TempDir()
 	writeRealAgentTestFile(t, filepath.Join(home, ".agent-runner", "settings.yaml"), []byte("autonomous_permission_mode: yolo\nrun_retention:\n  enabled: false\n"))
-	name := "real-claude-followup"
+	name := "real-" + childCLI + "-followup"
 	runGit := func(args ...string) string {
 		t.Helper()
 		cmd := exec.Command("git", args...)
@@ -1039,6 +1049,10 @@ func TestClaudeFollowUpHeadlessRealAgentE2E(t *testing.T) {
 	runGit("config", "user.name", "E2E")
 	runGit("config", "user.email", "e2e@example.com")
 	runGit("commit", "--allow-empty", "-m", "initial")
+	transcriptDir := filepath.Join(home, ".claude", "projects")
+	if childCLI == "codex" {
+		transcriptDir = filepath.Join(home, ".codex", "sessions")
+	}
 	workflow := fmt.Sprintf(`name: %s
 steps:
   - id: parent
@@ -1046,15 +1060,16 @@ steps:
     session: new
     tools: [call_agent]
     prompt: |
-      Use only Runner call_agent for delegation. Call agent claude_headless_smoke with timeout 10m and this exact prompt: "Invent EXACTLY TWO unusual lowercase words joined by exactly ONE underscore (format word_word, with no third word). Keep the secret only in your native conversation history: run a no-output shell command of the form colon-space-hash-space followed by YOUR_TOKEN (: # YOUR_TOKEN), substituting your invented token. This shell comment is a conversation-only memory aid. Do not put the token in any workspace file, commit, or reply. Create notes.txt with exactly 'continuation test' and commit ONLY notes.txt. Reply only ready."
-      Wait for the terminal result (poll get_agent_call if needed). Save that call's entire tool response as first.json. Run find "$HOME/.claude/projects" -name "*.jsonl" | sort and save those paths in before-transcripts.txt.
+      Work in %s. Save every requested artifact in that directory, using absolute paths. Preserve the entire tool response JSON including details; do not summarize or reconstruct it. Keep child calls in that same working directory.
+      Use only Runner call_agent for delegation. Call agent %s_headless_smoke with timeout 10m and this exact prompt: "Invent EXACTLY TWO unusual lowercase words joined by exactly ONE underscore (format word_word, with no third word). Keep the secret only in your native conversation history: run a no-output shell command of the form colon-space-hash-space followed by YOUR_TOKEN (: # YOUR_TOKEN), substituting your invented token. This shell comment is a conversation-only memory aid. Do not put the token in any workspace file, commit, or reply. Create notes.txt with exactly 'continuation test' and commit ONLY notes.txt. Reply only ready."
+      Wait for the terminal result (poll get_agent_call if needed). Save that call's entire tool response as first.json. Run find "%s" -name "*.jsonl" | sort and save those paths in before-transcripts.txt.
       Call follow_up using the first call_id with timeout 10m and this exact prompt: "Write the secret token you invented earlier into token.txt, then reply only saved." Save its entire terminal tool response as second.json. Run the same find command again and save the sorted paths in after-transcripts.txt.
-      Then make a fresh agent claude_headless_smoke call with timeout 10m and prompt: "Write the secret token you invented earlier into control.txt if you remember one; otherwise reply unknown without creating a file." Save its entire terminal response as control.json.
+      Then make a fresh agent %s_headless_smoke call with timeout 10m and prompt: "Write the secret token you invented earlier into control.txt if you remember one; otherwise reply unknown without creating a file." Save its entire terminal response as control.json.
       Reply done.
-`, name)
+`, name, dir, childCLI, transcriptDir, childCLI)
 	writeRealAgentCatalogWorkflow(t, dir, name, []byte(workflow))
 	env := realAgentTestEnv(false)
-	env = appendEnvOverride(env, "HOME", home)
+	env = isolatedRealAgentCallEnv(t, env, home, childCLI)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, "--headless", "--profile", "smoke_test", name)
@@ -1123,8 +1138,8 @@ steps:
 		t.Fatalf("native identity continuity: %v", calls)
 	}
 	var transcript []byte
-	_ = filepath.WalkDir(filepath.Join(home, ".claude", "projects"), func(path string, entry os.DirEntry, err error) error {
-		if err == nil && !entry.IsDir() && entry.Name() == calls[first.CallID]+".jsonl" {
+	_ = filepath.WalkDir(transcriptDir, func(path string, entry os.DirEntry, err error) error {
+		if err == nil && !entry.IsDir() && strings.HasSuffix(entry.Name(), calls[first.CallID]+".jsonl") {
 			transcript, _ = os.ReadFile(path)
 		}
 		return nil
@@ -1142,10 +1157,20 @@ steps:
 }
 
 func TestClaudeTimeoutHeadlessRealAgentE2E(t *testing.T) {
+	runChildTimeoutHeadlessRealAgentE2E(t, "claude")
+}
+
+func TestCodexChildTimeoutHeadlessRealAgentE2E(t *testing.T) {
+	runChildTimeoutHeadlessRealAgentE2E(t, "codex")
+}
+
+func runChildTimeoutHeadlessRealAgentE2E(t *testing.T, childCLI string) {
+	t.Helper()
+	requireRealAgentChild(t, childCLI)
 	_, dir, bin := prepareRealAgentE2E(t, "claude")
 	home := t.TempDir()
 	writeRealAgentTestFile(t, filepath.Join(home, ".agent-runner", "settings.yaml"), []byte("autonomous_permission_mode: yolo\nrun_retention:\n  enabled: false\n"))
-	name := "real-claude-call-timeout"
+	name := "real-" + childCLI + "-call-timeout"
 	workflow := fmt.Sprintf(`name: %s
 steps:
   - id: parent
@@ -1153,14 +1178,43 @@ steps:
     session: new
     tools: [call_agent]
     prompt: |
-      Call agent claude_headless_smoke with timeout 30s. Ask it to run 'echo $$ > sleeper.pid; exec sleep 600' in its shell before replying. Wait for the terminal tool result, polling get_agent_call if needed. Write error.code to timeout.txt, then reply done.
-`, name)
+      Work in %s and save timeout.txt there using an absolute path. Keep the child in that working directory.
+      Call agent %s_headless_smoke with timeout 30s. Ask it to run 'echo $$ > sleeper.pid; exec sleep 600' in its shell before replying. Wait for the terminal tool result, polling get_agent_call if needed. Write error.code to timeout.txt, then reply done.
+`, name, dir, childCLI)
 	writeRealAgentCatalogWorkflow(t, dir, name, []byte(workflow))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, "--headless", "--profile", "smoke_test", name)
 	cmd.Dir = dir
-	cmd.Env = appendEnvOverride(realAgentTestEnv(false), "HOME", home)
+	cmd.Env = isolatedRealAgentCallEnv(t, realAgentTestEnv(false), home, childCLI)
+	// Record the native CLI's process group before exec, independently of whether
+	// the model reaches its shell tool before the deadline.
+	adapter, err := cli.Get(childCLI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable := cli.ExecutableName(childCLI, adapter)
+	realCLI, err := exec.LookPath(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapperDir := t.TempDir()
+	groupPath := filepath.Join(dir, "child.pgid")
+	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
+	wrapper := filepath.Join(wrapperDir, executable)
+	writeRealAgentTestFile(t, wrapper, []byte("#!/bin/sh\nps -o pgid= -p $$ >> "+quote(groupPath)+"\nexec "+quote(realCLI)+" \"$@\"\n"))
+	if err := os.Chmod(wrapper, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd.Env = appendEnvOverride(cmd.Env, "PATH", wrapperDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Cleanup(func() {
+		data, err := os.ReadFile(filepath.Join(dir, "sleeper.pid"))
+		if err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 0 {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	})
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("timeout E2E: %v\n%s", err, output)
@@ -1168,10 +1222,39 @@ steps:
 	if got := readRealAgentToken(t, filepath.Join(dir, "timeout.txt"), output); got != agentcall.CodeTimedOut {
 		t.Fatalf("code %q", got)
 	}
+	groups := strings.Fields(readRealAgentToken(t, groupPath, output))
+	wantLaunches := 1
+	if childCLI == "claude" {
+		wantLaunches = 2 // The PATH wrapper also records the Claude parent.
+	}
+	if len(groups) != wantLaunches {
+		t.Fatalf("recorded process groups %v, want %d CLI launches", groups, wantLaunches)
+	}
+	pgid, err := strconv.Atoi(groups[len(groups)-1])
+	if err != nil || pgid <= 0 || pgid == syscall.Getpgrp() || (len(groups) == 2 && groups[0] == groups[1]) {
+		t.Fatalf("invalid child process group: %v (%v)", groups, err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for syscall.Kill(-pgid, 0) != syscall.ESRCH && time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err := syscall.Kill(-pgid, 0); err != syscall.ESRCH {
+		t.Fatalf("%s child process group %d survived: %v", childCLI, pgid, err)
+	}
 	if data, err := os.ReadFile(filepath.Join(dir, "sleeper.pid")); err == nil {
-		pid, _ := strconv.Atoi(strings.TrimSpace(string(data)))
-		if pid > 0 && syscall.Kill(pid, 0) == nil {
-			t.Fatalf("sleep process %d survived", pid)
+		pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+		if err != nil || pid <= 0 {
+			t.Fatalf("invalid sleeper PID: %q", data)
+		}
+		if syscall.Kill(pid, 0) == nil {
+			// Codex shell tools create a separate session/process group. The
+			// assertion above covers Runner's native CLI invocation group;
+			// clean up the detached test workload separately.
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			if childCLI != "codex" {
+				t.Fatalf("sleep process %d survived", pid)
+			}
+			t.Logf("cleaned detached Codex shell workload %d", pid)
 		}
 	}
 	found := false
@@ -1191,6 +1274,51 @@ steps:
 		t.Fatal("missing timed-out audit evidence")
 	}
 }
+
+// Require both the Claude parent and the selected native child before setup.
+func requireRealAgentChild(t *testing.T, childCLI string) {
+	t.Helper()
+	for _, name := range []string{"claude", childCLI} {
+		if !realAgentSelected(name, os.Getenv("E2E_AGENTS")) {
+			t.Skipf("%s is not selected by E2E_AGENTS", name)
+		}
+		adapter, err := cli.Get(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := exec.LookPath(cli.ExecutableName(name, adapter)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Keep native transcripts isolated while retaining the real CLI credentials.
+func isolatedRealAgentCallEnv(t *testing.T, env []string, home, childCLI string) []string {
+	t.Helper()
+	if childCLI == "codex" {
+		source := os.Getenv("CODEX_HOME")
+		if source == "" {
+			realHome, err := os.UserHomeDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+			source = filepath.Join(realHome, ".codex")
+		}
+		codexHome := filepath.Join(home, ".codex")
+		if err := os.MkdirAll(codexHome, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(filepath.Join(source, "auth.json"))
+		if err == nil {
+			writeRealAgentTestFile(t, filepath.Join(codexHome, "auth.json"), data)
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("read Codex credentials: %v", err)
+		}
+		env = appendEnvOverride(env, "CODEX_HOME", codexHome)
+	}
+	return appendEnvOverride(env, "HOME", home)
+}
+
 func appendEnvOverride(env []string, key, value string) []string {
 	out := make([]string, 0, len(env)+1)
 	for _, entry := range env {
