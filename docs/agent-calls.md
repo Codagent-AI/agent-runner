@@ -92,7 +92,7 @@ Calls are serial per parent attempt:
 - after a call finishes, the parent may make another call; and
 - a named session that resolves to the parent's active CLI session is rejected to prevent concurrent turns against the same native session.
 
-A call is accepted only after authentication, schema and target validation, safety checks, and request-ID reservation. Rejections before that boundary create no child execution and have no `call_id`. Once accepted, the call remains visible even if the CLI fails to launch. Retrying the same request ID returns the same `call_id` without waiting; `get_agent_call` returns the cached result, including a post-accept launch failure.
+A call is accepted only after authentication, schema and target validation, safety checks, and request-ID reservation. Rejections before that boundary create no child execution and have no `call_id`. Once accepted, the call remains visible even if the CLI fails to launch. Retrying the same request ID returns the same call (same `call_id`) without starting another child. Like `call_agent`, it waits up to the parent CLI's wait budget. `get_agent_call` returns the cached result, including a post-accept launch failure.
 
 Autonomous parents receive pre-authorized access only to the Runner-owned `call_agent`, `get_agent_call`, and `cancel_agent_call` tools. Interactive parents use their CLI's normal MCP approval flow. An optional `timeout` sets a Runner-enforced duration budget from acceptance (Go durations from `1s` to `24h`). Calls without it have no fixed duration limit. Where a CLI supports a process-local MCP timeout setting, Runner raises it so a long child can complete inside one waiting `call_agent`. Cursor exposes no such setting, which is why it polls instead.
 
@@ -137,7 +137,6 @@ The run view reads full child output from the output files. It does not rebuild 
 
 - For `timed_out`, inspect retained output, choose a longer timeout, or follow up if a native session was retained.
 - For `not_resumable`, the source has no native session or its transcript is unavailable in the selected directory. Use the original directory or explicitly start a fresh `agent` call. Runner never silently starts a fresh session for a follow-up.
-
 - If the tools are absent, confirm the active parent agent step declares `tools: [call_agent]`. Mentioning `call_agent` in the prompt does not enable them.
 - If an interactive call waits, complete the CLI's normal tool-approval prompt. Autonomous parents pre-authorize only these Runner-owned tools.
 - If `call_agent` returns a `call_id` with status `accepted` or `running`, poll `get_agent_call` until the call is terminal. Do not treat that start result as the child's response.
