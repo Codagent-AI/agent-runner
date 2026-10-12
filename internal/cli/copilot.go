@@ -315,17 +315,22 @@ func (a *CopilotAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error)
 	}}, nil
 }
 
+// copilotSpawnTimeSkew allows for millisecond-scale filesystem clock lag while
+// limiting the chance of selecting a prior session in the same workdir.
+const copilotSpawnTimeSkew = 10 * time.Millisecond
+
 // DiscoverSessionID returns the session ID after a copilot process exits by
 // scanning ~/.copilot/session-state/ for the most recently modified directory
-// created after spawn time, matching on CWD from workspace.yaml.
+// modified since spawn time with a small clock tolerance, matching on CWD from workspace.yaml.
 func (a *CopilotAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
-	return discoverCopilotSession(opts.SpawnTime, opts.Workdir)
+	return discoverCopilotSession(opts.SpawnTime, opts.Workdir, opts.ExcludeSessionIDs)
 }
 
 // discoverCopilotSession scans ~/.copilot/session-state/ for the most recently
-// modified session directory created after spawnTime, matching on CWD from workspace.yaml.
+// modified session directory since spawnTime with a small clock tolerance,
+// matching on CWD from workspace.yaml.
 // workdir is the effective CWD of the Copilot process; when empty, os.Getwd() is used.
-func discoverCopilotSession(spawnTime time.Time, workdir string) string {
+func discoverCopilotSession(spawnTime time.Time, workdir string, excludeIDs []string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
@@ -351,16 +356,20 @@ func discoverCopilotSession(spawnTime time.Time, workdir string) string {
 		modTime time.Time
 	}
 	var candidates []candidate
+	excluded := excludedSessionIDSet(excludeIDs)
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
+			continue
+		}
+		if _, skip := excluded[entry.Name()]; skip {
 			continue
 		}
 		info, err := entry.Info()
 		if err != nil {
 			continue
 		}
-		if info.ModTime().Before(spawnTime) {
+		if info.ModTime().Before(spawnTime.Add(-copilotSpawnTimeSkew)) {
 			continue
 		}
 		candidates = append(candidates, candidate{id: entry.Name(), modTime: info.ModTime()})

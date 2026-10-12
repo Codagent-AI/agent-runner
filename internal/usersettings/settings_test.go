@@ -8,6 +8,9 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+
+	"github.com/codagent/agent-runner/internal/model"
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestPathResolvesSettingsFileUnderHome(t *testing.T) {
@@ -549,5 +552,12 @@ func writeSettingsFile(t *testing.T, home, body string) {
 	}
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write settings file: %v", err)
+	}
+}
+
+func TestAutonomousBackendModelParity(t *testing.T) {
+	want := []string{string(BackendHeadless), string(BackendInteractive), string(BackendInteractiveClaude)}
+	if diff := cmp.Diff(want, model.AutonomousBackendValues); diff != "" {
+		t.Fatal(diff)
 	}
 }

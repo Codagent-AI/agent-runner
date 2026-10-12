@@ -1,0 +1,38 @@
+name: plan-and-implement-change
+description: "Plan and implement an existing approved change in one run: write and review its task plan, then implement, validate, and prepare it for human acceptance."
+hidden: true
+
+params:
+  - name: change_name
+    required: true
+  - name: change_dir
+    required: true
+  - name: change_label
+    required: true
+  - name: change_kind
+    required: true
+  - name: artifact_validation_instruction
+    required: true
+  - name: skip_validator
+    required: false
+    default: "false"
+
+steps:
+  - id: plan
+    workflow: plan-change-v1.0.yaml
+    params:
+      change_name: "{{change_name}}"
+      change_dir: "{{change_dir}}"
+      change_label: "{{change_label}}"
+      change_kind: "{{change_kind}}"
+      skip_validator: "{{skip_validator}}"
+
+  - id: implement
+    workflow: implement-change-v1.0.yaml
+    params:
+      change_name: "{{change_name}}"
+      change_dir: "{{change_dir}}"
+      change_label: "{{change_label}}"
+      change_kind: "{{change_kind}}"
+      artifact_validation_instruction: "{{artifact_validation_instruction}}"
+      skip_validator: "{{skip_validator}}"
