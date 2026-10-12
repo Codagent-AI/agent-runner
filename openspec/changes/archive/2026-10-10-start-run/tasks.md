@@ -1,0 +1,3 @@
+- [x] Workflow discovery package (`tasks/workflow-discovery.md`)
+- [x] New tab, search, and definition view (`tasks/new-tab-search-definition-view.md`)
+- [x] Param form and run launch (`tasks/param-form-run-launch.md`)
