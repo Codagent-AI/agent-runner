@@ -483,6 +483,33 @@ func agentCallChildSessionIDs(handler control.AgentCallHandler) []string {
 	return provider.ChildSessionIDs()
 }
 
+// childSessionProbe returns the child's start hook, which seeds the native
+// session and launches the live session probe, and a stop func that cancels
+// the probe and joins it so it never outlives the call.
+func (h *AgentCallHandler) childSessionProbe(ctx context.Context, record *acceptedAgentCall, call *resolvedAgentCall, sessionID string, output *synchronizedBuffer) (onStarted, stop func()) {
+	probeCtx, cancel := context.WithCancel(ctx)
+	var done chan struct{}
+	onStarted = func() {
+		h.mu.Lock()
+		if record.nativeSessionID == "" {
+			record.nativeSessionID = sessionID
+		}
+		h.mu.Unlock()
+		done = make(chan struct{})
+		go func() {
+			defer close(done)
+			h.probeChildSessionID(probeCtx, record, call, output)
+		}()
+	}
+	stop = func() {
+		cancel()
+		if done != nil {
+			<-done
+		}
+	}
+	return onStarted, stop
+}
+
 func (h *AgentCallHandler) probeChildSessionID(ctx context.Context, record *acceptedAgentCall, call *resolvedAgentCall, output *synchronizedBuffer) {
 	if output == nil {
 		return
@@ -895,15 +922,9 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 		return h.preLaunchFailure(record, call, "prepare called agent environment: "+err.Error())
 	}
 	record.startGit = h.captureStartGit(call.workdir)
-	probeCtx, stopProbe := context.WithCancel(ctx)
-	var probeDone chan struct{}
-	defer func() {
-		stopProbe()
-		if probeDone != nil {
-			<-probeDone
-		}
-	}()
 	output := &synchronizedBuffer{limit: maxChildSessionProbeBytes}
+	onStarted, stopProbe := h.childSessionProbe(ctx, record, call, sessionID, output)
+	defer stopProbe()
 	invocation, runErr := InvokeAgent(&AgentInvocation{
 		Context: ctx, Adapter: call.adapter, Args: args,
 		Env: spawnEnv, DropEnv: cli.DropSpawnEnvVars(call.adapter),
@@ -914,18 +935,7 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 		StdoutWrapper: childStdoutCapture(call.adapter, io.MultiWriter(output, record.activity)),
 		StderrWrapper: record.activity.stderrWrapper(call.adapter),
 		OnExited:      func(code int) { h.trySettle(record, settledExited, &code) },
-		OnStarted: func() {
-			h.mu.Lock()
-			if record.nativeSessionID == "" {
-				record.nativeSessionID = sessionID
-			}
-			h.mu.Unlock()
-			probeDone = make(chan struct{})
-			go func() {
-				defer close(probeDone)
-				h.probeChildSessionID(probeCtx, record, call, output)
-			}()
-		},
+		OnStarted:     onStarted,
 	}, h.options.Runner, h.options.Log)
 	if invocation.CLILaunched {
 		h.trySettle(record, settledExited, &invocation.ExitCode)
