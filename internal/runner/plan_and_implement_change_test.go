@@ -2,6 +2,7 @@ package runner
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	osexec "os/exec"
@@ -39,6 +40,8 @@ type planAndImplementRunner struct {
 	events     []string
 	// failGenerateCode makes the next n generate-code agents fail.
 	failGenerateCode int
+	taskCount        int
+	indexPrompt      string
 }
 
 func (r *planAndImplementRunner) RunShell(cmd string, _ bool, workdir string) (exec.ProcessResult, error) {
@@ -64,7 +67,7 @@ func (r *planAndImplementRunner) RunScript(path string, stdin []byte, _ bool, wo
 func (r *planAndImplementRunner) RunAgent(options *exec.AgentProcessOptions) (exec.ProcessResult, error) {
 	event := leafStepID(options.Prefix)
 	switch event {
-	case "repair-definition", "review-tasks", "session-report", "simplify", "open-draft-pr":
+	case "test", "review", "fix-violations", "repair-definition", "review-tasks", "session-report", "simplify", "open-draft-pr":
 	case "tasks":
 		r.writeTaskPlan()
 	case "generate-code":
@@ -73,10 +76,11 @@ func (r *planAndImplementRunner) RunAgent(options *exec.AgentProcessOptions) (ex
 			r.events = append(r.events, event+" (failed)")
 			return exec.ProcessResult{Started: true, ExitCode: 1, Stdout: claudeAgentOutput("crashed")}, nil
 		}
-		r.writeRepoFile("feature.txt", "implemented\n")
+		r.writeRepoFile("feature.txt", fmt.Sprintf("implemented %d\n", len(r.events)))
 		gitRun(r.t, r.repo, "add", "feature.txt")
 		gitRun(r.t, r.repo, "commit", "-q", "-m", "feat: implement the task")
 	case "complete-task-index":
+		r.indexPrompt = strings.Join(options.Args, "\n")
 		index := filepath.Join(planAndImplementDir, "tasks.md")
 		r.writeRepoFile(index, strings.ReplaceAll(r.readRepoFile(index), "- [ ]", "- [x]"))
 		gitRun(r.t, r.repo, "commit", "-q", "-m", "chore: check task index", "--", index)
@@ -125,6 +129,16 @@ func (r *planAndImplementRunner) exec(cmd *osexec.Cmd, stdin []byte, workdir str
 }
 
 func (r *planAndImplementRunner) writeTaskPlan() {
+	if r.taskCount > 1 {
+		index := "# Tasks\n\n"
+		for i := 1; i <= r.taskCount; i++ {
+			name := fmt.Sprintf("tasks/%02d-implement.md", i)
+			r.writeRepoFile(filepath.Join(planAndImplementDir, name), "# Implement\n\nWrite feature.txt.\n")
+			index += "- [ ] [Implement](" + name + ")\n"
+		}
+		r.writeRepoFile(filepath.Join(planAndImplementDir, "tasks.md"), index)
+		return
+	}
 	r.writeRepoFile(filepath.Join(planAndImplementDir, "tasks", "01-implement.md"), "# Implement\n\nWrite feature.txt.\n")
 	r.writeRepoFile(filepath.Join(planAndImplementDir, "tasks.md"), "# Tasks\n\n- [ ] [Implement](tasks/01-implement.md)\n")
 }
@@ -488,4 +502,113 @@ func TestPlanAndImplementChangeResumeContinuesInsideImplement(t *testing.T) {
 	}
 
 	requireCombinedMetrics(t, fixture.sessionDir)
+}
+
+// INT-002: composed non-factory workflows validate multiple tasks without
+// opting into task-compliance, including when final verification only warns.
+func TestBuiltInChangesDisableTaskCompliance(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("validatorFails=%v", fail), func(t *testing.T) {
+			f := newPlanAndImplementFixture(t, true)
+			bin := t.TempDir()
+			jq, err := osexec.LookPath("jq")
+			if err != nil {
+				t.Fatal(err)
+			}
+			shim := "#!/bin/sh\nexec " + jq + " -r --arg key \"$3\" '.[$key] // \"\"'\n"
+			path := filepath.Join(bin, "runner")
+			if err := os.WriteFile(path, []byte(shim), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("AGENT_RUNNER_EXECUTABLE", path)
+			if fail {
+				path := os.Getenv("AGENT_RUNNER_VALIDATOR_EXECUTABLE")
+				file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o700)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = file.WriteString("[ \"$1\" != run ] || exit 1\n")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := file.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			process := f.newRunner(t)
+			process.taskCount = 2
+			if result := f.run(t, process, "false"); !fail && result != ResultSuccess {
+				t.Fatalf("result=%s events=%v", result, process.events)
+			}
+			calls := f.validatorCalls(t)
+			if strings.Count(calls, "run --report") < 2 || strings.Contains(calls, "--enable-review") || strings.Contains(calls, "--context-file") {
+				t.Fatalf("calls=%s", calls)
+			}
+			if process.indexPrompt == "" {
+				t.Fatal("index not reached")
+			}
+			for _, forbidden := range []string{"task-compliance", "passed validation", "passed the validator"} {
+				if strings.Contains(process.indexPrompt, forbidden) {
+					t.Fatalf("prompt contains %s", forbidden)
+				}
+			}
+			// Count only launches before the task index, excluding change-level
+			// verification that follows it. Each exhausted task must launch
+			// three retries plus final verification.
+			launches := 0
+			for _, event := range process.events {
+				if event == "complete-task-index" {
+					break
+				}
+				if event == "run-validator.sh" {
+					launches++
+				}
+			}
+			wantLaunches := 2
+			if fail {
+				wantLaunches = 8
+			}
+			if launches != wantLaunches {
+				t.Fatalf("per-task launches=%d want=%d events=%v", launches, wantLaunches, process.events)
+			}
+		})
+	}
+}
+
+func TestCompleteSimpleChangeDisablesTaskCompliance(t *testing.T) {
+	f := newPlanAndImplementFixture(t, true)
+	jq, err := osexec.LookPath("jq")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shim := filepath.Join(t.TempDir(), "runner")
+	if err := os.WriteFile(shim, []byte("#!/bin/sh\nexec "+jq+" -r --arg key \"$3\" '.[$key] // \"\"'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_RUNNER_EXECUTABLE", shim)
+	process := f.newRunner(t)
+	process.writeTaskPlan()
+	gitRun(t, f.repo, "add", ".")
+	gitRun(t, f.repo, "commit", "-qm", "plan")
+	ref := "builtin:core/complete-simple-change-v1.0.yaml"
+	workflow, err := loader.LoadWorkflow(ref, loader.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fake review agent has no interactive terminal.
+	for i := range workflow.Steps {
+		if workflow.Steps[i].ID == "review" {
+			workflow.Steps[i].Mode = "autonomous"
+		}
+	}
+	options := f.options(process)
+	options.WorkflowFile = ref
+	result, err := RunWorkflow(&workflow, map[string]string{"change_name": planAndImplementName, "change_dir": planAndImplementDir, "change_label": "change"}, options)
+	if err != nil || result != ResultSuccess {
+		t.Fatalf("result=%s err=%v events=%v", result, err, process.events)
+	}
+	calls := f.validatorCalls(t)
+	if !strings.Contains(calls, "run --report") || strings.Contains(calls, "--enable-review") || strings.Contains(calls, "--context-file") {
+		t.Fatalf("calls=%s", calls)
+	}
 }

@@ -21,6 +21,7 @@ steps:
     workflow: implement-task-v1.0.yaml
     params:
       task_file: "{{change_dir}}/tasks.md"
+      task_compliance: "false"
       run_session_report: "true"
       skip_validator: "false"
 

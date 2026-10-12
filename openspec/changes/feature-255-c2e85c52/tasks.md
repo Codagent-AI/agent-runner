@@ -1,4 +1,4 @@
-- [ ] Implement the change described by these files using TDD, as `CLAUDE.md` requires: write each failing test before the code that makes it pass. Satisfy every spec scenario and every `INT-*` obligation in the test plan.
+- [x] Implement the change described by these files using TDD, as `CLAUDE.md` requires: write each failing test before the code that makes it pass. Satisfy every spec scenario and every `INT-*` obligation in the test plan.
 
   **`core/run-validator` (`workflows/core/run-validator-v1.0.yaml`, `workflows/core/run-validator.sh`)**
   - Add the optional param `task_compliance` with `default: "false"`.

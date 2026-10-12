@@ -1,5 +1,5 @@
 name: implement-task
-description: "Implement a single task, require committed progress, and optionally retry task-compliance validation."
+description: "Implement a single task, require committed progress, and run validation (optionally with task-compliance)."
 hidden: true
 
 params:
@@ -8,6 +8,9 @@ params:
   - name: run_session_report
     required: false
     default: "false"
+  - name: task_compliance
+    required: false
+    default: "true"
   - name: skip_validator
     required: false
     default: "false"
@@ -18,6 +21,12 @@ steps:
     script_inputs:
       name: skip_validator
       value: "{{skip_validator}}"
+
+  - id: validate-task-compliance
+    script: validate-boolean-param.sh
+    script_inputs:
+      name: task_compliance
+      value: "{{task_compliance}}"
 
   - id: check-task-file
     command: |
@@ -61,6 +70,7 @@ steps:
     workflow: run-validator-v1.0.yaml
     params:
       task_file: "{{task_file}}"
+      task_compliance: "{{task_compliance}}"
     # skip_if parameters are shell-quoted by InterpolateShellSafeTyped. The
     # validation step above additionally constrains this value to true|false.
     skip_if: 'sh: test {{skip_validator}} = true'

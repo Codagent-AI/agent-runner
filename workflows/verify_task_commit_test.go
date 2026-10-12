@@ -335,7 +335,7 @@ func TestVerifyTaskCommitExternalDelivery(t *testing.T) {
 					"branch (reported, unverified): feature",
 					"pull request (reported, unverified): https://example.com/pr/1",
 					"note: pushed state was judged from this clone's local remote-tracking refs; the remote was not contacted",
-					"note: this run's validator and task-compliance review did not cover the external work",
+					"note: this run's validator did not cover the external work",
 					"record: " + f.recordPath,
 				}, "\n") + "\n"
 				if diff := cmp.Diff(want, stdout); diff != "" {
