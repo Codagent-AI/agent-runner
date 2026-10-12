@@ -192,9 +192,10 @@ type acceptedCompletion struct {
 	// ready is closed once the accept-time checkpoint has been captured and
 	// request holds its final value. Retries block on it so every client is
 	// acknowledged only after the checkpoint exists.
-	ready     chan struct{}
-	request   CompletionRequest
-	delivered bool
+	ready        chan struct{}
+	request      CompletionRequest
+	delivered    bool
+	acknowledged bool
 }
 
 type pendingRouteSubmission struct {
@@ -378,7 +379,34 @@ func (s *ControlServer) Deactivate() {
 }
 
 func (s *ControlServer) Completions() <-chan CompletionRequest { return s.completions }
-func (s *ControlServer) CommittedTurns() <-chan CommittedTurn  { return s.turns }
+
+// AwaitAcceptedCompletion is for a consumer that observed its CLI exit before
+// any completion arrived on Completions. The client is acknowledged before the
+// accepted completion is delivered, so the CLI can exit inside that window.
+// When the attempt has an accepted completion this waits for its delivery and
+// returns it; otherwise it reports false at once, meaning a natural exit.
+func (s *ControlServer) AwaitAcceptedCompletion(ctx context.Context, attemptID string) (CompletionRequest, bool) {
+	select {
+	case completion := <-s.completions:
+		return completion, true
+	default:
+	}
+	s.mu.Lock()
+	accepted := s.active != nil && s.active.ID == attemptID && s.active.completionAccepted
+	s.mu.Unlock()
+	if !accepted {
+		return CompletionRequest{}, false
+	}
+	select {
+	case completion := <-s.completions:
+		return completion, true
+	case <-ctx.Done():
+	case <-s.done:
+	}
+	return CompletionRequest{}, false
+}
+
+func (s *ControlServer) CommittedTurns() <-chan CommittedTurn { return s.turns }
 
 // SubscribeCommittedTurn returns evidence scoped to one attempt. The
 // unsubscribe function removes a waiter whose durability was confirmed by a
@@ -663,22 +691,26 @@ func (s *ControlServer) handleCompletion(connection net.Conn, request *controlRe
 
 // acknowledgeCompletion waits for the accept-time checkpoint, acknowledges the
 // client, and delivers the completion to the consumer exactly once across
-// idempotent retries.
+// idempotent retries. An accepted completion is delivered even when its
+// acknowledgement is lost: the client may retry for its receipt, but the CLI
+// may also exit, and AwaitAcceptedCompletion relies on every accepted
+// completion eventually reaching Completions.
 func (s *ControlServer) acknowledgeCompletion(connection net.Conn, accepted *acceptedCompletion) {
 	<-accepted.ready
-	if writeControlResponse(connection, controlResponse{OK: true, Receipt: accepted.request.RequestID}) != nil {
-		return
-	}
+	acknowledged := writeControlResponse(connection, controlResponse{OK: true, Receipt: accepted.request.RequestID}) == nil
 	s.mu.Lock()
-	alreadyDelivered := accepted.delivered
+	deliver := !accepted.delivered
 	accepted.delivered = true
+	emitAcknowledged := acknowledged && !accepted.acknowledged
+	accepted.acknowledged = accepted.acknowledged || acknowledged
 	completion := accepted.request
 	s.mu.Unlock()
-	if alreadyDelivered {
-		return
+	if emitAcknowledged {
+		s.emit(audit.EventCompletionAcknowledged, completion.StepID, map[string]any{"request_id": completion.RequestID, "attempt_id": completion.AttemptID})
 	}
-	s.emit(audit.EventCompletionAcknowledged, completion.StepID, map[string]any{"request_id": completion.RequestID, "attempt_id": completion.AttemptID})
-	s.deliverCompletion(&completion)
+	if deliver {
+		s.deliverCompletion(&completion)
+	}
 }
 
 func (s *ControlServer) handleCommittedTurn(connection net.Conn, request *controlRequest, active *attemptState) {

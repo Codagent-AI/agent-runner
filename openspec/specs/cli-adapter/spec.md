@@ -129,25 +129,29 @@ When the session ID is known at spawn time — either because the runner pre-gen
 - **WHEN** a fresh Codex step spawns the CLI process and no pre-generated ID exists
 - **THEN** the runner does not pre-flush a session ID; post-exit discovery via `DiscoverSessionID` remains the sole persistence point
 
-### Requirement: Adapter mode coverage
+### Requirement: Adapter invocation context support
 
-Every registered CLI adapter SHALL support all three invocation contexts: interactive, autonomous-headless, and autonomous-interactive. The runner SHALL NOT reject any invocation context for any registered `cli`.
-
-#### Scenario: Interactive step succeeds for any registered CLI
-- **WHEN** an agent step runs in interactive context with any registered `cli`
-- **THEN** the runner spawns the CLI without emitting an unsupported-context error
+Every registered CLI adapter SHALL support autonomous-headless invocation. Every registered adapter except OpenCode SHALL support interactive and autonomous-interactive invocation. OpenCode SHALL fail interactive and autonomous-interactive steps before spawning the CLI, with an explanatory error identifying the unsupported context.
 
 #### Scenario: Autonomous-headless step succeeds for any registered CLI
 - **WHEN** an agent step runs in autonomous-headless context with any registered `cli`
 - **THEN** the runner spawns the CLI without emitting an unsupported-context error
 
-#### Scenario: Autonomous-interactive step succeeds for any registered CLI
-- **WHEN** an agent step runs in autonomous-interactive context with any registered `cli`
+#### Scenario: Interactive step succeeds for non-OpenCode CLIs
+- **WHEN** an agent step runs in interactive context with any registered `cli` except OpenCode
 - **THEN** the runner spawns the CLI without emitting an unsupported-context error
+
+#### Scenario: Autonomous-interactive step succeeds for non-OpenCode CLIs
+- **WHEN** an agent step runs in autonomous-interactive context with any registered `cli` except OpenCode
+- **THEN** the runner spawns the CLI without emitting an unsupported-context error
+
+#### Scenario: OpenCode interactive step is rejected before spawn
+- **WHEN** an agent step uses OpenCode in interactive or autonomous-interactive context
+- **THEN** the runner fails the step before spawning the CLI and reports an explanatory error that OpenCode does not support interactive steps
 
 ### Requirement: No permission loosening in interactive mode
 
-In interactive context, no adapter SHALL emit a flag that broadly bypasses or pre-approves the underlying CLI's permission/approval prompts. The human at the terminal supervises permissions; the runner MUST NOT preempt that supervision. An adapter MAY pre-approve the completion client only when it can restrict approval to the exact absolute executable path and fixed `step complete` arguments. If a CLI cannot express that narrow rule safely, the adapter SHALL retain the CLI's normal supervised approval prompt rather than broaden the rule. Autonomous invocations (both headless and interactive backend) MAY emit broader permission flags because the step operates without human supervision.
+In interactive context, no adapter SHALL emit a flag that broadly bypasses or pre-approves the underlying CLI's permission/approval prompts. The human at the terminal supervises permissions; the runner MUST NOT preempt that supervision. An adapter MAY pre-approve the completion client only when it can restrict approval to the exact absolute executable path and fixed `step complete` arguments. If a CLI cannot express that narrow rule safely, the adapter SHALL retain the CLI's normal supervised approval prompt rather than broaden the rule. Autonomous invocations (both headless and interactive backend) MAY emit broader permission flags because the step operates without human supervision. An autonomous permission flag MAY provide best-effort rather than guaranteed approval-free operation: under such a flag the backing CLI can still raise its own permission prompt (for example, Claude's `auto` mode on the autonomous-interactive backend, per "Adapters honor autonomous permission mode"). Such a CLI permission prompt does not make the step interactive: the step remains autonomous, and the runner continues to block agent clarification questions and to deliver autonomy instructions as it does for any autonomous step.
 
 #### Scenario: Adapter omits permission-grant flags in interactive context
 - **WHEN** any adapter constructs args for an interactive step
@@ -167,7 +171,7 @@ In interactive context, no adapter SHALL emit a flag that broadly bypasses or pr
 
 #### Scenario: Autonomous-interactive adapter MAY include permission-grant flags
 - **WHEN** any adapter constructs args for an autonomous-interactive step
-- **THEN** the adapter MAY include CLI-specific permission-grant flags as needed for unattended autonomous operation
+- **THEN** the adapter MAY include CLI-specific permission-grant flags as needed for unattended autonomous operation, including a flag under which the backing CLI may still occasionally raise its own permission prompt
 
 ### Requirement: AskUserQuestion blocked in headless, allowed in interactive
 
@@ -258,8 +262,15 @@ autonomous-headless) are unaffected. A step-required backend request never falls
 
 In autonomous invocation contexts (both autonomous-headless and autonomous-interactive), each CLI adapter SHALL receive the resolved `autonomous_permission_mode` setting and SHALL emit permission-grant flags accordingly:
 
-- When the mode is `conservative`, the adapter SHALL emit only the per-CLI baseline permission flags that it emits today for autonomous contexts. The adapter SHALL NOT emit additional broad-authority flags (e.g., Cursor `--force`, Claude `--permission-mode bypassPermissions`, Codex `--sandbox danger-full-access`, Copilot `--allow-all-tools`).
-- When the mode is `yolo`, the adapter MAY additionally emit each CLI's broadest-authority permission flag where the backing CLI provides one. Adapters whose CLI has no equivalent broader flag MAY ignore the mode and behave identically in both values.
+- When the mode is `conservative`, the adapter SHALL emit only the per-CLI baseline permission flags that it emits today for autonomous contexts. The adapter SHALL NOT emit additional broad-authority flags (e.g., Cursor `--force`, Claude `--permission-mode bypassPermissions` or `--permission-mode auto`, Codex `--sandbox danger-full-access`, Copilot `--allow-all-tools`).
+- When the mode is `yolo`, the adapter MAY additionally emit each CLI's broadest-authority permission flag where the backing CLI provides one. Adapters whose CLI has no equivalent broader flag MAY ignore the mode and behave identically in both values. An adapter MAY choose a different yolo flag per autonomous backend.
+
+The Claude adapter SHALL select its yolo permission mode by the resolved invocation context:
+
+- autonomous-headless: `--permission-mode bypassPermissions`.
+- autonomous-interactive: `--permission-mode auto`. The Claude adapter SHALL NOT emit `--permission-mode bypassPermissions` in autonomous-interactive context.
+
+The Claude adapter SHALL emit the context-selected permission mode for both fresh and resumed sessions. The adapter SHALL emit `--permission-mode auto` without probing whether Claude's auto mode is available to the user's account, model, or settings, and SHALL NOT substitute `bypassPermissions` or any other mode when it is not; when Claude starts the session in another mode instead (for example Manual), the step runs under whatever permission prompts that mode raises. Choosing `auto` for the autonomous-interactive backend SHALL NOT change the autonomy contract of that step: the runner SHALL continue to disallow `AskUserQuestion` and SHALL deliver autonomy instructions exactly as it does for any autonomous-interactive step: prepended to the system prompt on a fresh session, and not re-injected on a resumed session, whose existing resume prompt and completion instruction are unchanged.
 
 The setting SHALL NOT affect interactive (non-autonomous) invocations. The existing "no permission loosening in interactive mode" requirement remains in force regardless of `autonomous_permission_mode`.
 
@@ -270,20 +281,65 @@ The setting SHALL NOT affect interactive (non-autonomous) invocations. The exist
 - **WHEN** an autonomous agent step runs with `autonomous_permission_mode: conservative` (or the setting absent)
 - **THEN** each adapter's emitted args match the per-CLI autonomous baseline it emits today: Claude includes `--permission-mode acceptEdits`, Codex includes `--sandbox workspace-write` and, for headless `exec` invocations, `exec --skip-git-repo-check`, Copilot includes `--allow-tool=write --autopilot`, Cursor includes `--trust` only, OpenCode emits no permission flag
 
+#### Scenario: Conservative Claude autonomous-interactive keeps acceptEdits
+
+- **WHEN** a Claude agent step runs in autonomous-interactive context with `autonomous_permission_mode: conservative` (or the setting absent)
+- **THEN** the args include `--permission-mode acceptEdits` and include neither `--permission-mode auto` nor `--permission-mode bypassPermissions`
+
 #### Scenario: YOLO mode permits broader authority flag
 
 - **WHEN** an autonomous agent step runs with `autonomous_permission_mode: yolo`
-- **THEN** each adapter MAY emit an additional broader-authority flag appropriate to its CLI in addition to the baseline flags
+- **THEN** each adapter MAY emit an additional broader-authority flag appropriate to its CLI and backend in addition to the baseline flags
 
 #### Scenario: Setting does not affect interactive context
 
 - **WHEN** an interactive (non-autonomous) agent step runs with `autonomous_permission_mode: yolo`
-- **THEN** the adapter does not emit any flag that auto-approves tools, paths, URLs, or commands (the "no permission loosening in interactive mode" rule still holds)
+- **THEN** the adapter does not emit any flag that auto-approves tools, paths, URLs, or commands (the "no permission loosening in interactive mode" rule still holds), and Claude's args include no `--permission-mode` value
 
 #### Scenario: Setting applies to both autonomous-headless and autonomous-interactive
 
-- **WHEN** an autonomous step runs with `autonomous_permission_mode: yolo` and the resolved backend is autonomous-interactive (e.g., Claude on the user's terminal)
-- **THEN** the adapter applies the same yolo-mode flag set it would apply in autonomous-headless
+- **WHEN** an autonomous step runs with `autonomous_permission_mode: yolo` and the resolved backend is either autonomous-headless or autonomous-interactive
+- **THEN** the adapter applies its yolo-mode flag set for that backend; for every adapter other than Claude, that flag set is identical on both backends
+
+#### Scenario: Claude yolo autonomous-interactive uses auto mode
+
+- **WHEN** a Claude agent step runs in autonomous-interactive context with `autonomous_permission_mode: yolo`
+- **THEN** the args include `--permission-mode auto` and do not include `--permission-mode bypassPermissions`
+
+#### Scenario: Claude yolo autonomous-interactive resume uses auto mode
+
+- **WHEN** a Claude agent step resumes an existing session (`--resume <id>`) in autonomous-interactive context with `autonomous_permission_mode: yolo`
+- **THEN** the args include `--permission-mode auto` and do not include `--permission-mode bypassPermissions`
+
+#### Scenario: Claude yolo autonomous-headless keeps bypassPermissions
+
+- **WHEN** a Claude agent step runs in autonomous-headless context with `autonomous_permission_mode: yolo`
+- **THEN** the args include `--permission-mode bypassPermissions` and do not include `--permission-mode auto`
+
+#### Scenario: Capture-forced headless Claude step keeps bypassPermissions
+
+- **WHEN** an autonomous Claude agent step with output capture runs while the user's autonomous backend selects interactive Claude, with `autonomous_permission_mode: yolo`
+- **THEN** the step resolves to autonomous-headless context and its args include `--permission-mode bypassPermissions`
+
+#### Scenario: Claude auto mode does not relax the autonomy contract on a fresh session
+
+- **WHEN** a Claude agent step starts a fresh session in autonomous-interactive context with `autonomous_permission_mode: yolo`
+- **THEN** the step's disallowed tools include `AskUserQuestion` and its system prompt begins with the autonomy instructions, as for any fresh autonomous-interactive step
+
+#### Scenario: Claude auto mode does not relax the autonomy contract on a resumed session
+
+- **WHEN** a Claude agent step resumes an existing session in autonomous-interactive context with `autonomous_permission_mode: yolo`
+- **THEN** the step's disallowed tools include `AskUserQuestion`, the autonomy instructions are not re-injected, and the step's prompt and completion instruction are the same as for any resumed autonomous-interactive step
+
+#### Scenario: Unavailable Claude auto mode is not replaced
+
+- **WHEN** a Claude agent step runs in autonomous-interactive context with `autonomous_permission_mode: yolo` and Claude's auto mode is unavailable to the session (for example an unsupported model, `disableAutoMode`, or a server-side disable)
+- **THEN** the runner still launches Claude with `--permission-mode auto`, does not relaunch or retry with `bypassPermissions` or another mode, and the step proceeds under whatever permission mode Claude starts in
+
+#### Scenario: Claude external-user context is unchanged
+
+- **WHEN** a Claude agent step runs in external-user context under either `autonomous_permission_mode` value
+- **THEN** the args do not include `--permission-mode auto`, and the emitted permission mode is the same one the adapter emitted for that context and setting before this change
 
 #### Scenario: Adapter without a broader flag is mode-insensitive
 
@@ -338,19 +394,20 @@ When an adapter must request a structured output format in its autonomous-headle
 
 ### Requirement: Agent-call tool provisioning
 
-Every registered CLI adapter SHALL provision the process-local `call_agent` integration for an
+Every registered CLI adapter SHALL provision the process-local agent-call integration for an
 interactive or autonomous parent invocation whose trusted invocation metadata enables `call_agent`.
-Adapters MUST NOT inspect prompt text to determine availability. The integration MUST NOT modify
-global or project agent configuration and MUST NOT be provisioned to an ordinary step, a step with an
-omitted or empty tools list, or an agent started by `call_agent`. If an adapter cannot prepare the
-required integration, Agent Runner SHALL fail the declared parent step with the preparation cause
-before launching the parent CLI.
+The integration SHALL expose the Runner-owned MCP tools `call_agent`, `get_agent_call`, and
+`cancel_agent_call`. Adapters MUST NOT inspect prompt text to determine availability. The integration
+MUST NOT modify global or project agent configuration and MUST NOT be provisioned to an ordinary
+step, a step with an omitted or empty tools list, or an agent started by `call_agent`. If an adapter
+cannot prepare the required integration, Agent Runner SHALL fail the declared parent step with the
+preparation cause before launching the parent CLI.
 
-For a Runner-launched OpenCode invocation receiving the `call_agent` integration, Agent Runner SHALL replace inherited `OPENCODE_CONFIG_CONTENT`, `OPENCODE_PERMISSION`, and `OPENCODE_DISABLE_AUTOUPDATE` values with invocation-owned values rather than merging inherited values into the Runner-owned MCP and permission configuration. This replacement SHALL remain process-local and MUST NOT modify persistent global or project configuration.
+For a Runner-launched OpenCode invocation receiving the agent-call integration, Agent Runner SHALL replace inherited `OPENCODE_CONFIG_CONTENT`, `OPENCODE_PERMISSION`, and `OPENCODE_DISABLE_AUTOUPDATE` values with invocation-owned values rather than merging inherited values into the Runner-owned MCP and permission configuration. This replacement SHALL remain process-local and MUST NOT modify persistent global or project configuration.
 
 #### Scenario: Registered adapter provisions the tool
 - **WHEN** Agent Runner prepares a parent invocation whose trusted metadata enables `call_agent` through any registered CLI adapter
-- **THEN** the invocation exposes the `call_agent` tool
+- **THEN** the invocation exposes `call_agent`, `get_agent_call`, and `cancel_agent_call`
 
 #### Scenario: Prompt does not participate in adapter provisioning
 - **WHEN** two otherwise equivalent invocations have the same enabled tools but different prompt text
@@ -358,18 +415,18 @@ For a Runner-launched OpenCode invocation receiving the `call_agent` integration
 
 #### Scenario: Enabled parent mode does not change availability
 - **WHEN** Agent Runner prepares an interactive or autonomous parent invocation that enables `call_agent`
-- **THEN** the adapter provisions the same `call_agent` capability in either mode
+- **THEN** the adapter provisions the same three agent-call tools in either mode while preserving the mode's existing approval behavior
 
 #### Scenario: Unenabled parent omits the integration
 - **WHEN** Agent Runner prepares a parent invocation whose trusted metadata does not enable `call_agent`
-- **THEN** the adapter does not provision the `call_agent` integration
+- **THEN** the adapter does not provision the agent-call integration
 
 #### Scenario: Called child omits the integration
 - **WHEN** Agent Runner prepares an agent invocation started by `call_agent`
-- **THEN** the adapter does not provision `call_agent` to that child
+- **THEN** the adapter does not provision agent-call tools to that child
 
 #### Scenario: User configuration remains unchanged
-- **WHEN** an adapter provisions `call_agent` for a parent invocation
+- **WHEN** an adapter provisions the agent-call integration for a parent invocation
 - **THEN** no global or project agent configuration is created or modified
 
 #### Scenario: OpenCode integration replaces inherited invocation configuration
@@ -377,24 +434,28 @@ For a Runner-launched OpenCode invocation receiving the `call_agent` integration
 - **THEN** the spawned parent receives the Runner-owned values for that invocation without merging the inherited values or modifying persistent user or project configuration
 
 #### Scenario: Provisioning failure prevents launch
-- **WHEN** an adapter cannot prepare a safe process-local `call_agent` integration
+- **WHEN** an adapter cannot prepare a safe process-local agent-call integration
 - **THEN** Agent Runner fails the parent step before launching its CLI and reports the preparation cause
 
 ### Requirement: Long-running tool controls
 
-When a supported CLI exposes process-local control over its MCP tool-execution wall-clock timeout, its adapter SHALL configure that control for the spawned parent so a generic short host default does not govern `call_agent`, while preserving an explicit deadline configured by the user or requesting client. An adapter MUST NOT introduce a Runner-level call duration limit when the host exposes no such control. Timeout handling MUST remain isolated to the spawned parent and MUST NOT modify global or project configuration.
+When a supported CLI exposes process-local control over MCP tool-execution timeouts, its adapter MAY configure the Runner-owned server so a generic short host default does not govern the agent-call tools, while preserving an explicit deadline configured by the user or requesting client. That configuration MUST NOT be required for a long child to complete: when a parent CLI's MCP client aborts a long tool request regardless of configuration, `call_agent` and `get_agent_call` SHALL return a non-terminal status with the `call_id` before that abort, and `get_agent_call` SHALL collect the later result. An adapter MUST NOT introduce a Runner-level child duration limit when the host exposes no such control. Timeout handling MUST remain isolated to the spawned parent and MUST NOT modify global or project configuration.
 
 For Claude, the supported control is the `MCP_TOOL_TIMEOUT` environment variable, in milliseconds. When a Claude invocation carries the Runner agent-call integration, the Claude adapter SHALL set `MCP_TOOL_TIMEOUT` to `2147483647` in the spawned Claude process's environment. This SHALL apply to both interactive and headless invocations. When `MCP_TOOL_TIMEOUT` is already defined in Agent Runner's environment, the Claude adapter SHALL leave the inherited value in effect unchanged. When a Claude invocation does not carry the agent-call integration, the Claude adapter MUST NOT add `MCP_TOOL_TIMEOUT`.
 
 The Claude adapter MUST NOT change Claude's MCP idle-timeout or interactive auto-backgrounding behavior as part of this control. Its existing headless-only environment settings remain limited to headless invocations.
 
 #### Scenario: Supported timeout control is applied process-locally
-- **WHEN** an enabled parent uses a CLI with a supported MCP tool-execution timeout setting
-- **THEN** the adapter configures the Runner-owned server for long-running calls without changing persistent user or project settings
+- **WHEN** an enabled parent uses a CLI with a supported MCP tool-execution timeout setting that its adapter configures (for example Codex `tool_timeout_sec` in the invocation's private Codex home, or the Copilot `--additional-mcp-config` server `timeout`)
+- **THEN** the adapter configures the Runner-owned server for long-running agent-call tools without changing persistent user or project settings
 
 #### Scenario: Adapter without timeout control adds no Runner deadline
 - **WHEN** an enabled parent uses a CLI without a supported MCP tool-execution timeout setting
-- **THEN** Agent Runner preserves the host's native behavior and introduces no fixed call duration limit of its own
+- **THEN** Agent Runner preserves the host's native behavior and introduces no fixed child duration limit of its own
+
+#### Scenario: Host that aborts long tool requests still supports long children
+- **WHEN** an enabled parent uses a CLI whose MCP client aborts a long tool request regardless of configuration (Cursor) and the child is still running
+- **THEN** `call_agent` returns the `call_id` with a non-terminal status before the host abort, the child keeps running, and `get_agent_call` collects the later result
 
 #### Scenario: Headless Claude parent receives the raised tool timeout
 - **WHEN** a headless Claude invocation carries the agent-call integration and `MCP_TOOL_TIMEOUT` is not defined in Agent Runner's environment
@@ -416,6 +477,38 @@ The Claude adapter MUST NOT change Claude's MCP idle-timeout or interactive auto
 #### Scenario: Claude timeout control leaves persistent configuration untouched
 - **WHEN** the Claude adapter raises `MCP_TOOL_TIMEOUT` for an invocation
 - **THEN** no user, project, or global Claude configuration file is created or modified for the timeout, and Agent Runner's own environment is unchanged
+
+### Requirement: Headless Claude runs without background tasks
+
+When the Claude adapter builds a headless invocation, it SHALL contribute `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` to the spawned process's environment. It SHALL also contribute `BASH_DEFAULT_TIMEOUT_MS=600000` unless the runner's own environment already defines `BASH_DEFAULT_TIMEOUT_MS`, in which case the inherited value SHALL be left unchanged. These entries SHALL apply to every headless Claude invocation the runner spawns, including workflow agent steps, inline repair agents, and `call_agent` children. They SHALL apply only to the spawned process and MUST NOT modify the runner's own environment or any user, project, or global Claude configuration. Interactive and autonomous-interactive Claude invocations SHALL NOT receive these entries.
+
+#### Scenario: Headless agent step disables background tasks
+- **WHEN** an autonomous headless Claude agent step is spawned and the runner's environment does not define `BASH_DEFAULT_TIMEOUT_MS`
+- **THEN** the spawned process's environment contains `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` and `BASH_DEFAULT_TIMEOUT_MS=600000`
+
+#### Scenario: Inherited default Bash timeout is preserved
+- **WHEN** a headless Claude invocation is spawned and the runner's environment defines `BASH_DEFAULT_TIMEOUT_MS=900000`
+- **THEN** the spawned process's environment contains `BASH_DEFAULT_TIMEOUT_MS=900000` and `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`
+
+#### Scenario: Inherited background-task setting is overridden
+- **WHEN** a headless Claude invocation is spawned and the runner's environment defines `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=0`
+- **THEN** the spawned process's environment contains `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`
+
+#### Scenario: Agent-call child on Claude
+- **WHEN** a parent agent's `call_agent` request spawns a headless Claude child
+- **THEN** the child process's environment contains `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`
+
+#### Scenario: Interactive Claude step is unchanged
+- **WHEN** an interactive or autonomous-interactive Claude agent step is spawned
+- **THEN** the adapter contributes neither `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` nor `BASH_DEFAULT_TIMEOUT_MS`
+
+#### Scenario: No persistent configuration changes
+- **WHEN** a headless Claude invocation is spawned with these entries
+- **THEN** the runner's own environment and all user, project, and global Claude settings files are unchanged
+
+#### Scenario: Other adapters are unchanged
+- **WHEN** a headless Codex, Cursor, Copilot, or OpenCode invocation is spawned
+- **THEN** the adapter contributes neither `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` nor `BASH_DEFAULT_TIMEOUT_MS`
 
 ### Requirement: Effective autonomous backend resolution
 
@@ -460,4 +553,3 @@ failure SHALL be an ordinary step failure, so the step's existing failure handli
 #### Scenario: Step-required failure is per step
 - **WHEN** a run without a TTY contains one autonomous step with `autonomous_backend: interactive` and another autonomous step without the field, and the user's setting is `interactive`
 - **THEN** the step with the field fails, while the step without the field falls back to autonomous-headless with a warning
-
