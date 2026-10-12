@@ -346,3 +346,43 @@ func TestRepairedCheckDetailShowsFinalRunOutput(t *testing.T) {
 		t.Errorf("check detail shows the first failing run's stderr:\n%s", detail)
 	}
 }
+
+func TestAgentCallDetailsHistoricalINT006(t *testing.T) {
+	m := writeRepairRun(t, "calls", `name: calls
+steps:
+  - id: parent
+    agent: implementor
+    prompt: x
+`, []string{
+		`2026-09-01T00:00:00Z run_start {}`,
+		`2026-09-01T00:00:01Z [parent] step_start {"cli":"claude"}`,
+		`2026-09-01T00:00:02Z [parent, call:c1] agent_call_start {"call_id":"c1","target_kind":"agent","target_name":"implementor"}`,
+		`2026-09-01T00:00:03Z [parent, call:c1] agent_call_end {"call_id":"c1","outcome":"success"}`,
+		`2026-09-01T00:00:04Z [parent, call:c2] agent_call_start {"call_id":"c2","target_kind":"follow_up","target_name":"c1","follow_up_of":"c1","timeout":"2s"}`,
+		`2026-09-01T00:00:05Z [parent, call:c2] agent_call_end {"call_id":"c2","outcome":"success","git_state":"captured","exit":"exited"}`,
+		`2026-09-01T00:00:06Z [parent, call:c3] agent_call_start {"call_id":"c3","target_kind":"agent","target_name":"implementor","timeout":"1s"}`,
+		`2026-09-01T00:00:07Z [parent, call:c3] agent_call_end {"call_id":"c3","outcome":"failed","timeout":"1s","error_code":"timed_out","git_state":"not_git","exit":"terminated"}`,
+		`2026-09-01T00:00:08Z [parent] step_end {"outcome":"success"}`,
+		`2026-09-01T00:00:09Z run_end {"outcome":"success"}`,
+	}, &model.RunState{Completed: true})
+	for _, tc := range []struct {
+		id    string
+		wants []string
+	}{
+		{"c1", []string{"call agent: implementor"}},
+		{"c2", []string{"call follow-up: c1", "follow-up source: c1", "timeout: 2s", "git state: captured"}},
+		{"c3", []string{"timeout: 1s", "error code: timed_out", "git state: not_git"}},
+	} {
+		n := m.tree.FindByPrefix("[parent, call:" + tc.id + "]")
+		if n == nil {
+			t.Fatalf("missing %s", tc.id)
+		}
+		m.setSelected(n)
+		text := n.callLabel() + "\n" + m.selectedStepDetailText()
+		for _, want := range tc.wants {
+			if !strings.Contains(text, want) {
+				t.Fatalf("missing %q in %s", want, text)
+			}
+		}
+	}
+}

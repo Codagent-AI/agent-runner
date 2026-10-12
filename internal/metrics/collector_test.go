@@ -1547,3 +1547,26 @@ func TestCollectorRestoresClaudeCostBaselineOnResume(t *testing.T) {
 		t.Fatalf("restored cost mismatch (-want +got):\n%s", diff)
 	}
 }
+
+func TestAgentCallOptionalEvidenceINT006(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	c := NewCollector(dir, "run", "calls", now)
+	for i, data := range []map[string]any{
+		{"call_id": "c1", "target_kind": "agent", "target_name": "implementor", "outcome": "success"},
+		{"call_id": "c2", "target_kind": "follow_up", "target_name": "c1", "follow_up_of": "c1", "outcome": "success", "git_state": "captured", "exit": "exited"},
+		{"call_id": "c3", "target_kind": "agent", "target_name": "implementor", "timeout": "1s", "outcome": "failed", "error_code": "timed_out", "git_state": "not_git", "exit": "terminated"},
+	} {
+		identity := agentIdentity(fmt.Sprintf("c%d", i+1), true)
+		identity.Kind = "agent-call"
+		data[DataIdentity] = identity
+		c.Process(event(audit.EventAgentCallEnd, now.Add(time.Duration(i)*time.Second), data))
+	}
+	a := readArtifact(t, dir)
+	if len(a.Steps) != 3 {
+		t.Fatalf("records: %+v", a.Steps)
+	}
+	if a.Steps[0].Timeout != "" || a.Steps[1].FollowUpOf != "c1" || a.Steps[2].Timeout != "1s" || a.Steps[2].ErrorCode != "timed_out" || a.Steps[2].GitState != "not_git" {
+		t.Fatalf("evidence: %+v", a.Steps)
+	}
+}

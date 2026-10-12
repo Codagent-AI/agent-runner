@@ -89,6 +89,29 @@ func TestCanonicalToolsPublishStartPollAndCancel(t *testing.T) {
 	}
 }
 
+func TestCanonicalToolDescribesTimeoutAndFollowUp(t *testing.T) {
+	raw, err := json.Marshal(Tool().InputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties map[string]struct {
+			Description string `json:"description"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	for field, want := range map[string]string{
+		"timeout":   `Go duration, for example "30m" or "2h"; 1s to 24h`,
+		"follow_up": "call_id of an earlier terminal call in this parent attempt",
+	} {
+		if got := schema.Properties[field].Description; got != want {
+			t.Errorf("%s description = %q, want %q", field, got, want)
+		}
+	}
+}
+
 func TestDecodeCallIDRequestRejectsInvalidForms(t *testing.T) {
 	tests := []struct {
 		name string

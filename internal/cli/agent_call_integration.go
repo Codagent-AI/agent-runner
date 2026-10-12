@@ -11,12 +11,31 @@ import (
 )
 
 const (
-	agentCallMCPServerName       = "agent-runner"
-	agentCallTimeoutSeconds      = 30 * 24 * 60 * 60
+	agentCallMCPServerName  = "agent-runner"
+	agentCallPluginName     = "agent-runner-call"
+	agentCallTimeoutSeconds = 30 * 24 * 60 * 60
+	// agentCallTimeoutMilliseconds is shared by Copilot's per-server timeout
+	// and Claude's MCP_TOOL_TIMEOUT. Keep it at or below the Node.js 32-bit
+	// timer maximum to avoid overflow into an immediate timeout.
 	agentCallTimeoutMilliseconds = int64(2_147_483_647)
 )
 
 var agentCallMCPToolNames = []string{"call_agent", "get_agent_call", "cancel_agent_call"}
+
+// claudeAgentCallToolPermissions lists the --allowedTools names that
+// pre-authorize the agent-call tools. Claude namespaces MCP tools from a
+// --plugin-dir server as mcp__plugin_<plugin>_<server>__<tool>, so the bare
+// mcp__<server>__<tool> form alone never matches the provisioned plugin.
+func claudeAgentCallToolPermissions() []string {
+	permissions := make([]string, 0, 2*len(agentCallMCPToolNames))
+	for _, name := range agentCallMCPToolNames {
+		permissions = append(permissions,
+			"mcp__plugin_"+agentCallPluginName+"_"+agentCallMCPServerName+"__"+name,
+			"mcp__"+agentCallMCPServerName+"__"+name,
+		)
+	}
+	return permissions
+}
 
 var agentCallControlEnvironmentVariables = []string{
 	"AGENT_RUNNER_CONTROL_SOCKET",
@@ -91,7 +110,7 @@ func prepareAgentCallPlugin(command MCPServerCommand) (string, error) {
 		return "", fmt.Errorf("create agent-call MCP plugin: %w", err)
 	}
 	manifest, err := json.MarshalIndent(map[string]any{
-		"name":        "agent-runner-call",
+		"name":        agentCallPluginName,
 		"version":     "1.0.0",
 		"description": "Agent Runner process-local agent-call integration",
 	}, "", "  ")

@@ -441,6 +441,10 @@ For a Runner-launched OpenCode invocation receiving the agent-call integration, 
 
 When a supported CLI exposes process-local control over MCP tool-execution timeouts, its adapter MAY configure the Runner-owned server so a generic short host default does not govern the agent-call tools, while preserving an explicit deadline configured by the user or requesting client. That configuration MUST NOT be required for a long child to complete: when a parent CLI's MCP client aborts a long tool request regardless of configuration, `call_agent` and `get_agent_call` SHALL return a non-terminal status with the `call_id` before that abort, and `get_agent_call` SHALL collect the later result. An adapter MUST NOT introduce a Runner-level child duration limit when the host exposes no such control. Timeout handling MUST remain isolated to the spawned parent and MUST NOT modify global or project configuration.
 
+For Claude, the supported control is the `MCP_TOOL_TIMEOUT` environment variable, in milliseconds. When a Claude invocation carries the Runner agent-call integration, the Claude adapter SHALL set `MCP_TOOL_TIMEOUT` to `2147483647` in the spawned Claude process's environment. This SHALL apply to both interactive and headless invocations. When `MCP_TOOL_TIMEOUT` is already defined in Agent Runner's environment, the Claude adapter SHALL leave the inherited value in effect unchanged. When a Claude invocation does not carry the agent-call integration, the Claude adapter MUST NOT add `MCP_TOOL_TIMEOUT`.
+
+The Claude adapter MUST NOT change Claude's MCP idle-timeout or interactive auto-backgrounding behavior as part of this control. Its existing headless-only environment settings remain limited to headless invocations.
+
 #### Scenario: Supported timeout control is applied process-locally
 - **WHEN** an enabled parent uses a CLI with a supported MCP tool-execution timeout setting that its adapter configures (for example Codex `tool_timeout_sec` in the invocation's private Codex home, or the Copilot `--additional-mcp-config` server `timeout`)
 - **THEN** the adapter configures the Runner-owned server for long-running agent-call tools without changing persistent user or project settings
@@ -452,6 +456,27 @@ When a supported CLI exposes process-local control over MCP tool-execution timeo
 #### Scenario: Host that aborts long tool requests still supports long children
 - **WHEN** an enabled parent uses a CLI whose MCP client aborts a long tool request regardless of configuration (Cursor) and the child is still running
 - **THEN** `call_agent` returns the `call_id` with a non-terminal status before the host abort, the child keeps running, and `get_agent_call` collects the later result
+
+#### Scenario: Headless Claude parent receives the raised tool timeout
+- **WHEN** a headless Claude invocation carries the agent-call integration and `MCP_TOOL_TIMEOUT` is not defined in Agent Runner's environment
+- **THEN** the spawned Claude process runs with `MCP_TOOL_TIMEOUT=2147483647`
+
+#### Scenario: Interactive Claude parent receives the raised tool timeout
+- **WHEN** an interactive Claude invocation carries the agent-call integration and `MCP_TOOL_TIMEOUT` is not defined in Agent Runner's environment
+- **THEN** the spawned Claude process runs with `MCP_TOOL_TIMEOUT=2147483647`
+- **AND** the spawned process does not receive Runner's headless-only settings, such as disabling background tasks
+
+#### Scenario: User-set Claude tool timeout is preserved
+- **WHEN** a Claude invocation carries the agent-call integration and Agent Runner's environment defines `MCP_TOOL_TIMEOUT`
+- **THEN** the spawned Claude process runs with the user's `MCP_TOOL_TIMEOUT` value unchanged
+
+#### Scenario: Claude without agent-call integration is unchanged
+- **WHEN** a Claude invocation does not carry the agent-call integration
+- **THEN** the Claude adapter adds no `MCP_TOOL_TIMEOUT` to the spawned process's environment
+
+#### Scenario: Claude timeout control leaves persistent configuration untouched
+- **WHEN** the Claude adapter raises `MCP_TOOL_TIMEOUT` for an invocation
+- **THEN** no user, project, or global Claude configuration file is created or modified for the timeout, and Agent Runner's own environment is unchanged
 
 ### Requirement: Headless Claude runs without background tasks
 
@@ -528,3 +553,44 @@ failure SHALL be an ordinary step failure, so the step's existing failure handli
 #### Scenario: Step-required failure is per step
 - **WHEN** a run without a TTY contains one autonomous step with `autonomous_backend: interactive` and another autonomous step without the field, and the user's setting is `interactive`
 - **THEN** the step with the field fails, while the step without the field falls back to autonomous-headless with a warning
+
+### Requirement: Resume model-override capability
+
+Each registered adapter SHALL declare whether it applies a requested model when resuming an existing native session. Agent Runner SHALL use that declaration to decide whether to accept a follow-up's model override. An adapter that omits the model on resume MUST declare that it does not apply it, so an override is never accepted and then silently dropped. As of this change, Codex SHALL declare that it applies a resume model. Claude, Copilot, Cursor, and OpenCode SHALL declare that they do not.
+
+#### Scenario: Codex applies a resume model
+- **WHEN** a Codex resume invocation is built with a requested model
+- **THEN** the adapter passes that model and declares resume model overrides as supported
+
+#### Scenario: Claude omits a resume model
+- **WHEN** a Claude resume invocation is built with a requested model
+- **THEN** the adapter omits the model and declares resume model overrides as unsupported
+
+#### Scenario: Declaration matches argument construction
+- **WHEN** any registered adapter builds a resume invocation with a requested model
+- **THEN** the model appears in the arguments if and only if the adapter declares resume model overrides as supported
+
+### Requirement: Headless activity summaries
+
+An adapter MAY provide activity summaries for a running autonomous-headless child by recognizing events in the child's structured stdout. The Claude and Codex adapters SHALL provide them. A recognized event SHALL be summarized by its event kind and, for tool activity, its tool name. The summary SHALL be one line of at most 200 characters. It MUST NOT contain message text, tool arguments, tool output, or the final response. Unrecognized or malformed lines SHALL be ignored without error. Summarizing activity MUST NOT alter captured stdout, output files, usage extraction, or session discovery. An adapter that provides no summaries leaves Agent Runner to fall back to output-recency summaries.
+
+#### Scenario: Claude tool use is summarized
+- **WHEN** a Claude headless child emits a stream event for a `Bash` tool use
+- **THEN** the latest activity summary names the tool-use event and `Bash`, without the command text
+
+#### Scenario: Codex tool activity is summarized
+- **WHEN** a Codex headless child emits an item event for a command or tool execution
+- **THEN** the latest activity summary names that event kind and the tool, without its arguments or output
+
+#### Scenario: Malformed stream line is ignored
+- **WHEN** a child writes a line the adapter cannot parse
+- **THEN** the previous activity summary is kept and no error is raised
+
+#### Scenario: Captured output is unchanged
+- **WHEN** activity summaries are produced for a child
+- **THEN** the child's captured stdout and output files are byte-identical to an execution without summaries
+
+#### Scenario: Adapter without summaries
+- **WHEN** a Copilot, Cursor, or OpenCode child is running
+- **THEN** the adapter provides no activity summary and Agent Runner reports output recency instead
+
