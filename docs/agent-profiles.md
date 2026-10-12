@@ -193,7 +193,7 @@ User settings live in `~/.agent-runner/settings.yaml`:
 | Setting | Values |
 | --- | --- |
 | `theme` | `light` or `dark` |
-| `autonomous_backend` | `headless`, `interactive`, or `interactive-claude` |
+| `autonomous_backend` | `headless`, `interactive`, or `interactive-claude`; an agent step can override it with its own `autonomous_backend` |
 | `autonomous_permission_mode` | `conservative` or `yolo` |
 
 Setup, onboarding, and splash lifecycle fields are managed by Agent Runner.

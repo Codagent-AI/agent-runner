@@ -717,6 +717,108 @@ func TestCodexAdapter(t *testing.T) {
 		}
 	})
 
+	t.Run("discover interactive session skips newer sub-agent sessions", func(t *testing.T) {
+		fakeHome := t.TempDir()
+		cwd := t.TempDir()
+		canonCwd, err := filepath.EvalSymlinks(cwd)
+		if err != nil {
+			t.Fatalf("EvalSymlinks: %v", err)
+		}
+
+		origHome := os.Getenv("HOME")
+		origCwd, _ := os.Getwd()
+		t.Cleanup(func() {
+			os.Setenv("HOME", origHome)
+			_ = os.Chdir(origCwd)
+		})
+		os.Setenv("HOME", fakeHome)
+		if err := os.Chdir(canonCwd); err != nil {
+			t.Fatalf("chdir: %v", err)
+		}
+
+		sessionDir := filepath.Join(fakeHome, ".codex", "sessions", "2026", "10", "09")
+		if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+			t.Fatalf("mkdir session dir: %v", err)
+		}
+		const leadID = "01a11e8c-aea3-7f60-b2fe-45d12021735d"
+		leadFile := filepath.Join(sessionDir, "rollout-2026-10-09T10-00-00-"+leadID+".jsonl")
+		leadData := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"cwd":%q}}`, leadID, canonCwd) + "\n"
+		if err := os.WriteFile(leadFile, []byte(leadData), 0o600); err != nil {
+			t.Fatalf("write lead fixture: %v", err)
+		}
+		for name, meta := range map[string]string{
+			"01a11e8c-c1d3-7dd1-b9ec-bc014efd3f4c": fmt.Sprintf(`"parent_thread_id":%q,"source":{"subagent":{"thread_spawn":{"parent_thread_id":%q,"depth":1}}}`, leadID, leadID),
+			"01a11e8c-d000-7dd1-b9ec-bc014efd3f4c": fmt.Sprintf(`"parent_thread_id":%q,"forked_from_id":%q`, leadID, leadID),
+		} {
+			childFile := filepath.Join(sessionDir, "rollout-2026-10-09T10-00-05-"+name+".jsonl")
+			childData := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"cwd":%q,%s}}`, name, canonCwd, meta) + "\n"
+			if err := os.WriteFile(childFile, []byte(childData), 0o600); err != nil {
+				t.Fatalf("write child fixture: %v", err)
+			}
+			later := time.Now().Add(time.Minute)
+			if err := os.Chtimes(childFile, later, later); err != nil {
+				t.Fatalf("chtimes child fixture: %v", err)
+			}
+		}
+
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			SpawnTime: time.Now().Add(-time.Second),
+			Headless:  false,
+		})
+		if id != leadID {
+			t.Fatalf("expected lead session %q, got %q", leadID, id)
+		}
+	})
+
+	t.Run("discover interactive session accepts a newer user fork", func(t *testing.T) {
+		fakeHome := t.TempDir()
+		cwd := t.TempDir()
+		canonCwd, err := filepath.EvalSymlinks(cwd)
+		if err != nil {
+			t.Fatalf("EvalSymlinks: %v", err)
+		}
+
+		origHome := os.Getenv("HOME")
+		origCwd, _ := os.Getwd()
+		t.Cleanup(func() {
+			os.Setenv("HOME", origHome)
+			_ = os.Chdir(origCwd)
+		})
+		os.Setenv("HOME", fakeHome)
+		if err := os.Chdir(canonCwd); err != nil {
+			t.Fatalf("chdir: %v", err)
+		}
+
+		sessionDir := filepath.Join(fakeHome, ".codex", "sessions", "2026", "10", "09")
+		if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+			t.Fatalf("mkdir session dir: %v", err)
+		}
+		const originalID = "01a11e8c-aea3-7f60-b2fe-45d12021735d"
+		const forkID = "01a11e8c-e000-7dd1-b9ec-bc014efd3f4c"
+		originalFile := filepath.Join(sessionDir, "rollout-2026-10-09T10-00-00-"+originalID+".jsonl")
+		originalData := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"cwd":%q}}`, originalID, canonCwd) + "\n"
+		if err := os.WriteFile(originalFile, []byte(originalData), 0o600); err != nil {
+			t.Fatalf("write original fixture: %v", err)
+		}
+		forkFile := filepath.Join(sessionDir, "rollout-2026-10-09T10-00-05-"+forkID+".jsonl")
+		forkData := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"cwd":%q,"forked_from_id":%q}}`, forkID, canonCwd, originalID) + "\n"
+		if err := os.WriteFile(forkFile, []byte(forkData), 0o600); err != nil {
+			t.Fatalf("write fork fixture: %v", err)
+		}
+		later := time.Now().Add(time.Minute)
+		if err := os.Chtimes(forkFile, later, later); err != nil {
+			t.Fatalf("chtimes fork fixture: %v", err)
+		}
+
+		id := adapter.DiscoverSessionID(&DiscoverOptions{
+			SpawnTime: time.Now().Add(-time.Second),
+			Headless:  false,
+		})
+		if id != forkID {
+			t.Fatalf("expected user fork %q, got %q", forkID, id)
+		}
+	})
+
 	t.Run("implements OutputFilter interface", func(t *testing.T) {
 		var a Adapter = adapter
 		if _, ok := a.(OutputFilter); !ok {

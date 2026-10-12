@@ -13,8 +13,10 @@ plain_output="$(mktemp)"
 tagged_output="$(mktemp)"
 trap 'rm -f "$plain_output" "$tagged_output"' EXIT
 
-deadcode -test ./... > "$plain_output"
-deadcode -test -tags dev_audit ./... > "$tagged_output"
+# shellcheck disable=SC2046 # package paths contain no spaces
+deadcode -test $(./.validator/go-packages.sh) > "$plain_output"
+# shellcheck disable=SC2046
+deadcode -test -tags dev_audit $(./.validator/go-packages.sh -tags dev_audit) > "$tagged_output"
 
 findings="$(comm -12 <(sort -u "$plain_output") <(sort -u "$tagged_output"))"
 if [ -n "$findings" ]; then
