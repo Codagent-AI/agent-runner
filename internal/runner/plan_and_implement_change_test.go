@@ -505,17 +505,7 @@ func TestBuiltInChangesDisableTaskCompliance(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(fmt.Sprintf("validatorFails=%v", fail), func(t *testing.T) {
 			f := newPlanAndImplementFixture(t, true)
-			bin := t.TempDir()
-			jq, err := osexec.LookPath("jq")
-			if err != nil {
-				t.Fatal(err)
-			}
-			shim := "#!/bin/sh\nexec " + jq + " -r --arg key \"$3\" '.[$key] // \"\"'\n"
-			path := filepath.Join(bin, "runner")
-			if err := os.WriteFile(path, []byte(shim), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("AGENT_RUNNER_EXECUTABLE", path)
+			setTaskComplianceRunnerShim(t)
 			if fail {
 				path := os.Getenv("AGENT_RUNNER_VALIDATOR_EXECUTABLE")
 				file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o700)
@@ -572,15 +562,7 @@ func TestBuiltInChangesDisableTaskCompliance(t *testing.T) {
 
 func TestCompleteSimpleChangeDisablesTaskCompliance(t *testing.T) {
 	f := newPlanAndImplementFixture(t, true)
-	jq, err := osexec.LookPath("jq")
-	if err != nil {
-		t.Fatal(err)
-	}
-	shim := filepath.Join(t.TempDir(), "runner")
-	if err := os.WriteFile(shim, []byte("#!/bin/sh\nexec "+jq+" -r --arg key \"$3\" '.[$key] // \"\"'\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("AGENT_RUNNER_EXECUTABLE", shim)
+	setTaskComplianceRunnerShim(t)
 	process := f.newRunner(t)
 	process.writeTaskPlan()
 	gitRun(t, f.repo, "add", ".")
@@ -606,4 +588,17 @@ func TestCompleteSimpleChangeDisablesTaskCompliance(t *testing.T) {
 	if !strings.Contains(calls, "run --report") || strings.Contains(calls, "--enable-review") || strings.Contains(calls, "--context-file") {
 		t.Fatalf("calls=%s", calls)
 	}
+}
+
+func setTaskComplianceRunnerShim(t *testing.T) {
+	t.Helper()
+	jq, err := osexec.LookPath("jq")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shim := filepath.Join(t.TempDir(), "runner")
+	if err := os.WriteFile(shim, []byte("#!/bin/sh\nexec "+jq+" -r --arg key \"$3\" '.[$key] // \"\"'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_RUNNER_EXECUTABLE", shim)
 }
