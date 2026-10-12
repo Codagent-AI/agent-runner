@@ -4,7 +4,7 @@
 
 The `core/run-validator` built-in workflow SHALL accept an optional `task_file` param, defaulting to the empty string, and an optional `task_compliance` param, defaulting to `false`. Callers that do not need task-compliance activation SHALL be able to invoke `run-validator` without supplying either param. `task_compliance` SHALL accept only `true` or `false`. Any other value SHALL fail the workflow with an error that names the param, before any validator command runs.
 
-#### Scenario: Params default when caller omits them
+#### Scenario: Param defaults to empty when caller omits it
 - **WHEN** `core/run-validator` is invoked with no `task_file` and no `task_compliance` param
 - **THEN** the workflow executes successfully, `{{task_file}}` resolves to the empty string, and task-compliance is not activated
 

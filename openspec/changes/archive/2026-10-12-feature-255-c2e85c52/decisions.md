@@ -123,3 +123,10 @@
 - Decision: Write a single checklist task in `tasks.md` that covers the run-validator switch and guard, the implement-task default, the non-factory caller pins, the delivery-note rewording, the docs, and every unit, structure and INT test. It links every source artifact.
 - Alternatives considered: split by component, which the step instructions rule out.
 - Decision-bearing: no
+
+## archive-repair
+
+### Restore the current scenario header in the MODIFIED optional-param requirement
+- Decision: Rename the delta scenario "Params default when caller omits them" back to the current spec's "Param defaults to empty when caller omits it", keeping its body, which also covers `task_compliance`. Both MODIFIED blocks now carry every current scenario header.
+- Alternatives considered: add the old scenario alongside the renamed one, which would duplicate the same behavior.
+- Decision-bearing: no
