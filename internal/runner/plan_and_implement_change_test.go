@@ -129,18 +129,13 @@ func (r *planAndImplementRunner) exec(cmd *osexec.Cmd, stdin []byte, workdir str
 }
 
 func (r *planAndImplementRunner) writeTaskPlan() {
-	if r.taskCount > 1 {
-		index := "# Tasks\n\n"
-		for i := 1; i <= r.taskCount; i++ {
-			name := fmt.Sprintf("tasks/%02d-implement.md", i)
-			r.writeRepoFile(filepath.Join(planAndImplementDir, name), "# Implement\n\nWrite feature.txt.\n")
-			index += "- [ ] [Implement](" + name + ")\n"
-		}
-		r.writeRepoFile(filepath.Join(planAndImplementDir, "tasks.md"), index)
-		return
+	index := "# Tasks\n\n"
+	for i := 1; i <= max(1, r.taskCount); i++ {
+		name := fmt.Sprintf("tasks/%02d-implement.md", i)
+		r.writeRepoFile(filepath.Join(planAndImplementDir, name), "# Implement\n\nWrite feature.txt.\n")
+		index += "- [ ] [Implement](" + name + ")\n"
 	}
-	r.writeRepoFile(filepath.Join(planAndImplementDir, "tasks", "01-implement.md"), "# Implement\n\nWrite feature.txt.\n")
-	r.writeRepoFile(filepath.Join(planAndImplementDir, "tasks.md"), "# Tasks\n\n- [ ] [Implement](tasks/01-implement.md)\n")
+	r.writeRepoFile(filepath.Join(planAndImplementDir, "tasks.md"), index)
 }
 
 func (r *planAndImplementRunner) writeRepoFile(rel, content string) {
