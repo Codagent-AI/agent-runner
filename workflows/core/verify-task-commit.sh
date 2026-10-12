@@ -322,7 +322,7 @@ accepted=$(
     printf 'pull request (reported, unverified): %s\n' "$pull_request"
   fi
   echo "note: pushed state was judged from this clone's local remote-tracking refs; the remote was not contacted"
-  echo "note: this run's validator and task-compliance review did not cover the external work"
+  echo "note: this run's validator did not cover the external work"
   printf 'record: %s\n' "$record_path"
 )
 

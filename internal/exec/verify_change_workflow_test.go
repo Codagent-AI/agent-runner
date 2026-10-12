@@ -60,7 +60,7 @@ func (r *acceptanceRoundRunner) RunScript(path string, stdin []byte, _ bool, _ s
 	name := filepath.Base(path)
 	r.events = append(r.events, name)
 	switch name {
-	case "acceptance-gate.sh":
+	case "acceptance-gate.sh", "check-task-compliance.sh":
 		return r.run(osexec.Command("sh", path), stdin)
 	case "run-validator.sh":
 		return r.validate(stdin), nil
@@ -302,7 +302,7 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			skipValidator: "false",
 			readyInRound:  func(round int) bool { return round == 2 },
 			wantEvents: []string{
-				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "run-validator.sh", "acceptance-push.sh", "check-draft-pr.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "check-task-compliance.sh", "run-validator.sh", "acceptance-push.sh", "check-draft-pr.sh",
 				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh",
 				"acceptance-gate.sh", "verify-acceptance-handoff",
 			},
@@ -317,7 +317,7 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			failValidator: true,
 			wantEvents: []string{
 				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix",
-				"run-validator.sh", "fix-violations", "run-validator.sh", "fix-violations", "run-validator.sh", "fix-violations", "run-validator.sh",
+				"check-task-compliance.sh", "run-validator.sh", "fix-violations", "run-validator.sh", "fix-violations", "run-validator.sh", "fix-violations", "run-validator.sh",
 				"acceptance-push.sh", "check-draft-pr.sh",
 				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh",
 				"acceptance-gate.sh", "verify-acceptance-handoff",
@@ -331,8 +331,8 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			skipValidator: "false",
 			readyInRound:  never,
 			wantEvents: []string{
-				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "run-validator.sh", "acceptance-push.sh", "check-draft-pr.sh",
-				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "run-validator.sh", "acceptance-push.sh", "check-draft-pr.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "check-task-compliance.sh", "run-validator.sh", "acceptance-push.sh", "check-draft-pr.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "check-task-compliance.sh", "run-validator.sh", "acceptance-push.sh", "check-draft-pr.sh",
 				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "end-final-round",
 				"acceptance-gate.sh", "verify-acceptance-handoff",
 			},

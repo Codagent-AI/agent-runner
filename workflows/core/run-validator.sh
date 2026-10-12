@@ -5,10 +5,11 @@ validator=${AGENT_RUNNER_VALIDATOR_EXECUTABLE:-agent-validator}
 
 IFS= read -r payload || :
 task_file=$(printf '%s' "$payload" | "$AGENT_RUNNER_EXECUTABLE" internal json-value task_file)
+task_compliance=$(printf '%s' "$payload" | "$AGENT_RUNNER_EXECUTABLE" internal json-value task_compliance)
 result_file=$(printf '%s' "$payload" | "$AGENT_RUNNER_EXECUTABLE" internal json-value result_file)
 
 set -- run --report
-if [ -n "$task_file" ]; then
+if [ "$task_compliance" = true ] && [ -n "$task_file" ]; then
   set -- "$@" --enable-review task-compliance --context-file "$task_file"
 fi
 

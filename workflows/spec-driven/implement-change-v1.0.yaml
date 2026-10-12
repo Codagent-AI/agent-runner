@@ -26,6 +26,7 @@ steps:
         workflow: ../core/implement-task-v1.0.yaml
         params:
           task_file: "{{task_file}}"
+          task_compliance: "false"
           run_session_report: "true"
 
   - id: review-assumptions
