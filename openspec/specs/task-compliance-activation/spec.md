@@ -1,7 +1,7 @@
 # task-compliance-activation Specification
 
 ## Purpose
-Define task-compliance activation in validator setup and the optional task-file context passed through validation workflows.
+Define task-compliance activation and the optional task-file context passed through validation workflows.
 ## Requirements
 ### Requirement: Optional task_file param on run-validator
 
@@ -19,32 +19,28 @@ The `core/run-validator` built-in workflow SHALL accept an optional `task_file` 
 - **WHEN** `core/run-validator` is invoked with `task_compliance: "yes"`
 - **THEN** the workflow fails with an error naming `task_compliance` and no `agent-validator` command is issued
 
-### Requirement: validator-init requests task-compliance scaffolding
+### Requirement: validator-init does not scaffold task-compliance
 
-The `agent-runner internal validator-init` command SHALL invoke `agent-validator init` with `--enable-builtin task-compliance` so that fresh validator scaffolds in consumer projects include the opt-in review entry.
+The `agent-runner internal validator-init` command SHALL invoke `agent-validator init` without `--enable-builtin task-compliance`, so fresh validator scaffolds in consumer projects include no task-compliance review entry. It SHALL pass `--agents` followed by the configured CLI names when available; otherwise it SHALL invoke `agent-validator init` without additional arguments.
 
-#### Scenario: Fresh project scaffolds the entry
+#### Scenario: Fresh project omits the entry
 - **WHEN** a user runs the agent-runner onboarding flow in a project without a `.validator/` directory
 - **AND** the onboarding workflow invokes `agent-runner internal validator-init`
-- **THEN** `agent-validator init` is invoked with `--enable-builtin task-compliance`
-- **AND** the resulting `.validator/config.yml` contains a `task-compliance` review entry with `builtin: task-compliance` and `enabled: false`
+- **THEN** `agent-validator init` is invoked without `--enable-builtin task-compliance`
+- **AND** the resulting `.validator/config.yml` contains no task-compliance review entry
 
-#### Scenario: Existing .validator/ directory surfaces a warning
-- **WHEN** a user runs `agent-runner internal validator-init` in a project that already has a `.validator/` directory
-- **THEN** `agent-validator init` runs with `--enable-builtin task-compliance`
-- **AND** agent-validator prints its "paste this into your config" warning (the agent-runner side does not retry or patch the config)
+#### Scenario: Configured CLIs are passed through
+- **WHEN** a user runs `agent-runner internal validator-init` with configured CLI names `claude`, `codex`, and `copilot`
+- **THEN** `agent-validator` is invoked with arguments `init --agents claude codex copilot`
 
-### Requirement: agent-runner repo config carries the entry
+#### Scenario: No configured CLIs
+- **WHEN** a user runs `agent-runner internal validator-init` without configured CLI names
+- **THEN** `agent-validator` is invoked with only the argument `init`
 
-The `.validator/config.yml` checked into the agent-runner repository SHALL include a `task-compliance` review entry under the root entry point's `reviews:` list with `builtin: task-compliance` and `enabled: false`, alongside the activation comment.
-
-#### Scenario: Entry present in repo config
-- **WHEN** the file `.validator/config.yml` is read at the repo root
-- **THEN** the entry point with `path: "."` contains a review entry keyed `task-compliance` whose `builtin` is `task-compliance` and whose `enabled` is `false`
-
-#### Scenario: Activator runs against repo locally
-- **WHEN** a developer runs `agent-validator run --report --enable-review task-compliance --context-file <some-task-file>` in the agent-runner repo
-- **THEN** the `task-compliance` review is activated (the config entry is present to flip)
+#### Scenario: Factory gate reports undeclared review for a fresh scaffold
+- **WHEN** the factory's task-compliance gate inspects a repository onboarded with this validator-init behavior
+- **AND** no task-compliance review entry has been added to its validator config
+- **THEN** the gate reports `not-declared`
 
 ### Requirement: Task-compliance flags activated only by explicit opt-in
 

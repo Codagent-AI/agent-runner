@@ -278,7 +278,6 @@ func validatorInitArgs(projectConfigPath string) ([]string, error) {
 		args = append(args, "--agents")
 		args = append(args, clis...)
 	}
-	args = append(args, "--enable-builtin", "task-compliance")
 	return args, nil
 }
 
