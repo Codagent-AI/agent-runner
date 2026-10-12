@@ -144,7 +144,9 @@ seed_claude_settings_if_present() {
   fi
   mkdir -p "$(dirname -- "$target")"
   temp="$(mktemp "${target}.tmp.XXXXXX")"
-  if ! jq 'del(.hooks)' "$source" > "$temp"; then
+  # Slurp so an empty file or multiple JSON values fail instead of producing an
+  # invalid settings file; only a single JSON object is accepted.
+  if ! jq -s 'if length == 1 and (.[0] | type) == "object" then .[0] | del(.hooks) else error("expected exactly one JSON object") end' "$source" > "$temp"; then
     rm -f "$temp"
     echo "Failed to sanitize Claude settings: $source" >&2
     exit 1

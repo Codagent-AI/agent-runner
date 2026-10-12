@@ -610,39 +610,48 @@ func TestSandboxSyncHomeStripsHostClaudeHooks(t *testing.T) {
 }
 
 func TestSandboxSyncHomeRejectsMalformedClaudeSettings(t *testing.T) {
+	contents := map[string]string{
+		"truncated":  `{"hooks":`,
+		"empty":      ``,
+		"two-values": `{} {}`,
+		"non-object": `[]`,
+		"null":       `null`,
+	}
 	for _, filename := range []string{"settings.json", "settings.local.json"} {
-		t.Run(filename, func(t *testing.T) {
-			dir := t.TempDir()
-			hostHome := filepath.Join(dir, "host-home")
-			containerHome := filepath.Join(dir, "container-home")
-			if err := os.MkdirAll(filepath.Join(hostHome, "claude"), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			source := filepath.Join(hostHome, "claude", filename)
-			if err := os.WriteFile(source, []byte(`{"hooks":`), 0o400); err != nil {
-				t.Fatal(err)
-			}
-			cmd := exec.Command("bash", "./sandbox-sync-home.sh")
-			cmd.Env = append(withoutHostLauncherEnv(os.Environ()),
-				"HOME="+containerHome,
-				"SANDBOX_HOST_HOME_ROOT="+hostHome,
-				"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
-			)
-			output, err := cmd.CombinedOutput()
-			if err == nil || !strings.Contains(string(output), "Failed to sanitize Claude settings: "+source) {
-				t.Errorf("expected clear sanitization failure, got %v:\n%s", err, output)
-			}
-			if _, err := os.Stat(filepath.Join(containerHome, ".claude", filename)); !os.IsNotExist(err) {
-				t.Errorf("malformed settings must not be copied: %v", err)
-			}
-			entries, err := os.ReadDir(filepath.Join(containerHome, ".claude"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(entries) != 0 {
-				t.Errorf("failed sanitization left files behind: %v", entries)
-			}
-		})
+		for name, content := range contents {
+			t.Run(filename+"/"+name, func(t *testing.T) {
+				dir := t.TempDir()
+				hostHome := filepath.Join(dir, "host-home")
+				containerHome := filepath.Join(dir, "container-home")
+				if err := os.MkdirAll(filepath.Join(hostHome, "claude"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				source := filepath.Join(hostHome, "claude", filename)
+				if err := os.WriteFile(source, []byte(content), 0o400); err != nil {
+					t.Fatal(err)
+				}
+				cmd := exec.Command("bash", "./sandbox-sync-home.sh")
+				cmd.Env = append(withoutHostLauncherEnv(os.Environ()),
+					"HOME="+containerHome,
+					"SANDBOX_HOST_HOME_ROOT="+hostHome,
+					"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
+				)
+				output, err := cmd.CombinedOutput()
+				if err == nil || !strings.Contains(string(output), "Failed to sanitize Claude settings: "+source) {
+					t.Errorf("expected clear sanitization failure, got %v:\n%s", err, output)
+				}
+				if _, err := os.Stat(filepath.Join(containerHome, ".claude", filename)); !os.IsNotExist(err) {
+					t.Errorf("malformed settings must not be copied: %v", err)
+				}
+				entries, err := os.ReadDir(filepath.Join(containerHome, ".claude"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != 0 {
+					t.Errorf("failed sanitization left files behind: %v", entries)
+				}
+			})
+		}
 	}
 }
 
