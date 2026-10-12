@@ -61,6 +61,15 @@ const (
 	UnavailableSubagentSpanUnavailable   UnavailableReason = "subagent-span-unavailable"
 	UnavailableSubagentParentInvalid     UnavailableReason = "subagent-parent-transcript-invalid"
 	UnavailableTranscriptAmbiguous       UnavailableReason = "transcript-ambiguous"
+	UnavailableTranscriptMissing         UnavailableReason = "transcript-missing"
+	UnavailableTranscriptInvalid         UnavailableReason = "transcript-invalid"
+	UnavailableTranscriptSpanUnavailable UnavailableReason = "transcript-span-unavailable"
+	UnavailableSessionSwitched           UnavailableReason = "session-switched"
+	UnavailableCostReportUnavailable     UnavailableReason = "cost-report-unavailable"
+	UnavailableCostReportStale           UnavailableReason = "cost-report-stale"
+	UnavailableCostBaselineMissing       UnavailableReason = "cost-baseline-missing"
+	UnavailableCostSubagentUnsettled     UnavailableReason = "cost-subagent-unsettled"
+	UnavailableCostSessionMismatch       UnavailableReason = "cost-session-mismatch"
 )
 
 type UsageAllocation struct {

@@ -590,6 +590,7 @@ func TestDirectRunnerHelperProcess(t *testing.T) {
 	if helperMode != "1" && helperMode != "2" && helperMode != "3" {
 		return
 	}
+	prepareUsageWaitHelper(t)
 	if _, err := control.SendControlEventFromEnvironment(context.Background(), control.MessageCompleteStep, os.Getenv); err != nil {
 		os.Exit(10)
 	}
@@ -599,6 +600,12 @@ func TestDirectRunnerHelperProcess(t *testing.T) {
 	if helperMode == "1" {
 		if _, err := control.SendControlEventFromEnvironment(context.Background(), control.MessageTurnCommitted, os.Getenv); err != nil {
 			os.Exit(11)
+		}
+	}
+	emitUsageWaitHelperReport(t)
+	if os.Getenv("AGENT_RUNNER_USAGE_TEST_MODE") != "" {
+		for {
+			time.Sleep(time.Second)
 		}
 	}
 	select {}
