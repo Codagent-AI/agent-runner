@@ -314,12 +314,11 @@ func awaitDirectResult(ctx context.Context, options *DirectOptions, attempt *con
 	case completion := <-options.Control.Completions():
 		return finishDirectCompletion(ctx, options, attempt, supervisor, &completion)
 	case <-supervisor.Done():
-		// Acceptance and exit can become ready together. Once accepted, the
-		// durability state machine wins over natural-exit handling.
-		select {
-		case completion := <-options.Control.Completions():
+		// Acceptance and exit can become ready together, and the client is
+		// acknowledged just before its completion is delivered. Once accepted,
+		// the durability state machine wins over natural-exit handling.
+		if completion, ok := options.Control.AwaitAcceptedCompletion(ctx, attempt.ID); ok {
 			return finishDirectCompletion(ctx, options, attempt, supervisor, &completion)
-		default:
 		}
 		childResult := supervisor.Result()
 		return DirectResult{ExitCode: waitStatusExitCode(childResult.status)}, childResult.err
