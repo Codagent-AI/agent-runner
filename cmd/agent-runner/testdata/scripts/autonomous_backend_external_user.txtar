@@ -1,0 +1,48 @@
+# INT-001: explicit requirements fail while inherited preferences stay headless.
+chmod 755 bin/claude
+env PATH=$WORK/bin:$PATH
+env CLAUDE_STUB_LOG=$WORK/claude-args.log
+env HOME=$WORK/home
+mkdir exchange
+exec agent-runner --external-user $WORK/exchange workflow
+stderr 'step "required".*autonomous_backend "interactive".*not supported in external-user mode'
+! stderr 'falling back'
+grep -count=2 ' -p ' claude-args.log
+! grep 'required-prompt' claude-args.log
+grep 'explicit-prompt' claude-args.log
+grep 'inherited-prompt' claude-args.log
+
+-- bin/claude --
+#!/bin/sh
+echo "$@" >> "$CLAUDE_STUB_LOG"
+echo '{"type":"result","result":"captured-output"}'
+
+-- .agent-runner/config.yaml --
+profiles:
+  default:
+    agents:
+      worker:
+        default_mode: autonomous
+        cli: claude
+
+-- home/.agent-runner/settings.yaml --
+autonomous_backend: interactive
+
+-- .agent-runner/workflows/workflow-v1.0.yaml --
+name: workflow
+steps:
+  - id: required
+    agent: worker
+    session: new
+    prompt: required-prompt
+    autonomous_backend: interactive
+    continue_on_failure: true
+  - id: explicit
+    agent: worker
+    session: new
+    prompt: explicit-prompt
+    autonomous_backend: headless
+  - id: inherited
+    agent: worker
+    session: new
+    prompt: inherited-prompt

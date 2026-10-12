@@ -896,7 +896,13 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 	}
 	record.startGit = h.captureStartGit(call.workdir)
 	probeCtx, stopProbe := context.WithCancel(ctx)
-	defer stopProbe()
+	var probeDone chan struct{}
+	defer func() {
+		stopProbe()
+		if probeDone != nil {
+			<-probeDone
+		}
+	}()
 	output := &synchronizedBuffer{limit: maxChildSessionProbeBytes}
 	invocation, runErr := InvokeAgent(&AgentInvocation{
 		Context: ctx, Adapter: call.adapter, Args: args,
@@ -914,7 +920,11 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 				record.nativeSessionID = sessionID
 			}
 			h.mu.Unlock()
-			go h.probeChildSessionID(probeCtx, record, call, output)
+			probeDone = make(chan struct{})
+			go func() {
+				defer close(probeDone)
+				h.probeChildSessionID(probeCtx, record, call, output)
+			}()
 		},
 	}, h.options.Runner, h.options.Log)
 	if invocation.CLILaunched {
