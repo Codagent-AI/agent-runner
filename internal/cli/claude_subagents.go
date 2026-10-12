@@ -28,13 +28,10 @@ func claudeTokenTotals(tokens model.TokenCounts) *model.TokenTotals {
 }
 
 type claudeEntry struct {
-	Timestamp     time.Time `json:"timestamp"`
-	PromptID      string    `json:"promptId"`
-	ToolUseResult struct {
-		IsAsync bool   `json:"isAsync"`
-		Status  string `json:"status"`
-	} `json:"toolUseResult"`
-	Attachment struct {
+	Timestamp     time.Time           `json:"timestamp"`
+	PromptID      string              `json:"promptId"`
+	ToolUseResult claudeToolUseResult `json:"toolUseResult"`
+	Attachment    struct {
 		Type   string `json:"type"`
 		Prompt string `json:"prompt"`
 	} `json:"attachment"`
@@ -56,6 +53,22 @@ type claudeEntry struct {
 	IsError     bool            `json:"is_error"`
 	IsSidechain bool            `json:"isSidechain"`
 }
+
+// claudeToolUseResult reads the async-launch fields Claude records for its own
+// tools. MCP tools record toolUseResult as a string, which carries neither field.
+type claudeToolUseResult struct {
+	IsAsync bool   `json:"isAsync"`
+	Status  string `json:"status"`
+}
+
+func (r *claudeToolUseResult) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || data[0] != '{' {
+		return nil
+	}
+	type plain claudeToolUseResult
+	return json.Unmarshal(data, (*plain)(r))
+}
+
 type claudeTool struct {
 	Type      string `json:"type"`
 	Name      string `json:"name"`

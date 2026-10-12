@@ -720,3 +720,21 @@ func TestInteractiveClaudeMalformedReportGuards(t *testing.T) {
 		})
 	}
 }
+
+func TestInteractiveClaudeStringToolUseResultStaysComplete(t *testing.T) {
+	f := newInteractiveUsageFixture(t)
+	mcpCall := assistantFixture("call", "opus", 5, 10)
+	mcpCall["message"].(map[string]any)["content"] = []any{map[string]any{"type": "tool_use", "name": "mcp__agent-runner__call_agent", "id": "toolu_mcp"}}
+	// MCP tool results record toolUseResult as a JSON string, not an object.
+	mcpResult := map[string]any{
+		"type":          "user",
+		"timestamp":     "2026-10-10T00:00:11Z",
+		"toolUseResult": `{"details":{"exit":"exited"}}`,
+		"message":       map[string]any{"content": []any{map[string]any{"type": "tool_result", "tool_use_id": "toolu_mcp"}}},
+	}
+	f.write(f.path, promptFixture(), mcpCall, mcpResult, assistantFixture("final", "opus", 8, 12))
+	got := f.a.ExtractInteractiveUsage(f.p, f.uc)
+	if got.Usage.Completeness != model.CompletenessComplete || got.Usage.Tokens[model.TokenOutput] != 13 {
+		t.Fatalf("%+v", got.Usage)
+	}
+}
