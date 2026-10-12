@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/codagent/agent-runner/internal/model"
 )
 
@@ -391,5 +393,38 @@ func TestClaudeTranscriptsFollowSymlinkedProjectsDir(t *testing.T) {
 	}
 	if u.Allocations[1].Model != "claude-haiku-4-5" || u.TokenTotals == nil || u.TokenTotals.Total != 5 {
 		t.Fatalf("usage=%+v", u)
+	}
+}
+
+func TestClaudeParentSpanSelectors(t *testing.T) {
+	old := `{"uuid":"old","type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent","id":"old"}]}}` + "\n"
+	first := `{"uuid":"first","type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent","id":"first"}]}}` + "\n"
+	last := `{"uuid":"last","type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"first","is_error":true}]}}` + "\n"
+	tail := `{"uuid":"tail","type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent","id":"tail"}]}}` + "\n"
+	dir := t.TempDir()
+	writeClaudeFixture(t, filepath.Join(dir, "parent"), old+first+last+tail)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	offset := int64(len(old))
+	for _, tc := range []struct {
+		name string
+		span claudeParentSpanSelector
+		want map[string]bool
+	}{
+		{"UUID bounds", claudeParentSpanSelector{uuids: map[string]bool{"first": true, "last": true}}, map[string]bool{"first": true}},
+		{"offset to EOF", claudeParentSpanSelector{startOffset: &offset}, map[string]bool{"first": true, "tail": true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spawns, failed, reason := scanClaudeParentSpan(root, "parent", tc.span)
+			if diff := cmp.Diff(tc.want, spawns); diff != "" {
+				t.Fatalf("spawns (-want +got): %s", diff)
+			}
+			if !failed["first"] || reason != "" {
+				t.Fatalf("failed=%v reason=%s", failed, reason)
+			}
+		})
 	}
 }

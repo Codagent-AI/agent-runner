@@ -19,6 +19,26 @@ type ClaudeAdapter struct {
 	prepareCompletionPlugin func(CompletionCommand) (string, error) // test seam; nil uses prepareNextCommandPlugin
 }
 
+func claudeConfigHome(uc UsageContext) (home, config string, err error) {
+	for _, entry := range uc.Env {
+		if v, ok := strings.CutPrefix(entry, "HOME="); ok {
+			home = v
+		}
+		if v, ok := strings.CutPrefix(entry, "CLAUDE_CONFIG_DIR="); ok {
+			config = v
+		}
+	}
+	if home == "" {
+		home, err = os.UserHomeDir()
+	}
+	if config == "" {
+		config = filepath.Join(home, ".claude")
+	} else {
+		err = nil // An explicit config directory does not require a home directory.
+	}
+	return home, config, err
+}
+
 // BuildArgs constructs Claude CLI args.
 //
 // Patterns:
