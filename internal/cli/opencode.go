@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -172,16 +171,23 @@ func (a *OpenCodeAdapter) DiscoverSessionID(opts *DiscoverOptions) string {
 	if opts.Headless {
 		return discoverOpenCodeHeadlessSession(opts.ProcessOutput)
 	}
-	if id := discoverOpenCodeInteractiveSession(opts.SpawnTime); id != "" {
+	if id := discoverOpenCodeInteractiveSession(opts.SpawnTime, opts.ExcludeSessionIDs); id != "" {
 		return id
 	}
-	if id := discoverOpenCodeDatabaseSession(opts.SpawnTime, opts.Workdir, func(query string) ([]byte, error) {
-		return exec.Command("opencode", "db", query, "--format", "json").Output() // #nosec G204 -- fixed executable; query is one argv value, not shell-expanded
+	ctx, cancel := context.WithTimeout(context.Background(), openCodeDiscoveryQueryTimeout)
+	defer cancel()
+	if id := discoverOpenCodeDatabaseSession(opts.SpawnTime, opts.Workdir, opts.ExcludeSessionIDs, func(query string) ([]byte, error) {
+		return a.queryOpenCodeDB(ctx, query)
 	}); id != "" {
 		return id
 	}
 	return ""
 }
+
+// openCodeDiscoveryQueryTimeout bounds the `opencode db` session lookup so a
+// hung subprocess cannot stall agent-call finalization, which waits for the
+// discovery probe to finish.
+const openCodeDiscoveryQueryTimeout = 10 * time.Second
 
 func (a *OpenCodeAdapter) FilterOutput(stdout string) string {
 	return extractOpenCodeText(stdout)
@@ -338,7 +344,7 @@ func discoverOpenCodeHeadlessSession(output string) string {
 	}
 }
 
-func discoverOpenCodeDatabaseSession(spawnTime time.Time, workdir string, runQuery func(string) ([]byte, error)) string {
+func discoverOpenCodeDatabaseSession(spawnTime time.Time, workdir string, excludeIDs []string, runQuery func(string) ([]byte, error)) string {
 	if workdir == "" {
 		var err error
 		workdir, err = os.Getwd()
@@ -362,6 +368,14 @@ func discoverOpenCodeDatabaseSession(spawnTime time.Time, workdir string, runQue
 	if err := json.Unmarshal(output, &candidates); err != nil {
 		return ""
 	}
+	excluded := excludedSessionIDSet(excludeIDs)
+	matched := candidates[:0]
+	for _, c := range candidates {
+		if _, skip := excluded[c.ID]; !skip {
+			matched = append(matched, c)
+		}
+	}
+	candidates = matched
 	if len(candidates) > 1 {
 		log.Printf("opencode: %d database sessions match spawn time and workdir; refusing to guess", len(candidates))
 		return ""
@@ -372,7 +386,7 @@ func discoverOpenCodeDatabaseSession(spawnTime time.Time, workdir string, runQue
 	return ""
 }
 
-func discoverOpenCodeInteractiveSession(spawnTime time.Time) string {
+func discoverOpenCodeInteractiveSession(spawnTime time.Time, excludeIDs []string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
@@ -389,14 +403,18 @@ func discoverOpenCodeInteractiveSession(spawnTime time.Time) string {
 		modTime time.Time
 	}
 	var candidates []candidate
+	excluded := excludedSessionIDSet(excludeIDs)
 	for _, path := range matches {
 		info, err := os.Stat(path)
 		if err != nil || info.IsDir() || info.ModTime().Before(spawnTime) {
 			continue
 		}
-		base := filepath.Base(path)
+		id := strings.TrimSuffix(filepath.Base(path), ".json")
+		if _, skip := excluded[id]; skip {
+			continue
+		}
 		candidates = append(candidates, candidate{
-			id:      strings.TrimSuffix(base, ".json"),
+			id:      id,
 			modTime: info.ModTime(),
 		})
 	}

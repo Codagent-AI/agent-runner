@@ -3673,3 +3673,27 @@ func TestSuspendedMsg_PreservesPausedSelectionWhenActiveInside(t *testing.T) {
 		t.Fatalf("cursor = %d, want 0 (manual selection preserved)", m.cursor)
 	}
 }
+
+func TestModelOriginCwd(t *testing.T) {
+	for _, recorded := range []bool{true, false} {
+		name := "unknown origin"
+		if recorded {
+			name = "recorded origin"
+		}
+		t.Run(name, func(t *testing.T) {
+			dirs := scenarioA(t)
+			want := ""
+			if recorded {
+				want = dirs.root
+			}
+			writeMeta(t, dirs.projectDir, want)
+			m, err := New(dirs.sessionDir, dirs.projectDir, FromInspect)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(want, m.OriginCwd()); diff != "" {
+				t.Errorf("OriginCwd (-want +got):\n%s", diff)
+			}
+		})
+	}
+}

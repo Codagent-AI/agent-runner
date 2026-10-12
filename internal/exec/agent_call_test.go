@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,6 +66,105 @@ func (a *recordingDiscoverAdapter) DiscoverSessionID(opts *cli.DiscoverOptions) 
 		a.discoverOpts = append(a.discoverOpts, *opts)
 	}
 	return a.discovered
+}
+
+type delayedDiscoverCallAdapter struct {
+	callTestAdapter
+	discoverCalls int
+	probeStarted  chan struct{}
+	startedOnce   sync.Once
+}
+
+func (a *delayedDiscoverCallAdapter) DiscoverSessionID(opts *cli.DiscoverOptions) string {
+	a.mu.Lock()
+	a.discoverCalls++
+	a.mu.Unlock()
+	if opts.Headless && opts.ProcessOutput == "" {
+		a.startedOnce.Do(func() { close(a.probeStarted) })
+		time.Sleep(50 * time.Millisecond)
+	}
+	return ""
+}
+
+func (a *delayedDiscoverCallAdapter) callCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.discoverCalls
+}
+
+type outputDiscoverCallAdapter struct {
+	callTestAdapter
+}
+
+func (a *outputDiscoverCallAdapter) DiscoverSessionID(opts *cli.DiscoverOptions) string {
+	if opts.ProcessOutput != "" {
+		return "child-chat"
+	}
+	return ""
+}
+
+type probeCallTestRunner struct {
+	callTestRunner
+	run func(*AgentProcessOptions) (ProcessResult, error)
+}
+
+func (r *probeCallTestRunner) RunAgent(opts *AgentProcessOptions) (ProcessResult, error) {
+	return r.run(opts)
+}
+
+func TestAgentCallProbeDoesNotOutliveCall(t *testing.T) {
+	adapter := &delayedDiscoverCallAdapter{probeStarted: make(chan struct{})}
+	runner := &probeCallTestRunner{run: func(opts *AgentProcessOptions) (ProcessResult, error) {
+		opts.NotifyStarted()
+		select {
+		case <-adapter.probeStarted:
+			return ProcessResult{Started: true, Stdout: "done"}, nil
+		case <-time.After(time.Second):
+			return ProcessResult{}, errors.New("child session probe did not start")
+		}
+	}}
+	handler := NewAgentCallHandler(testAgentCallOptions(t.TempDir(), runner, adapter))
+	response := startAndAwaitAgentCall(t, handler, control.AgentCallRequest{
+		RequestID: "probe", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`),
+	})
+	if response.Error != nil {
+		t.Fatalf("response = %#v", response)
+	}
+	calls := adapter.callCount()
+	time.Sleep(125 * time.Millisecond)
+	if got := adapter.callCount(); got != calls {
+		t.Fatalf("discovery calls after completion = %d, want %d", got, calls)
+	}
+}
+
+func TestAgentCallKeepsProbedChildSessionWhenFinalDiscoveryEmpty(t *testing.T) {
+	adapter := &outputDiscoverCallAdapter{}
+	var handler *AgentCallHandler
+	runner := &probeCallTestRunner{run: func(opts *AgentProcessOptions) (ProcessResult, error) {
+		if _, err := io.WriteString(opts.StdoutWrapper(io.Discard), "child output"); err != nil {
+			return ProcessResult{}, err
+		}
+		opts.NotifyStarted()
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			if len(handler.ChildSessionIDs()) > 0 {
+				// Final discovery sees empty stdout, unlike the live probe.
+				return ProcessResult{Started: true}, nil
+			}
+			time.Sleep(time.Millisecond)
+		}
+		return ProcessResult{}, errors.New("child session probe did not publish an ID")
+	}}
+	handler = NewAgentCallHandler(testAgentCallOptions(t.TempDir(), runner, adapter))
+	response := startAndAwaitAgentCall(t, handler, control.AgentCallRequest{
+		RequestID: "probe", Payload: json.RawMessage(`{"prompt":"x","agent":"implementor"}`),
+	})
+	if response.Error != nil {
+		t.Fatalf("response = %#v", response)
+	}
+	if diff := cmp.Diff([]string{"child-chat"}, handler.ChildSessionIDs()); diff != "" {
+		t.Fatalf("child session IDs (-want +got):\n%s", diff)
+	}
 }
 func (a *callTestAdapter) SupportsSystemPrompt() bool { return true }
 func (a *callTestAdapter) ProbeModel(string, string) (cli.ProbeStrength, error) {

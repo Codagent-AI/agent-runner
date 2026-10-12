@@ -330,7 +330,9 @@ func (h *AgentCallHandler) finalizeExecution(record *acceptedAgentCall, resolved
 	h.mu.Lock()
 	record.response = raw
 	record.status = execution.response.Status
-	record.childSessionID = strings.TrimSpace(execution.invocation.DiscoveredSessionID)
+	if id := strings.TrimSpace(execution.invocation.DiscoveredSessionID); id != "" {
+		record.childSessionID = id
+	}
 	if h.active == record {
 		h.active = nil
 	}
@@ -819,7 +821,13 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 		return h.preLaunchFailure(record, call, "prepare called agent environment: "+err.Error())
 	}
 	probeCtx, stopProbe := context.WithCancel(ctx)
-	defer stopProbe()
+	var probeDone chan struct{}
+	defer func() {
+		stopProbe()
+		if probeDone != nil {
+			<-probeDone
+		}
+	}()
 	output := &synchronizedBuffer{limit: maxChildSessionProbeBytes}
 	invocation, runErr := InvokeAgent(&AgentInvocation{
 		Context: ctx, Adapter: call.adapter, Args: args,
@@ -830,7 +838,11 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 		Log: h.options.Log, Now: h.options.Now,
 		StdoutWrapper: childStdoutCapture(call.adapter, output),
 		OnStarted: func() {
-			go h.probeChildSessionID(probeCtx, record, call, output)
+			probeDone = make(chan struct{})
+			go func() {
+				defer close(probeDone)
+				h.probeChildSessionID(probeCtx, record, call, output)
+			}()
 		},
 	}, h.options.Runner, h.options.Log)
 	if runErr != nil {

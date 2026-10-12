@@ -24,6 +24,9 @@ const (
 	ModeUI          StepMode = "ui"
 )
 
+// AutonomousBackendValues lists the step backends, mirroring usersettings.AutonomousBackend.
+var AutonomousBackendValues = []string{"headless", "interactive", "interactive-claude"}
+
 // SessionStrategy defines how an agent session is managed.
 type SessionStrategy string
 
@@ -170,6 +173,7 @@ type Step struct {
 	CaptureFormat     string            `yaml:"capture_format,omitempty" json:"capture_format,omitempty"`
 	Agent             string            `yaml:"agent,omitempty" json:"agent,omitempty"`
 	Mode              StepMode          `yaml:"mode,omitempty" json:"mode,omitempty"`
+	AutonomousBackend string            `yaml:"autonomous_backend,omitempty" json:"autonomous_backend,omitempty"`
 	Session           SessionStrategy   `yaml:"session,omitempty" json:"session,omitempty"`
 	CLI               string            `yaml:"cli,omitempty" json:"cli,omitempty"`
 	Capture           string            `yaml:"capture,omitempty" json:"capture,omitempty"`
@@ -402,6 +406,23 @@ func (s *Step) validateCaptureFields(isAgent, isShell bool) error {
 	return nil
 }
 
+func (s *Step) validateAutonomousBackendField(isAgent, isScript, isUI bool) error {
+	if s.AutonomousBackend == "" {
+		return nil
+	}
+	switch {
+	case !isAgent || isScript || isUI:
+		return fmt.Errorf(`"autonomous_backend" is only allowed on agent steps`)
+	case !slices.Contains(AutonomousBackendValues, s.AutonomousBackend):
+		return fmt.Errorf("invalid autonomous_backend %q (valid values: %s)", s.AutonomousBackend, strings.Join(AutonomousBackendValues, ", "))
+	case s.Mode == ModeInteractive:
+		return fmt.Errorf(`"autonomous_backend" requires autonomous mode`)
+	case s.Capture != "" && s.AutonomousBackend != "headless":
+		return fmt.Errorf(`"capture" cannot be combined with an interactive "autonomous_backend"`)
+	}
+	return nil
+}
+
 func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 	isAgent := s.isAgentContext()
 	isShell := s.Command != ""
@@ -433,6 +454,10 @@ func (s *Step) validateFieldConstraints(knownCLIs []string) error {
 
 	if s.Workdir != "" && !isShell && !isAgent && !isScript {
 		return fmt.Errorf(`"workdir" is only allowed on shell, script, and agent steps`)
+	}
+
+	if err := s.validateAutonomousBackendField(isAgent, isScript, isUI); err != nil {
+		return err
 	}
 
 	if err := s.validateAgentAdapterFields(knownCLIs, isAgent, isScript, isUI); err != nil {
