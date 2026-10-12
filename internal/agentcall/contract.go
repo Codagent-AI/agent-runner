@@ -126,10 +126,10 @@ type Details struct {
 	Git      GitDelta       `json:"git"`
 }
 type SessionDetails struct {
-	CLI      string `json:"cli"`
-	Model    string `json:"model,omitempty"`
-	Resumed  bool   `json:"resumed"`
-	FollowUp bool   `json:"follow_up"`
+	CLI              string `json:"cli"`
+	Model            string `json:"model,omitempty"`
+	Resumed          bool   `json:"resumed"`
+	FollowUpEligible bool   `json:"follow_up_eligible"`
 }
 type GitDelta struct {
 	State     string      `json:"state"`

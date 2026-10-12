@@ -96,7 +96,7 @@ func (h *AgentCallHandler) buildDetails(r *acceptedAgentCall, c *resolvedAgentCa
 	s := *r.settlement
 	native := r.nativeSessionID
 	h.mu.Unlock()
-	d := &agentcall.Details{Exit: "terminated", Duration: max(s.at.Sub(r.started).Round(time.Second), 0).String(), Session: agentcall.SessionDetails{CLI: c.cliName, Model: c.knownModel, Resumed: c.resume, FollowUp: c.target.Kind != agentcall.TargetSession && native != ""}, Git: h.collectGit(r, c)}
+	d := &agentcall.Details{Exit: "terminated", Duration: max(s.at.Sub(r.started).Round(time.Second), 0).String(), Session: agentcall.SessionDetails{CLI: c.cliName, Model: c.knownModel, Resumed: c.resume, FollowUpEligible: c.target.Kind != agentcall.TargetSession && native != ""}, Git: h.collectGit(r, c)}
 	switch s.kind {
 	case settledExited:
 		d.Exit = "exited"

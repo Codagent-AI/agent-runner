@@ -61,7 +61,7 @@ type SessionDetails struct {
     CLI        string `json:"cli"`
     Model      string `json:"model,omitempty"`  // effective model passed to the child
     Resumed    bool   `json:"resumed"`
-    FollowUp   bool   `json:"follow_up"`        // eligible as a follow_up source
+    FollowUpEligible bool `json:"follow_up_eligible"` // eligible as a follow_up source
 }
 type GitDelta struct {
     State     string      `json:"state"` // captured | not_git | unavailable | non_linear
@@ -162,7 +162,7 @@ type callSettlement struct {
     - for a named-session resume through any other adapter: empty, because the named-session map stores only the session ID, so the session's original model is unknown, and a requested override is not applied.
 
     Named-session request handling is otherwise unchanged.
-  - `Session.FollowUp`: true when the target kind is `agent` or `follow_up` and `nativeSessionID != ""`.
+  - `Session.FollowUpEligible`: true when the target kind is `agent` or `follow_up` and `nativeSessionID != ""`.
 - `Details` is attached to every terminal response, including `preLaunchFailure` and the oversized-result failure, before the size check. `oversizedAgentCallFailure` re-attaches it. Details are small: at most about 50 × 250 bytes.
 - `nativeSessionID` is set in `finalizeExecution` from `DiscoveredSessionID`. It falls back to `invocation.SessionID` when `CLILaunched` is true (Claude's pre-assigned UUID).
 
