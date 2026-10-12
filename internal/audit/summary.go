@@ -51,6 +51,11 @@ type AgentCallBoundary struct {
 	ParentAttemptID string         `json:"parent_attempt_id,omitempty"`
 	TargetKind      string         `json:"target_kind,omitempty"`
 	TargetName      string         `json:"target_name,omitempty"`
+	Timeout         string         `json:"timeout,omitempty"`
+	FollowUpOf      string         `json:"follow_up_of,omitempty"`
+	ErrorCode       string         `json:"error_code,omitempty"`
+	Exit            string         `json:"exit,omitempty"`
+	GitState        string         `json:"git_state,omitempty"`
 	Outcome         string         `json:"outcome,omitempty"`
 	Data            map[string]any `json:"data,omitempty"`
 }
@@ -344,6 +349,11 @@ func appendBoundaryEvent(summary *Summary, event Event, capBytes int, boundaryBy
 			ParentAttemptID: stringField(event.Data, "parent_attempt_id"),
 			TargetKind:      stringField(event.Data, "target_kind"),
 			TargetName:      stringField(event.Data, "target_name"),
+			Timeout:         stringField(event.Data, "timeout"),
+			FollowUpOf:      stringField(event.Data, "follow_up_of"),
+			ErrorCode:       stringField(event.Data, "error_code"),
+			Exit:            stringField(event.Data, "exit"),
+			GitState:        stringField(event.Data, "git_state"),
 			Outcome:         stringField(event.Data, "outcome"),
 			Data:            event.Data,
 		}

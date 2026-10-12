@@ -1,0 +1,7 @@
+{"type":"turn.started"}
+{"type":"item.started","item":{"type":"command_execution","command":"SECRET"}}
+malformed
+{"type":"item.completed","item":{"type":"command_execution","aggregated_output":"SECRET"}}
+{"type":"item.started","item":{"type":"mcp_tool_call","server":"runner","tool":"call_agent","arguments":{"prompt":"SECRET"}}}
+{"type":"item.completed","item":{"type":"agent_message","text":"SECRET"}}
+{"type":"turn.completed","usage":{}}

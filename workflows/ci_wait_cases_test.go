@@ -73,6 +73,11 @@ func writeCIPage(t *testing.T, page string) string {
 
 func runCIFixture(t *testing.T, fixture map[string]any, inputs string) (output string, exitCode int, elapsed time.Duration) {
 	t.Helper()
+	return runCIFixtureWithGHDelay(t, fixture, inputs, 0)
+}
+
+func runCIFixtureWithGHDelay(t *testing.T, fixture map[string]any, inputs string, ghDelay time.Duration) (output string, exitCode int, elapsed time.Duration) {
+	t.Helper()
 	dir := t.TempDir()
 	for _, name := range []string{"ci-wait.sh", "ci_wait.py"} {
 		data, err := ReadAsset("core/" + name)
@@ -91,6 +96,7 @@ func runCIFixture(t *testing.T, fixture map[string]any, inputs string) (output s
 		t.Fatal(err)
 	}
 	stub := `#!/bin/sh
+if [ "$CI_FAKE_GH_DELAY" != 0 ]; then sleep "$CI_FAKE_GH_DELAY"; fi
 if [ "$CI_FAKE_GH_MODE" = hang ]; then sleep 10; fi
 if [ "$CI_FAKE_GH_MODE" = no_pr ] && [ "$1" = pr ]; then echo 'no pull requests found' >&2; exit 1; fi
 if [ "$CI_FAKE_GH_MODE" = auth ] && [ "$1" = api ]; then echo 'HTTP 401 Bad credentials' >&2; exit 1; fi
@@ -120,7 +126,7 @@ esac
 		t.Fatal(err)
 	}
 	cmd := exec.Command("sh", filepath.Join(dir, "ci-wait.sh"))
-	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "CI_SNAPSHOT="+filepath.Join(dir, "snapshot.json"))
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "CI_SNAPSHOT="+filepath.Join(dir, "snapshot.json"), fmt.Sprintf("CI_FAKE_GH_DELAY=%g", ghDelay.Seconds()))
 	cmd.Stdin = strings.NewReader(inputs)
 	start := time.Now()
 	out, err := cmd.CombinedOutput()
@@ -141,85 +147,102 @@ func TestCIWaitClassification(t *testing.T) {
 	bot := map[string]any{"login": "coderabbitai[bot]", "__typename": "Bot"}
 	human := map[string]any{"login": "reviewer", "__typename": "User"}
 	tests := []struct {
-		name     string
-		setup    func(map[string]any)
-		inputs   string
-		want     string
-		contains string
+		name             string
+		setup            func(map[string]any)
+		inputs           string
+		want             string
+		contains         string
+		ghDelay          time.Duration
+		waitsForDeadline bool
 	}{
-		{"green snapshot", func(map[string]any) {}, "", "CI_PASSED", "**PR:**"},
+		{"green snapshot", func(map[string]any) {}, "", "CI_PASSED", "**PR:**", 0, false},
+		// Reproduce process startup taking longer than the former 300 ms call timeout.
+		{"slow gh startup", func(map[string]any) {}, "", "CI_PASSED", "**PR:**", 400 * time.Millisecond, false},
 		{"failed check and log", func(pr map[string]any) {
 			ciChecks(pr)["nodes"] = []any{map[string]any{"name": "unit tests", "conclusion": "FAILURE", "detailsUrl": "https://github.com/example/project/actions/runs/123"}}
-		}, "", "CI_FAILED", "failed job log excerpt"},
-		{"merge conflict", func(pr map[string]any) { pr["mergeable"] = "CONFLICTING" }, "", "CI_FAILED", "Merge Conflicts"},
+		}, "", "CI_FAILED", "failed job log excerpt", 0, false},
+		{"merge conflict", func(pr map[string]any) { pr["mergeable"] = "CONFLICTING" }, "", "CI_FAILED", "Merge Conflicts", 0, false},
 		{"blocking review", func(pr map[string]any) {
 			ciConn(pr, "reviews")["nodes"] = []any{map[string]any{"author": human, "state": "CHANGES_REQUESTED", "body": "fix this"}}
-		}, "", "CI_FAILED", "Blocking Reviews"},
+		}, "", "CI_FAILED", "Blocking Reviews", 0, false},
 		{"actionable thread", func(pr map[string]any) {
 			ciConn(pr, "reviewThreads")["nodes"] = []any{map[string]any{"isResolved": false, "comments": map[string]any{"nodes": []any{map[string]any{"author": human, "body": "fix", "path": "a.go", "line": 3}}, "pageInfo": map[string]any{"hasNextPage": false}}}}
-		}, "", "CI_COMMENTS", "a.go:3"},
+		}, "", "CI_COMMENTS", "a.go:3", 0, false},
 		{"comment outranks pending CI", func(pr map[string]any) {
 			ciChecks(pr)["nodes"] = []any{map[string]any{"name": "build", "status": "IN_PROGRESS"}}
 			ciConn(pr, "reviewThreads")["nodes"] = []any{map[string]any{"isResolved": false, "comments": map[string]any{"nodes": []any{map[string]any{"author": human, "body": "fix", "path": "a.go", "line": 3}}, "pageInfo": map[string]any{"hasNextPage": false}}}}
-		}, "", "CI_COMMENTS", "Still Running"},
+		}, "", "CI_COMMENTS", "Still Running", 0, false},
 		{"deferred thread", func(pr map[string]any) {
 			ciConn(pr, "reviewThreads")["nodes"] = []any{map[string]any{"isResolved": false, "comments": map[string]any{"nodes": []any{map[string]any{"author": human, "body": "fix", "path": "a.go", "line": 3}, map[string]any{"author": map[string]any{"login": "alice", "__typename": "User"}, "body": "deferred"}}, "pageInfo": map[string]any{"hasNextPage": false}}}}
-		}, "", "CI_PASSED", "Deferred Threads"},
+		}, "", "CI_PASSED", "Deferred Threads", 0, false},
 		{"human reply reopens", func(pr map[string]any) {
 			ciConn(pr, "reviewThreads")["nodes"] = []any{map[string]any{"isResolved": false, "comments": map[string]any{"nodes": []any{map[string]any{"author": human, "body": "fix", "path": "a.go", "line": 3}, map[string]any{"author": map[string]any{"login": "alice", "__typename": "User"}, "body": "deferred"}, map[string]any{"author": human, "body": "still broken"}}, "pageInfo": map[string]any{"hasNextPage": false}}}}
-		}, "", "CI_COMMENTS", "PR Comments"},
+		}, "", "CI_COMMENTS", "PR Comments", 0, false},
 		{"bot summary", func(pr map[string]any) {
 			ciConn(pr, "comments")["nodes"] = []any{map[string]any{"author": bot, "body": "summary"}}
-		}, "", "CI_PASSED", "Informational Bot Comments"},
+		}, "", "CI_PASSED", "Informational Bot Comments", 0, false},
 		{"pending check", func(pr map[string]any) {
 			ciChecks(pr)["nodes"] = []any{map[string]any{"name": "build", "status": "IN_PROGRESS"}}
-		}, "", "CI_PENDING", "Still Running"},
-		{"unknown mergeability", func(pr map[string]any) { pr["mergeable"] = "UNKNOWN" }, "", "CI_PENDING", "pending"},
-		{"configured bot absent", func(pr map[string]any) {}, `"review_bots":"CodeRabbitAI[bot]",`, "CI_REVIEW_INCOMPLETE", "coderabbitai: not started"},
+		}, "", "CI_PENDING", "Still Running", 0, true},
+		{"unknown mergeability", func(pr map[string]any) { pr["mergeable"] = "UNKNOWN" }, "", "CI_PENDING", "pending", 0, true},
+		{"configured bot absent", func(pr map[string]any) {}, `"review_bots":"CodeRabbitAI[bot]",`, "CI_REVIEW_INCOMPLETE", "coderabbitai: not started", 0, false},
 		{"old bot review", func(pr map[string]any) {
 			ciConn(pr, "reviews")["nodes"] = []any{map[string]any{"author": bot, "state": "APPROVED", "submittedAt": past, "commit": map[string]any{"oid": "old-head"}}}
-		}, "", "CI_REVIEW_INCOMPLETE", "Unfinished Review Bots"},
+		}, "", "CI_REVIEW_INCOMPLETE", "Unfinished Review Bots", 0, true},
 		{"fresh bot success", func(pr map[string]any) {
 			ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": past}}
 			ciChecks(pr)["nodes"] = []any{map[string]any{"context": "CodeRabbit", "state": "SUCCESS", "createdAt": fresh, "creator": map[string]any{"login": "coderabbitai[bot]"}}}
-		}, `"review_bots":"coderabbitai",`, "CI_PASSED", "passed"},
+		}, `"review_bots":"coderabbitai",`, "CI_PASSED", "passed", 0, false},
 		{"pending bot status", func(pr map[string]any) {
 			ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": past}}
 			ciChecks(pr)["nodes"] = []any{map[string]any{"context": "CodeRabbit", "state": "PENDING", "createdAt": fresh, "creator": map[string]any{"login": "coderabbitai[bot]"}}}
-		}, `"review_bots":"coderabbitai",`, "CI_REVIEW_INCOMPLETE", "coderabbitai: pending"},
+		}, `"review_bots":"coderabbitai",`, "CI_REVIEW_INCOMPLETE", "coderabbitai: pending", 0, true},
 		{"first-time bot pending", func(pr map[string]any) {
 			ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": past}}
 			ciChecks(pr)["nodes"] = []any{map[string]any{"context": "CodeRabbit", "state": "PENDING", "createdAt": fresh, "creator": map[string]any{"login": "coderabbitai[bot]"}}}
-		}, "", "CI_REVIEW_INCOMPLETE", "coderabbitai: pending"},
+		}, "", "CI_REVIEW_INCOMPLETE", "coderabbitai: pending", 0, true},
 		{"first-time bot failure stays CI", func(pr map[string]any) {
 			ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": past}}
 			ciChecks(pr)["nodes"] = []any{map[string]any{"context": "codecov/patch", "state": "FAILURE", "createdAt": fresh, "creator": map[string]any{"login": "codecov[bot]"}}}
-		}, "", "CI_FAILED", "codecov/patch"},
+		}, "", "CI_FAILED", "codecov/patch", 0, false},
 		{"skipped bot check", func(pr map[string]any) {
 			ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": past}}
 			ciChecks(pr)["nodes"] = []any{map[string]any{"name": "CodeRabbit", "conclusion": "SKIPPED", "completedAt": fresh, "checkSuite": map[string]any{"app": map[string]any{"slug": "coderabbitai"}}}}
-		}, `"review_bots":"coderabbitai",`, "CI_REVIEW_INCOMPLETE", "coderabbitai: skipped"},
+		}, `"review_bots":"coderabbitai",`, "CI_REVIEW_INCOMPLETE", "coderabbitai: skipped", 0, true},
 		{"bot comment does not finish", func(pr map[string]any) {
 			ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": past}}
 			ciConn(pr, "comments")["nodes"] = []any{map[string]any{"author": bot, "body": "review complete", "updatedAt": fresh}}
-		}, `"review_bots":"coderabbitai",`, "CI_REVIEW_INCOMPLETE", "coderabbitai: commented"},
+		}, `"review_bots":"coderabbitai",`, "CI_REVIEW_INCOMPLETE", "coderabbitai: commented", 0, true},
 		{"stale after ready", func(pr map[string]any) {
 			ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": past}}
 			ciConn(pr, "timelineItems")["nodes"] = []any{map[string]any{"createdAt": fresh}}
 			ciChecks(pr)["nodes"] = []any{map[string]any{"context": "CodeRabbit", "state": "SUCCESS", "createdAt": past, "creator": map[string]any{"login": "coderabbitai[bot]"}}}
-		}, `"review_bots":"coderabbitai",`, "CI_REVIEW_INCOMPLETE", "not started"},
+		}, `"review_bots":"coderabbitai",`, "CI_REVIEW_INCOMPLETE", "not started", 0, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			fixture := ciFixture()
 			tt.setup(ciPR(fixture))
-			input := fmt.Sprintf(`{%s"deadline_seconds":"0.7","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.15","call_timeout_seconds":"0.3"}`, tt.inputs)
-			out, code, elapsed := runCIFixture(t, fixture, input)
+			// Terminal classifications should finish well before the deadline, even
+			// when starting gh takes longer under full-suite load.
+			deadline, callTimeout := 10*time.Second, 5*time.Second
+			// Pending checks and bots with unfinished evidence keep polling until
+			// the deadline; bots that never started can finish at the grace end.
+			if tt.waitsForDeadline {
+				deadline, callTimeout = 6*time.Second, 5*time.Second
+			}
+			input := fmt.Sprintf(`{%s"deadline_seconds":"%g","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.15","call_timeout_seconds":"%g"}`, tt.inputs, deadline.Seconds(), callTimeout.Seconds())
+			out, code, elapsed := runCIFixtureWithGHDelay(t, fixture, input, tt.ghDelay)
 			if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), tt.want) || !strings.Contains(out, tt.contains) {
 				t.Fatalf("code=%d elapsed=%s output=\n%s", code, elapsed, out)
 			}
-			if elapsed > 2*time.Second {
-				t.Fatalf("wait took %s", elapsed)
+			maxElapsed := 5 * time.Second
+			if tt.waitsForDeadline {
+				maxElapsed = 10 * time.Second
+			}
+			if elapsed >= maxElapsed {
+				t.Fatalf("wait took %s (limit %s)", elapsed, maxElapsed)
 			}
 		})
 	}

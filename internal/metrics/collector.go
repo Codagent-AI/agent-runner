@@ -99,6 +99,11 @@ type StepRecord struct {
 	ParentAttemptID          string                 `json:"parent_attempt_id,omitempty"`
 	TargetKind               string                 `json:"target_kind,omitempty"`
 	TargetName               string                 `json:"target_name,omitempty"`
+	Timeout                  string                 `json:"timeout,omitempty"`
+	FollowUpOf               string                 `json:"follow_up_of,omitempty"`
+	ErrorCode                string                 `json:"error_code,omitempty"`
+	Exit                     string                 `json:"exit,omitempty"`
+	GitState                 string                 `json:"git_state,omitempty"`
 	ExecutionSessionID       string                 `json:"execution_session_id,omitempty"`
 	ExecutionSessionCoverage string                 `json:"execution_session_coverage,omitempty"`
 	GitStart                 *audit.GitCheckpoint   `json:"git_start,omitempty"`
@@ -291,6 +296,11 @@ func (c *Collector) processTerminal(event *audit.Event) {
 		CallID: stringValue(event.Data["call_id"]), ParentAttemptID: stringValue(event.Data["parent_attempt_id"]),
 		TargetKind: stringValue(event.Data["target_kind"]), TargetName: stringValue(event.Data["target_name"]),
 		ExecutionSessionID: identity.ExecutionSessionID,
+		Timeout:            stringValue(event.Data["timeout"]),
+		FollowUpOf:         stringValue(event.Data["follow_up_of"]),
+		ErrorCode:          stringValue(event.Data["error_code"]),
+		Exit:               stringValue(event.Data["exit"]),
+		GitState:           stringValue(event.Data["git_state"]),
 	}
 	if record.ExecutionSessionID == "" {
 		record.ExecutionSessionID = stringValue(event.Data["execution_session_id"])
@@ -560,9 +570,9 @@ func totalsForRecords(records []StepRecord, activeDuration int64) model.RunTotal
 		}
 		agents++
 		if step.Usage != nil && step.Usage.Status == model.UsageCollected {
-			// Only partial subagent collection lowers coverage; other partial
+			// Partial Claude transcript collection lowers coverage; other partial
 			// records, such as nested Validator projections, count as reported.
-			partial := step.Usage.SubagentCollection == model.CompletenessPartial
+			partial := partialClaudeTranscript(step.Usage)
 			if partial {
 				usagePartial++
 			} else {
