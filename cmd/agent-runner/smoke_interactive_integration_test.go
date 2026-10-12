@@ -1158,7 +1158,7 @@ steps:
 			t.Fatalf("headless args: %v", args)
 		}
 	}
-	if valueAfter(args, "--permission-mode") != "bypassPermissions" {
+	if valueAfter(args, "--permission-mode") != "auto" {
 		t.Fatalf("permission args: %v", args)
 	}
 	prompt := valueAfter(args, "--append-system-prompt")

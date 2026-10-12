@@ -142,6 +142,104 @@ func TestResolveStepProfile_RunAgentOverrideAppliesWithoutProfileStore(t *testin
 	}
 }
 
+// INT-001: exercise the runner-to-adapter boundary for fresh and resumed sessions.
+func TestExecuteAgentStepClaudeYoloInteractive(t *testing.T) {
+	for _, session := range []model.SessionStrategy{model.SessionNew, model.SessionResume} {
+		t.Run(string(session), func(t *testing.T) {
+			var launches [][]string
+			oldRunner, oldTTY := interactiveRunnerFn, isStdinTerminal
+			interactiveRunnerFn = func(args []string, _ directRunOptions) (interactive.DirectResult, error) {
+				launches = append(launches, args)
+				return interactive.DirectResult{Completed: true}, nil
+			}
+			isStdinTerminal = func() bool { return true }
+			t.Cleanup(func() { interactiveRunnerFn, isStdinTerminal = oldRunner, oldTTY })
+			ctx := makeCtx()
+			ctx.AutonomousBackend = "interactive-claude"
+			ctx.AutonomousPermissionMode = "yolo"
+			if session == model.SessionResume {
+				ctx.SessionIDs["prev"] = "session-abc"
+				ctx.LastSessionStepID = "prev"
+			}
+			runner := &mockRunner{}
+			step := model.Step{ID: "s", CLI: "claude", Mode: model.ModeAutonomous, Session: session, Prompt: "implement feature"}
+			outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+			if err != nil || outcome != OutcomeSuccess {
+				t.Fatalf("outcome=%q err=%v", outcome, err)
+			}
+			if len(runner.calls) != 0 || len(launches) != 1 {
+				t.Fatalf("headless calls=%d, interactive calls=%d", len(runner.calls), len(launches))
+			}
+			args := launches[0]
+			if mode, _ := argValue(args, "--permission-mode"); mode != "auto" {
+				t.Fatalf("expected auto, got %v", args)
+			}
+			if containsArg(args, "bypassPermissions") {
+				t.Fatalf("unexpected bypassPermissions: %v", args)
+			}
+			if tool, _ := argValue(args, "--disallowedTools"); tool != "AskUserQuestion" {
+				t.Fatalf("clarification questions must remain blocked: %v", args)
+			}
+			systemPrompt, hasSystemPrompt := argValue(args, "--append-system-prompt")
+			if session == model.SessionNew {
+				if !hasSystemPrompt || !strings.HasPrefix(systemPrompt, autonomyPreamble) {
+					t.Fatalf("expected autonomy preamble in system prompt: %v", args)
+				}
+				return
+			}
+			if id, _ := argValue(args, "--resume"); id != "session-abc" {
+				t.Fatalf("expected resumed session: %v", args)
+			}
+			if hasSystemPrompt {
+				t.Fatalf("resume must not append system prompt: %v", args)
+			}
+			prompt := args[len(args)-1]
+			if !strings.Contains(prompt, step.Prompt) || strings.Contains(prompt, autonomyPreamble) {
+				t.Fatalf("unexpected resume prompt: %q", prompt)
+			}
+			assertControlCompletionInstruction(t, prompt)
+		})
+	}
+}
+
+// INT-002: both plain and capture-forced headless launches retain bypass permissions.
+func TestExecuteAgentStepClaudeYoloHeadless(t *testing.T) {
+	for _, tc := range []struct{ name, backend, capture string }{
+		{"capture forced headless", "interactive-claude", "out"},
+		{"plain headless", "headless", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			interactiveCalls := 0
+			oldRunner, oldTTY := interactiveRunnerFn, isStdinTerminal
+			interactiveRunnerFn = func(_ []string, _ directRunOptions) (interactive.DirectResult, error) {
+				interactiveCalls++
+				return interactive.DirectResult{Completed: true}, nil
+			}
+			isStdinTerminal = func() bool { return true }
+			t.Cleanup(func() { interactiveRunnerFn, isStdinTerminal = oldRunner, oldTTY })
+			ctx := makeCtx()
+			ctx.AutonomousBackend = tc.backend
+			ctx.AutonomousPermissionMode = "yolo"
+			runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: claudeResultOutput("captured-value")}}}
+			step := model.Step{ID: "s", CLI: "claude", Mode: model.ModeAutonomous, Session: model.SessionNew, Prompt: "implement feature", Capture: tc.capture}
+			outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+			if err != nil || outcome != OutcomeSuccess {
+				t.Fatalf("outcome=%q err=%v", outcome, err)
+			}
+			if interactiveCalls != 0 || len(runner.calls) != 1 {
+				t.Fatalf("interactive calls=%d headless calls=%d", interactiveCalls, len(runner.calls))
+			}
+			args := runner.calls[0]
+			if mode, _ := argValue(args, "--permission-mode"); mode != "bypassPermissions" || !containsArg(args, "-p") {
+				t.Fatalf("expected headless bypassPermissions: %v", args)
+			}
+			if tc.capture != "" && ctx.CapturedVariables[tc.capture].Str != "captured-value" {
+				t.Fatalf("unexpected captured output: %v", ctx.CapturedVariables)
+			}
+		})
+	}
+}
+
 func TestExecuteAgentStep(t *testing.T) {
 	t.Run("adapter without extraction keeps unsupported usage unavailable", func(t *testing.T) {
 		got, err := extractAgentUsage(&spawnEnvAdapter{}, "fake", cli.ContextAutonomousHeadless, `{"type":"result"}`+"\n", cli.UsageContext{})
