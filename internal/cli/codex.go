@@ -595,7 +595,6 @@ func matchesSessionCwd(sessionFile, cwd string) bool {
 			Payload struct {
 				Cwd            string `json:"cwd"`
 				ParentThreadID string `json:"parent_thread_id"`
-				ForkedFromID   string `json:"forked_from_id"`
 			} `json:"payload"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &meta); err != nil {
@@ -604,7 +603,8 @@ func matchesSessionCwd(sessionFile, cwd string) bool {
 		if meta.Type == "session_meta" {
 			// Sub-agent threads share the parent's cwd and can be written
 			// after it, so they must never be taken for the spawned session.
-			if meta.Payload.ParentThreadID != "" || meta.Payload.ForkedFromID != "" {
+			// User forks have no parent thread and stay eligible.
+			if meta.Payload.ParentThreadID != "" {
 				return false
 			}
 			return meta.Cwd == cwd || meta.Payload.Cwd == cwd
