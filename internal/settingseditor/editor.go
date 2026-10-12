@@ -86,7 +86,7 @@ var fields = []field{
 			},
 			{
 				label:          "YOLO",
-				description:    "Bypass per-command approval for shell, file, and network actions. Recommended only inside an external sandbox such as Docker.",
+				description:    "Pre-approve shell, file, and network actions; Claude steps on an interactive backend use Claude's auto mode (classifier-reviewed, may occasionally prompt). Recommended only inside an external sandbox such as Docker.",
 				permissionMode: usersettings.PermissionModeYOLO,
 			},
 		},

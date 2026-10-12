@@ -142,6 +142,104 @@ func TestResolveStepProfile_RunAgentOverrideAppliesWithoutProfileStore(t *testin
 	}
 }
 
+// INT-001: exercise the runner-to-adapter boundary for fresh and resumed sessions.
+func TestExecuteAgentStepClaudeYoloInteractive(t *testing.T) {
+	for _, session := range []model.SessionStrategy{model.SessionNew, model.SessionResume} {
+		t.Run(string(session), func(t *testing.T) {
+			var launches [][]string
+			oldRunner, oldTTY := interactiveRunnerFn, isStdinTerminal
+			interactiveRunnerFn = func(args []string, _ directRunOptions) (interactive.DirectResult, error) {
+				launches = append(launches, args)
+				return interactive.DirectResult{Completed: true}, nil
+			}
+			isStdinTerminal = func() bool { return true }
+			t.Cleanup(func() { interactiveRunnerFn, isStdinTerminal = oldRunner, oldTTY })
+			ctx := makeCtx()
+			ctx.AutonomousBackend = "interactive-claude"
+			ctx.AutonomousPermissionMode = "yolo"
+			if session == model.SessionResume {
+				ctx.SessionIDs["prev"] = "session-abc"
+				ctx.LastSessionStepID = "prev"
+			}
+			runner := &mockRunner{}
+			step := model.Step{ID: "s", CLI: "claude", Mode: model.ModeAutonomous, Session: session, Prompt: "implement feature"}
+			outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+			if err != nil || outcome != OutcomeSuccess {
+				t.Fatalf("outcome=%q err=%v", outcome, err)
+			}
+			if len(runner.calls) != 0 || len(launches) != 1 {
+				t.Fatalf("headless calls=%d, interactive calls=%d", len(runner.calls), len(launches))
+			}
+			args := launches[0]
+			if mode, _ := argValue(args, "--permission-mode"); mode != "auto" {
+				t.Fatalf("expected auto, got %v", args)
+			}
+			if containsArg(args, "bypassPermissions") {
+				t.Fatalf("unexpected bypassPermissions: %v", args)
+			}
+			if tool, _ := argValue(args, "--disallowedTools"); tool != "AskUserQuestion" {
+				t.Fatalf("clarification questions must remain blocked: %v", args)
+			}
+			systemPrompt, hasSystemPrompt := argValue(args, "--append-system-prompt")
+			if session == model.SessionNew {
+				if !hasSystemPrompt || !strings.HasPrefix(systemPrompt, autonomyPreamble) {
+					t.Fatalf("expected autonomy preamble in system prompt: %v", args)
+				}
+				return
+			}
+			if id, _ := argValue(args, "--resume"); id != "session-abc" {
+				t.Fatalf("expected resumed session: %v", args)
+			}
+			if hasSystemPrompt {
+				t.Fatalf("resume must not append system prompt: %v", args)
+			}
+			prompt := args[len(args)-1]
+			if !strings.Contains(prompt, step.Prompt) || strings.Contains(prompt, autonomyPreamble) {
+				t.Fatalf("unexpected resume prompt: %q", prompt)
+			}
+			assertControlCompletionInstruction(t, prompt)
+		})
+	}
+}
+
+// INT-002: both plain and capture-forced headless launches retain bypass permissions.
+func TestExecuteAgentStepClaudeYoloHeadless(t *testing.T) {
+	for _, tc := range []struct{ name, backend, capture string }{
+		{"capture forced headless", "interactive-claude", "out"},
+		{"plain headless", "headless", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			interactiveCalls := 0
+			oldRunner, oldTTY := interactiveRunnerFn, isStdinTerminal
+			interactiveRunnerFn = func(_ []string, _ directRunOptions) (interactive.DirectResult, error) {
+				interactiveCalls++
+				return interactive.DirectResult{Completed: true}, nil
+			}
+			isStdinTerminal = func() bool { return true }
+			t.Cleanup(func() { interactiveRunnerFn, isStdinTerminal = oldRunner, oldTTY })
+			ctx := makeCtx()
+			ctx.AutonomousBackend = tc.backend
+			ctx.AutonomousPermissionMode = "yolo"
+			runner := &mockRunner{results: []ProcessResult{{ExitCode: 0, Stdout: claudeResultOutput("captured-value")}}}
+			step := model.Step{ID: "s", CLI: "claude", Mode: model.ModeAutonomous, Session: model.SessionNew, Prompt: "implement feature", Capture: tc.capture}
+			outcome, err := ExecuteAgentStep(&step, ctx, runner, &mockLogger{})
+			if err != nil || outcome != OutcomeSuccess {
+				t.Fatalf("outcome=%q err=%v", outcome, err)
+			}
+			if interactiveCalls != 0 || len(runner.calls) != 1 {
+				t.Fatalf("interactive calls=%d headless calls=%d", interactiveCalls, len(runner.calls))
+			}
+			args := runner.calls[0]
+			if mode, _ := argValue(args, "--permission-mode"); mode != "bypassPermissions" || !containsArg(args, "-p") {
+				t.Fatalf("expected headless bypassPermissions: %v", args)
+			}
+			if tc.capture != "" && ctx.CapturedVariables[tc.capture].Str != "captured-value" {
+				t.Fatalf("unexpected captured output: %v", ctx.CapturedVariables)
+			}
+		})
+	}
+}
+
 func TestExecuteAgentStep(t *testing.T) {
 	t.Run("adapter without extraction keeps unsupported usage unavailable", func(t *testing.T) {
 		got, err := extractAgentUsage(&spawnEnvAdapter{}, "fake", cli.ContextAutonomousHeadless, `{"type":"result"}`+"\n", cli.UsageContext{})
@@ -2507,5 +2605,185 @@ func TestExecuteAgentStepCoordinatesIntakeHandoffAcrossConcurrentContexts(t *tes
 	}
 	if count != 1 {
 		t.Fatalf("intake handoff delivery count = %d, want 1; calls: %#v", count, runner.calls)
+	}
+}
+
+func TestStepBackendResolutionMatrix(t *testing.T) {
+	old := isStdinTerminal
+	defer func() { isStdinTerminal = old }()
+	type resolutionCase struct {
+		mode                   model.StepMode
+		backend, setting, name string
+		tty, external, capture bool
+	}
+	var cases []resolutionCase
+	for _, mode := range []model.StepMode{model.ModeAutonomous, model.ModeInteractive, ""} {
+		for _, backend := range []string{"", "headless", "interactive", "interactive-claude"} {
+			for _, setting := range []string{"", "headless", "interactive", "interactive-claude"} {
+				for _, name := range []string{"claude", "codex"} {
+					for _, tty := range []bool{false, true} {
+						for _, external := range []bool{false, true} {
+							for _, capture := range []bool{false, true} {
+								cases = append(cases, resolutionCase{mode, backend, setting, name, tty, external, capture})
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	for _, tc := range cases {
+		mode, backend, setting, name, tty, external, capture := tc.mode, tc.backend, tc.setting, tc.name, tc.tty, tc.external, tc.capture
+		t.Run(fmt.Sprintf("%s/%s/%s/%s/tty=%t/external=%t/capture=%t", mode, backend, setting, name, tty, external, capture), func(t *testing.T) {
+			isStdinTerminal = func() bool { return tty }
+			ctx := makeCtx()
+			ctx.AutonomousBackend = setting
+			if external {
+				ctx.ExternalUser = &model.ExternalUserSettings{}
+			}
+			step := &model.Step{AutonomousBackend: backend}
+			if capture {
+				step.Capture = "out"
+			}
+			effective := backend
+			if effective == "" {
+				effective = setting
+			}
+			wantsInteractive := effective == "interactive" || effective == "interactive-claude" && name == "claude"
+			want := cli.ContextAutonomousHeadless
+			reason := ""
+			if mode != model.ModeAutonomous {
+				switch {
+				case backend != "":
+					reason = "requires autonomous mode"
+				case external:
+					want = cli.ContextExternalUser
+				default:
+					want = cli.ContextInteractive
+				}
+			} else if wantsInteractive {
+				if backend != "" {
+					switch {
+					case external:
+						reason = "external-user"
+					case capture:
+						reason = "capture"
+					case !tty:
+						reason = "TTY"
+					default:
+						want = cli.ContextAutonomousInteractive
+					}
+				} else if !external && !capture && tty {
+					want = cli.ContextAutonomousInteractive
+				}
+			}
+			log := &mockLogger{}
+			got, err := resolveInvocationContext(step, mode, ctx, name, log)
+			if reason != "" {
+				if err == nil || !strings.Contains(err.Error(), reason) {
+					t.Fatalf("error=%v, want %s", err, reason)
+				}
+			} else if err != nil || got != want {
+				t.Fatalf("context=%v error=%v, want %v", got, err, want)
+			}
+			warning := mode == model.ModeAutonomous && backend == "" && wantsInteractive && !external && !capture && !tty
+			if strings.Contains(strings.Join(log.lines, ""), "falling back") != warning {
+				t.Fatalf("unexpected warning: %v", log.lines)
+			}
+		})
+	}
+}
+
+func TestStepBackendFailureBeforeLaunch(t *testing.T) {
+	oldTTY, oldRunner := isStdinTerminal, interactiveRunnerFn
+	defer func() { isStdinTerminal = oldTTY; interactiveRunnerFn = oldRunner }()
+	interactiveRunnerFn = func([]string, directRunOptions) (interactive.DirectResult, error) {
+		t.Fatal("interactive process started")
+		return interactive.DirectResult{}, nil
+	}
+	for _, backend := range []string{"interactive", "interactive-claude", "headless"} {
+		for _, reason := range []string{"TTY", "external-user", "capture", "requires autonomous mode"} {
+			if backend == "headless" && reason != "requires autonomous mode" {
+				continue
+			}
+			t.Run(backend+"/"+reason, func(t *testing.T) {
+				ctx := makeCtx()
+				step := &model.Step{ID: "required", Prompt: "work", Mode: model.ModeAutonomous, AutonomousBackend: backend}
+				isStdinTerminal = func() bool { return reason != "TTY" }
+				switch reason {
+				case "external-user":
+					ctx.ExternalUser = &model.ExternalUserSettings{}
+				case "capture":
+					step.Capture = "out"
+				case "requires autonomous mode":
+					step.Mode = ""
+					step.Session = model.SessionNew
+					step.Agent = "worker"
+					ctx.ProfileStore = &config.Config{ActiveAgents: map[string]*config.Agent{"worker": {DefaultMode: "interactive", CLI: "claude"}}}
+				}
+				auditLog := &recordingAuditLogger{}
+				ctx.AuditLogger = auditLog
+				runner := &mockRunner{}
+				log := &mockLogger{}
+				outcome, err := ExecuteAgentStep(step, ctx, runner, log)
+				if err != nil || outcome != OutcomeFailed || len(runner.calls) != 0 {
+					t.Fatalf("outcome=%v err=%v calls=%v", outcome, err, runner.calls)
+				}
+				for _, text := range []string{"required", reason} {
+					if !strings.Contains(strings.Join(log.lines, ""), text) {
+						t.Fatalf("missing %s: %v", text, log.lines)
+					}
+				}
+				if start := findAuditEvent(auditLog.events, audit.EventStepStart); start != nil {
+					if _, ok := start.Data["prompt"]; ok {
+						t.Fatal("emitted agent start")
+					}
+				}
+				end := findAuditEvent(auditLog.events, audit.EventStepEnd)
+				if end == nil {
+					t.Fatal("missing failure event")
+				}
+				usage, ok := end.Data["usage"].(model.UsageRecord)
+				if !ok || usage.Reason != model.UnavailableNotInvoked {
+					t.Fatalf("usage=%v", end.Data["usage"])
+				}
+			})
+		}
+	}
+}
+
+func TestExecuteAgentStepBackendOverride(t *testing.T) {
+	oldTTY, oldRunner := isStdinTerminal, interactiveRunnerFn
+	defer func() { isStdinTerminal = oldTTY; interactiveRunnerFn = oldRunner }()
+	isStdinTerminal = func() bool { return true }
+	var calls [][]string
+	interactiveRunnerFn = func(args []string, _ directRunOptions) (interactive.DirectResult, error) {
+		calls = append(calls, args)
+		return interactive.DirectResult{Completed: true}, nil
+	}
+	ctx := makeCtx()
+	ctx.AutonomousBackend = "headless"
+	step := &model.Step{ID: "override", Prompt: "work", Mode: model.ModeAutonomous, AutonomousBackend: "interactive", Session: model.SessionNew}
+	runner := &mockRunner{}
+	outcome, err := ExecuteAgentStep(step, ctx, runner, &mockLogger{})
+	if err != nil || outcome != OutcomeSuccess || len(runner.calls) != 0 || len(calls) != 1 {
+		t.Fatalf("outcome=%v err=%v headless=%v interactive=%v", outcome, err, runner.calls, calls)
+	}
+	args := calls[0]
+	if containsArg(args, "-p") || !containsArg(args, "acceptEdits") || !containsArg(args, "AskUserQuestion") {
+		t.Fatalf("wrong interactive autonomy args: %v", args)
+	}
+	prompt := ""
+	for i, arg := range args {
+		if arg == "--append-system-prompt" && i+1 < len(args) {
+			prompt = args[i+1]
+		}
+	}
+	if !strings.Contains(prompt, autonomyPreamble) {
+		t.Fatalf("missing autonomy preamble: %s", prompt)
+	}
+	assertControlCompletionInstruction(t, prompt)
+	if ctx.AutonomousBackend != "headless" {
+		t.Fatal("modified user backend")
 	}
 }

@@ -46,6 +46,7 @@ func claudeConfigHome(uc UsageContext) (home, config string, err error) {
 //   - Fresh headless:     claude --session-id <uuid> --permission-mode acceptEdits -p --output-format stream-json --verbose <prompt>
 //   - Resume interactive: claude --resume <uuid> <prompt>
 //   - Resume headless:    claude --resume <uuid> -p --output-format stream-json --verbose <prompt>
+//   - YOLO autonomous:   uses --permission-mode auto on interactive backends, bypassPermissions on headless (fresh and resume)
 //   - Model override:     appends --model <m> (fresh sessions only)
 //
 // --session-id is reserved for fresh sessions — Claude CLI rejects it when
@@ -59,6 +60,23 @@ func claudeConfigHome(uc UsageContext) (home, config string, err error) {
 func (a *ClaudeAdapter) BuildArgs(input *BuildArgsInput) []string {
 	args, _ := a.BuildArgsWithError(input)
 	return args
+}
+
+// claudePermissionMode returns the --permission-mode value for an invocation,
+// or "" when none is emitted (interactive context).
+func claudePermissionMode(context InvocationContext, mode usersettings.AutonomousPermissionMode) string {
+	if !context.IsAutonomous() && context != ContextExternalUser {
+		return ""
+	}
+	if usersettings.EffectiveAutonomousPermissionMode(mode) != usersettings.PermissionModeYOLO {
+		return "acceptEdits"
+	}
+	if context == ContextAutonomousInteractive {
+		// Auto shares the prompting permission class with ordinary sessions.
+		// Headless keeps bypassPermissions because it cannot fall back to prompts.
+		return "auto"
+	}
+	return "bypassPermissions"
 }
 
 // BuildArgsWithError constructs Claude args and fails before spawn if its
@@ -87,11 +105,7 @@ func (a *ClaudeAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, err
 		args = append(args, "--effort", input.Effort)
 	}
 
-	if context.IsAutonomous() || context == ContextExternalUser {
-		permissionMode := "acceptEdits"
-		if usersettings.EffectiveAutonomousPermissionMode(input.PermissionMode) == usersettings.PermissionModeYOLO {
-			permissionMode = "bypassPermissions"
-		}
+	if permissionMode := claudePermissionMode(context, input.PermissionMode); permissionMode != "" {
 		args = append(args, "--permission-mode", permissionMode)
 	}
 

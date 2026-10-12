@@ -512,3 +512,35 @@ func TestGroupStepEvaluatesMemberSkipIf(t *testing.T) {
 		t.Fatalf("skipped member step_end not found: %+v", recorder.events)
 	})
 }
+
+func TestDispatchStepRequiredBackendHandoff(t *testing.T) {
+	old := isStdinTerminal
+	defer func() { isStdinTerminal = old }()
+	for _, tc := range []struct {
+		name          string
+		tty, external bool
+		mode          model.StepMode
+		want          bool
+	}{
+		{name: "success", tty: true, mode: model.ModeAutonomous, want: true},
+		{name: "no TTY", mode: model.ModeAutonomous},
+		{name: "external", tty: true, external: true, mode: model.ModeAutonomous},
+		{name: "mode mismatch", tty: true, mode: model.ModeInteractive},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isStdinTerminal = func() bool { return tc.tty }
+			ctx := makeCtx()
+			ctx.AutonomousBackend = "headless"
+			if tc.external {
+				ctx.ExternalUser = &model.ExternalUserSettings{}
+			}
+			called := []bool{}
+			ctx.PrepareStepHook = func(interactive bool) { called = append(called, interactive) }
+			step := &model.Step{ID: "required", Prompt: "work", Mode: tc.mode, AutonomousBackend: "interactive"}
+			DispatchStep(step, ctx, &mockRunner{}, &mockGlob{}, &mockLogger{})
+			if len(called) != 1 || called[0] != tc.want {
+				t.Fatalf("handoff=%v want %t", called, tc.want)
+			}
+		})
+	}
+}
