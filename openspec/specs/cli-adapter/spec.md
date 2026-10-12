@@ -441,6 +441,10 @@ For a Runner-launched OpenCode invocation receiving the agent-call integration, 
 
 When a supported CLI exposes process-local control over MCP tool-execution timeouts, its adapter MAY configure the Runner-owned server so a generic short host default does not govern the agent-call tools, while preserving an explicit deadline configured by the user or requesting client. That configuration MUST NOT be required for a long child to complete: when a parent CLI's MCP client aborts a long tool request regardless of configuration, `call_agent` and `get_agent_call` SHALL return a non-terminal status with the `call_id` before that abort, and `get_agent_call` SHALL collect the later result. An adapter MUST NOT introduce a Runner-level child duration limit when the host exposes no such control. Timeout handling MUST remain isolated to the spawned parent and MUST NOT modify global or project configuration.
 
+For Claude, the supported control is the `MCP_TOOL_TIMEOUT` environment variable, in milliseconds. When a Claude invocation carries the Runner agent-call integration, the Claude adapter SHALL set `MCP_TOOL_TIMEOUT` to `2147483647` in the spawned Claude process's environment. This SHALL apply to both interactive and headless invocations. When `MCP_TOOL_TIMEOUT` is already defined in Agent Runner's environment, the Claude adapter SHALL leave the inherited value in effect unchanged. When a Claude invocation does not carry the agent-call integration, the Claude adapter MUST NOT add `MCP_TOOL_TIMEOUT`.
+
+The Claude adapter MUST NOT change Claude's MCP idle-timeout or interactive auto-backgrounding behavior as part of this control. Its existing headless-only environment settings remain limited to headless invocations.
+
 #### Scenario: Supported timeout control is applied process-locally
 - **WHEN** an enabled parent uses a CLI with a supported MCP tool-execution timeout setting that its adapter configures (for example Codex `tool_timeout_sec` in the invocation's private Codex home, or the Copilot `--additional-mcp-config` server `timeout`)
 - **THEN** the adapter configures the Runner-owned server for long-running agent-call tools without changing persistent user or project settings
@@ -452,6 +456,27 @@ When a supported CLI exposes process-local control over MCP tool-execution timeo
 #### Scenario: Host that aborts long tool requests still supports long children
 - **WHEN** an enabled parent uses a CLI whose MCP client aborts a long tool request regardless of configuration (Cursor) and the child is still running
 - **THEN** `call_agent` returns the `call_id` with a non-terminal status before the host abort, the child keeps running, and `get_agent_call` collects the later result
+
+#### Scenario: Headless Claude parent receives the raised tool timeout
+- **WHEN** a headless Claude invocation carries the agent-call integration and `MCP_TOOL_TIMEOUT` is not defined in Agent Runner's environment
+- **THEN** the spawned Claude process runs with `MCP_TOOL_TIMEOUT=2147483647`
+
+#### Scenario: Interactive Claude parent receives the raised tool timeout
+- **WHEN** an interactive Claude invocation carries the agent-call integration and `MCP_TOOL_TIMEOUT` is not defined in Agent Runner's environment
+- **THEN** the spawned Claude process runs with `MCP_TOOL_TIMEOUT=2147483647`
+- **AND** the spawned process does not receive Runner's headless-only settings, such as disabling background tasks
+
+#### Scenario: User-set Claude tool timeout is preserved
+- **WHEN** a Claude invocation carries the agent-call integration and Agent Runner's environment defines `MCP_TOOL_TIMEOUT`
+- **THEN** the spawned Claude process runs with the user's `MCP_TOOL_TIMEOUT` value unchanged
+
+#### Scenario: Claude without agent-call integration is unchanged
+- **WHEN** a Claude invocation does not carry the agent-call integration
+- **THEN** the Claude adapter adds no `MCP_TOOL_TIMEOUT` to the spawned process's environment
+
+#### Scenario: Claude timeout control leaves persistent configuration untouched
+- **WHEN** the Claude adapter raises `MCP_TOOL_TIMEOUT` for an invocation
+- **THEN** no user, project, or global Claude configuration file is created or modified for the timeout, and Agent Runner's own environment is unchanged
 
 ### Requirement: Headless Claude runs without background tasks
 

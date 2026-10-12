@@ -53,7 +53,7 @@ func TestRegisteredAdaptersProvisionAgentCallProcessLocally(t *testing.T) {
 				}
 
 				assertAgentCallApproval(t, adapterName, invocationContext, prepared)
-				assertAgentCallTimeout(t, adapterName, &registration)
+				assertAgentCallTimeout(t, adapterName, &registration, prepared)
 			})
 		}
 	}
@@ -336,6 +336,7 @@ type agentCallRegistrationView struct {
 
 func agentCallTestInput(t *testing.T, adapterName string, invocationContext InvocationContext) (Adapter, *BuildArgsInput) {
 	t.Helper()
+	unsetTestEnv(t, "MCP_TOOL_TIMEOUT")
 	home := t.TempDir()
 	workdir := t.TempDir()
 	t.Setenv("HOME", home)
@@ -591,7 +592,7 @@ func assertAgentCallApproval(t *testing.T, adapterName string, invocationContext
 	}
 }
 
-func assertAgentCallTimeout(t *testing.T, adapterName string, registration *agentCallRegistrationView) {
+func assertAgentCallTimeout(t *testing.T, adapterName string, registration *agentCallRegistrationView, prepared agentCallPreparedInvocation) {
 	t.Helper()
 	switch adapterName {
 	case "codex":
@@ -605,6 +606,17 @@ func assertAgentCallTimeout(t *testing.T, adapterName string, registration *agen
 	default:
 		if registration.timeout != 0 {
 			t.Fatalf("%s unexpectedly sets a Runner tool timeout: %d", adapterName, registration.timeout)
+		}
+	}
+	if adapterName == "claude" {
+		count := 0
+		for _, entry := range prepared.env {
+			if entry == "MCP_TOOL_TIMEOUT=2147483647" {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("Claude env = %v; want exactly one raised MCP tool timeout", prepared.env)
 		}
 	}
 }
@@ -730,5 +742,14 @@ func assertConfigSentinelUnchanged(t *testing.T, path string, before configSenti
 	after := readConfigSentinel(t, path)
 	if after != before {
 		t.Fatalf("config %s changed: before=%+v after=%+v", path, before, after)
+	}
+}
+
+// unsetTestEnv restores the original value (or absence) when the test finishes.
+func unsetTestEnv(t *testing.T, key string) {
+	t.Helper()
+	t.Setenv(key, "")
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatal(err)
 	}
 }

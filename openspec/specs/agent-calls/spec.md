@@ -145,11 +145,23 @@ The called child SHALL receive its resolved profile system prompt and the suppli
 
 ### Requirement: Long-running MCP execution
 
-Agent Runner MUST NOT impose a fixed duration limit on a valid agent call. Only a caller-supplied `timeout` bounds a call's duration. After acceptance, a child's survival MUST NOT depend on any MCP request staying open, on host MCP tool-execution timeout configuration, or on progress notifications. When a supported host exposes a process-local MCP tool-execution timeout control, the adapter MAY raise that timeout for the Runner-owned server; a long child MUST NOT depend on it (see the wait-budget and polling clauses). Where a host enforces an unconfigurable `tools/call` abort, its parents SHALL receive a wait budget shorter than that abort and reach the result by polling `get_agent_call`. When an MCP client supplies a progress token on `call_agent`, the bridge SHALL emit rate-limited progress notifications while that request remains open. Progress notifications MUST NOT be treated as a substitute for polling or for any host timeout configuration.
+Agent Runner MUST NOT impose a fixed duration limit on a valid agent call. Only a caller-supplied `timeout` bounds a call's duration. After acceptance, a child's survival MUST NOT depend on any MCP request staying open, on host MCP tool-execution timeout configuration, or on progress notifications. When a supported host exposes a process-local MCP tool-execution timeout control, the adapter MAY raise that timeout for the Runner-owned server; a long child MUST NOT depend on it (see the wait-budget and polling clauses). Claude is a host whose adapter raises this control (see the cli-adapter `MCP_TOOL_TIMEOUT` requirement). Raising the wall-clock control does not guarantee one uninterrupted waiting call: a host's idle timeout or automatic backgrounding of long tool calls can still end or detach the waiting request. In that case the child SHALL continue running within the parent attempt, and a parent that holds the call's `call_id` SHALL be able to obtain its result through `get_agent_call`. Recovering a `call_id` the parent never received is not guaranteed. A new `call_agent` discloses the active call's `call_id` through a `call_in_progress` rejection only while that call is still active. After the call completes, a new `call_agent` starts a new child. Where a host enforces an unconfigurable `tools/call` abort, its parents SHALL receive a wait budget shorter than that abort and reach the result by polling `get_agent_call`. When an MCP client supplies a progress token on `call_agent`, the bridge SHALL emit rate-limited progress notifications while that request remains open. Progress notifications MUST NOT be treated as a substitute for polling or for any host timeout configuration.
 
 #### Scenario: Configurable host timeout does not bound the call
-- **WHEN** an adapter that configures its host's process-local timeout control (Codex, Copilot) provisions the agent-call tools
+- **WHEN** an adapter that configures its host's process-local timeout control (Codex, Copilot, Claude) provisions the agent-call tools
 - **THEN** Agent Runner provisions the agent-call tools so the host's generic short default does not terminate a waiting `call_agent` request for an otherwise active child
+
+#### Scenario: Claude parent's wall-clock tool timeout is raised
+- **WHEN** a Claude parent with the agent-call integration invokes `call_agent` for a child that runs longer than Claude's default MCP tool timeout, and the user has not set `MCP_TOOL_TIMEOUT`
+- **THEN** Claude's default wall-clock tool timeout does not abort the waiting call
+
+#### Scenario: Host idle or backgrounding does not lose the child
+- **WHEN** a host's idle timeout or automatic backgrounding ends or detaches a waiting `call_agent` request while the child is still active
+- **THEN** the child continues to run, and a parent that holds the call's `call_id` can still reach its terminal result with `get_agent_call`
+
+#### Scenario: Active call discloses its call_id to a retrying parent
+- **WHEN** a parent whose waiting request was ended before it received a `call_id` invokes `call_agent` again while the original child is still active
+- **THEN** Agent Runner rejects the new call with `call_in_progress`, reports the active call's `call_id`, and does not start another child
 
 #### Scenario: Requested progress is reported
 - **WHEN** an MCP client invokes `call_agent` with a progress token and the request remains open while the child is active
