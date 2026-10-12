@@ -612,3 +612,5 @@ func matchesSessionCwd(sessionFile, cwd string) bool {
 	}
 	return false
 }
+
+func (*CodexAdapter) AppliesResumeModel() bool { return true }

@@ -1,0 +1,12 @@
+{"type":"thread.started","thread_id":"00000000-0000-0000-0000-000000000000"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"SECRET"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"SECRET","aggregated_output":"SECRET","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"SECRET","aggregated_output":"SECRET","exit_code":0,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"SECRET","aggregated_output":"SECRET","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"SECRET","aggregated_output":"SECRET","exit_code":0,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_3","type":"command_execution","command":"SECRET","aggregated_output":"SECRET","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_3","type":"command_execution","command":"SECRET","aggregated_output":"SECRET","exit_code":0,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_4","type":"command_execution","command":"SECRET","aggregated_output":"SECRET","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_4","type":"command_execution","command":"SECRET","aggregated_output":"SECRET","exit_code":0,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_5","type":"command_execution","command":"SECRET","aggregated_output":"SECRET","exit_code":null,"status":"in_progress"}}

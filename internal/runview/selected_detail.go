@@ -352,6 +352,21 @@ func repairMetadataLine(node *StepNode) string {
 func detailAgentMetadata(node *StepNode, options detailBuildOptions) []string {
 	var lines []string
 	if node.Type == NodeAgentCall {
+		if node.CallTimeout != "" {
+			lines = append(lines, "timeout: "+node.CallTimeout)
+		}
+		if node.CallFollowUpOf != "" {
+			lines = append(lines, "follow-up source: "+node.CallFollowUpOf)
+		}
+		if node.CallErrorCode != "" {
+			lines = append(lines, "error code: "+node.CallErrorCode)
+		}
+		if node.CallGitState != "" {
+			lines = append(lines, "git state: "+node.CallGitState)
+		}
+		if node.CallExit != "" {
+			lines = append(lines, "exit: "+node.CallExit)
+		}
 		target := strings.TrimSpace(node.CallTargetKind + " " + node.CallTargetName)
 		if target != "" {
 			lines = append(lines, "target: "+target)
