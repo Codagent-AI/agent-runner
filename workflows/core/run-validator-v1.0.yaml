@@ -6,11 +6,20 @@ params:
   - name: task_file
     required: false
     default: ""
+  - name: task_compliance
+    required: false
+    default: "false"
   - name: result_file
     required: false
     default: ""
 
 steps:
+  - id: check-task-compliance
+    script: check-task-compliance.sh
+    script_inputs:
+      task_compliance: "{{task_compliance}}"
+      task_file: "{{task_file}}"
+
   - id: validator-retry
     continue_on_failure: true
     loop:
@@ -20,6 +29,7 @@ steps:
         script: run-validator.sh
         script_inputs:
           task_file: "{{task_file}}"
+          task_compliance: "{{task_compliance}}"
           result_file: "{{result_file}}"
         capture: validator_output
         capture_stderr: true
@@ -68,6 +78,7 @@ steps:
     script: run-validator.sh
     script_inputs:
       task_file: "{{task_file}}"
+      task_compliance: "{{task_compliance}}"
       result_file: "{{result_file}}"
     capture: validator_output
     capture_stderr: true

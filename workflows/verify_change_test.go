@@ -325,7 +325,7 @@ func TestRunValidatorReadsTaskAndResultFileFromSameInput(t *testing.T) {
 	resultFile := filepath.Join(dir, "result.txt")
 	writeFakeBinary(t, dir, "runner", "#!/bin/sh\njq -r --arg key \"$3\" '.[$key] // \"\"'\n")
 	writeFakeBinary(t, dir, "validator", "#!/bin/sh\nprintf '%s\\n' \"$@\" > validator-args\n")
-	input := `{"task_file":"task.md","result_file":"` + resultFile + `"}`
+	input := `{"task_file":"task.md","task_compliance":"true","result_file":"` + resultFile + `"}`
 	output, err := runScriptIn(t, coreRunValidatorScript(t), dir, input, "AGENT_RUNNER_EXECUTABLE="+filepath.Join(dir, "runner"), "AGENT_RUNNER_VALIDATOR_EXECUTABLE="+filepath.Join(dir, "validator"))
 	if err != nil {
 		t.Fatalf("run-validator = (%q, %v)", output, err)

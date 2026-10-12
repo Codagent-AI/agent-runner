@@ -2662,3 +2662,92 @@ func TestMigratedRepairSitesLoadWithExpectedShape(t *testing.T) {
 		})
 	}
 }
+
+func TestTaskComplianceWorkflowWiring(t *testing.T) {
+	for _, tc := range []struct{ ref, value, guard string }{
+		{"builtin:core/run-validator-v1.0.yaml", "false", "check-task-compliance"},
+		{"builtin:core/implement-task-v1.0.yaml", "true", "validate-task-compliance"},
+	} {
+		wf := readBuiltinWorkflowForTest(t, tc.ref)
+		found := false
+		for _, param := range wf.Params {
+			if param.Name == "task_compliance" {
+				found = true
+				if param.Default != tc.value || param.Required == nil || *param.Required {
+					t.Errorf("param=%+v", param)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s missing param", tc.ref)
+		}
+		guard := findStep(wf.Steps, tc.guard)
+		if guard == nil {
+			t.Errorf("%s missing guard", tc.ref)
+			continue
+		}
+		if guard.ContinueOnFailure {
+			t.Error("guard must block")
+		}
+		if tc.value == "false" {
+			if wf.Steps[0].ID != tc.guard || guard.Script != "check-task-compliance.sh" || guard.ScriptInputs["task_compliance"] != "{{task_compliance}}" || guard.ScriptInputs["task_file"] != "{{task_file}}" {
+				t.Errorf("guard=%+v", guard)
+			}
+			for _, id := range []string{"run-validator", "verify-final-validator"} {
+				if step := findStep(wf.Steps, id); step.ScriptInputs["task_compliance"] != "{{task_compliance}}" {
+					t.Errorf("%s missing forward", id)
+				}
+			}
+			continue
+		}
+		if wf.Steps[1].ID != tc.guard || guard.Script != "validate-boolean-param.sh" || guard.ScriptInputs["name"] != "task_compliance" || guard.ScriptInputs["value"] != "{{task_compliance}}" {
+			t.Errorf("guard=%+v", guard)
+		}
+		if step := findStep(wf.Steps, "run-validator"); step.Params["task_compliance"] != "{{task_compliance}}" {
+			t.Error("missing forward")
+		}
+	}
+}
+
+func TestEmbeddedTaskComplianceCallers(t *testing.T) {
+	err := fs.WalkDir(FS, ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".yaml") {
+			return nil
+		}
+		data, err := FS.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var wf model.Workflow
+		if err := yaml.Unmarshal(data, &wf); err != nil {
+			return err
+		}
+		walkSteps(wf.Steps, func(step *model.Step) {
+			if strings.HasSuffix(step.Workflow, "implement-task-v1.0.yaml") && step.Params["task_compliance"] != "false" {
+				t.Errorf("%s/%s must opt out", path, step.ID)
+			}
+			if strings.HasSuffix(step.Workflow, "run-validator-v1.0.yaml") && step.Params["task_compliance"] == "true" {
+				t.Errorf("%s/%s opts in", path, step.ID)
+			}
+			if strings.HasSuffix(path, "simple-change-v1.0.yaml") && strings.HasSuffix(step.Workflow, "run-validator-v1.0.yaml") {
+				if _, ok := step.Params["task_file"]; ok {
+					t.Errorf("%s retains task_file", path)
+				}
+			}
+			if step.ID == "complete-task-index" {
+				for _, forbidden := range []string{"task-compliance", "passed validation", "passed the validator"} {
+					if strings.Contains(step.Prompt, forbidden) {
+						t.Errorf("%s prompt contains %s", path, forbidden)
+					}
+				}
+			}
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

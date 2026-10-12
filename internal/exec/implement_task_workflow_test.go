@@ -150,12 +150,14 @@ type taskDeliveryRunner struct {
 	// validatorFailures is how many validator runs report a compliance failure.
 	validatorFailures int
 	crashGenerate     bool
+	realValidator     bool
 
 	events              []string
 	delivered           string
 	repairRecordPath    string
 	fixViolationsPrompt string
 	lastGate            ProcessResult
+	lastScript          ProcessResult
 }
 
 var recordPathPattern = regexp.MustCompile("`(/[^`]*/output/task-delivery/[^`]*\\.json)`")
@@ -172,7 +174,7 @@ func (r *taskDeliveryRunner) RunShell(cmd string, _ bool, _ string) (ProcessResu
 func (r *taskDeliveryRunner) RunScript(path string, stdin []byte, _ bool, _ string) (ProcessResult, error) {
 	name := filepath.Base(path)
 	r.events = append(r.events, name)
-	if name == "run-validator.sh" {
+	if name == "run-validator.sh" && !r.realValidator {
 		if r.validatorFailures > 0 {
 			r.validatorFailures--
 			return ProcessResult{Started: true, ExitCode: 1, Stdout: "REVIEW task-compliance: 1. task not implemented\n"}, nil
@@ -180,6 +182,7 @@ func (r *taskDeliveryRunner) RunScript(path string, stdin []byte, _ bool, _ stri
 		return ProcessResult{Started: true, ExitCode: 0, Stdout: "PASS\n"}, nil
 	}
 	result, err := r.exec(osexec.Command("sh", path), stdin)
+	r.lastScript = result
 	if name == "verify-task-commit.sh" {
 		r.lastGate = result
 	}
@@ -328,6 +331,7 @@ func (f *taskDeliveryFixture) runImplementTask(t *testing.T, runner *taskDeliver
 		Params: map[string]string{
 			"task_file":          filepath.Join(f.run, taskFile),
 			"skip_validator":     skipValidator,
+			"task_compliance":    "true",
 			"run_session_report": "false",
 		},
 		WorkflowFile: implementTaskRef,
@@ -419,7 +423,7 @@ func TestImplementTaskAcceptsRepairRecordedExternalDelivery(t *testing.T) {
 			"repository: "+extRoot,
 			"commit: "+runner.delivered+" (contained in refs/remotes/origin/feature)",
 			"pull request (reported, unverified): https://example.com/pr/7",
-			"note: this run's validator and task-compliance review did not cover the external work",
+			"note: this run's validator did not cover the external work",
 			"record: "+runner.repairRecordPath,
 		)
 		if got := gitOut(t, f.run, "rev-parse", "HEAD"); got != headBefore {
@@ -496,5 +500,112 @@ func TestImplementTaskIsolatesExternalDeliveryRecords(t *testing.T) {
 	)
 	if _, err := os.Stat(first.repairRecordPath); err != nil {
 		t.Errorf("first task's record removed: %v", err)
+	}
+}
+
+// INT-001 and INT-003 exercise real bundled scripts through sub-workflow
+// parameter resolution, ending at an argv-recording fake Validator.
+func TestTaskComplianceExecutorIntegration(t *testing.T) {
+	for _, tc := range []struct {
+		name, ref, value, file string
+		invalid, skip          bool
+	}{
+		{name: "factory default", ref: implementTaskRef, file: "a task.md"},
+		{name: "explicit opt out", ref: implementTaskRef, value: "false", file: "a task.md"},
+		{name: "skip", ref: implementTaskRef, value: "true", file: "a task.md", skip: true},
+		{name: "invalid implementation", ref: implementTaskRef, value: "maybe", file: "a task.md", invalid: true},
+		{name: "invalid validator", ref: "builtin:core/run-validator-v1.0.yaml", value: "yes", invalid: true},
+		{name: "missing task", ref: "builtin:core/run-validator-v1.0.yaml", value: "true", invalid: true},
+		{name: "plain defaults", ref: "builtin:core/run-validator-v1.0.yaml"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newTaskDeliveryFixture(t)
+			if err := os.Rename(filepath.Join(f.run, "01-task.md"), filepath.Join(f.run, "a task.md")); err != nil {
+				t.Fatal(err)
+			}
+			gitIn(t, f.run, "add", ".")
+			gitIn(t, f.run, "commit", "-qm", "rename task")
+			bin := t.TempDir()
+			log := filepath.Join(bin, "argv")
+			jq, err := osexec.LookPath("jq")
+			if err != nil {
+				t.Fatal(err)
+			}
+			shim := "#!/bin/sh\n[ \"$1\" = internal ] && [ \"$2\" = json-value ] || exit 99\nexec " + jq + " -r --arg key \"$3\" '.[$key] // \"\"'\n"
+			if err := os.WriteFile(filepath.Join(bin, "runner"), []byte(shim), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			fake := "#!/bin/sh\n[ \"$1\" = run ] || exit 0\nprintf '%s\\n' \"$@\" >> " + log + "\nprintf '\\n' >> " + log + "\nexit 1\n"
+			if tc.name == "plain defaults" {
+				fake = strings.Replace(fake, "exit 1", "exit 0", 1)
+			}
+			if err := os.WriteFile(filepath.Join(bin, "validator"), []byte(fake), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("AGENT_RUNNER_EXECUTABLE", filepath.Join(bin, "runner"))
+			t.Setenv("AGENT_RUNNER_VALIDATOR_EXECUTABLE", filepath.Join(bin, "validator"))
+			t.Setenv("AGENT_RUNNER_METRICS_CONSUMER", "agent-runner")
+			t.Setenv("AGENT_RUNNER_METRICS_CONTEXT", "integration-context")
+			runner := f.runner(t)
+			runner.realValidator = true
+			runner.deliver = true
+			runner.writeRecord = true
+			params := map[string]string{}
+			if tc.file != "" {
+				params["task_file"] = filepath.Join(f.run, tc.file)
+			}
+			if tc.value != "" {
+				params["task_compliance"] = tc.value
+			}
+			if tc.skip {
+				params["skip_validator"] = "true"
+			}
+			ctx := model.NewRootContext(&model.RootContextOptions{SessionDir: f.sessionDir, ProjectRoot: f.run, WorkingDir: f.run, ProfileStore: &config.Config{ActiveAgents: map[string]*config.Agent{"implementor": {CLI: "claude", DefaultMode: "autonomous"}}}})
+			outcome, err := DispatchStep(&model.Step{ID: "call", Workflow: tc.ref, Params: params}, ctx, runner, &mockGlob{}, &mockLogger{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, readErr := os.ReadFile(log)
+			if readErr != nil && !os.IsNotExist(readErr) {
+				t.Fatal(readErr)
+			}
+			if tc.invalid {
+				if outcome != OutcomeFailed || len(data) != 0 || countEvents(runner.events, "fix-violations") != 0 || countEvents(runner.events, "generate-code") != 0 {
+					t.Fatalf("outcome=%s argv=%s events=%v", outcome, data, runner.events)
+				}
+				// Read the same real guard's diagnostic, captured by the process runner.
+				if !strings.Contains(runner.lastScript.Stderr, "task_compliance") {
+					t.Fatalf("missing diagnostic: %q", runner.lastScript.Stderr)
+				}
+				return
+			}
+			if outcome != OutcomeSuccess {
+				t.Fatalf("outcome=%s events=%v", outcome, runner.events)
+			}
+			if tc.skip {
+				if len(data) != 0 {
+					t.Fatalf("skipped validator ran: %s", data)
+				}
+				return
+			}
+			calls := strings.Split(strings.TrimSuffix(string(data), "\n\n"), "\n\n")
+			wantCount := 4
+			if tc.name == "plain defaults" {
+				wantCount = 1
+			}
+			if len(calls) != wantCount {
+				t.Fatalf("calls=%q", calls)
+			}
+			for _, call := range calls {
+				want := []string{"run", "--report"}
+				if tc.name == "factory default" {
+					want = append(want, "--enable-review", "task-compliance", "--context-file", filepath.Join(f.run, tc.file))
+				}
+				want = append(want, "--metrics-consumer", "agent-runner", "--metrics-context", "integration-context")
+				if diff := cmp.Diff(want, strings.Split(call, "\n")); diff != "" {
+					t.Fatal(diff)
+				}
+			}
+		})
 	}
 }

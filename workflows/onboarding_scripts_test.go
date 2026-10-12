@@ -1,12 +1,16 @@
 package builtinworkflows
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestOpenSpecCreateChangeReportsExistingChange(t *testing.T) {
@@ -63,6 +67,10 @@ if [ "$1" = internal ] && [ "$2" = json-value ] && [ "$3" = task_file ]; then
   printf '%s' '$(touch should-not-exist)'
   exit 0
 fi
+if [ "$3" = task_compliance ]; then
+  printf true
+  exit 0
+fi
 if [ "$1" = internal ] && [ "$2" = json-value ] && [ "$3" = result_file ]; then
   exit 0
 fi
@@ -74,7 +82,7 @@ printf '%s\n' "$@" > validator-args
 
 	cmd := exec.Command("sh", coreRunValidatorScript(t))
 	cmd.Dir = workdir
-	cmd.Stdin = strings.NewReader(`{"task_file":"$(touch should-not-exist)"}`)
+	cmd.Stdin = strings.NewReader(`{"task_file":"$(touch should-not-exist)","task_compliance":"true"}`)
 	cmd.Env = append(os.Environ(), "PATH="+binDir,
 		"AGENT_RUNNER_EXECUTABLE="+filepath.Join(binDir, "agent-runner"),
 		"AGENT_RUNNER_VALIDATOR_EXECUTABLE="+filepath.Join(binDir, "agent-validator"))
@@ -224,4 +232,89 @@ func coreRunValidatorScript(t *testing.T) string {
 		t.Fatalf("resolve run-validator.sh: %v", err)
 	}
 	return path
+}
+
+func TestTaskComplianceValidatorArguments(t *testing.T) {
+	for _, value := range []string{"", "false", "true", "yes"} {
+		for _, metrics := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/metrics=%v", value, metrics), func(t *testing.T) {
+				bin, dir := t.TempDir(), t.TempDir()
+				writeFakeBinary(t, bin, "runner", `#!/bin/sh
+exec jq -r --arg key "$3" '.[$key] // ""'
+`)
+				writeFakeBinary(t, bin, "validator", "#!/bin/sh\nprintf '%s\\n' \"$@\" > args\n")
+				inputs := map[string]string{"task_file": "tasks/a file.md"}
+				if value != "" {
+					inputs["task_compliance"] = value
+				}
+				payload, err := json.Marshal(inputs)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cmd := exec.Command("sh", coreRunValidatorScript(t))
+				cmd.Dir = dir
+				cmd.Stdin = strings.NewReader(string(payload))
+				cmd.Env = append(os.Environ(), "AGENT_RUNNER_EXECUTABLE="+filepath.Join(bin, "runner"), "AGENT_RUNNER_VALIDATOR_EXECUTABLE="+filepath.Join(bin, "validator"), "AGENT_RUNNER_METRICS_CONSUMER=", "AGENT_RUNNER_METRICS_CONTEXT=")
+				want := []string{"run", "--report"}
+				if value == "true" {
+					want = append(want, "--enable-review", "task-compliance", "--context-file", "tasks/a file.md")
+				}
+				if metrics {
+					cmd.Env = append(cmd.Env, "AGENT_RUNNER_METRICS_CONSUMER=agent-runner", "AGENT_RUNNER_METRICS_CONTEXT=id")
+					want = append(want, "--metrics-consumer", "agent-runner", "--metrics-context", "id")
+				}
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("%v: %s", err, out)
+				}
+				data, err := os.ReadFile(filepath.Join(dir, "args"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if diff := cmp.Diff(want, strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")); diff != "" {
+					t.Fatal(diff)
+				}
+			})
+		}
+	}
+}
+
+func TestCheckTaskCompliance(t *testing.T) {
+	for _, fallback := range []bool{false, true} {
+		for _, tc := range []struct{ value, file, error string }{
+			{"true", "task.md", ""}, {"false", "", ""}, {"false", "task.md", ""},
+			{"yes", "task.md", "task_compliance must be true or false, got: yes"},
+			{"", "", "task_compliance must be true or false, got: "},
+			{"true", "", "task_compliance is true but task_file is empty"},
+		} {
+			t.Run(fmt.Sprintf("fallback=%v/%s/%s", fallback, tc.value, tc.file), func(t *testing.T) {
+				payload, _ := json.Marshal(map[string]string{"task_compliance": tc.value, "task_file": tc.file})
+				cmd := exec.Command("/bin/sh", "core/check-task-compliance.sh")
+				cmd.Stdin = strings.NewReader(string(payload))
+				if fallback {
+					bin := t.TempDir()
+					for _, name := range []string{"cat", "sed"} {
+						tool, err := exec.LookPath(name)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Symlink(tool, filepath.Join(bin, name)); err != nil {
+							t.Fatal(err)
+						}
+					}
+					cmd.Env = append(os.Environ(), "PATH="+bin)
+				}
+				out, err := cmd.CombinedOutput()
+				if (err != nil) != (tc.error != "") {
+					t.Fatalf("err=%v out=%s", err, out)
+				}
+				want := tc.error
+				if want != "" {
+					want += "\n"
+				}
+				if string(out) != want {
+					t.Fatalf("got %q want %q", out, want)
+				}
+			})
+		}
+	}
 }
