@@ -180,7 +180,7 @@ or another command payload:
 
 ```bash
 scripts/sandbox-run.sh \
-  --input-dir ../agent-evals/evals/agent-runner/example \
+  --input-dir ../path/to/eval-suite \
   -- bash /eval-input/run.sh
 ```
 

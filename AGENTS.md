@@ -72,6 +72,10 @@ go test ./internal/runner -run TestName
 go test ./internal/exec -run TestName -v
 ```
 
+## Knowing When a Run Finished
+
+A workflow has finished when its `audit.log` has a top-level `run_end` event (one with no step path) and `state.json` shows it completed. Do not wait for the `agent-runner` process to exit: an interactive run stays open on its end screen after the workflow completes. When watching a run in order to act on its outcome, poll for `run_end`, then check the outcome before acting.
+
 ## Architecture Notes
 
 - Keep all step executor implementations in `internal/exec/` to avoid circular imports.
