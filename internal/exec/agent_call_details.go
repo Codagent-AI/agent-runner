@@ -24,8 +24,10 @@ func (h *AgentCallHandler) captureStartGit(ctx context.Context, dir string) agen
 	defer cancel()
 	d := agentcall.GitDelta{State: "unavailable"}
 	if _, err := h.options.Git(ctx, dir, "rev-parse", "--is-inside-work-tree"); err != nil {
+		// A probe killed by the expired budget also returns an ExitError; only a
+		// completed probe proves the directory is not a Git worktree.
 		var exit *exec.ExitError
-		if errors.As(err, &exit) {
+		if errors.As(err, &exit) && ctx.Err() == nil {
 			d.State = "not_git"
 		}
 		return d
