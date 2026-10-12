@@ -12,6 +12,7 @@ import (
 
 	"github.com/codagent/agent-runner/internal/discovery"
 	"github.com/codagent/agent-runner/internal/tuistyle"
+	builtinworkflows "github.com/codagent/agent-runner/workflows"
 )
 
 func keyMsg(key string) tea.KeyMsg {
@@ -867,5 +868,32 @@ func TestNewTab_R_OnIntakeEntry_StartsIntake(t *testing.T) {
 	}
 	if _, ok := cmd().(discovery.StartIntakeMsg); !ok {
 		t.Fatalf("r on the intake entry produced %T, want discovery.StartIntakeMsg", cmd())
+	}
+}
+
+// Scenario "Workflow is hidden but runnable": the shipped composed workflow is
+// left out of the workflow list unless hidden workflows are shown.
+func TestNewTabHidesShippedPlanAndImplementChange(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	entries := discovery.EnumerateForProject(t.TempDir())
+	groups := discovery.EnumerateGroups(builtinworkflows.FS, entries)
+	const name = "core:plan-and-implement-change"
+
+	listed := func(filter string, showHidden bool) bool {
+		for _, index := range workflowRows(buildFilteredRows(entries, groups, filter, showHidden)) {
+			if entries[index].CanonicalName == name {
+				return true
+			}
+		}
+		return false
+	}
+	if !listed("", true) {
+		t.Fatalf("%s is not discovered at all", name)
+	}
+	if listed("", false) {
+		t.Errorf("%s is listed although it is hidden", name)
+	}
+	if listed("plan-and-implement", false) {
+		t.Errorf("%s is listed by search although it is hidden", name)
 	}
 }
