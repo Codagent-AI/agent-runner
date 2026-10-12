@@ -48,6 +48,7 @@ steps:
     script_inputs:
       change_name: "{{change_name}}"
       change_dir: "{{change_dir}}"
+      skip_validator: "{{skip_validator}}"
     skip_if: 'sh: test {{change_kind}} = spec-driven'
     repair:
       session: lead-agent
