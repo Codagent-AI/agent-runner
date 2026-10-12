@@ -921,7 +921,7 @@ func (h *AgentCallHandler) execute(ctx context.Context, record *acceptedAgentCal
 	if err != nil {
 		return h.preLaunchFailure(record, call, "prepare called agent environment: "+err.Error())
 	}
-	record.startGit = h.captureStartGit(call.workdir)
+	record.startGit = h.captureStartGit(ctx, call.workdir)
 	output := &synchronizedBuffer{limit: maxChildSessionProbeBytes}
 	onStarted, stopProbe := h.childSessionProbe(ctx, record, call, sessionID, output)
 	defer stopProbe()

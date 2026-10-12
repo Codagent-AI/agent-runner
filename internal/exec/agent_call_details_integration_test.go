@@ -4,8 +4,11 @@ import (
 	"context"
 	stdexec "os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/codagent/agent-runner/internal/control"
 )
@@ -76,6 +79,63 @@ func TestGitFailurePreservesResultINT004(t *testing.T) {
 	start := time.Now()
 	r := decodeCallResponse(t, h.HandleAgentCall(context.Background(), control.AgentCallRequest{RequestID: "r", Payload: []byte(`{"agent":"implementor","prompt":"x"}`)}))
 	if r.Error != nil || r.Details.Git.State != "unavailable" || time.Since(start) > 6*time.Second {
+		t.Fatalf("%+v", r)
+	}
+}
+func TestCallGitPhasesShareOneDeadline(t *testing.T) {
+	o := testAgentCallOptions(t.TempDir(), &callTestRunner{result: ProcessResult{Started: true, Stdout: "done"}}, &callTestAdapter{})
+	var mu sync.Mutex
+	var deadlines []time.Time
+	o.Git = func(ctx context.Context, _ string, args ...string) (string, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Errorf("git %v ran without a deadline", args)
+		}
+		mu.Lock()
+		deadlines = append(deadlines, deadline)
+		mu.Unlock()
+		time.Sleep(2 * time.Millisecond)
+		if args[0] != "rev-parse" {
+			return "", nil
+		}
+		if args[1] == "HEAD" {
+			return "abc", nil
+		}
+		return "true", nil
+	}
+	h := NewAgentCallHandler(o)
+	r := decodeCallResponse(t, h.HandleAgentCall(context.Background(), control.AgentCallRequest{RequestID: "r", Payload: []byte(`{"agent":"implementor","prompt":"x"}`)}))
+	if r.Error != nil || r.Details == nil || r.Details.Git.State != "captured" {
+		t.Fatalf("%+v", r)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	// Start capture runs 2 commands and end collection runs 3; each phase
+	// shares one deadline instead of granting every command its own budget.
+	want := []time.Time{deadlines[0], deadlines[0], deadlines[2], deadlines[2], deadlines[2]}
+	if diff := cmp.Diff(want, deadlines); diff != "" {
+		t.Fatalf("git deadlines (-want +got):\n%s", diff)
+	}
+}
+func TestCallCancelAbortsStartGitCapture(t *testing.T) {
+	o := testAgentCallOptions(t.TempDir(), &callTestRunner{result: ProcessResult{Started: true, Stdout: "done"}}, &callTestAdapter{})
+	o.WaitBudget = 50 * time.Millisecond
+	captureStarted := make(chan struct{})
+	var once sync.Once
+	o.Git = func(ctx context.Context, _ string, _ ...string) (string, error) {
+		once.Do(func() { close(captureStarted) })
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	h := NewAgentCallHandler(o)
+	accepted := startAgentCall(t, h, control.AgentCallRequest{RequestID: "r", Payload: []byte(`{"agent":"implementor","prompt":"x"}`)})
+	<-captureStarted
+	start := time.Now()
+	r := cancelAgentCall(t, h, accepted.CallID)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("cancel waited %s for pre-launch git capture", elapsed)
+	}
+	if r.Status != "canceled" {
 		t.Fatalf("%+v", r)
 	}
 }

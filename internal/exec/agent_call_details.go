@@ -16,42 +16,47 @@ func defaultAgentCallGit(ctx context.Context, dir string, args ...string) (strin
 	out, err := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...).Output() // #nosec G204 -- fixed executable; dir is the resolved workdir and args are Runner-built git operations/observed HEADs, passed without a shell.
 	return strings.TrimSpace(string(out)), err
 }
-func (h *AgentCallHandler) git(dir string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), agentCallGitTimeout)
+
+// captureStartGit shares one agentCallGitTimeout budget across its commands
+// and stops early when ctx (the call's context) is canceled.
+func (h *AgentCallHandler) captureStartGit(ctx context.Context, dir string) agentcall.GitDelta {
+	ctx, cancel := context.WithTimeout(ctx, agentCallGitTimeout)
 	defer cancel()
-	return h.options.Git(ctx, dir, args...)
-}
-func (h *AgentCallHandler) captureStartGit(dir string) agentcall.GitDelta {
 	d := agentcall.GitDelta{State: "unavailable"}
-	if _, err := h.git(dir, "rev-parse", "--is-inside-work-tree"); err != nil {
+	if _, err := h.options.Git(ctx, dir, "rev-parse", "--is-inside-work-tree"); err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
 			d.State = "not_git"
 		}
 		return d
 	}
-	head, err := h.git(dir, "rev-parse", "HEAD")
+	head, err := h.options.Git(ctx, dir, "rev-parse", "HEAD")
 	if err == nil {
 		d.State = "captured"
 		d.StartHead = head
 	}
 	return d
 }
+
+// collectGit runs after settlement, when the call's context may already be
+// canceled, so it bounds all of its commands by one shared timeout instead.
 func (h *AgentCallHandler) collectGit(r *acceptedAgentCall, c *resolvedAgentCall) agentcall.GitDelta {
+	ctx, cancel := context.WithTimeout(context.Background(), agentCallGitTimeout)
+	defer cancel()
 	d := r.startGit
 	if d.State == "" {
-		d = h.captureStartGit(c.workdir)
+		d = h.captureStartGit(ctx, c.workdir)
 	}
 	if d.State != "captured" {
 		return d
 	}
-	end, err := h.git(c.workdir, "rev-parse", "HEAD")
+	end, err := h.options.Git(ctx, c.workdir, "rev-parse", "HEAD")
 	if err != nil {
 		d.State = "unavailable"
 		return d
 	}
 	d.EndHead = end
-	if _, err = h.git(c.workdir, "merge-base", "--is-ancestor", d.StartHead, end); err != nil {
+	if _, err = h.options.Git(ctx, c.workdir, "merge-base", "--is-ancestor", d.StartHead, end); err != nil {
 		d.State = "unavailable"
 		var exit *exec.ExitError
 		if errors.As(err, &exit) && exit.ExitCode() == 1 {
@@ -60,7 +65,7 @@ func (h *AgentCallHandler) collectGit(r *acceptedAgentCall, c *resolvedAgentCall
 			return d
 		}
 	}
-	log, err := h.git(c.workdir, "log", "--format=%h%x00%s", "-n", "51", d.StartHead+".."+end)
+	log, err := h.options.Git(ctx, c.workdir, "log", "--format=%h%x00%s", "-n", "51", d.StartHead+".."+end)
 	if err != nil {
 		d.State = "unavailable"
 		return d
