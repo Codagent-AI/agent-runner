@@ -299,8 +299,8 @@ func Tool() *mcp.Tool {
     "prompt": {"type": "string", "minLength": 1},
     "agent": {"type": "string", "minLength": 1},
     "session": {"type": "string", "minLength": 1},
-    "follow_up": {"type": "string", "minLength": 1},
-    "timeout": {"type": "string", "minLength": 1},
+    "follow_up": {"type": "string", "minLength": 1, "description": "call_id of an earlier terminal call in this parent attempt"},
+    "timeout": {"type": "string", "minLength": 1, "description": "Go duration, for example \"30m\" or \"2h\"; 1s to 24h"},
     "cli": {"type": "string", "minLength": 1},
     "model": {"type": "string", "minLength": 1},
     "workdir": {"type": "string", "minLength": 1}
