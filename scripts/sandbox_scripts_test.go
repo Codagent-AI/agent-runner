@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestSandboxRunDryRunShowsSafeDockerInvocation(t *testing.T) {
@@ -525,6 +527,131 @@ func TestSandboxRunCanMountSubscriptionAuthFiles(t *testing.T) {
 	}
 	if strings.Contains(text, "target=/host-home/cursor/cli-config.json") {
 		t.Fatalf("sandbox-run should not mount host Cursor config:\n%s", text)
+	}
+}
+
+func TestSandboxSyncHomeStripsHostClaudeHooks(t *testing.T) {
+	for _, withHooks := range []bool{true, false} {
+		name := "without hooks"
+		if withHooks {
+			name = "with hooks"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			hostHome := filepath.Join(dir, "host-home")
+			containerHome := filepath.Join(dir, "container-home")
+			if err := os.MkdirAll(filepath.Join(hostHome, "claude"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for _, filename := range []string{"settings.json", "settings.local.json"} {
+				body := `{"model":"host-model","permissions":{"allow":["Read"],"deny":["Bash(rm *)"]},"enabled":false,"custom":null}`
+				if withHooks {
+					body = strings.TrimSuffix(body, "}") + `,"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"~/.claude/hooks/runstate.sh"}]}]}}`
+				}
+				source := filepath.Join(hostHome, "claude", filename)
+				if err := os.WriteFile(source, []byte(body), 0o400); err != nil {
+					t.Fatal(err)
+				}
+			}
+			runSync := func() {
+				t.Helper()
+				cmd := exec.Command("bash", "./sandbox-sync-home.sh")
+				cmd.Env = append(withoutHostLauncherEnv(os.Environ()),
+					"HOME="+containerHome,
+					"SANDBOX_HOST_HOME_ROOT="+hostHome,
+					"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
+				)
+				if output, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("sandbox-sync-home failed: %v\n%s", err, output)
+				}
+			}
+			runSync()
+			for _, filename := range []string{"settings.json", "settings.local.json"} {
+				source := filepath.Join(hostHome, "claude", filename)
+				target := filepath.Join(containerHome, ".claude", filename)
+				var want, got map[string]any
+				for path, value := range map[string]*map[string]any{source: &want, target: &got} {
+					data, err := os.ReadFile(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := json.Unmarshal(data, value); err != nil {
+						t.Fatalf("parse %s: %v", path, err)
+					}
+				}
+				delete(want, "hooks")
+				if diff := cmp.Diff(want, got); diff != "" {
+					t.Errorf("%s settings mismatch (-want +got):\n%s", filename, diff)
+				}
+				info, err := os.Stat(target)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if info.Mode().Perm()&0o600 != 0o600 || info.Mode().Perm()&0o077 != 0 {
+					t.Errorf("%s must be private and writable: %v", filename, info.Mode().Perm())
+				}
+				// In-sandbox edits, including sandbox-owned hooks, survive re-sync.
+				if err := os.WriteFile(target, []byte(`{"hooks":{"Stop":[]},"model":"sandbox-model"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			runSync()
+			for _, filename := range []string{"settings.json", "settings.local.json"} {
+				data, err := os.ReadFile(filepath.Join(containerHome, ".claude", filename))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(data) != `{"hooks":{"Stop":[]},"model":"sandbox-model"}` {
+					t.Errorf("re-sync overwrote %s: %s", filename, data)
+				}
+			}
+		})
+	}
+}
+
+func TestSandboxSyncHomeRejectsMalformedClaudeSettings(t *testing.T) {
+	contents := map[string]string{
+		"truncated":  `{"hooks":`,
+		"empty":      ``,
+		"two-values": `{} {}`,
+		"non-object": `[]`,
+		"null":       `null`,
+	}
+	for _, filename := range []string{"settings.json", "settings.local.json"} {
+		for name, content := range contents {
+			t.Run(filename+"/"+name, func(t *testing.T) {
+				dir := t.TempDir()
+				hostHome := filepath.Join(dir, "host-home")
+				containerHome := filepath.Join(dir, "container-home")
+				if err := os.MkdirAll(filepath.Join(hostHome, "claude"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				source := filepath.Join(hostHome, "claude", filename)
+				if err := os.WriteFile(source, []byte(content), 0o400); err != nil {
+					t.Fatal(err)
+				}
+				cmd := exec.Command("bash", "./sandbox-sync-home.sh")
+				cmd.Env = append(withoutHostLauncherEnv(os.Environ()),
+					"HOME="+containerHome,
+					"SANDBOX_HOST_HOME_ROOT="+hostHome,
+					"SANDBOX_WORKSPACE_BIN="+filepath.Join(dir, "workspace", "bin"),
+				)
+				output, err := cmd.CombinedOutput()
+				if err == nil || !strings.Contains(string(output), "Failed to sanitize Claude settings: "+source) {
+					t.Errorf("expected clear sanitization failure, got %v:\n%s", err, output)
+				}
+				if _, err := os.Stat(filepath.Join(containerHome, ".claude", filename)); !os.IsNotExist(err) {
+					t.Errorf("malformed settings must not be copied: %v", err)
+				}
+				entries, err := os.ReadDir(filepath.Join(containerHome, ".claude"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != 0 {
+					t.Errorf("failed sanitization left files behind: %v", entries)
+				}
+			})
+		}
 	}
 }
 

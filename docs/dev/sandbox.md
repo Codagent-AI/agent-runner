@@ -204,7 +204,9 @@ Credentials enter the sandbox only through explicit options:
   use `--no-default-secrets` to disable it.
 - `--mount-codex-auth` mounts `~/.codex/auth.json` read-only.
 - `--mount-claude-auth` mounts Claude credentials and available settings files
-  read-only. When `~/.claude/.credentials.json` does not exist, as with a macOS
+  read-only. The sandbox copies Claude settings without their `hooks`, because
+  the hook scripts live on the host and are not mounted.
+  When `~/.claude/.credentials.json` does not exist, as with a macOS
   Keychain login, it passes `CLAUDE_CODE_OAUTH_TOKEN` (from the environment or a
   secrets file; create one with `claude setup-token`) instead, and fails when
   neither is available. The token avoids sharing the host login's refresh token.
@@ -251,6 +253,16 @@ a trusted checkout, `--with-host-config` creates a derived configuration under
 `artifacts/devcontainer/` with the available allowlisted files mounted
 read-only. Unlike the one-shot runner, the devcontainer mounts the checkout as a
 writable workspace for development.
+
+Devcontainer homes persist in named volumes: `agent-runner-dev-home` by default
+and `agent-runner-dev-home-host-auth` with `--with-host-config`. The sync script
+preserves existing Claude settings, so rebuilding a devcontainer does not
+remove host hooks copied before hook filtering was added. To refresh those
+settings, back up and delete `~/.claude/settings.json` and
+`~/.claude/settings.local.json` **inside the devcontainer**, then restart with
+`--with-host-config` to seed fresh copies without host hooks. If you want to
+keep sandbox edits, edit those files inside the devcontainer to remove only
+the host hook entries instead.
 
 Run `scripts/sandbox-run.sh --help` and
 `scripts/devcontainer-shell.sh --help` for all supported options.

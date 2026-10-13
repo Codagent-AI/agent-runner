@@ -64,6 +64,7 @@ Options:
   --mount-claude-auth    Mount host ~/.claude auth/settings files read-only for
                           subscription-based Claude Code auth. Files are copied
                           into writable container home before the command runs.
+                          Host hooks are removed from copied Claude settings.
                           Without ~/.claude/.credentials.json (for example a
                           macOS Keychain login), pass CLAUDE_CODE_OAUTH_TOKEN
                           from the environment or a secrets file instead.

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Copies allowlisted host config from /host-home into the sandbox's writable
 # HOME. It keeps mounted credentials read-only, writes a sandbox-owned Codex
-# config, creates private env/zsh files, and seeds CLI conveniences.
+# config, drops host Claude hooks, creates private env/zsh files, and seeds CLI
+# conveniences.
 set -euo pipefail
 
 HOME_DIR="${HOME:-/workspace/home}"
@@ -132,6 +133,26 @@ seed_file_if_present() {
     return 0
   fi
   copy_file_if_present "$source" "$target"
+}
+
+seed_claude_settings_if_present() {
+  local source="$1"
+  local target="$2"
+  local temp
+  if [[ -e "$target" || ! -f "$source" ]]; then
+    return 0
+  fi
+  mkdir -p "$(dirname -- "$target")"
+  temp="$(mktemp "${target}.tmp.XXXXXX")"
+  # Slurp so an empty file or multiple JSON values fail instead of producing an
+  # invalid settings file; only a single JSON object is accepted.
+  if ! jq -s 'if length == 1 and (.[0] | type) == "object" then .[0] | del(.hooks) else error("expected exactly one JSON object") end' "$source" > "$temp"; then
+    rm -f "$temp"
+    echo "Failed to sanitize Claude settings: $source" >&2
+    exit 1
+  fi
+  chmod u+rw,go-rwx "$temp" 2>/dev/null || chmod u+rw "$temp"
+  mv "$temp" "$target"
 }
 
 trim_space() {
@@ -305,8 +326,8 @@ write_claude_headless_helper() {
 seed_file_if_present "$HOST_HOME_ROOT/codex/auth.json" "$HOME_DIR/.codex/auth.json"
 
 seed_file_if_present "$HOST_HOME_ROOT/claude/.credentials.json" "$HOME_DIR/.claude/.credentials.json"
-seed_file_if_present "$HOST_HOME_ROOT/claude/settings.json" "$HOME_DIR/.claude/settings.json"
-seed_file_if_present "$HOST_HOME_ROOT/claude/settings.local.json" "$HOME_DIR/.claude/settings.local.json"
+seed_claude_settings_if_present "$HOST_HOME_ROOT/claude/settings.json" "$HOME_DIR/.claude/settings.json"
+seed_claude_settings_if_present "$HOST_HOME_ROOT/claude/settings.local.json" "$HOME_DIR/.claude/settings.local.json"
 seed_file_if_present "$HOST_HOME_ROOT/cursor/auth.json" "$HOME_DIR/.cursor/auth.json"
 # Linux Cursor reads XDG (~/.config/cursor/auth.json); macOS uses ~/.cursor/auth.json.
 seed_file_if_present "$HOST_HOME_ROOT/cursor/auth.json" "$HOME_DIR/.config/cursor/auth.json"
