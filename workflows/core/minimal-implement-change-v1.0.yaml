@@ -111,6 +111,8 @@ steps:
 
       Even if this is a very large task, you must finish all of it yourself. Keep working until it is finished. You may use sub-agents if you feel it would help, but you are not required to.
 
+      Do not use the codagent:orchestrate-change, codagent:plan-tasks, or codagent:simple-plan skills. How you implement the change is up to you.
+
       If you have a clarifying question, you can ask the lead with the `call_agent` tool and `session: lead-agent`. Your first call starts that session, so give it the context it needs; later calls continue the same conversation.
 
       Commit your work following the project's commit message conventions and prepend `[{{step_id}}]` to each message. {{artifact_validation_instruction}}
