@@ -1,0 +1,37 @@
+name: commit-definition
+description: "Commit an approved change definition for a workflow without a planning step, and require a clean worktree before implementation starts."
+hidden: true
+
+params:
+  - name: change_name
+    required: true
+  - name: change_dir
+    required: true
+  - name: change_kind
+    required: true
+  - name: skip_validator
+    required: false
+    default: "false"
+
+sessions:
+  - name: lead-agent
+    agent: lead
+
+steps:
+  - id: commit-definition
+    script: commit-change-plan.sh
+    script_inputs:
+      change_name: "{{change_name}}"
+      change_dir: "{{change_dir}}"
+      skip_validator: "{{skip_validator}}"
+    skip_if: 'sh: test {{change_kind}} = spec-driven'
+    repair:
+      session: lead-agent
+      prompt: commit only {{change_dir}} following repository conventions. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
+
+  - id: check-clean-before-implementation
+    command: |
+      if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+        echo "tracked worktree changes exist before implementation; commit or remove them before continuing" >&2
+        exit 1
+      fi

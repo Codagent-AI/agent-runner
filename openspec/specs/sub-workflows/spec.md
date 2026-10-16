@@ -42,14 +42,18 @@ A step with `workflow` MAY include a `params` map that passes values to the sub-
 
 ### Requirement: Session inheritance
 
-A step with `session: inherit` SHALL resume the most recent session from the parent workflow that invoked the current sub-workflow. This allows a sub-workflow's agent steps to continue the session chain started in the parent.
+A step with `session: inherit` SHALL resume the most recent session from the parent workflow that invoked the current sub-workflow. If that parent is itself a sub-workflow that has run no session of its own, the step SHALL resume the most recent session of the nearest enclosing workflow that has run one. This allows a sub-workflow's agent steps to continue the session chain started in the parent.
 
 #### Scenario: Inherit resumes parent session
 - **WHEN** a sub-workflow step has `session: inherit` and the parent workflow has an active session
 - **THEN** the step resumes the parent's most recent session
 
+#### Scenario: Inherit passes through a sessionless parent sub-workflow
+- **WHEN** workflow A runs a session and then calls sub-workflow B, B runs no session of its own, and B calls sub-workflow C whose step has `session: inherit`
+- **THEN** the step resumes A's most recent session
+
 #### Scenario: Inherit with no parent session
-- **WHEN** a sub-workflow step has `session: inherit` but no parent workflow session exists
+- **WHEN** a sub-workflow step has `session: inherit` but no enclosing workflow session exists
 - **THEN** Agent Runner fails with a descriptive error
 
 #### Scenario: Inherit in a top-level workflow

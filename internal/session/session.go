@@ -7,24 +7,25 @@ import (
 	"github.com/codagent/agent-runner/internal/model"
 )
 
-// ResolveInheritSession walks the parent context chain until crossing a
-// sub-workflow boundary (different WorkflowFile), then returns that
-// context's most recent session ID.
+// ResolveInheritSession walks the parent context chain past the current
+// sub-workflow boundary (different WorkflowFile) and returns the most recent
+// session of the nearest enclosing context that has one. An enclosing
+// sub-workflow that has run no session of its own (for example, because its
+// agent steps were skipped) is transparent: the walk continues to its parent.
 func ResolveInheritSession(ctx *model.ExecutionContext) (string, error) {
 	if ctx.ParentContext == nil {
 		return "", nil // warn caller: no parent
 	}
 
-	current := ctx.ParentContext
-	for current != nil {
-		if current.WorkflowFile != ctx.WorkflowFile {
-			id := getMostRecentSessionID(current)
-			if id != "" {
-				return id, nil
-			}
-			return "", fmt.Errorf(`session "inherit" failed: no parent session exists`)
+	crossed := false
+	for current := ctx.ParentContext; current != nil; current = current.ParentContext {
+		if !crossed && current.WorkflowFile == ctx.WorkflowFile {
+			continue
 		}
-		current = current.ParentContext
+		crossed = true
+		if id := getMostRecentSessionID(current); id != "" {
+			return id, nil
+		}
 	}
 
 	return "", fmt.Errorf(`session "inherit" failed: no parent session exists`)

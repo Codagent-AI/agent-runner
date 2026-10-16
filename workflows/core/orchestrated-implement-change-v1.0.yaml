@@ -44,22 +44,12 @@ steps:
   # Without a planning step, commit the approved definition here so the
   # orchestrator's implementation commits start from a committed definition.
   - id: commit-definition
-    script: commit-change-plan.sh
-    script_inputs:
+    workflow: commit-definition-v1.0.yaml
+    params:
       change_name: "{{change_name}}"
       change_dir: "{{change_dir}}"
+      change_kind: "{{change_kind}}"
       skip_validator: "{{skip_validator}}"
-    skip_if: 'sh: test {{change_kind}} = spec-driven'
-    repair:
-      session: lead-agent
-      prompt: commit only {{change_dir}} following repository conventions. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
-
-  - id: check-clean-before-implementation
-    command: |
-      if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
-        echo "tracked worktree changes exist before implementation; commit or remove them before continuing" >&2
-        exit 1
-      fi
 
   - id: record-implementation-start
     command: git rev-parse --verify HEAD
