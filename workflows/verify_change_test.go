@@ -443,8 +443,8 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 		"check-findings-not-blocked",
 		"check-clean",
 		"verify-implementation-commits",
-		"session-report",
 		"check-lead-decisions",
+		"session-report",
 		"verify-change",
 	}
 	if diff := cmp.Diff(wantSteps, stepIDs(workflow.Steps)); diff != "" {
