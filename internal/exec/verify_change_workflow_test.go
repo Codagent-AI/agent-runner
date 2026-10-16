@@ -405,3 +405,140 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 		})
 	}
 }
+
+// implementationReviewRunner runs the head of verify-change, from the
+// skip_implementation_review validation through simplify. Scripts and shell
+// checks run for real; the lead's assumption review writes the handoff.
+type implementationReviewRunner struct {
+	t          *testing.T
+	repo       string
+	sessionDir string
+	events     []string
+}
+
+func (r *implementationReviewRunner) RunShell(cmd string, _ bool, _ string) (ProcessResult, error) {
+	r.events = append(r.events, "verify-assumptions-handoff")
+	return runProcess(osexec.Command("sh", "-c", cmd), r.repo, nil)
+}
+
+func (r *implementationReviewRunner) RunScript(path string, stdin []byte, _ bool, _ string) (ProcessResult, error) {
+	r.events = append(r.events, filepath.Base(path))
+	return runProcess(osexec.Command("sh", path), r.repo, stdin)
+}
+
+func (r *implementationReviewRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, error) {
+	switch {
+	case strings.Contains(options.Prefix, "review-assumptions"):
+		r.events = append(r.events, "review-assumptions")
+		handoff := filepath.Join(r.sessionDir, "output", "acceptance-assumptions.md")
+		if err := os.WriteFile(handoff, []byte("No unresolved assumptions or context gaps.\n"), 0o600); err != nil {
+			r.t.Fatalf("write handoff: %v", err)
+		}
+	case strings.Contains(options.Prefix, "simplify"):
+		r.events = append(r.events, "simplify")
+	default:
+		r.t.Fatalf("unexpected agent step %s", options.Prefix)
+	}
+	return ProcessResult{Started: true, ExitCode: 0, Stdout: claudeUsageOutput("done", 0)}, nil
+}
+
+func TestBuiltinVerifyChangeSkipImplementationReview(t *testing.T) {
+	tests := []struct {
+		name        string
+		skip        string
+		handoff     bool
+		wantOutcome StepOutcome
+		wantEvents  []string
+	}{
+		{
+			name:        "default runs the assumption review and simplification",
+			skip:        "false",
+			wantOutcome: OutcomeSuccess,
+			wantEvents:  []string{"validate-boolean-param.sh", "review-assumptions", "verify-assumptions-handoff", "simplify"},
+		},
+		{
+			name:        "skipping keeps the handoff check",
+			skip:        "true",
+			handoff:     true,
+			wantOutcome: OutcomeSuccess,
+			wantEvents:  []string{"validate-boolean-param.sh", "verify-assumptions-handoff"},
+		},
+		{
+			name:        "a skipped review still requires the caller's handoff",
+			skip:        "true",
+			wantOutcome: OutcomeFailed,
+			wantEvents:  []string{"validate-boolean-param.sh", "verify-assumptions-handoff"},
+		},
+		{
+			name:        "a non-boolean value fails before any review",
+			skip:        "yes",
+			wantOutcome: OutcomeFailed,
+			wantEvents:  []string{"validate-boolean-param.sh"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			workflow, err := loader.LoadWorkflow(verifyChangeRef, loader.Options{})
+			if err != nil {
+				t.Fatalf("LoadWorkflow: %v", err)
+			}
+			start, end := -1, -1
+			for i := range workflow.Steps {
+				switch workflow.Steps[i].ID {
+				case "validate-skip-implementation-review":
+					start = i
+				case "simplify":
+					end = i
+				}
+			}
+			if start < 0 || end < start {
+				t.Fatalf("verify-change has no validate-skip-implementation-review..simplify range (%d..%d)", start, end)
+			}
+			head := make([]model.Step, end-start+1)
+			copy(head, workflow.Steps[start:end+1])
+			// The handoff check's repair would start a lead session; this test
+			// observes only whether the check passes.
+			for i := range head {
+				head[i].Repair = nil
+			}
+
+			sessionDir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(sessionDir, "output"), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if tt.handoff {
+				handoff := filepath.Join(sessionDir, "output", "acceptance-assumptions.md")
+				if err := os.WriteFile(handoff, []byte("No questions were escalated to the lead; no lead decisions are recorded.\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			runner := &implementationReviewRunner{t: t, repo: t.TempDir(), sessionDir: sessionDir}
+			ctx := model.NewRootContext(&model.RootContextOptions{
+				Params: map[string]string{
+					"change_name":                     "add-export",
+					"change_dir":                      "changes/add-export",
+					"change_label":                    "change",
+					"artifact_validation_instruction": "Validate artifacts.",
+					"skip_validator":                  "false",
+					"acceptance_rounds":               "3",
+					"skip_implementation_review":      tt.skip,
+				},
+				WorkflowFile:      verifyChangeRef,
+				SessionDir:        sessionDir,
+				NamedSessionDecls: map[string]string{"lead-agent": "lead", "acceptance-tester": "tester"},
+			})
+			group := model.Step{ID: "verify-head", Steps: head}
+			outcome, err := DispatchStep(&group, ctx, runner, &mockGlob{}, &mockLogger{})
+			if err != nil && tt.wantOutcome == OutcomeSuccess {
+				t.Fatalf("verify-change head: %v", err)
+			}
+			if outcome != tt.wantOutcome {
+				t.Errorf("outcome = %q, want %q; events %v", outcome, tt.wantOutcome, runner.events)
+			}
+			if diff := cmp.Diff(tt.wantEvents, runner.events); diff != "" {
+				t.Errorf("events mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}

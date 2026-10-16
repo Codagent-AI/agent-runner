@@ -17,6 +17,12 @@ params:
   - name: acceptance_rounds
     required: false
     default: "3"
+  # A caller that already reviewed its implementation's assumptions and ran a
+  # maintainability pass sets this to skip review-assumptions and simplify. The
+  # assumptions handoff check still runs.
+  - name: skip_implementation_review
+    required: false
+    default: "false"
 
 sessions:
   - name: lead-agent
@@ -36,9 +42,16 @@ steps:
       name: skip_validator
       value: "{{skip_validator}}"
 
+  - id: validate-skip-implementation-review
+    script: validate-boolean-param.sh
+    script_inputs:
+      name: skip_implementation_review
+      value: "{{skip_implementation_review}}"
+
   - id: review-assumptions
     session: lead-agent
     mode: autonomous
+    skip_if: 'sh: test {{skip_implementation_review}} = true'
     prompt: |
       The implementation iterations for {{change_label}} "{{change_name}}" have completed. Audit the risky and notable assumptions plus context gaps in their session reports.
 
@@ -65,6 +78,7 @@ steps:
     agent: implementor
     session: new
     mode: autonomous
+    skip_if: 'sh: test {{skip_implementation_review}} = true'
     prompt: |
       Do a maintainability pass over {{change_label}} "{{change_name}}" (artifacts in `{{change_dir}}/`), covering the branch's changes since its merge base with the default branch. Review it yourself in one pass; do not use a /simplify skill or reviewer subagents.
 
