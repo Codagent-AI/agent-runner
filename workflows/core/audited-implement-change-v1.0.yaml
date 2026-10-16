@@ -251,8 +251,9 @@ steps:
   # The lead's record is the assumptions handoff, so verify it against the
   # Runner's own record of lead calls in audit.log rather than file presence.
   # It runs before session-report so that, even after a lead repair, the
-  # implementor is the most recent session: verify-change's Validator fixes
-  # inherit it.
+  # implementor is this workflow's most recent session. verify-change normally
+  # runs no session before its Validator (skip_implementation_review), so the
+  # pre-PR Validator's fix-violations steps inherit the implementor session.
   - id: check-lead-decisions
     script: check-lead-decisions.sh
     script_inputs:

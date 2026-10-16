@@ -17,7 +17,7 @@ Agent steps support these session strategies:
 | --- | --- |
 | `new` | Start a fresh session using the step's `agent` profile. |
 | `resume` | Resume the most recent session in the current workflow context. |
-| `inherit` | In a sub-workflow, resume the parent workflow's most recent session. |
+| `inherit` | In a sub-workflow, resume the parent workflow's most recent session. If the parent is a sub-workflow that has run no session, use the nearest enclosing workflow's. |
 | named session | Resume or create a declared session such as `lead-agent`. |
 
 The first agent step defaults to `session: new`, so it must specify an `agent` profile. Later agent steps default to `session: resume` and continue the most recent session unless you set a different session.

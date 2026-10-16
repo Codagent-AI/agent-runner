@@ -110,12 +110,65 @@ func TestResolveInheritSession(t *testing.T) {
 			WorkflowFile: "leaf.yaml",
 		})
 
-		// leaf inherits from mid, but mid has no sessions, so it keeps walking
-		// Actually, leaf's WorkflowFile differs from mid's, so it checks mid first.
-		// mid has no sessions, so it errors.
-		_, err := ResolveInheritSession(leaf)
-		if err == nil {
-			t.Fatal("expected error since mid has no sessions")
+		// mid ran no session of its own, so leaf inherits root's.
+		id, err := ResolveInheritSession(leaf)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if id != "root-session" {
+			t.Fatalf("expected 'root-session', got %q", id)
+		}
+	})
+
+	t.Run("prefers the nearest enclosing workflow's session", func(t *testing.T) {
+		root := model.NewRootContext(&model.RootContextOptions{
+			Params:       map[string]string{},
+			WorkflowFile: "root.yaml",
+			SessionIDs:   map[string]string{"step1": "root-session"},
+		})
+		root.LastSessionStepID = "step1"
+
+		mid := model.NewSubWorkflowContext(root, &model.SubWorkflowContextOptions{
+			StepID:       "sub1",
+			Params:       map[string]string{},
+			WorkflowFile: "mid.yaml",
+		})
+		mid.SessionIDs["mid-step"] = "mid-session"
+		mid.LastSessionStepID = "mid-step"
+
+		leaf := model.NewSubWorkflowContext(mid, &model.SubWorkflowContextOptions{
+			StepID:       "sub2",
+			Params:       map[string]string{},
+			WorkflowFile: "leaf.yaml",
+		})
+
+		id, err := ResolveInheritSession(leaf)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if id != "mid-session" {
+			t.Fatalf("expected 'mid-session', got %q", id)
+		}
+	})
+
+	t.Run("errors when no enclosing workflow has a session", func(t *testing.T) {
+		root := model.NewRootContext(&model.RootContextOptions{
+			Params:       map[string]string{},
+			WorkflowFile: "root.yaml",
+		})
+		mid := model.NewSubWorkflowContext(root, &model.SubWorkflowContextOptions{
+			StepID:       "sub1",
+			Params:       map[string]string{},
+			WorkflowFile: "mid.yaml",
+		})
+		leaf := model.NewSubWorkflowContext(mid, &model.SubWorkflowContextOptions{
+			StepID:       "sub2",
+			Params:       map[string]string{},
+			WorkflowFile: "leaf.yaml",
+		})
+
+		if _, err := ResolveInheritSession(leaf); err == nil || !strings.Contains(err.Error(), "no parent session") {
+			t.Fatalf("expected 'no parent session' error, got: %v", err)
 		}
 	})
 }

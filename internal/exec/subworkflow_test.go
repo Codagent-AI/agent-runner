@@ -754,3 +754,63 @@ func TestBuiltinImplementTaskSessionReportSkipIf(t *testing.T) {
 		t.Fatalf("skip_if interpolation executed shell metacharacters; sentinel stat err = %v", err)
 	}
 }
+
+// Regression: a sub-workflow that runs no session of its own (here every agent
+// step is skipped) must not hide the enclosing workflow's session from a
+// grandchild's `session: inherit` step. Mirrors audited-implement-change ->
+// verify-change (skip_implementation_review) -> run-validator fix-violations.
+func TestExecuteSubWorkflowStep_InheritSkipsSessionlessIntermediateWorkflow(t *testing.T) {
+	dir := t.TempDir()
+	midYAML := `name: mid
+steps:
+  - id: review
+    agent: implementor
+    session: new
+    mode: autonomous
+    skip_if: 'sh: true'
+    prompt: review
+  - id: validate
+    workflow: leaf-v1.0.yaml
+`
+	leafYAML := `name: leaf
+steps:
+  - id: fix
+    session: inherit
+    cli: claude
+    mode: autonomous
+    prompt: fix the violations
+`
+	if err := os.WriteFile(filepath.Join(dir, "mid-v1.0.yaml"), []byte(midYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "leaf-v1.0.yaml"), []byte(leafYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := model.NewRootContext(&model.RootContextOptions{
+		Params:       map[string]string{},
+		WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"),
+		SessionIDs:   map[string]string{"implement": "older-session", "session-report": "implementor-session"},
+	})
+	ctx.LastSessionStepID = "session-report"
+
+	runner := &mockRunner{results: []ProcessResult{{ExitCode: 0}, {ExitCode: 0}}}
+	step := model.Step{ID: "verify", Workflow: "mid-v1.0.yaml"}
+	log := &mockLogger{}
+	outcome, err := ExecuteSubWorkflowStep(&step, ctx, runner, &mockGlob{}, log)
+	if err != nil || outcome != OutcomeSuccess {
+		t.Fatalf("ExecuteSubWorkflowStep = %q, %v; want success; log:\n%s", outcome, err, strings.Join(log.lines, "\n"))
+	}
+	var agentArgs []string
+	for _, call := range runner.calls {
+		if len(call) > 0 && call[0] == "claude" {
+			agentArgs = call
+		}
+	}
+	if agentArgs == nil {
+		t.Fatalf("inherit step did not launch the agent; calls = %v", runner.calls)
+	}
+	if got, ok := argValue(agentArgs, "--resume"); !ok || got != "implementor-session" {
+		t.Fatalf("inherit args = %v, want --resume implementor-session", agentArgs)
+	}
+}
