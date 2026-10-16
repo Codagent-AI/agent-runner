@@ -56,7 +56,8 @@ try:
             elif call_id in calls:
                 calls[call_id]["outcome"] = data.get("outcome") or "unknown"
 except OSError as exc:
-    print(f"check-lead-decisions: cannot read audit log {audit_log}: {exc}", file=sys.stderr)
+    # The lead cannot rebuild a missing log, so tell the repair to stop.
+    print(f"check-lead-decisions: cannot read audit log {audit_log}: {exc}; only a human can resolve this (REPAIR_BLOCKED)", file=sys.stderr)
     sys.exit(1)
 
 try:
@@ -81,7 +82,12 @@ if not record.strip():
 elif NO_ESCALATION in record:
     problems.append(f"{len(calls)} call(s) reached {session}, but {record_file} states that none were escalated")
 
-unanswered = [(call_id, call) for call_id, call in calls.items() if call["outcome"] != "success" and call_id not in record]
+def names(call_id):
+    # A whole-token match, so a short id cannot match inside a longer token.
+    return re.search(r"(?<![A-Za-z0-9_-])" + re.escape(call_id) + r"(?![A-Za-z0-9_-])", record) is not None
+
+
+unanswered = [(call_id, call) for call_id, call in calls.items() if call["outcome"] != "success" and not names(call_id)]
 for call_id, call in unanswered:
     outcome = call["outcome"] or "no recorded end"
     problems.append(f"call {call_id} from [{call['caller']}] ended before a ruling ({outcome}) and is not recorded")

@@ -429,9 +429,10 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 		"validate-skip-validator",
 		"check-definition",
 		"commit-definition",
-		"check-clean-before-implementation",
 		"reviewer-list",
+		"check-reviewer-list-not-blocked",
 		"implementor-list",
+		"check-implementor-list-not-blocked",
 		"merge-lists",
 		"check-lists-not-blocked",
 		"verify-outcomes-list",
@@ -509,7 +510,7 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 	if indexes["merge-lists"] > indexes["verify-outcomes-list"] || indexes["verify-outcomes-list"] > indexes["record-implementation-start"] {
 		t.Error("record-implementation-start must follow the committed outcome list")
 	}
-	for _, id := range []string{"check-lists-not-blocked", "check-implementation-not-blocked", "check-findings-not-blocked"} {
+	for _, id := range []string{"check-reviewer-list-not-blocked", "check-implementor-list-not-blocked", "check-lists-not-blocked", "check-implementation-not-blocked", "check-findings-not-blocked"} {
 		step := workflow.Steps[indexes[id]]
 		if step.Repair != nil || step.ContinueOnFailure || !strings.Contains(step.Command, "{{session_dir}}/output/implementation-blocked.md") {
 			t.Errorf("%s = %+v, want an unrepaired check of the blocked record", id, step)
@@ -621,6 +622,10 @@ func TestCoreCheckLeadDecisionsScript(t *testing.T) {
 		{
 			name: "an unfinished call must be recorded by id", calls: []call{{id: "c3", target: "lead-agent"}},
 			record: ptr("Ruling: CSV.\n"), wantErr: true, wantOutput: []string{"call c3 from [implement] ended before a ruling (no recorded end)"},
+		},
+		{
+			name: "a failed call id inside a longer token is not a match", calls: []call{{id: "c1", target: "lead-agent", outcome: "failed"}},
+			record: ptr("Ruling for call c10: CSV.\n"), wantErr: true, wantOutput: []string{"call c1 from [implement] ended before a ruling (failed)"},
 		},
 		{
 			name: "a failed call named in the record passes", calls: []call{{id: "c2", target: "lead-agent", outcome: "failed"}},
