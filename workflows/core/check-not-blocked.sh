@@ -19,6 +19,6 @@ fi
 if [ -e "$blocked_file" ]; then
   echo "the change cannot be implemented compliantly without a user decision:" >&2
   cat "$blocked_file" >&2
-  echo "after deciding, update the definition, delete $blocked_file, and resume" >&2
+  echo "after deciding, update the definition and start a new run; resuming this run would not redo the stopped work" >&2
   exit 1
 fi

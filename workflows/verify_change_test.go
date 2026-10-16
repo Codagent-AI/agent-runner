@@ -433,6 +433,7 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 		"reviewer-list",
 		"check-reviewer-list-not-blocked",
 		"implementor-list",
+		"check-implementor-list-not-blocked",
 		"check-implementor-list",
 		"merge-lists",
 		"check-lists-not-blocked",
@@ -512,7 +513,7 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 	if indexes["merge-lists"] > indexes["verify-outcomes-list"] || indexes["verify-outcomes-list"] > indexes["record-implementation-start"] {
 		t.Error("record-implementation-start must follow the committed outcome list")
 	}
-	for _, id := range []string{"check-reviewer-list-not-blocked", "check-lists-not-blocked", "check-implementation-not-blocked", "check-findings-not-blocked"} {
+	for _, id := range []string{"check-reviewer-list-not-blocked", "check-implementor-list-not-blocked", "check-lists-not-blocked", "check-implementation-not-blocked", "check-findings-not-blocked"} {
 		step := workflow.Steps[indexes[id]]
 		if step.Repair != nil || step.ContinueOnFailure || step.Script != "check-not-blocked.sh" ||
 			step.ScriptInputs["blocked_file"] != "{{session_dir}}/output/implementation-blocked.md" {
@@ -574,7 +575,7 @@ func TestCoreCheckNotBlockedScript(t *testing.T) {
 	if err == nil {
 		t.Fatalf("blocked record present: want failure\n%s", out)
 	}
-	for _, want := range []string{"without a user decision", "Decision needed: which export format?", "delete " + blocked + ", and resume"} {
+	for _, want := range []string{"without a user decision", "Decision needed: which export format?", "start a new run"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
@@ -636,7 +637,7 @@ func TestCoreCheckLeadDecisionsScript(t *testing.T) {
 		{name: "no calls fills an empty record", record: ptr("  \n"), wantRecord: noEscalation + "\n"},
 		{name: "no calls keeps an existing record", record: ptr("Prior note.\n"), wantRecord: "Prior note.\n"},
 		{name: "calls to other targets do not count", calls: []call{{id: "c1", target: "implementor-agent", outcome: "success"}}, wantRecord: noEscalation + "\n"},
-		{name: "answered calls with a record pass", calls: []call{{id: "c1", target: "lead-agent", outcome: "success"}}, record: ptr("Ruling: CSV.\n"), wantRecord: "Ruling: CSV.\n"},
+		{name: "answered calls with a record pass", calls: []call{{id: "c1", target: "lead-agent", outcome: "success"}}, record: ptr("## Ruling: CSV.\n"), wantRecord: "## Ruling: CSV.\n"},
 		{
 			name: "answered calls without a record fail", calls: []call{{id: "c1", target: "lead-agent", outcome: "success"}},
 			wantErr: true, wantOutput: []string{"1 call(s) reached lead-agent", "missing or empty"},
@@ -647,12 +648,17 @@ func TestCoreCheckLeadDecisionsScript(t *testing.T) {
 		},
 		{
 			name: "a failed call must be recorded by id", calls: []call{{id: "c1", target: "lead-agent", outcome: "success"}, {id: "c2", target: "lead-agent", outcome: "failed"}},
-			record: ptr("Ruling: CSV.\n"), wantErr: true,
+			record: ptr("## Ruling: CSV.\n"), wantErr: true,
 			wantOutput: []string{"call c2 from [implement] ended before a ruling (failed)", "--- question of call c2 ---", "Which export format? [c2]"},
 		},
 		{
 			name: "an unfinished call must be recorded by id", calls: []call{{id: "c3", target: "lead-agent"}},
 			record: ptr("Ruling: CSV.\n"), wantErr: true, wantOutput: []string{"call c3 from [implement] ended before a ruling (no recorded end)"},
+		},
+		{
+			name: "each answered call needs its own ruling section",
+			calls: []call{{id: "c1", target: "lead-agent", outcome: "success"}, {id: "c2", target: "lead-agent", outcome: "success"}},
+			record: ptr("## Ruling: CSV.\n"), wantErr: true, wantOutput: []string{"2 answered call(s) reached lead-agent", "only 1 ruling section(s)"},
 		},
 		{
 			name: "a failed call id inside a longer token is not a match", calls: []call{{id: "c1", target: "lead-agent", outcome: "failed"}},

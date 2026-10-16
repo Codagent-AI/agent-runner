@@ -2,8 +2,9 @@
 # Checks that the lead decision record accounts for the run's calls to the
 # lead session, as audit.log records them. With no calls, it writes the
 # no-escalation statement into a missing or empty record. With calls, it fails
-# when the record is empty or still claims no escalation, or when a call that
-# ended without a successful response is not named by its call id.
+# when the record is empty, still claims no escalation, has fewer "## " ruling
+# sections than answered calls, or does not name by call id a call that ended
+# without a successful response.
 set -eu
 
 payload=$(cat)
@@ -81,6 +82,13 @@ if not record.strip():
     problems.append(f"{len(calls)} call(s) reached {session}, but {record_file} is missing or empty")
 elif NO_ESCALATION in record:
     problems.append(f"{len(calls)} call(s) reached {session}, but {record_file} states that none were escalated")
+else:
+    # The lead cannot see call ids, so each answered call must at least have
+    # its own "## " ruling section.
+    answered = sum(1 for call in calls.values() if call["outcome"] == "success")
+    sections = len(re.findall(r"^## ", record, re.MULTILINE))
+    if sections < answered:
+        problems.append(f"{answered} answered call(s) reached {session}, but {record_file} has only {sections} ruling section(s)")
 
 def names(call_id):
     # A whole-token match, so a short id cannot match inside a longer token.
