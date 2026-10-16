@@ -61,6 +61,14 @@ steps:
       change_kind: "{{change_kind}}"
       skip_validator: "{{skip_validator}}"
 
+  # Snapshots the worktree so check-implementor-list can tell what the list
+  # step changed.
+  - id: record-definition-head
+    command: |
+      git status --porcelain --untracked-files=all > "{{session_dir}}/output/pre-list-status.txt"
+      git rev-parse --verify HEAD
+    capture: definition_head
+
   # Captured rather than written to the worktree, so the implementor writes
   # its own list before it sees this one.
   - id: reviewer-list
@@ -97,7 +105,9 @@ steps:
     prompt: |
       You will implement {{change_label}} "{{change_name}}" from its approved definition under `{{change_dir}}/`: `proposal.md`, every `specs/*/spec.md`, `design.md`, and `test-plan.md`. Before implementing anything, read only that definition and write the outcomes the change is required to deliver to `{{change_dir}}/outcomes.md`.
 
-      List observable outcomes, and required integration relationships between deliverables (for example "the demo uses the kit's public API"). Do not list implementation tasks. Write one Markdown table with the columns ID, Outcome, Definition reference (file and requirement, scenario, or section), and Verification (how it should be verified), giving each row a stable ID (`I-1`, `I-2`, ...). Do not commit it yet.
+      List observable outcomes, and required integration relationships between deliverables (for example "the demo uses the kit's public API"). Do not list implementation tasks. Write one Markdown table with the columns ID, Outcome, Definition reference (file and requirement, scenario, or section), and Verification (how it should be verified), giving each row a stable ID (`I-1`, `I-2`, ...).
+
+      This step only writes the list. Do not write or change code, tests, or any other file, do not run Agent Validator, and do not commit. You implement the change in a later step, after merging your list with an independent reviewer's.
 
       Escalation rule, for this step and the rest of this session: ask the lead with the `call_agent` tool and `session: lead-agent` before proceeding when plausible interpretations would produce materially different required behavior, scope, or integration; when requirements conflict; or when you would depart from the approved definition. Resolve ordinary implementation choices yourself. The lead may resolve interpretation within the approved definition; changing an approved requirement needs the user's decision. Your first call starts the lead's session and later calls continue it. Begin every lead call with this brief, then give your context and question:
 
@@ -105,12 +115,24 @@ steps:
 
       Follow the lead's ruling. When a requirement is clear and the lead records your proposed exception for the user, build the requirement as written. If the lead rules that no compliant implementation is possible without the user, write the question, the ruling, and the decision needed to `{{session_dir}}/output/implementation-blocked.md` and stop. The workflow then ends blocked; do not wait for an answer, work around it, or claim completion.
 
-  - id: check-implementor-list-not-blocked
+  # The list step must leave only the list behind: no commits and no other
+  # changes, so implementation starts from the merged list.
+  - id: check-implementor-list
     command: |
       if [ -e "{{session_dir}}/output/implementation-blocked.md" ]; then
         echo "the change cannot be implemented compliantly without a user decision:" >&2
         cat "{{session_dir}}/output/implementation-blocked.md" >&2
         echo "after deciding, update the definition, delete this file, and resume" >&2
+        exit 1
+      fi
+      if [ "$(git rev-parse HEAD)" != "{{definition_head}}" ]; then
+        echo "implementor-list committed work; it may only write {{change_dir}}/outcomes.md" >&2
+        exit 1
+      fi
+      other=$(git status --porcelain --untracked-files=all | grep -v -F "{{change_dir}}/outcomes.md" | grep -v -x -F -f "{{session_dir}}/output/pre-list-status.txt" || true)
+      if [ -n "$other" ]; then
+        echo "implementor-list changed files other than {{change_dir}}/outcomes.md:" >&2
+        echo "$other" >&2
         exit 1
       fi
 

@@ -429,10 +429,11 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 		"validate-skip-validator",
 		"check-definition",
 		"commit-definition",
+		"record-definition-head",
 		"reviewer-list",
 		"check-reviewer-list-not-blocked",
 		"implementor-list",
-		"check-implementor-list-not-blocked",
+		"check-implementor-list",
 		"merge-lists",
 		"check-lists-not-blocked",
 		"verify-outcomes-list",
@@ -510,7 +511,7 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 	if indexes["merge-lists"] > indexes["verify-outcomes-list"] || indexes["verify-outcomes-list"] > indexes["record-implementation-start"] {
 		t.Error("record-implementation-start must follow the committed outcome list")
 	}
-	for _, id := range []string{"check-reviewer-list-not-blocked", "check-implementor-list-not-blocked", "check-lists-not-blocked", "check-implementation-not-blocked", "check-findings-not-blocked"} {
+	for _, id := range []string{"check-reviewer-list-not-blocked", "check-implementor-list", "check-lists-not-blocked", "check-implementation-not-blocked", "check-findings-not-blocked"} {
 		step := workflow.Steps[indexes[id]]
 		if step.Repair != nil || step.ContinueOnFailure || !strings.Contains(step.Command, "{{session_dir}}/output/implementation-blocked.md") {
 			t.Errorf("%s = %+v, want an unrepaired check of the blocked record", id, step)
