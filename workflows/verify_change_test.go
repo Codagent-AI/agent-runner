@@ -656,8 +656,8 @@ func TestCoreCheckLeadDecisionsScript(t *testing.T) {
 			record: ptr("Ruling: CSV.\n"), wantErr: true, wantOutput: []string{"call c3 from [implement] ended before a ruling (no recorded end)"},
 		},
 		{
-			name: "each answered call needs its own ruling section",
-			calls: []call{{id: "c1", target: "lead-agent", outcome: "success"}, {id: "c2", target: "lead-agent", outcome: "success"}},
+			name:   "each answered call needs its own ruling section",
+			calls:  []call{{id: "c1", target: "lead-agent", outcome: "success"}, {id: "c2", target: "lead-agent", outcome: "success"}},
 			record: ptr("## Ruling: CSV.\n"), wantErr: true, wantOutput: []string{"2 answered call(s) reached lead-agent", "only 1 ruling section(s)"},
 		},
 		{
