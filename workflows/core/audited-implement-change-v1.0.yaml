@@ -208,9 +208,8 @@ steps:
       blocked_file: "{{session_dir}}/output/implementation-blocked.md"
 
   # Checks that the record is complete, not that it is true; the audit judges
-  # whether the evidence proves each outcome. The record format is documented
-  # in the codagent:outcome-evidence skill and must stay in step with
-  # check-outcome-evidence.sh.
+  # whether the evidence proves each outcome. Its columns and statuses must
+  # stay in step with the codagent:outcome-evidence skill.
   - id: check-outcome-evidence
     script: check-outcome-evidence.sh
     script_inputs:
