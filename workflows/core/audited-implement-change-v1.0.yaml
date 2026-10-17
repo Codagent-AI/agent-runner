@@ -251,13 +251,15 @@ steps:
     tools: [call_agent]
     capture: audit_findings
     prompt: |
-      The implementor has finished {{change_label}} "{{change_name}}". Audit it against the approved definition and the checklist you merged, `{{change_dir}}/checklist.md`:
+      The implementor has finished {{change_label}} "{{change_name}}". Audit it against the approved definition and the checklist you merged, `{{change_dir}}/checklist.md`.
+
+      This audit is inspection only. Never run tests, builds, the product, or any other command that executes the change; read the code, the checklist, and the evidence. The implementor has run the checks, and acceptance testing follows.
 
       - Check the checklist for behaviors missing or weakened compared with the definition.
-      - Verify each row's status and evidence against the code and its behavior, running the behavior where practical. The cited evidence files are in `{{session_dir}}/output/evidence/`; check that each one proves its claim for the current code.
+      - Check each row's status against the code and its evidence. The cited evidence files are in `{{session_dir}}/output/evidence/`; check that each one proves its claim for the current code, including the failure, error, and cleanup cases its row names.
       - Find choices that silently weaken, omit, or reinterpret a requirement. When one's validity is unclear, ask the lead now (`session: lead-agent`, with the brief from earlier).
 
-      Do not change the repository's files (scratch files outside it and the blocked record are fine), and do not review style. Respond with one findings list, highest priority first: the row IDs (or `new`), the definition reference, what is wrong, and the reproduction evidence (commands and results). If there are none, respond exactly `No findings.`
+      Change no file except the blocked record, and do not review style. Respond with one findings list, highest priority first: the row IDs (or `new`), the definition reference, what is wrong, and where it shows: the code location, the evidence file, or what the evidence lacks. If there are none, respond exactly `No findings.`
 
   - id: resolve-findings
     session: implementor-agent
