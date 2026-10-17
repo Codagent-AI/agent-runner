@@ -7,6 +7,9 @@
 #   - A verified row cites, in backticks, at least one non-empty file in the
 #     evidence directory: a path relative to it, or an absolute path inside it.
 #   - A failed or not-verified row says why in its Evidence cell.
+#   - The checklist cites no acceptance (AT-n) or human-only (HT-n) test:
+#     manual testing happens once, in acceptance testing, and is never a
+#     checklist check.
 #
 # When problems_file is given, the problem list is written there on failure
 # and the file is removed on success, so a later step can tell whether the
@@ -160,7 +163,7 @@ while IFS="$sep" read -r id status tokens has_text; do
       fi
       ;;
     *)
-      add_problem "$id has status '${status}'; use one of: verified, failed, not verified"
+      add_problem "$id has status '${status}'; Status holds only verified, failed, or not verified, and evidence file names go in the Evidence column"
       ;;
   esac
 done <<EOF
@@ -169,6 +172,11 @@ EOF
 
 if [ "$total" -eq 0 ]; then
   add_problem "the checklist table has no rows"
+fi
+
+manual=$(grep -oE '(^|[^A-Za-z0-9-])(AT|HT)-[0-9]+' "$checklist_file" | sed -E 's/^[^AH]//' | sort -u | paste -sd ',' - | sed 's/,/, /g' || true)
+if [ -n "$manual" ]; then
+  add_problem "the checklist cites manual tests, which are not checklist checks: $manual; verify each behavior with an automated test, a command, or inspection"
 fi
 
 record_problems

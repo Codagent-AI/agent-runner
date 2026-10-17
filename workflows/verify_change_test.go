@@ -674,6 +674,14 @@ func TestCoreCheckChecklistMergeScript(t *testing.T) {
 			wantErr:    true,
 			wantOutput: []string{"the lead's checklist has no L- IDs"},
 		},
+		{
+			// XAT-3 is not an acceptance test ID.
+			name:       "a cited acceptance or human-only test fails",
+			lead:       lead,
+			merged:     "| L-1, I-1 | Export works | AT-001 |\n| L-2 | Import works | unit, not XAT-3 |\n| L-10 | Prints | HT-2 |\n| I-2 | Rejects | unit |\n",
+			wantErr:    true,
+			wantOutput: []string{"cites manual tests, which are not checklist checks: AT-001, HT-2"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -746,6 +754,12 @@ func TestCoreCheckEvidenceScript(t *testing.T) {
 			name:      "an open row fails",
 			checklist: header + "| L-1 | Export works | e2e | | open |\n",
 			wantErr:   true, wantOutput: []string{"L-1 has status 'open'"},
+		},
+		{
+			name:      "a cited acceptance or human-only test fails",
+			checklist: header + "| L-1 | Export works | AT-003 | `export.log` | verified |\n| L-2 | Prints | HT-1 | Needs a printer | not verified |\n",
+			evidence:  map[string]string{"export.log": "PASS\n"},
+			wantErr:   true, wantOutput: []string{"cites manual tests, which are not checklist checks: AT-003, HT-1"},
 		},
 		{
 			name:      "a verified row without an evidence file fails",
