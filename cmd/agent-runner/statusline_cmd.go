@@ -49,7 +49,9 @@ func handleStatuslineRecord(args []string, stdin io.Reader, stdout, stderr io.Wr
 	select {
 	case sig := <-signals:
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		<-done
+		// Killed above, so Wait's error is expected.
+		waitErr := <-done
+		_ = waitErr
 		if sig == syscall.SIGINT {
 			return 130
 		}
