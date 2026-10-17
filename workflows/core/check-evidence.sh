@@ -1,7 +1,7 @@
 #!/bin/sh
-# Checks that the merged outcome list is a complete record before review: the
-# first Markdown table with Status and Evidence columns must give every row a
-# final status, and each claim must point at its evidence.
+# Checks that the merged checklist is complete before the audit: the first
+# Markdown table with Status and Evidence columns must give every row a final
+# status, and each claim must point at its evidence.
 #
 #   - Status is `verified`, `failed`, or `not verified`.
 #   - A verified row cites, in backticks, at least one non-empty file in the
@@ -10,10 +10,10 @@
 #
 # When problems_file is given, the problem list is written there on failure
 # and the file is removed on success, so a later step can tell whether the
-# record still needs work.
+# checklist still needs work.
 #
-# This checks that the record is complete, not that its claims are true; the
-# independent review judges whether the evidence proves each outcome.
+# This checks that the checklist is complete, not that its claims are true;
+# the audit judges whether the evidence proves each behavior.
 set -eu
 # Cited paths are split unquoted below; never glob-expand them.
 set -f
@@ -21,10 +21,10 @@ set -f
 payload=$(cat)
 
 if ! command -v jq >/dev/null 2>&1; then
-  printf 'jq is required to read the outcome evidence check input\n' >&2
+  printf 'jq is required to read the evidence check input\n' >&2
   exit 1
 fi
-outcomes_file=$(printf '%s' "$payload" | jq -r '.outcomes_file // ""')
+checklist_file=$(printf '%s' "$payload" | jq -r '.checklist_file // ""')
 evidence_dir=$(printf '%s' "$payload" | jq -r '.evidence_dir // ""')
 evidence_dir=${evidence_dir%/}
 problems_file=$(printf '%s' "$payload" | jq -r '.problems_file // ""')
@@ -34,15 +34,15 @@ fail() {
   if [ -n "$problems_file" ]; then
     printf -- '- %s\n' "$1" > "$problems_file"
   fi
-  printf 'outcome evidence check: %s\n' "$1" >&2
+  printf 'evidence check: %s\n' "$1" >&2
   exit 1
 }
 
-if [ -z "$outcomes_file" ] || [ -z "$evidence_dir" ]; then
-  fail "outcomes_file and evidence_dir are required"
+if [ -z "$checklist_file" ] || [ -z "$evidence_dir" ]; then
+  fail "checklist_file and evidence_dir are required"
 fi
-if [ ! -s "$outcomes_file" ]; then
-  fail "$outcomes_file is missing or empty"
+if [ ! -s "$checklist_file" ]; then
+  fail "$checklist_file is missing or empty"
 fi
 
 # Non-whitespace separators, so read keeps empty fields and a cited path may
@@ -97,10 +97,10 @@ rows=$(awk '
     if (status_col && evidence_col) { in_table = 1; found = 1 }
   }
   END { if (!found) print "NO_TABLE" }
-' "$outcomes_file")
+' "$checklist_file")
 
 if [ "$rows" = "NO_TABLE" ]; then
-  fail "$outcomes_file has no Markdown table with Status and Evidence columns"
+  fail "$checklist_file has no Markdown table with Status and Evidence columns"
 fi
 
 problems=""
@@ -168,15 +168,15 @@ $rows
 EOF
 
 if [ "$total" -eq 0 ]; then
-  add_problem "the outcome table has no rows"
+  add_problem "the checklist table has no rows"
 fi
 
 record_problems
 
 if [ -n "$problems" ]; then
-  printf 'outcome evidence check: %s is not a complete record:\n%s' "$outcomes_file" "$problems" >&2
+  printf 'evidence check: %s is not complete:\n%s' "$checklist_file" "$problems" >&2
   printf 'Cite evidence files in backticks, relative to %s or as absolute paths inside it.\n' "$evidence_dir" >&2
   exit 1
 fi
 
-printf 'outcome evidence check: %d rows: %d verified, %d failed, %d not verified\n' "$total" "$verified" "$failed" "$unverified"
+printf 'evidence check: %d rows: %d verified, %d failed, %d not verified\n' "$total" "$verified" "$failed" "$unverified"
