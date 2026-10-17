@@ -111,7 +111,8 @@ steps:
       blocked_file: "{{session_dir}}/output/implementation-blocked.md"
 
   # The checklist step must leave only the checklist behind: no commits and no
-  # other changes, so implementation starts from the merged checklist.
+  # other changes, so implementation starts from the merged checklist. A copy
+  # is kept for check-merged-ids, because the merge rewrites the file.
   - id: check-implementor-checklist
     command: |
       if [ "$(git rev-parse HEAD)" != "{{definition_head}}" ]; then
@@ -124,6 +125,11 @@ steps:
         echo "$other" >&2
         exit 1
       fi
+      if [ ! -s "{{change_dir}}/checklist.md" ]; then
+        echo "implementor-checklist did not write {{change_dir}}/checklist.md" >&2
+        exit 1
+      fi
+      cp "{{change_dir}}/checklist.md" "{{session_dir}}/output/implementor-checklist.md"
 
   - id: merge-checklists
     session: crosscheck-agent
@@ -155,6 +161,20 @@ steps:
     script_inputs:
       blocked_file: "{{session_dir}}/output/implementation-blocked.md"
 
+  # The merge must keep every behavior from both checklists. A dropped ID goes
+  # back to the crosscheck, which still has the lead's checklist in context.
+  - id: check-merged-ids
+    script: check-checklist-merge.sh
+    script_inputs:
+      lead_checklist: "{{lead_checklist}}"
+      implementor_checklist_file: "{{session_dir}}/output/implementor-checklist.md"
+      checklist_file: "{{change_dir}}/checklist.md"
+    repair:
+      session: crosscheck-agent
+      max: 2
+      prompt: |
+        The merged checklist `{{change_dir}}/checklist.md` for {{change_label}} "{{change_name}}" drops behaviors from the lead's or the implementor's checklist; the check output lists the missing IDs. Restore each one as the merge step asked, as its own row or cited in the row that covers it. The implementor's original checklist is `{{session_dir}}/output/implementor-checklist.md`. Change no other file. If `{{change_dir}}` is inside this repository, commit only that file following the project's commit message conventions with the `[{{step_id}}]` prefix. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, explain why and end your response with the line `REPAIR_BLOCKED`.
+
   - id: verify-checklist
     command: |
       list="{{change_dir}}/checklist.md"
@@ -183,8 +203,6 @@ steps:
     tools: [call_agent]
     prompt: |
       Implement {{change_label}} "{{change_name}}" as defined under `{{change_dir}}/`, against the merged checklist `{{change_dir}}/checklist.md`.
-
-      Even if this is a very large task, you must finish all of it yourself. Keep working until it is finished. Do not use the codagent:orchestrate-change, codagent:plan-tasks, or codagent:simple-plan skills.
 
       - Follow the codagent:implement-change skill to implement and test the change, and the codagent:verify-behavior skill to record evidence in `{{change_dir}}/checklist.md`. Save each check's output under `{{session_dir}}/output/evidence/`. A script checks the checklist before the audit.
       - A reproduced spec violation stays open until it is fixed and verified, or the lead rules it is not a violation. Disputing it does not close it.

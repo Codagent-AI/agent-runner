@@ -441,6 +441,7 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 		"check-implementor-checklist",
 		"merge-checklists",
 		"check-merge-not-blocked",
+		"check-merged-ids",
 		"verify-checklist",
 		"record-implementation-start",
 		"implement",
@@ -529,7 +530,6 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 	// keep only what is specific to this workflow.
 	requirePromptContains(t, "implementor-checklist", workflow.Steps[indexes["implementor-checklist"]].Prompt, "codagent:verify-behavior", "IDs `I-1`", "`{{change_dir}}/checklist.md`")
 	requirePromptContains(t, "implement", workflow.Steps[indexes["implement"]].Prompt,
-		"Do not use the codagent:orchestrate-change, codagent:plan-tasks, or codagent:simple-plan skills",
 		"{{artifact_validation_instruction}}",
 		"[{{step_id}}]",
 		"Do not run Agent Validator",
@@ -614,6 +614,23 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 	if repair := workflow.Steps[indexes["verify-checklist"]].Repair; repair == nil || repair.Session != "crosscheck-agent" {
 		t.Errorf("verify-checklist repair = %+v, want the crosscheck session that merged it", repair)
 	}
+	// The merge must keep every ID from both checklists; the implementor's is
+	// copied before the merge rewrites it.
+	mergedIDs := workflow.Steps[indexes["check-merged-ids"]]
+	wantMergeInputs := map[string]string{
+		"lead_checklist":             "{{lead_checklist}}",
+		"implementor_checklist_file": "{{session_dir}}/output/implementor-checklist.md",
+		"checklist_file":             "{{change_dir}}/checklist.md",
+	}
+	if mergedIDs.Script != "check-checklist-merge.sh" || !cmp.Equal(wantMergeInputs, mergedIDs.ScriptInputs) {
+		t.Errorf("check-merged-ids = %+v, want the checklist merge check", mergedIDs)
+	}
+	if mergedIDs.Repair == nil || mergedIDs.Repair.Session != "crosscheck-agent" || mergedIDs.Repair.Max == nil || *mergedIDs.Repair.Max != 2 {
+		t.Errorf("check-merged-ids repair = %+v, want two crosscheck repairs", mergedIDs.Repair)
+	}
+	if indexes["check-merged-ids"] < indexes["check-merge-not-blocked"] || indexes["check-merged-ids"] > indexes["verify-checklist"] {
+		t.Error("check-merged-ids must run after the merge and before verify-checklist commits are checked")
+	}
 	for _, id := range []string{"check-lead-checklist-not-blocked", "check-implementor-checklist-not-blocked", "check-merge-not-blocked", "check-implementation-not-blocked", "check-findings-not-blocked", "check-evidence-not-blocked", "check-recheck-evidence-not-blocked"} {
 		step := workflow.Steps[indexes[id]]
 		if step.Repair != nil || step.ContinueOnFailure || step.Script != "check-not-blocked.sh" ||
@@ -622,7 +639,8 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 		}
 	}
 	listOnly := workflow.Steps[indexes["check-implementor-checklist"]]
-	if listOnly.Repair != nil || !strings.Contains(listOnly.Command, "{{definition_head}}") || !strings.Contains(listOnly.Command, "pre-list-status.txt") {
+	if listOnly.Repair != nil || !strings.Contains(listOnly.Command, "{{definition_head}}") || !strings.Contains(listOnly.Command, "pre-list-status.txt") ||
+		!strings.Contains(listOnly.Command, `cp "{{change_dir}}/checklist.md" "{{session_dir}}/output/implementor-checklist.md"`) {
 		t.Errorf("check-implementor-checklist = %+v, want an unrepaired check that the checklist step changed only the checklist", listOnly)
 	}
 
@@ -684,6 +702,70 @@ func TestCoreCheckNotBlockedScript(t *testing.T) {
 	}
 	if out, err := runScriptIn(t, scriptPath, dir, `{}`); err == nil || !strings.Contains(out, "blocked_file is required") {
 		t.Errorf("missing input: err = %v\n%s", err, out)
+	}
+}
+
+func TestCoreCheckChecklistMergeScript(t *testing.T) {
+	scriptPath := writeAssetScript(t, "core/check-checklist-merge.sh")
+	const lead = "| ID | Behavior |\n|---|---|\n| L-1 | Export works |\n| L-2 | Import works |\n| L-10 | Prints |\n"
+	const implementor = "| ID | Behavior |\n|---|---|\n| I-1 | Export works |\n| I-2 | Rejects bad input |\n"
+	tests := []struct {
+		name       string
+		lead       string
+		merged     string
+		wantErr    bool
+		wantOutput []string
+	}{
+		{
+			name:       "every ID kept, combined rows citing both",
+			lead:       lead,
+			merged:     "| ID | Behavior | Source |\n|---|---|---|\n| L-1 (I-1) | Export works | both |\n| L-2 | Import works | lead |\n| L-10 | Prints | lead |\n| I-2 | Rejects bad input | implementor |\n",
+			wantOutput: []string{"kept 3 lead and 2 implementor IDs"},
+		},
+		{
+			name:       "a dropped ID from each checklist fails",
+			lead:       lead,
+			merged:     "| L-1 (I-1) | Export works |\n| L-10 | Prints |\n",
+			wantErr:    true,
+			wantOutput: []string{"missing from the lead's checklist: L-2", "missing from the implementor's checklist: I-2"},
+		},
+		{
+			// L-10 must not count as L-1, nor XL-2 as L-2.
+			name:       "IDs match whole",
+			lead:       lead,
+			merged:     "| L-10 | Prints |\n| XL-2 | Import |\n| I-1 | Export |\n| I-2 | Rejects |\n",
+			wantErr:    true,
+			wantOutput: []string{"missing from the lead's checklist: L-1, L-2"},
+		},
+		{
+			name:       "a lead checklist without IDs fails",
+			lead:       "I could not write a checklist.",
+			merged:     "| I-1 | Export |\n| I-2 | Rejects |\n",
+			wantErr:    true,
+			wantOutput: []string{"the lead's checklist has no L- IDs"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			implementorFile := filepath.Join(dir, "implementor-checklist.md")
+			merged := filepath.Join(dir, "checklist.md")
+			mustWriteFile(t, implementorFile, implementor)
+			mustWriteFile(t, merged, tt.merged)
+			input := `{"lead_checklist":` + strconv.Quote(tt.lead) + `,"implementor_checklist_file":` + strconv.Quote(implementorFile) + `,"checklist_file":` + strconv.Quote(merged) + `}`
+			out, err := runScriptIn(t, scriptPath, dir, input)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v\n%s", err, tt.wantErr, out)
+			}
+			for _, want := range tt.wantOutput {
+				if !strings.Contains(out, want) {
+					t.Errorf("output missing %q:\n%s", want, out)
+				}
+			}
+		})
+	}
+	if out, err := runScriptIn(t, scriptPath, t.TempDir(), `{}`); err == nil || !strings.Contains(out, "must be non-empty strings") {
+		t.Errorf("missing inputs: err = %v\n%s", err, out)
 	}
 }
 
