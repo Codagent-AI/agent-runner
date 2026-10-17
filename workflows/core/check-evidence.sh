@@ -10,6 +10,11 @@
 #   - The checklist cites no acceptance (AT-n) or human-only (HT-n) test:
 #     manual testing happens once, in acceptance testing, and is never a
 #     checklist check.
+#   - When plan_file (the merged checklist as committed before implementation)
+#     is given, every planned row is still there with its planned columns
+#     unchanged, and no row was added. When findings (the audit's) is also
+#     given, rows may be added, and a planned row may change only if a finding
+#     names its ID.
 #
 # When problems_file is given, the problem list is written there on failure
 # and the file is removed on success, so a later step can tell whether the
@@ -31,6 +36,9 @@ checklist_file=$(printf '%s' "$payload" | jq -r '.checklist_file // ""')
 evidence_dir=$(printf '%s' "$payload" | jq -r '.evidence_dir // ""')
 evidence_dir=${evidence_dir%/}
 problems_file=$(printf '%s' "$payload" | jq -r '.problems_file // ""')
+plan_file=$(printf '%s' "$payload" | jq -r '.plan_file // ""')
+has_findings=$(printf '%s' "$payload" | jq -r 'if has("findings") then "yes" else "" end')
+findings=$(printf '%s' "$payload" | jq -r '.findings // ""')
 
 # Reports a problem that stops the check before the rows are read.
 fail() {
@@ -177,6 +185,98 @@ fi
 manual=$(grep -oE '(^|[^A-Za-z0-9-])(AT|HT)-[0-9]+' "$checklist_file" | sed -E 's/^[^AH]//' | sort -u | paste -sd ',' - | sed 's/,/, /g' || true)
 if [ -n "$manual" ]; then
   add_problem "the checklist cites manual tests, which are not checklist checks: $manual; verify each behavior with an automated test, a scripted command, or inspection"
+fi
+
+if [ -n "$plan_file" ]; then
+  plan_problems=$(CHECKLIST_FILE="$checklist_file" PLAN_FILE="$plan_file" HAS_FINDINGS="$has_findings" AUDIT_FINDINGS="$findings" python3 - <<'PY'
+import os
+import re
+from collections import Counter
+
+DONE_COLUMNS = {"code", "evidence", "status"}
+
+
+def cells(line):
+    line = line.strip().replace("\\|", "\x01")
+    line = re.sub(r"^\|", "", line)
+    line = re.sub(r"\|$", "", line)
+    return [" ".join(c.replace("\x01", "|").split()) for c in line.split("|")]
+
+
+def id_table(path):
+    """Returns the header and rows of the first table with an ID column."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError as exc:
+        print(f"cannot read {path}: {exc.strerror}")
+        raise SystemExit(0)
+    header, rows = None, []
+    for line in lines:
+        if not line.lstrip().startswith("|"):
+            if header is not None and "id" in header:
+                break
+            header, rows = None, []
+            continue
+        if header is None:
+            header = [c.lower() for c in cells(line)]
+        elif not re.fullmatch(r"[\s:|-]*", line):
+            rows.append(cells(line))
+    if header is None or "id" not in header:
+        print(f"{path} has no Markdown table with an ID column")
+        raise SystemExit(0)
+    return header, rows
+
+
+def cell(header, row, name):
+    i = header.index(name)
+    return row[i] if i < len(row) else ""
+
+
+def named(id_cell, findings):
+    ids = re.findall(r"[A-Za-z]+-\d+", id_cell)
+    if not ids:
+        return bool(id_cell) and id_cell in findings
+    return any(re.search(r"(?<![A-Za-z0-9-])" + re.escape(i) + r"(?!\d)", findings) for i in ids)
+
+
+plan_path = os.environ["PLAN_FILE"]
+plan_header, plan_rows = id_table(plan_path)
+header, rows = id_table(os.environ["CHECKLIST_FILE"])
+columns = [c for c in plan_header if c and c not in DONE_COLUMNS]
+lost = [c for c in columns if c not in header]
+if lost:
+    print(f"the checklist table lost the planned column(s) {', '.join(lost)} of {plan_path}")
+    raise SystemExit(0)
+
+after_audit = os.environ["HAS_FINDINGS"] == "yes"
+findings = os.environ["AUDIT_FINDINGS"]
+current = Counter(tuple(cell(header, r, c) for c in columns) for r in rows)
+changed = set()
+for r in plan_rows:
+    key = tuple(cell(plan_header, r, c) for c in columns)
+    if current[key]:
+        current[key] -= 1
+        continue
+    row_id = cell(plan_header, r, "id") or "a row"
+    if after_audit and named(row_id, findings):
+        continue
+    changed.add(row_id)
+    rule = "only a row an audit finding names may change them" if after_audit else "implementation fills in only Code, Evidence, and Status"
+    print(f"{row_id} was changed or removed: restore its planned cells ({', '.join(columns)}) as they are in {plan_path}; {rule}")
+if not after_audit:
+    for key, count in current.items():
+        if count > 0 and key[columns.index("id")] not in changed:
+            print(f"{key[columns.index('id')] or 'a row'} is not in the planned checklist {plan_path}: remove the row, or restore the planned row it changed")
+PY
+) || plan_problems="the planned checklist comparison failed to run"
+  while IFS= read -r line; do
+    if [ -n "$line" ]; then
+      add_problem "$line"
+    fi
+  done <<EOF
+$plan_problems
+EOF
 fi
 
 record_problems

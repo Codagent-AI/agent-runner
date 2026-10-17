@@ -510,10 +510,16 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 		"recheck-evidence": "complete-evidence-after-review",
 	} {
 		step := workflow.Steps[indexes[id]]
+		// Both compare the checklist with the committed merge; after the audit,
+		// rows its findings name may change.
 		wantInputs := map[string]string{
 			"checklist_file": "{{change_dir}}/checklist.md",
 			"evidence_dir":   "{{session_dir}}/output/evidence",
 			"problems_file":  problemsFile,
+			"plan_file":      "{{session_dir}}/output/merged-checklist.md",
+		}
+		if id == "recheck-evidence" {
+			wantInputs["findings"] = "{{audit_findings}}"
 		}
 		if step.Script != "check-evidence.sh" || !cmp.Equal(wantInputs, step.ScriptInputs) {
 			t.Errorf("%s = %+v, want the evidence check", id, step)
@@ -543,6 +549,9 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 	}
 	if repair := workflow.Steps[indexes["verify-checklist"]].Repair; repair == nil || repair.Session != "crosscheck-agent" {
 		t.Errorf("verify-checklist repair = %+v, want the crosscheck session that merged it", repair)
+	}
+	if !strings.Contains(workflow.Steps[indexes["verify-checklist"]].Command, `cp "$list" "{{session_dir}}/output/merged-checklist.md"`) {
+		t.Error("verify-checklist must keep the committed merge as the plan the evidence checks compare with")
 	}
 	// The merge must keep every ID from both checklists; the implementor's is
 	// copied before the merge rewrites it.
@@ -710,11 +719,14 @@ func TestCoreCheckChecklistMergeScript(t *testing.T) {
 func TestCoreCheckEvidenceScript(t *testing.T) {
 	scriptPath := writeAssetScript(t, "core/check-evidence.sh")
 	const header = "| ID | Behavior | How to verify | Evidence | Status |\n|----|----|----|----|----|\n"
+	ptr := func(s string) *string { return &s }
 
 	tests := []struct {
 		name       string
 		checklist  string // empty leaves the file missing
 		evidence   map[string]string
+		plan       string  // the merged checklist; empty skips the comparison
+		findings   *string // the audit's findings; nil leaves the input out
 		wantErr    bool
 		wantOutput []string
 	}{
@@ -793,6 +805,47 @@ func TestCoreCheckEvidenceScript(t *testing.T) {
 			wantErr:   true, wantOutput: []string{"the checklist table has no rows"},
 		},
 		{
+			name:       "filled-in planned rows match the plan",
+			plan:       "| ID | Behavior | How to verify |\n|----|----|----|\n| L-1 | Export works | e2e |\n| L-1 | Export  works | e2e |\n",
+			checklist:  header + "| L-1 | Export works | e2e | `export.log` | verified |\n| L-1 | Export works | e2e | `export.log` | verified |\n",
+			evidence:   map[string]string{"export.log": "PASS\n"},
+			wantOutput: []string{"2 rows: 2 verified"},
+		},
+		{
+			name:      "a changed, removed, or added row fails before the audit",
+			plan:      "| ID | Behavior | How to verify |\n|----|----|----|\n| L-1 | Export works | e2e |\n| L-2 | Import works | unit |\n",
+			checklist: header + "| L-1 | Export works | build | `export.log` | verified |\n| I-9 | Extra | unit | `export.log` | verified |\n",
+			evidence:  map[string]string{"export.log": "PASS\n"},
+			wantErr:   true,
+			wantOutput: []string{
+				"L-1 was changed or removed", "L-2 was changed or removed",
+				"I-9 is not in the planned checklist",
+			},
+		},
+		{
+			name:      "a lost planned column fails",
+			plan:      "| ID | Behavior | Spec reference | How to verify |\n|----|----|----|----|\n| L-1 | Export works | spec | e2e |\n",
+			checklist: header + "| L-1 | Export works | e2e | `export.log` | verified |\n",
+			evidence:  map[string]string{"export.log": "PASS\n"},
+			wantErr:   true, wantOutput: []string{"lost the planned column(s) spec reference"},
+		},
+		{
+			name:       "after the audit, named rows may change and rows may be added",
+			plan:       "| ID | Behavior | How to verify |\n|----|----|----|\n| L-1, I-1 | Export works | e2e |\n",
+			findings:   ptr("1. I-1: the e2e test never exports"),
+			checklist:  header + "| L-1, I-1 | Export works | stronger e2e | `export.log` | verified |\n| new | Cleans up | unit | `export.log` | verified |\n",
+			evidence:   map[string]string{"export.log": "PASS\n"},
+			wantOutput: []string{"2 rows: 2 verified"},
+		},
+		{
+			name:      "after the audit, an unnamed row still may not change",
+			plan:      "| ID | Behavior | How to verify |\n|----|----|----|\n| L-1 | Export works | e2e |\n",
+			findings:  ptr("No findings. L-10 and XL-1 are fine."),
+			checklist: header + "| L-1 | Export works | build | `export.log` | verified |\n",
+			evidence:  map[string]string{"export.log": "PASS\n"},
+			wantErr:   true, wantOutput: []string{"L-1 was changed or removed", "only a row an audit finding names may change them"},
+		},
+		{
 			name:    "a missing list fails",
 			wantErr: true, wantOutput: []string{"is missing or empty"},
 		},
@@ -811,7 +864,16 @@ func TestCoreCheckEvidenceScript(t *testing.T) {
 			if tt.checklist != "" {
 				mustWriteFile(t, checklist, strings.ReplaceAll(tt.checklist, "{{evidence}}", evidenceDir))
 			}
-			input := `{"checklist_file":` + strconv.Quote(checklist) + `,"evidence_dir":` + strconv.Quote(evidenceDir+"/") + `}`
+			input := `{"checklist_file":` + strconv.Quote(checklist) + `,"evidence_dir":` + strconv.Quote(evidenceDir+"/")
+			if tt.plan != "" {
+				plan := filepath.Join(dir, "output", "merged-checklist.md")
+				mustWriteFile(t, plan, tt.plan)
+				input += `,"plan_file":` + strconv.Quote(plan)
+			}
+			if tt.findings != nil {
+				input += `,"findings":` + strconv.Quote(*tt.findings)
+			}
+			input += `}`
 			out, err := runScriptIn(t, scriptPath, dir, input)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err = %v, wantErr %v\n%s", err, tt.wantErr, out)

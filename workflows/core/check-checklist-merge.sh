@@ -6,7 +6,7 @@
 # in acceptance testing, and is never a checklist check.
 #
 # This checks that no ID was dropped, not that a combined row keeps the
-# stricter check; the audit judges that.
+# stricter check.
 set -eu
 
 payload=$(cat)
