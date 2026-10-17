@@ -160,7 +160,7 @@ while IFS="$sep" read -r id status tokens has_text; do
       fi
       ;;
     *)
-      add_problem "$id has status '${status}', not verified, failed, or not verified"
+      add_problem "$id has status '${status}'; use one of: verified, failed, not verified"
       ;;
   esac
 done <<EOF
