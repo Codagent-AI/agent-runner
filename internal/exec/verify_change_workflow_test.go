@@ -34,6 +34,9 @@ type acceptanceRoundRunner struct {
 	// validatorFails makes every validator run fail, so its repairs are
 	// exhausted and the validator workflow ends with a warning.
 	validatorFails bool
+	// fixMode is how the lead's fix ends: "" commits a change, "none" changes
+	// nothing, and "retest" changes nothing but asks for another round.
+	fixMode string
 }
 
 func (r *acceptanceRoundRunner) RunShell(cmd string, _ bool, _ string) (ProcessResult, error) {
@@ -42,6 +45,8 @@ func (r *acceptanceRoundRunner) RunShell(cmd string, _ bool, _ string) (ProcessR
 		r.events = append(r.events, "reset-round-evidence")
 	case strings.Contains(cmd, "acceptance round limit reached"):
 		r.events = append(r.events, "end-final-round")
+	case strings.Contains(cmd, "ending the acceptance rounds"):
+		r.events = append(r.events, "check-acceptance-progress")
 	case strings.Contains(cmd, "acceptance-handoff.md"):
 		r.events = append(r.events, "verify-acceptance-handoff")
 		if r.breakStatusOnce {
@@ -168,6 +173,13 @@ func (r *acceptanceRoundRunner) test() {
 }
 
 func (r *acceptanceRoundRunner) fix() {
+	switch r.fixMode {
+	case "none":
+		return
+	case "retest":
+		r.write("acceptance-retest-reason.txt", "repaired the test server\n")
+		return
+	}
 	if err := os.WriteFile(filepath.Join(r.repo, "file.txt"), []byte(r.head()+"\n"), 0o600); err != nil {
 		r.t.Fatalf("write fix: %v", err)
 	}
@@ -196,7 +208,7 @@ func TestBuiltinVerifyChangeLoadsStandalone(t *testing.T) {
 // runVerifyChangeAcceptance executes verify-change from prepare-acceptance to
 // the end with the given acceptance rounds and returns the observed events and
 // the final acceptance status.
-func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator string, readyInRound func(int) bool, breakStatusOnce, validatorFails bool) (events []string, status, evidenceDir string) {
+func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator, stopUnchanged, fixMode string, readyInRound func(int) bool, breakStatusOnce, validatorFails bool) (events []string, status, evidenceDir string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	// Keep the process fake independent of any installed Validator CLI.
@@ -235,7 +247,7 @@ func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator string, ready
 
 	runner := &acceptanceRoundRunner{
 		t: t, repo: repo, evidenceDir: evidenceDir, sessionDir: sessionDir, readyInRound: readyInRound,
-		breakStatusOnce: breakStatusOnce, validatorFails: validatorFails,
+		breakStatusOnce: breakStatusOnce, validatorFails: validatorFails, fixMode: fixMode,
 	}
 	ctx := model.NewRootContext(&model.RootContextOptions{
 		Params: map[string]string{
@@ -245,6 +257,7 @@ func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator string, ready
 			"artifact_validation_instruction": "Validate artifacts.",
 			"skip_validator":                  skipValidator,
 			"acceptance_rounds":               rounds,
+			"stop_unchanged_acceptance":       stopUnchanged,
 		},
 		WorkflowFile:      verifyChangeRef,
 		SessionDir:        sessionDir,
@@ -276,6 +289,8 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 		name          string
 		rounds        string
 		skipValidator string
+		stopUnchanged string
+		fixMode       string
 		readyInRound  func(int) bool
 		breakStatus   bool
 		failValidator bool
@@ -365,6 +380,59 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			wantStatus: "ACCEPTANCE_FAILED",
 		},
 		{
+			name:          "an unchanged fix ends the rounds when stop_unchanged_acceptance is set",
+			rounds:        "3",
+			skipValidator: "false",
+			stopUnchanged: "true",
+			fixMode:       "none",
+			readyInRound:  never,
+			wantEvents: []string{
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "check-acceptance-progress",
+				"acceptance-gate.sh", "verify-acceptance-handoff",
+			},
+			wantStatus: "ACCEPTANCE_FAILED",
+		},
+		{
+			name:          "a committed fix continues the rounds when stop_unchanged_acceptance is set",
+			rounds:        "2",
+			skipValidator: "true",
+			stopUnchanged: "true",
+			readyInRound:  never,
+			wantEvents: []string{
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "check-acceptance-progress", "acceptance-push.sh", "check-draft-pr.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "end-final-round",
+				"acceptance-gate.sh", "verify-acceptance-handoff",
+			},
+			wantStatus: "ACCEPTANCE_FAILED",
+		},
+		{
+			name:          "a retest reason continues the rounds without a commit",
+			rounds:        "2",
+			skipValidator: "true",
+			stopUnchanged: "true",
+			fixMode:       "retest",
+			readyInRound:  func(round int) bool { return round == 2 },
+			wantEvents: []string{
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "check-acceptance-progress", "acceptance-push.sh", "check-draft-pr.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh",
+				"acceptance-gate.sh", "verify-acceptance-handoff",
+			},
+			wantStatus: "ACCEPTANCE_COMPLETE",
+		},
+		{
+			name:          "an unchanged fix continues the rounds by default",
+			rounds:        "2",
+			skipValidator: "true",
+			fixMode:       "none",
+			readyInRound:  never,
+			wantEvents: []string{
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "acceptance-push.sh", "check-draft-pr.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "end-final-round",
+				"acceptance-gate.sh", "verify-acceptance-handoff",
+			},
+			wantStatus: "ACCEPTANCE_FAILED",
+		},
+		{
 			name:          "a single round never fixes",
 			rounds:        "1",
 			skipValidator: "false",
@@ -378,7 +446,11 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			events, status, evidenceDir := runVerifyChangeAcceptance(t, tt.rounds, tt.skipValidator, tt.readyInRound, tt.breakStatus, tt.failValidator)
+			stopUnchanged := tt.stopUnchanged
+			if stopUnchanged == "" {
+				stopUnchanged = "false"
+			}
+			events, status, evidenceDir := runVerifyChangeAcceptance(t, tt.rounds, tt.skipValidator, stopUnchanged, tt.fixMode, tt.readyInRound, tt.breakStatus, tt.failValidator)
 			if diff := cmp.Diff(tt.wantEvents, events); diff != "" {
 				t.Errorf("events mismatch (-want +got):\n%s", diff)
 			}

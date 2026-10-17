@@ -1,0 +1,154 @@
+#!/bin/sh
+# Checks that the merged outcome list is a complete record before review: the
+# first Markdown table with Status and Evidence columns must give every row a
+# final status, and each claim must point at its evidence.
+#
+#   - Status is `verified`, `failed`, or `not verified`.
+#   - A verified row cites, in backticks, at least one non-empty file in the
+#     evidence directory: a path relative to it, or an absolute path inside it.
+#   - A failed or not-verified row says why in its Evidence cell.
+#
+# This checks that the record is complete, not that its claims are true; the
+# independent review judges whether the evidence proves each outcome.
+set -eu
+# Cited tokens are split unquoted below; never glob-expand them.
+set -f
+
+payload=$(cat)
+
+if ! command -v jq >/dev/null 2>&1; then
+  printf 'jq is required to read the outcome evidence check input\n' >&2
+  exit 1
+fi
+outcomes_file=$(printf '%s' "$payload" | jq -r '.outcomes_file // ""')
+evidence_dir=$(printf '%s' "$payload" | jq -r '.evidence_dir // ""')
+evidence_dir=${evidence_dir%/}
+
+if [ -z "$outcomes_file" ] || [ -z "$evidence_dir" ]; then
+  printf 'outcome evidence check: outcomes_file and evidence_dir are required\n' >&2
+  exit 1
+fi
+if [ ! -s "$outcomes_file" ]; then
+  printf 'outcome evidence check: %s is missing or empty\n' "$outcomes_file" >&2
+  exit 1
+fi
+
+# A non-whitespace separator, so read keeps empty fields.
+sep=$(printf '\037')
+
+# Emits one separator-delimited record per data row: ID, normalized status, the
+# backticked tokens of its Evidence cell (space-separated, without whitespace
+# or `..`), and whether that cell has any text.
+rows=$(awk '
+  function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+  function cells(line, out,    n, i) {
+    gsub(/\\\|/, "\001", line)
+    sub(/^[ \t]*\|/, "", line)
+    sub(/\|[ \t]*$/, "", line)
+    n = split(line, out, "|")
+    for (i = 1; i <= n; i++) { gsub("\001", "|", out[i]); out[i] = trim(out[i]) }
+    return n
+  }
+  done { next }
+  !/^[ \t]*\|/ { if (in_table) done = 1; next }
+  in_table && /^[ \t]*\|[ \t:|-]*$/ { next }
+  in_table {
+    rownum++
+    cells($0, c)
+    id = (id_col && c[id_col] != "") ? c[id_col] : "row " rownum
+    status = tolower(c[status_col])
+    gsub(/[`*_]/, "", status)
+    gsub(/[ \t]+/, " ", status)
+    status = trim(status)
+    evidence = c[evidence_col]
+    tokens = ""
+    rest = evidence
+    while (match(rest, /`[^`]+`/)) {
+      token = substr(rest, RSTART + 1, RLENGTH - 2)
+      rest = substr(rest, RSTART + RLENGTH)
+      if (token !~ /[ \t]/ && index(token, "..") == 0) tokens = tokens (tokens == "" ? "" : " ") token
+    }
+    printf "%s\037%s\037%s\037%s\n", id, status, tokens, (evidence == "" ? "empty" : "text")
+    next
+  }
+  {
+    n = cells($0, h)
+    status_col = evidence_col = id_col = 0
+    for (i = 1; i <= n; i++) {
+      name = tolower(h[i])
+      if (name == "status") status_col = i
+      else if (name == "evidence") evidence_col = i
+      else if (name == "id") id_col = i
+    }
+    if (status_col && evidence_col) { in_table = 1; found = 1 }
+  }
+  END { if (!found) print "NO_TABLE" }
+' "$outcomes_file")
+
+if [ "$rows" = "NO_TABLE" ]; then
+  printf 'outcome evidence check: %s has no Markdown table with Status and Evidence columns\n' "$outcomes_file" >&2
+  exit 1
+fi
+
+problems=""
+total=0
+verified=0
+failed=0
+unverified=0
+
+add_problem() {
+  problems="${problems}- $1
+"
+}
+
+while IFS="$sep" read -r id status tokens has_text; do
+  [ -n "$id" ] || continue
+  total=$((total + 1))
+  case "$status" in
+    verified)
+      verified=$((verified + 1))
+      cited=""
+      for token in $tokens; do
+        case "$token" in
+          "$evidence_dir"/*) path=$token ;;
+          /*) continue ;;
+          *) path="$evidence_dir/$token" ;;
+        esac
+        if [ -f "$path" ] && [ -s "$path" ]; then
+          cited=yes
+          break
+        fi
+      done
+      if [ -z "$cited" ]; then
+        add_problem "$id is verified but cites no non-empty file in $evidence_dir"
+      fi
+      ;;
+    failed|"not verified")
+      if [ "$status" = failed ]; then
+        failed=$((failed + 1))
+      else
+        unverified=$((unverified + 1))
+      fi
+      if [ "$has_text" != text ]; then
+        add_problem "$id is $status but its Evidence cell does not say why"
+      fi
+      ;;
+    *)
+      add_problem "$id has status '${status}', not verified, failed, or not verified"
+      ;;
+  esac
+done <<EOF
+$rows
+EOF
+
+if [ "$total" -eq 0 ]; then
+  add_problem "the outcome table has no rows"
+fi
+
+if [ -n "$problems" ]; then
+  printf 'outcome evidence check: %s is not a complete record:\n%s' "$outcomes_file" "$problems" >&2
+  printf 'Cite evidence files in backticks, relative to %s or as absolute paths inside it.\n' "$evidence_dir" >&2
+  exit 1
+fi
+
+printf 'outcome evidence check: %d rows: %d verified, %d failed, %d not verified\n' "$total" "$verified" "$failed" "$unverified"

@@ -23,6 +23,12 @@ params:
   - name: skip_implementation_review
     required: false
     default: "false"
+  # Ends the acceptance rounds when the lead's fix leaves the tested revision
+  # unchanged and writes no acceptance-retest-reason.txt: another tester round
+  # could only repeat the last one.
+  - name: stop_unchanged_acceptance
+    required: false
+    default: "false"
 
 sessions:
   - name: lead-agent
@@ -41,6 +47,12 @@ steps:
     script_inputs:
       name: skip_validator
       value: "{{skip_validator}}"
+
+  - id: validate-stop-unchanged-acceptance
+    script: validate-boolean-param.sh
+    script_inputs:
+      name: stop_unchanged_acceptance
+      value: "{{stop_unchanged_acceptance}}"
 
   - id: validate-skip-implementation-review
     script: validate-boolean-param.sh
@@ -160,7 +172,7 @@ steps:
       # acceptance-tested-revision.txt, and acceptance-findings.md remain as the
       # tester's history and diff base.
       - id: reset-round-evidence
-        command: rm -f "{{session_dir}}/output/acceptance-round-status.txt" "{{session_dir}}/output/acceptance-handoff.md" && mkdir -p "{{session_dir}}/scratch/acceptance-test"
+        command: rm -f "{{session_dir}}/output/acceptance-round-status.txt" "{{session_dir}}/output/acceptance-handoff.md" "{{session_dir}}/output/acceptance-retest-reason.txt" && mkdir -p "{{session_dir}}/scratch/acceptance-test"
 
       - id: acceptance-test
         session: acceptance-tester
@@ -216,9 +228,25 @@ steps:
 
           If a tracked file changes, run the narrowest relevant automated checks. {{artifact_validation_instruction}} Do not run Agent Validator, directly or through any skill, and do not push: the workflow runs validation and pushes in the steps after this one. Commit all related changes following the project's commit message conventions with the `[{{step_id}}]` prefix, and leave no tracked change uncommitted.
 
-          Do not name a scope for the next round. The tester diffs against its recorded tested revision and sizes its next pass from what your fix moved.
+          Do not name a scope for the next round. The tester diffs against its recorded tested revision and sizes its next pass from what your fix moved. If the next round needs to run although you changed no tracked file, for example because you repaired the test environment or a result may have been flaky, write the reason to `{{session_dir}}/output/acceptance-retest-reason.txt`.
 
           If a finding needs a decision only a human can make, record it in the assumptions ledger and fix what you safely can.
+
+      # Exits nonzero, ending the rounds, when stop_unchanged_acceptance is set
+      # and the fix left the tested revision unchanged with no retest reason.
+      # The remaining findings go to the acceptance handoff.
+      - id: check-acceptance-progress
+        skip_if: 'sh: test {{stop_unchanged_acceptance}} != true'
+        continue_on_failure: true
+        break_if: failure
+        command: |
+          evidence="{{session_dir}}/output"
+          tested=$(sed '/^[[:space:]]*$/d' "$evidence/acceptance-tested-revision.txt" 2>/dev/null | tail -n 1 | tr -d '[:space:]')
+          if [ "$(git rev-parse HEAD)" != "$tested" ] || [ -n "$(git status --porcelain --untracked-files=no)" ] || [ -s "$evidence/acceptance-retest-reason.txt" ]; then
+            exit 0
+          fi
+          echo "the acceptance fix left the tested revision unchanged and gave no retest reason; ending the acceptance rounds" >&2
+          exit 1
 
       - id: acceptance-validator
         workflow: run-validator-v1.0.yaml
