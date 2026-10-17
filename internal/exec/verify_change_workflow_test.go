@@ -41,6 +41,8 @@ type acceptanceRoundRunner struct {
 
 func (r *acceptanceRoundRunner) RunShell(cmd string, _ bool, _ string) (ProcessResult, error) {
 	switch {
+	case strings.HasPrefix(cmd, "rm -f") && strings.Contains(cmd, "acceptance-retest-reason.txt"):
+		r.events = append(r.events, "clear-retest-reason")
 	case strings.HasPrefix(cmd, "rm -f"):
 		r.events = append(r.events, "reset-round-evidence")
 	case strings.Contains(cmd, "acceptance round limit reached"):
@@ -88,6 +90,9 @@ func (r *acceptanceRoundRunner) RunAgent(options *AgentProcessOptions) (ProcessR
 			r.t.Errorf("acceptance prompt does not contain interpolated scratch directory %q", scratchDir)
 		}
 		r.round++
+		if r.exists("acceptance-retest-reason.txt") {
+			r.events = append(r.events, "tester-sees-retest-reason")
+		}
 		r.events = append(r.events, "acceptance-test")
 		r.test()
 	case strings.Contains(options.Prefix, "acceptance-fix"):
@@ -159,6 +164,11 @@ func (r *acceptanceRoundRunner) write(name, content string) {
 	}
 }
 
+func (r *acceptanceRoundRunner) exists(name string) bool {
+	_, err := os.Stat(filepath.Join(r.evidenceDir, name))
+	return err == nil
+}
+
 func (r *acceptanceRoundRunner) test() {
 	head := r.head()
 	r.write("exploration-log.md", "explored "+head+"\n")
@@ -173,6 +183,9 @@ func (r *acceptanceRoundRunner) test() {
 }
 
 func (r *acceptanceRoundRunner) fix() {
+	if r.exists("acceptance-retest-reason.txt") {
+		r.t.Errorf("round %d: the previous retest reason was not cleared before the fix", r.round)
+	}
 	switch r.fixMode {
 	case "none":
 		return
@@ -317,7 +330,7 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			skipValidator: "false",
 			readyInRound:  func(round int) bool { return round == 2 },
 			wantEvents: []string{
-				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "check-task-compliance.sh", "run-validator.sh", "acceptance-push.sh", "check-draft-pr.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "clear-retest-reason", "acceptance-fix", "check-task-compliance.sh", "run-validator.sh", "acceptance-push.sh", "check-draft-pr.sh",
 				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh",
 				"acceptance-gate.sh", "verify-acceptance-handoff",
 			},
@@ -331,7 +344,7 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			readyInRound:  func(round int) bool { return round == 2 },
 			failValidator: true,
 			wantEvents: []string{
-				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "clear-retest-reason", "acceptance-fix",
 				"check-task-compliance.sh", "run-validator.sh", "fix-violations", "run-validator.sh", "fix-violations", "run-validator.sh", "fix-violations", "run-validator.sh",
 				"acceptance-push.sh", "check-draft-pr.sh",
 				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh",
@@ -346,8 +359,8 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			skipValidator: "false",
 			readyInRound:  never,
 			wantEvents: []string{
-				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "check-task-compliance.sh", "run-validator.sh", "acceptance-push.sh", "check-draft-pr.sh",
-				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "check-task-compliance.sh", "run-validator.sh", "acceptance-push.sh", "check-draft-pr.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "clear-retest-reason", "acceptance-fix", "check-task-compliance.sh", "run-validator.sh", "acceptance-push.sh", "check-draft-pr.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "clear-retest-reason", "acceptance-fix", "check-task-compliance.sh", "run-validator.sh", "acceptance-push.sh", "check-draft-pr.sh",
 				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "end-final-round",
 				"acceptance-gate.sh", "verify-acceptance-handoff",
 			},
@@ -360,7 +373,7 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			skipValidator: "true",
 			readyInRound:  never,
 			wantEvents: []string{
-				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "acceptance-push.sh", "check-draft-pr.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "clear-retest-reason", "acceptance-fix", "acceptance-push.sh", "check-draft-pr.sh",
 				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "end-final-round",
 				"acceptance-gate.sh", "verify-acceptance-handoff",
 			},
@@ -387,7 +400,7 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			fixMode:       "none",
 			readyInRound:  never,
 			wantEvents: []string{
-				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "check-acceptance-progress",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "clear-retest-reason", "acceptance-fix", "check-acceptance-progress",
 				"acceptance-gate.sh", "verify-acceptance-handoff",
 			},
 			wantStatus: "ACCEPTANCE_FAILED",
@@ -399,22 +412,25 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			stopUnchanged: "true",
 			readyInRound:  never,
 			wantEvents: []string{
-				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "check-acceptance-progress", "acceptance-push.sh", "check-draft-pr.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "clear-retest-reason", "acceptance-fix", "check-acceptance-progress", "acceptance-push.sh", "check-draft-pr.sh",
 				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "end-final-round",
 				"acceptance-gate.sh", "verify-acceptance-handoff",
 			},
 			wantStatus: "ACCEPTANCE_FAILED",
 		},
 		{
+			// The reason reaches the next tester and is cleared before the
+			// next fix, which writes its own.
 			name:          "a retest reason continues the rounds without a commit",
-			rounds:        "2",
+			rounds:        "3",
 			skipValidator: "true",
 			stopUnchanged: "true",
 			fixMode:       "retest",
-			readyInRound:  func(round int) bool { return round == 2 },
+			readyInRound:  func(round int) bool { return round == 3 },
 			wantEvents: []string{
-				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "check-acceptance-progress", "acceptance-push.sh", "check-draft-pr.sh",
-				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "clear-retest-reason", "acceptance-fix", "check-acceptance-progress", "acceptance-push.sh", "check-draft-pr.sh",
+				"reset-round-evidence", "tester-sees-retest-reason", "acceptance-test", "acceptance-gate.sh", "clear-retest-reason", "acceptance-fix", "check-acceptance-progress", "acceptance-push.sh", "check-draft-pr.sh",
+				"reset-round-evidence", "tester-sees-retest-reason", "acceptance-test", "acceptance-gate.sh",
 				"acceptance-gate.sh", "verify-acceptance-handoff",
 			},
 			wantStatus: "ACCEPTANCE_COMPLETE",
@@ -426,7 +442,7 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			fixMode:       "none",
 			readyInRound:  never,
 			wantEvents: []string{
-				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "acceptance-fix", "acceptance-push.sh", "check-draft-pr.sh",
+				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "clear-retest-reason", "acceptance-fix", "acceptance-push.sh", "check-draft-pr.sh",
 				"reset-round-evidence", "acceptance-test", "acceptance-gate.sh", "end-final-round",
 				"acceptance-gate.sh", "verify-acceptance-handoff",
 			},

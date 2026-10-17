@@ -8,10 +8,14 @@
 #     evidence directory: a path relative to it, or an absolute path inside it.
 #   - A failed or not-verified row says why in its Evidence cell.
 #
+# When problems_file is given, the problem list is written there on failure
+# and the file is removed on success, so a later step can tell whether the
+# record still needs work.
+#
 # This checks that the record is complete, not that its claims are true; the
 # independent review judges whether the evidence proves each outcome.
 set -eu
-# Cited tokens are split unquoted below; never glob-expand them.
+# Cited paths are split unquoted below; never glob-expand them.
 set -f
 
 payload=$(cat)
@@ -23,22 +27,32 @@ fi
 outcomes_file=$(printf '%s' "$payload" | jq -r '.outcomes_file // ""')
 evidence_dir=$(printf '%s' "$payload" | jq -r '.evidence_dir // ""')
 evidence_dir=${evidence_dir%/}
+problems_file=$(printf '%s' "$payload" | jq -r '.problems_file // ""')
+
+# Reports a problem that stops the check before the rows are read.
+fail() {
+  if [ -n "$problems_file" ]; then
+    printf -- '- %s\n' "$1" > "$problems_file"
+  fi
+  printf 'outcome evidence check: %s\n' "$1" >&2
+  exit 1
+}
 
 if [ -z "$outcomes_file" ] || [ -z "$evidence_dir" ]; then
-  printf 'outcome evidence check: outcomes_file and evidence_dir are required\n' >&2
-  exit 1
+  fail "outcomes_file and evidence_dir are required"
 fi
 if [ ! -s "$outcomes_file" ]; then
-  printf 'outcome evidence check: %s is missing or empty\n' "$outcomes_file" >&2
-  exit 1
+  fail "$outcomes_file is missing or empty"
 fi
 
-# A non-whitespace separator, so read keeps empty fields.
+# Non-whitespace separators, so read keeps empty fields and a cited path may
+# contain spaces.
 sep=$(printf '\037')
+path_sep=$(printf '\036')
 
 # Emits one separator-delimited record per data row: ID, normalized status, the
-# backticked tokens of its Evidence cell (space-separated, without whitespace
-# or `..`), and whether that cell has any text.
+# backticked paths of its Evidence cell (separated by path_sep, without a `..`
+# segment), and whether that cell has any text.
 rows=$(awk '
   function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
   function cells(line, out,    n, i) {
@@ -66,7 +80,7 @@ rows=$(awk '
     while (match(rest, /`[^`]+`/)) {
       token = substr(rest, RSTART + 1, RLENGTH - 2)
       rest = substr(rest, RSTART + RLENGTH)
-      if (token !~ /[ \t]/ && index(token, "..") == 0) tokens = tokens (tokens == "" ? "" : " ") token
+      if (token !~ /(^|\/)\.\.(\/|$)/) tokens = tokens (tokens == "" ? "" : "\036") token
     }
     printf "%s\037%s\037%s\037%s\n", id, status, tokens, (evidence == "" ? "empty" : "text")
     next
@@ -86,8 +100,7 @@ rows=$(awk '
 ' "$outcomes_file")
 
 if [ "$rows" = "NO_TABLE" ]; then
-  printf 'outcome evidence check: %s has no Markdown table with Status and Evidence columns\n' "$outcomes_file" >&2
-  exit 1
+  fail "$outcomes_file has no Markdown table with Status and Evidence columns"
 fi
 
 problems=""
@@ -101,6 +114,17 @@ add_problem() {
 "
 }
 
+# Records the outcome for a later step: the problem list on failure, nothing
+# on success.
+record_problems() {
+  [ -n "$problems_file" ] || return 0
+  if [ -n "$problems" ]; then
+    printf '%s' "$problems" > "$problems_file"
+  else
+    rm -f "$problems_file"
+  fi
+}
+
 while IFS="$sep" read -r id status tokens has_text; do
   [ -n "$id" ] || continue
   total=$((total + 1))
@@ -108,6 +132,7 @@ while IFS="$sep" read -r id status tokens has_text; do
     verified)
       verified=$((verified + 1))
       cited=""
+      IFS=$path_sep
       for token in $tokens; do
         case "$token" in
           "$evidence_dir"/*) path=$token ;;
@@ -119,6 +144,7 @@ while IFS="$sep" read -r id status tokens has_text; do
           break
         fi
       done
+      unset IFS
       if [ -z "$cited" ]; then
         add_problem "$id is verified but cites no non-empty file in $evidence_dir"
       fi
@@ -144,6 +170,8 @@ EOF
 if [ "$total" -eq 0 ]; then
   add_problem "the outcome table has no rows"
 fi
+
+record_problems
 
 if [ -n "$problems" ]; then
   printf 'outcome evidence check: %s is not a complete record:\n%s' "$outcomes_file" "$problems" >&2
