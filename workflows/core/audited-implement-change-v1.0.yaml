@@ -181,7 +181,7 @@ steps:
 
       - Follow the codagent:implement-change skill to implement and test the change, and the codagent:outcome-evidence skill to keep `{{change_dir}}/outcomes.md` current. Save each check's output under `{{session_dir}}/output/evidence/`. A script checks this record before the review.
       - A reproduced spec violation stays open until it is fixed and verified, or the lead rules it is not a violation. Disputing it does not close it.
-      - The session rules still apply: escalate to the lead (`session: lead-agent`), and stop if blocked.
+      - The session rules still apply: escalate to the lead (`session: lead-agent`), and stop if blocked. If you believe a required check needs something you lack, ask the lead before leaving it unperformed.
       - Run the broader test run (tier 2) once, after the maintainability pass, and then the repository's other required checks, such as lint and build.
 
       Commit following the project's commit message conventions, prefixing each message with `[{{step_id}}]`. {{artifact_validation_instruction}} Do not run Agent Validator.

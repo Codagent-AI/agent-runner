@@ -522,6 +522,7 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 		"`{{session_dir}}/output/evidence/`",
 		"codagent:implement-change",
 		"codagent:outcome-evidence",
+		"ask the lead before leaving it unperformed",
 	)
 	requirePromptContains(t, "implementor-list", workflow.Steps[indexes["implementor-list"]].Prompt,
 		"Follow the codagent:implement-change skill for the rest of this session; its default test limits apply",
