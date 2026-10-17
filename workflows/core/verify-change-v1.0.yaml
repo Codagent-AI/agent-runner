@@ -23,6 +23,12 @@ params:
   - name: skip_implementation_review
     required: false
     default: "false"
+  # Ends the acceptance rounds when the lead's fix leaves the tested revision
+  # unchanged and writes no acceptance-retest-reason.txt: another tester round
+  # could only repeat the last one.
+  - name: stop_unchanged_acceptance
+    required: false
+    default: "false"
 
 sessions:
   - name: lead-agent
@@ -41,6 +47,12 @@ steps:
     script_inputs:
       name: skip_validator
       value: "{{skip_validator}}"
+
+  - id: validate-stop-unchanged-acceptance
+    script: validate-boolean-param.sh
+    script_inputs:
+      name: stop_unchanged_acceptance
+      value: "{{stop_unchanged_acceptance}}"
 
   - id: validate-skip-implementation-review
     script: validate-boolean-param.sh
@@ -158,7 +170,9 @@ steps:
       # The gate must judge only evidence written in this round, so clear the
       # previous round's status and handoff; exploration-log.md,
       # acceptance-tested-revision.txt, and acceptance-findings.md remain as the
-      # tester's history and diff base.
+      # tester's history and diff base. acceptance-retest-reason.txt also
+      # remains, for this round's tester; clear-retest-reason removes it before
+      # the next fix.
       - id: reset-round-evidence
         command: rm -f "{{session_dir}}/output/acceptance-round-status.txt" "{{session_dir}}/output/acceptance-handoff.md" && mkdir -p "{{session_dir}}/scratch/acceptance-test"
 
@@ -181,7 +195,7 @@ steps:
 
           Round index 0 is the change's first acceptance pass. Apply the skill's coverage floor: exercise every user-visible requirement or scenario that the approved specs add or modify at least once, then explore beyond that floor where risk is highest. Seam sizing and the step ceiling bound only the exploration beyond the floor, never the floor itself. Record the floor items and your exploration budget and rationale before testing, list any floor item you could not exercise as a limitation with its reason, and name what else you deliberately did not exercise.
 
-          Every later round follows a fix, and a fix is itself a change. Reproduce each prior finding against the fix, then diff the worktree against the SHA in `acceptance-tested-revision.txt`, size that diff the same way, and explore it; the coverage floor does not apply again. If that file is missing or names an unresolvable SHA, report an impediment and explore the change as a whole. Do not re-run your previous pass or derive scope from what you tested before, and treat your prior exploration log as history rather than as coverage. A diff with no tracked product change sizes to zero steps: proceed directly to current-head CI and the handoff.
+          Every later round follows a fix, and a fix is itself a change. Reproduce each prior finding against the fix, then diff the worktree against the SHA in `acceptance-tested-revision.txt`, size that diff the same way, and explore it; the coverage floor does not apply again. If that file is missing or names an unresolvable SHA, report an impediment and explore the change as a whole. Do not re-run your previous pass or derive scope from what you tested before, and treat your prior exploration log as history rather than as coverage. A diff with no tracked product change sizes to zero steps: proceed directly to current-head CI and the handoff, unless `{{session_dir}}/output/acceptance-retest-reason.txt` exists. That file is the lead's reason for retesting without a product change, such as a repaired test environment or a result that may have been flaky; recheck what it names.
 
           Do not fix defects, modify tracked files, commit, push, or change the pull request; the workflow fixes, validates, and pushes in separate steps. Append product, scope, or design ambiguity to the assumptions ledger instead of deciding it.
 
@@ -204,6 +218,11 @@ steps:
         skip_if: 'sh: test "$(({{acceptance_round}} + 1))" -lt "{{acceptance_rounds}}"'
         break_if: success
 
+      # The tester has read any retest reason; a stale one must not keep the
+      # rounds going after the next fix.
+      - id: clear-retest-reason
+        command: rm -f "{{session_dir}}/output/acceptance-retest-reason.txt"
+
       - id: acceptance-fix
         session: lead-agent
         mode: autonomous
@@ -214,11 +233,27 @@ steps:
 
           When fixing an implementation defect found by acceptance testing, add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
 
-          If a tracked file changes, run the narrowest relevant automated checks. {{artifact_validation_instruction}} Do not run Agent Validator, directly or through any skill, and do not push: the workflow runs validation and pushes in the steps after this one. Commit all related changes following the project's commit message conventions with the `[{{step_id}}]` prefix, and leave no tracked change uncommitted.
+          If a tracked file changes, run only the unit tests your fix affects, within 3 minutes, using a timeout (for example `timeout 180 <command>`); if a run times out, run a smaller set. Do not run integration, end-to-end, or full test suites here; the next acceptance round and CI cover them. {{artifact_validation_instruction}} Do not run Agent Validator, directly or through any skill, and do not push: the workflow runs validation and pushes in the steps after this one. Commit all related changes following the project's commit message conventions with the `[{{step_id}}]` prefix, and leave no tracked change uncommitted.
 
-          Do not name a scope for the next round. The tester diffs against its recorded tested revision and sizes its next pass from what your fix moved.
+          Do not name a scope for the next round. The tester diffs against its recorded tested revision and sizes its next pass from what your fix moved. If the next round needs to run although you changed no tracked file, for example because you repaired the test environment or a result may have been flaky, write the reason to `{{session_dir}}/output/acceptance-retest-reason.txt`.
 
           If a finding needs a decision only a human can make, record it in the assumptions ledger and fix what you safely can.
+
+      # Exits nonzero, ending the rounds, when stop_unchanged_acceptance is set
+      # and the fix left the tested revision unchanged with no retest reason.
+      # The remaining findings go to the acceptance handoff.
+      - id: check-acceptance-progress
+        skip_if: 'sh: test {{stop_unchanged_acceptance}} != true'
+        continue_on_failure: true
+        break_if: failure
+        command: |
+          evidence="{{session_dir}}/output"
+          tested=$(sed '/^[[:space:]]*$/d' "$evidence/acceptance-tested-revision.txt" 2>/dev/null | tail -n 1 | tr -d '[:space:]')
+          if [ "$(git rev-parse HEAD)" != "$tested" ] || [ -n "$(git status --porcelain --untracked-files=no)" ] || [ -s "$evidence/acceptance-retest-reason.txt" ]; then
+            exit 0
+          fi
+          echo "the acceptance fix left the tested revision unchanged and gave no retest reason; ending the acceptance rounds" >&2
+          exit 1
 
       - id: acceptance-validator
         workflow: run-validator-v1.0.yaml
