@@ -80,7 +80,7 @@ steps:
     prompt: |
       Read the approved definition of {{change_label}} "{{change_name}}" under `{{change_dir}}/` (proposal, specs, design, and test plan), not the implementation.
 
-      Use the codagent:verify-behavior skill to write its checklist, with IDs `L-1`, `L-2`, and so on. Verify each behavior with an automated test (unit, integration, or end-to-end), a command, or inspection. Never plan a check in which an agent operates the product as a user would, and do not cite the test plan's acceptance (`AT-`) or human-only (`HT-`) tests or add rows for them; that testing happens once, in acceptance testing after the audit, and a script rejects a checklist that cites them. Return the table as your response, not in a file. Change no file in this step except the records below.
+      Use the codagent:verify-behavior skill to write its checklist, with IDs `L-1`, `L-2`, and so on. Return the table as your response, not in a file. Change no file in this step except the records below.
 
       Where the definition is ambiguous, choose the reading you would rule for and record it in `{{session_dir}}/output/acceptance-assumptions.md` as its own `## ` section: the question, the requirement, your ruling, your rationale, and any decision pending from the user. If no compliant implementation is possible without the user, write the question and the decision needed to `{{session_dir}}/output/implementation-blocked.md` and stop.
 
@@ -94,7 +94,7 @@ steps:
     mode: autonomous
     tools: [call_agent]
     prompt: |
-      Before implementing {{change_label}} "{{change_name}}", read only its approved definition under `{{change_dir}}/` (proposal, specs, design, and test plan). Use the codagent:verify-behavior skill to write its checklist, with IDs `I-1`, `I-2`, and so on, in the file `{{change_dir}}/checklist.md`. Verify each behavior with an automated test (unit, integration, or end-to-end), a command, or inspection. Never plan a check in which an agent operates the product as a user would, and do not cite the test plan's acceptance (`AT-`) or human-only (`HT-`) tests or add rows for them; that testing happens once, in acceptance testing after the audit, and a script rejects a checklist that cites them.
+      Before implementing {{change_label}} "{{change_name}}", read only its approved definition under `{{change_dir}}/` (proposal, specs, design, and test plan). Use the codagent:verify-behavior skill to write its checklist, with IDs `I-1`, `I-2`, and so on, in the file `{{change_dir}}/checklist.md`.
 
       This step only writes the checklist: change no other file and do not commit. You implement the change later, after the crosscheck merges your checklist with the lead's.
 
@@ -205,7 +205,7 @@ steps:
     prompt: |
       Implement {{change_label}} "{{change_name}}" as defined under `{{change_dir}}/`, against the merged checklist `{{change_dir}}/checklist.md`.
 
-      - Follow the codagent:implement-change skill to implement and test the change, and the codagent:verify-behavior skill to record evidence in `{{change_dir}}/checklist.md`. Save each check's output under `{{session_dir}}/output/evidence/`. In the checklist, Status holds only `verified`, `failed`, or `not verified`; evidence file names go in the Evidence column, in backticks. A script checks the checklist before the audit.
+      - Follow the codagent:implement-change skill to implement and test the change, and the codagent:verify-behavior skill to record evidence in `{{change_dir}}/checklist.md`. Save each check's output under `{{session_dir}}/output/evidence/`. A script checks the checklist before the audit.
       - Test only with automated tests: unit, integration, and end-to-end. An end-to-end test that drives the product as a user would, such as a scripted browser test, is expected where the test plan calls for one.
       - Never test the product yourself as a user would: do not use browser or other tools to click through it, type into it, or inspect screenshots to check that it works, and do not run the test plan's acceptance tests. The independent acceptance tester does that after the audit. Running the product to debug a failing automated test is fine, but it is never evidence.
       - A reproduced spec violation stays open until it is fixed and verified, or the lead rules it is not a violation. Disputing it does not close it.
