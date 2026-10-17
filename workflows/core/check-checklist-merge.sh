@@ -1,10 +1,12 @@
 #!/bin/sh
 # Checks that the merged checklist kept every behavior from both checklists:
 # each lead ID (L-n) and implementor ID (I-n) must appear in it, as a row or
-# cited in a row that combines several.
+# cited in a row that combines several. It also rejects a checklist that cites
+# an acceptance (AT-n) or human-only (HT-n) test: manual testing happens once,
+# in acceptance testing, and is never a checklist check.
 #
 # This checks that no ID was dropped, not that a combined row keeps the
-# stricter check; the audit judges that.
+# stricter check.
 set -eu
 
 payload=$(cat)
@@ -59,12 +61,15 @@ for prefix, numbers, owner in (("L", lead_ids, "lead's"), ("I", implementor_ids,
     missing = [f"{prefix}-{n}" for n in numbers if n not in present]
     if missing:
         problems.append(f"missing from the {owner} checklist: " + ", ".join(missing))
+manual = sorted(set(re.findall(r"(?<![A-Za-z0-9-])((?:AT|HT)-\d+)(?!\d)", merged_text)))
+if manual:
+    problems.append("cites manual tests, which are not checklist checks: " + ", ".join(manual))
 
 if problems:
-    print(f"checklist merge check: {merged_path} does not keep every behavior:", file=sys.stderr)
+    print(f"checklist merge check: {merged_path} is not a complete merge:", file=sys.stderr)
     for p in problems:
         print(f"- {p}", file=sys.stderr)
-    print("Keep each ID as its own row or cite it in the row that covers it.", file=sys.stderr)
+    print("Keep each ID as its own row or cite it in the row that covers it. Verify each behavior with an automated test, a scripted command, or inspection, never an acceptance or human-only test.", file=sys.stderr)
     sys.exit(1)
 
 print(f"checklist merge check: kept {len(lead_ids)} lead and {len(implementor_ids)} implementor IDs")
