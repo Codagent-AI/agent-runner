@@ -69,7 +69,7 @@ if problems:
     print(f"checklist merge check: {merged_path} is not a complete merge:", file=sys.stderr)
     for p in problems:
         print(f"- {p}", file=sys.stderr)
-    print("Keep each ID as its own row or cite it in the row that covers it. Verify each behavior with an automated test, a command, or inspection, never an acceptance or human-only test.", file=sys.stderr)
+    print("Keep each ID as its own row or cite it in the row that covers it. Verify each behavior with an automated test, a scripted command, or inspection, never an acceptance or human-only test.", file=sys.stderr)
     sys.exit(1)
 
 print(f"checklist merge check: kept {len(lead_ids)} lead and {len(implementor_ids)} implementor IDs")

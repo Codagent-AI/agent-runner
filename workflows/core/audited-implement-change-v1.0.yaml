@@ -149,7 +149,7 @@ steps:
       - Add a Source column: `lead`, `implementor`, or `both`.
       - Never drop a behavior or weaken its check. If the checklists disagree about what the definition requires, ask the lead.
       - Add a row, with Source `crosscheck`, for any behavior in the definition that both checklists miss.
-      - Verify each behavior with an automated test (unit, integration, or end-to-end), a command, or inspection. Where a row's check has an agent operate the product as a user would, including one of the test plan's acceptance (`AT-`) or human-only (`HT-`) tests, replace it with one of those; the checklist must not cite them. That testing happens once, in acceptance testing after the audit.
+      - Verify each behavior with an automated test (unit, integration, or end-to-end), a scripted command such as a build, lint, or verify script, or inspection. Where a row's check has an agent operate the product as a user would, including one of the test plan's acceptance (`AT-`) or human-only (`HT-`) tests, replace it with one of those; the checklist must not cite them. That testing happens once, in acceptance testing after the audit.
 
       Change no other file. If `{{change_dir}}` is inside this repository, commit only that file following the project's commit message conventions, prefixed `[{{step_id}}]`.
 
@@ -174,7 +174,7 @@ steps:
       session: crosscheck-agent
       max: 2
       prompt: |
-        The merged checklist `{{change_dir}}/checklist.md` for {{change_label}} "{{change_name}}" fails the merge check; the check output lists each problem. Restore each missing ID as the merge step asked, as its own row or cited in the row that covers it, and replace each cited acceptance or human-only test with an automated test, a command, or inspection. The implementor's original checklist is `{{session_dir}}/output/implementor-checklist.md`. Change no other file. If `{{change_dir}}` is inside this repository, commit only that file following the project's commit message conventions with the `[{{step_id}}]` prefix. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, explain why and end your response with the line `REPAIR_BLOCKED`.
+        The merged checklist `{{change_dir}}/checklist.md` for {{change_label}} "{{change_name}}" fails the merge check; the check output lists each problem. Restore each missing ID as the merge step asked, as its own row or cited in the row that covers it, and replace each cited acceptance or human-only test with an automated test, a scripted command, or inspection. The implementor's original checklist is `{{session_dir}}/output/implementor-checklist.md`. Change no other file. If `{{change_dir}}` is inside this repository, commit only that file following the project's commit message conventions with the `[{{step_id}}]` prefix. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, explain why and end your response with the line `REPAIR_BLOCKED`.
 
   - id: verify-checklist
     command: |

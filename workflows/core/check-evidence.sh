@@ -176,7 +176,7 @@ fi
 
 manual=$(grep -oE '(^|[^A-Za-z0-9-])(AT|HT)-[0-9]+' "$checklist_file" | sed -E 's/^[^AH]//' | sort -u | paste -sd ',' - | sed 's/,/, /g' || true)
 if [ -n "$manual" ]; then
-  add_problem "the checklist cites manual tests, which are not checklist checks: $manual; verify each behavior with an automated test, a command, or inspection"
+  add_problem "the checklist cites manual tests, which are not checklist checks: $manual; verify each behavior with an automated test, a scripted command, or inspection"
 fi
 
 record_problems
