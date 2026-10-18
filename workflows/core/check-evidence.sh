@@ -245,6 +245,9 @@ def named(id_cell, findings):
 
 plan_path = os.environ["PLAN_FILE"]
 plan_header, plan_rows = id_table(plan_path, planned=True)
+if not plan_rows:
+    print(f"the planned checklist {plan_path} has no rows in its ID table; this is a merge-step defect that the evidence repair cannot fix")
+    raise SystemExit(0)
 header, rows = id_table(os.environ["CHECKLIST_FILE"])
 columns = [c for c in plan_header if c and c not in DONE_COLUMNS]
 lost = [c for c in columns if c not in header]

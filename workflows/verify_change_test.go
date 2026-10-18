@@ -677,8 +677,29 @@ func TestCoreCheckChecklistMergeScript(t *testing.T) {
 		{
 			name:       "an ID header in a later table passes",
 			lead:       lead,
-			merged:     "| Notes |\n|---|\n| Overview |\n\n| Behavior | ID |\n|---|---|\n| Export works | L-1, I-1 |\n| Import works | L-2 |\n| Prints | L-10 |\n| Rejects bad input | I-2 |\n",
+			merged:     "| Notes |\n|---|\n| Overview |\n\n| ID | Behavior |\n|---|---|\n| L-1, I-1 | Export works |\n| L-2 | Import works |\n| L-10 | Prints |\n| I-2 | Rejects bad input |\n",
 			wantOutput: []string{"kept 3 lead and 2 implementor IDs"},
+		},
+		{
+			name:       "an ID column that is not first fails",
+			lead:       lead,
+			merged:     "| Behavior | ID |\n|---|---|\n| Export works | L-1, I-1 |\n| Import works | L-2 |\n| Prints | L-10 |\n| Rejects bad input | I-2 |\n",
+			wantErr:    true,
+			wantOutput: []string{"exactly ID", "first column"},
+		},
+		{
+			name:       "an ID table without rows fails even with every ID in prose",
+			lead:       lead,
+			merged:     "| ID | Behavior |\n|---|---|\n\nCovers L-1, I-1, L-2, L-10, I-2.\n",
+			wantErr:    true,
+			wantOutput: []string{"the ID table has no rows", "missing from the lead's checklist: L-1, L-2, L-10"},
+		},
+		{
+			name:       "IDs only in a non-ID cell do not count",
+			lead:       lead,
+			merged:     "| ID | Behavior |\n|---|---|\n| L-1, I-1 | Export works |\n| L-10 | Prints |\n| I-2 | Import works, covers L-2 |\n",
+			wantErr:    true,
+			wantOutput: []string{"missing from the lead's checklist: L-2"},
 		},
 		{
 			name:       "an escaped pipe does not create an ID header cell",
@@ -852,6 +873,17 @@ func TestCoreCheckEvidenceScript(t *testing.T) {
 			wantErr:   true,
 			wantOutput: []string{
 				"the planned checklist", "has no table with a header cell exactly ID",
+				"this is a merge-step defect that the evidence repair cannot fix",
+			},
+		},
+		{
+			name:      "a header-only plan reports a merge-step defect",
+			plan:      "| ID | Behavior | How to verify |\n|----|----|----|\n",
+			checklist: header + "| L-1 | Export works | e2e | `export.log` | verified |\n",
+			evidence:  map[string]string{"export.log": "PASS\n"},
+			wantErr:   true,
+			wantOutput: []string{
+				"has no rows in its ID table",
 				"this is a merge-step defect that the evidence repair cannot fix",
 			},
 		},
