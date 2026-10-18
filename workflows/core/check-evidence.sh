@@ -103,7 +103,7 @@ rows=$(awk '
       name = tolower(h[i])
       if (name == "status") status_col = i
       else if (name == "evidence") evidence_col = i
-      else if (name == "id") id_col = i
+      else if (name ~ /^id([^a-z0-9_-]|$)/) id_col = i
     }
     if (status_col && evidence_col) { in_table = 1; found = 1 }
   }
@@ -203,6 +203,12 @@ def cells(line):
     return [" ".join(c.replace("\x01", "|").split()) for c in line.split("|")]
 
 
+def header_cells(line):
+    """Lowercases the header, naming any annotated ID column, such as
+    `ID (merged; original IDs)`, plainly `id`."""
+    return ["id" if re.match(r"id(?![a-z0-9_-])", c) else c for c in (c.lower() for c in cells(line))]
+
+
 def id_table(path):
     """Returns the header and rows of the first table with an ID column."""
     try:
@@ -219,7 +225,7 @@ def id_table(path):
             header, rows = None, []
             continue
         if header is None:
-            header = [c.lower() for c in cells(line)]
+            header = header_cells(line)
         elif not re.fullmatch(r"[\s:|-]*", line):
             rows.append(cells(line))
     if header is None or "id" not in header:
