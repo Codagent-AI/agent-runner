@@ -76,13 +76,14 @@ func recordClaudeStatusline(path string, payload []byte) {
 			Total *float64 `json:"total_cost_usd"`
 		} `json:"cost"`
 		Context struct {
-			Usage json.RawMessage `json:"current_usage"`
+			Usage  json.RawMessage `json:"current_usage"`
+			Window *int64          `json:"context_window_size"`
 		} `json:"context_window"`
 	}
 	if json.Unmarshal(payload, &input) != nil {
 		return
 	}
-	record := cli.ClaudeStatusReport{RecordedAt: time.Now().UTC(), SessionID: input.SessionID, PromptID: input.PromptID, TotalCostUSD: input.Cost.Total, CurrentUsage: input.Context.Usage}
+	record := cli.ClaudeStatusReport{RecordedAt: time.Now().UTC(), SessionID: input.SessionID, PromptID: input.PromptID, TotalCostUSD: input.Cost.Total, CurrentUsage: input.Context.Usage, ContextWindowSize: input.Context.Window}
 	raw, err := json.Marshal(record)
 	if err != nil {
 		return

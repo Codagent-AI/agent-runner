@@ -20,6 +20,7 @@ type ClaudeAdapter struct {
 	prepareCompletionPlugin func(CompletionCommand) (string, error) // test seam; nil uses prepareNextCommandPlugin
 }
 
+//nolint:gocritic // UsageContext is an immutable value shared by adapter capability interfaces.
 func claudeConfigHome(uc UsageContext) (home, config string, err error) {
 	for _, entry := range uc.Env {
 		if v, ok := strings.CutPrefix(entry, "HOME="); ok {
@@ -309,6 +310,11 @@ func (a *ClaudeAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) 
 		lastUsage json.RawMessage
 		lastCost  *float64
 	)
+	observations := map[string]contextObservation{}
+	var order []string
+	var windows map[string]struct {
+		Window *int64 `json:"contextWindow"`
+	}
 	scanner := newStreamScanner(strings.NewReader(rawStdout))
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -322,6 +328,7 @@ func (a *ClaudeAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) 
 			Message         json.RawMessage `json:"message"`
 			Usage           json.RawMessage `json:"usage"`
 			TotalCostUSD    *float64        `json:"total_cost_usd"`
+			ModelUsage      json.RawMessage `json:"modelUsage"`
 		}
 		if err := json.Unmarshal(line, &event); err != nil {
 			return UsageExtraction{}, fmt.Errorf("claude: parse stream-json: %w", err)
@@ -331,22 +338,34 @@ func (a *ClaudeAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) 
 		}
 		if len(event.Message) > 0 {
 			var message struct {
-				Model string `json:"model"`
+				Model string          `json:"model"`
+				ID    string          `json:"id"`
+				Usage json.RawMessage `json:"usage"`
 			}
-			if event.ParentToolUseID == "" && json.Unmarshal(event.Message, &message) == nil && message.Model != "" {
+			if event.ParentToolUseID == "" && json.Unmarshal(event.Message, &message) == nil && message.Model != "" && message.Model != "<synthetic>" {
 				modelName = message.Model
+				if event.Type == "assistant" {
+					recordClaudeContext(observations, &order, message.ID, message.Usage)
+				}
 			}
 		}
 		if event.Type == "result" {
 			lastUsage = event.Usage
 			lastCost = event.TotalCostUSD
+			_ = json.Unmarshal(event.ModelUsage, &windows)
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return UsageExtraction{}, fmt.Errorf("claude: scan stream-json: %w", err)
 	}
+	obs := make([]contextObservation, 0, len(order))
+	for _, id := range order {
+		obs = append(obs, observations[id])
+	}
+	context := buildContext("claude:stream-json", obs, windows[modelName].Window, false)
 	if len(lastUsage) == 0 || string(lastUsage) == "null" {
 		usage := unavailableUsage("claude", "claude:result-event", model.UnavailableNoUsageEvent)
+		usage.Context = context
 		usage.Model = modelName
 		usage.RawCumulativeCostUSD = lastCost
 		return UsageExtraction{
@@ -359,7 +378,7 @@ func (a *ClaudeAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) 
 		return UsageExtraction{}, fmt.Errorf("claude: parse result usage: %w", err)
 	}
 	usage := model.UsageRecord{
-		Status: model.UsageCollected, CLI: "claude", Provider: "anthropic", Model: modelName,
+		Context: context, Status: model.UsageCollected, CLI: "claude", Provider: "anthropic", Model: modelName,
 		Tokens: tokens, Source: "claude:result-event", Completeness: completeness(complete),
 		// total_cost_usd accumulates across resumed invocations of a session,
 		// while usage is per invocation. The metrics collector attributes it.

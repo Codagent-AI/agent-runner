@@ -1163,6 +1163,7 @@ func emitAgentEnd(
 	emitStepEnd(ctx, prefix, startTime, string(outcome), data, step)
 }
 
+//nolint:gocritic // UsageContext is an immutable value shared by adapter capability interfaces.
 func extractAgentUsage(adapter cli.Adapter, cliName string, invocationContext cli.InvocationContext, rawStdout string, usageContext cli.UsageContext) (cli.UsageExtraction, error) {
 	if !invocationContext.IsHeadless() {
 		if invocationContext == cli.ContextAutonomousInteractive {
@@ -1174,11 +1175,18 @@ func extractAgentUsage(adapter cli.Adapter, cliName string, invocationContext cl
 				return collector.ExtractInteractiveUsage(plan, usageContext), nil
 			}
 		}
-		return cli.UsageExtraction{Usage: defaultAgentUsage(cliName, false)}, nil
+		u := defaultAgentUsage(cliName, false)
+		u.Context = &model.ContextMeasurement{Status: model.ContextUnavailable, Reason: u.Reason, Source: "agent-runner"}
+		if invocationContext == cli.ContextAutonomousInteractive {
+			u.Context.Reason = model.UnavailableContextUnsupported
+		}
+		return cli.UsageExtraction{Usage: u}, nil
 	}
 	extractor, ok := adapter.(cli.UsageExtractor)
 	if !ok {
-		return cli.UsageExtraction{Usage: defaultAgentUsage(cliName, true)}, nil
+		u := defaultAgentUsage(cliName, true)
+		u.Context = &model.ContextMeasurement{Status: model.ContextUnavailable, Reason: model.UnavailableContextUnsupported, Source: "agent-runner"}
+		return cli.UsageExtraction{Usage: u}, nil
 	}
 	var extraction cli.UsageExtraction
 	var err error
@@ -1189,7 +1197,8 @@ func extractAgentUsage(adapter cli.Adapter, cliName string, invocationContext cl
 	}
 	if err != nil {
 		return cli.UsageExtraction{Usage: model.UsageRecord{
-			Status: model.UsageUnavailable, Reason: model.UnavailableParseFailure,
+			Context: &model.ContextMeasurement{Status: model.ContextUnavailable, Reason: model.UnavailableParseFailure, Source: "agent-runner"},
+			Status:  model.UsageUnavailable, Reason: model.UnavailableParseFailure,
 			CLI: cliName, Source: "agent-runner",
 		}}, fmt.Errorf("%s usage extraction: %w", cliName, err)
 	}
