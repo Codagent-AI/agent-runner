@@ -25,6 +25,8 @@ import (
 	"github.com/codagent/agent-runner/internal/agentcall"
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
+	"github.com/codagent/agent-runner/internal/metrics"
+	"github.com/codagent/agent-runner/internal/model"
 	"github.com/codagent/agent-runner/internal/runview"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
@@ -470,11 +472,23 @@ steps:
 	cmd := exec.CommandContext(ctx, runnerBin, "--headless", "--profile", "smoke_test", workflowName)
 	cmd.Dir = workdir
 	cmd.Env = realAgentTestEnv(false)
+	isolated := agent == "claude" || agent == "codex"
+	home := ""
+	if isolated {
+		home = t.TempDir()
+		writeSmokeProfileConfig(t, home)
+		cmd.Env = isolatedRealAgentCallEnv(t, cmd.Env, home, agent)
+		cmd.Env = appendEnvOverride(cmd.Env, "CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	}
 	output, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
 		t.Fatalf("real %s headless E2E timed out after %s\n%s", agent, realAgentTimeout, output)
 	}
 	if err != nil {
+		text := strings.ToLower(string(output))
+		if isolated && (strings.Contains(text, "not logged in") || strings.Contains(text, "unauthorized") || strings.Contains(text, "authentication") || strings.Contains(text, "login required") || strings.Contains(text, "please run /login")) {
+			t.Skipf("%s cannot authenticate with isolated session storage: %s", agent, output)
+		}
 		t.Fatalf("real %s headless E2E failed: %v\n%s", agent, err, output)
 	}
 
@@ -485,7 +499,40 @@ steps:
 	if got := strings.TrimSpace(string(data)); got != token {
 		t.Fatalf("real %s resumed token = %q, want %q\n%s", agent, got, token, output)
 	}
-	assertRealAgentRunCompleted(t, workdir, workflowName, []string{agent + "-headless-fresh", "remove-headless-artifact", agent + "-headless-resume"})
+	if isolated {
+		dir := latestWorkflowRunDir(t, home, workdir, workflowName)
+		state, err := stateio.ReadState(filepath.Join(dir, "state.json"))
+		if err != nil || !state.Completed {
+			t.Fatalf("run state: %+v %v", state, err)
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, "run-metrics.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var a metrics.Artifact
+		if err = json.Unmarshal(raw, &a); err != nil {
+			t.Fatal(err)
+		}
+		count := 0
+		for _, step := range a.Steps {
+			if step.Type != "agent" {
+				continue
+			}
+			count++
+			c := step.Usage.Context
+			if c == nil || c.Status != model.ContextAvailable || c.PeakContext == nil || c.LastRequestInput == nil || *c.LastRequestInput <= 0 || *c.PeakContext < *c.LastRequestInput || c.ContextWindowLimit == nil {
+				t.Fatalf("%s context: %+v", agent, c)
+			}
+			if agent == "codex" && c.Source != "codex:rollout" {
+				t.Fatalf("source: %s", c.Source)
+			}
+		}
+		if count != 2 {
+			t.Fatalf("agent attempts: %d", count)
+		}
+	} else {
+		assertRealAgentRunCompleted(t, workdir, workflowName, []string{agent + "-headless-fresh", "remove-headless-artifact", agent + "-headless-resume"})
+	}
 }
 
 // runRealInteractiveAgentE2E proves completing-turn durability: the agent

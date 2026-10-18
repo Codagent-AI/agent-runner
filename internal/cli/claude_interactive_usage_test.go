@@ -504,7 +504,7 @@ func TestInteractiveClaudeHomeRepositoryUsesWorkdirLocal(t *testing.T) {
 	f.write(filepath.Join(sub, ".claude", "settings.local.json"), map[string]any{"statusLine": map[string]any{"type": "command", "command": "WORKDIR"}})
 	f.uc.Workdir = sub
 	f.uc.Env = append(f.uc.Env, "HOME="+home)
-	line, err := resolveClaudeStatusLine(f.uc)
+	line, err := resolveClaudeStatusLine(&f.uc)
 	if err != nil {
 		t.Fatal(err)
 	}

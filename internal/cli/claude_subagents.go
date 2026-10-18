@@ -197,6 +197,8 @@ func scanClaudeStdout(stdout string) claudeStdout {
 
 // ExtractUsageWithContext combines Claude's invocation result with transcript evidence.
 // Transcript failures reduce completeness but never fail the invocation.
+//
+//nolint:gocritic // UsageContext is an immutable value shared by adapter capability interfaces.
 func (a *ClaudeAdapter) ExtractUsageWithContext(stdout string, uc UsageContext) (UsageExtraction, error) {
 	result, err := a.ExtractUsage(stdout)
 	if err != nil {
@@ -212,7 +214,7 @@ func (a *ClaudeAdapter) ExtractUsageWithContext(stdout string, uc UsageContext) 
 	var reason claudeCollectionReason
 	spawns, failed := evidence.spawns, map[string]bool{}
 	var transcripts *os.Root
-	projectsRoot, parentRel, subagentsRel, pathReason := claudeTranscriptPaths(evidence.session, uc)
+	projectsRoot, parentRel, subagentsRel, pathReason := claudeTranscriptPaths(evidence.session, &uc)
 	reason.note(pathReason)
 	if projectsRoot != "" {
 		transcripts, err = os.OpenRoot(projectsRoot)
@@ -597,11 +599,11 @@ func readClaudeSubagent(root *os.Root, transcript string, base *model.UsageAlloc
 // The store itself may be a symlink, as in the eval sandbox, which links
 // ~/.claude/projects to persisted state; Claude follows it, so collection
 // resolves it once. Reads then stay inside the resolved store.
-func claudeTranscriptPaths(session string, uc UsageContext) (projectsRoot, parentRel, subagentsRel string, reason model.UnavailableReason) {
+func claudeTranscriptPaths(session string, uc *UsageContext) (projectsRoot, parentRel, subagentsRel string, reason model.UnavailableReason) {
 	if validateSessionID(session) != nil || strings.Contains(session, `\`) {
 		return "", "", "", model.UnavailableSubagentSpanUnavailable
 	}
-	_, root, err := claudeConfigHome(uc)
+	_, root, err := claudeConfigHome(*uc)
 	if err != nil {
 		return "", "", "", model.UnavailableSubagentSpanUnavailable
 	}

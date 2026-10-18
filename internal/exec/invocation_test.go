@@ -523,3 +523,30 @@ func TestBuildAgentEnvironmentRemovesAndOverridesByName(t *testing.T) {
 		t.Fatalf("BuildAgentEnvironment() mismatch (-want +got):\n%s", diff)
 	}
 }
+
+func TestInvokeAgentContextRequiresLaunch(t *testing.T) {
+	runner := &invocationRecordingRunner{options: make(chan AgentProcessOptions, 1), err: errors.New("launch failed")}
+	got, err := InvokeAgent(&AgentInvocation{Context: context.Background(), Adapter: &cli.ClaudeAdapter{}, Args: []string{"claude"}, CLI: "claude", InvocationContext: cli.ContextAutonomousHeadless}, runner, &mockLogger{})
+	if err == nil || got.CLILaunched {
+		t.Fatal("expected launch failure")
+	}
+	if got.Usage.Context != nil {
+		t.Fatalf("unlaunched attempt has context: %+v", got.Usage.Context)
+	}
+}
+
+func TestInvokeAgentFailedAttemptRetainsContext(t *testing.T) {
+	stdout := `{"type":"assistant","message":{"id":"main","model":"opus","usage":{"input_tokens":10,"cache_read_input_tokens":20,"cache_creation_input_tokens":30}}}`
+	runner := &invocationRecordingRunner{options: make(chan AgentProcessOptions, 1), result: ProcessResult{Started: true, ExitCode: 1, Stdout: stdout}, err: errors.New("exit 1")}
+	got, err := InvokeAgent(&AgentInvocation{Context: context.Background(), Adapter: &cli.ClaudeAdapter{}, Args: []string{"claude"}, CLI: "claude", InvocationContext: cli.ContextAutonomousHeadless}, runner, &mockLogger{})
+	if err == nil || !got.CLILaunched {
+		t.Fatal("expected failed launched attempt")
+	}
+	c := got.Usage.Context
+	if c == nil || c.Status != model.ContextAvailable || c.PeakContext == nil || *c.PeakContext != 60 {
+		t.Fatalf("failed attempt lost context %+v", c)
+	}
+	if got.Usage.Status != model.UsageUnavailable {
+		t.Fatal("context must be independent of result usage")
+	}
+}
