@@ -35,20 +35,21 @@ const (
 
 // Artifact is the stable run-metrics.json schema.
 type Artifact struct {
-	NativeMeasurements []NativeMeasurement       `json:"native_measurements"`
-	MeasurementHeads   []MeasurementHead         `json:"measurement_heads"`
-	ValidatorContexts  []DeliveryContext         `json:"validator_contexts"`
-	MeasurementTotals  map[string]FieldAggregate `json:"measurement_totals"`
-	AggregateVersion   int                       `json:"aggregate_version"`
-	SchemaVersion      int                       `json:"schema_version"`
-	RunID              string                    `json:"run_id"`
-	Workflow           string                    `json:"workflow"`
-	HistoryComplete    bool                      `json:"history_complete"`
-	Sessions           []SessionRecord           `json:"sessions"`
-	Steps              []StepRecord              `json:"steps"`
-	SessionRollups     []SessionRollup           `json:"session_rollups"`
-	RepositoryChanges  *audit.GitChangeCounts    `json:"repository_changes,omitempty"`
-	Totals             model.RunTotals           `json:"totals"`
+	AgentSessionContext AgentSessionContextSummary `json:"agent_session_context"`
+	NativeMeasurements  []NativeMeasurement        `json:"native_measurements"`
+	MeasurementHeads    []MeasurementHead          `json:"measurement_heads"`
+	ValidatorContexts   []DeliveryContext          `json:"validator_contexts"`
+	MeasurementTotals   map[string]FieldAggregate  `json:"measurement_totals"`
+	AggregateVersion    int                        `json:"aggregate_version"`
+	SchemaVersion       int                        `json:"schema_version"`
+	RunID               string                     `json:"run_id"`
+	Workflow            string                     `json:"workflow"`
+	HistoryComplete     bool                       `json:"history_complete"`
+	Sessions            []SessionRecord            `json:"sessions"`
+	Steps               []StepRecord               `json:"steps"`
+	SessionRollups      []SessionRollup            `json:"session_rollups"`
+	RepositoryChanges   *audit.GitChangeCounts     `json:"repository_changes,omitempty"`
+	Totals              model.RunTotals            `json:"totals"`
 	// ValidatorDelivery is separate from native collection and totals so a
 	// missing, blocked, or legacy producer history can never be interpreted as
 	// confirmed zero model work.
@@ -609,6 +610,7 @@ func totalsForRecords(records []StepRecord, activeDuration int64) model.RunTotal
 func (c *Collector) refreshAggregatesLocked() {
 	c.artifact.AggregateVersion = 1
 	c.refreshMeasurementsLocked()
+	c.artifact.AgentSessionContext = summarizeAgentContext(c.artifact.Steps)
 	c.artifact.Totals = c.totalsLocked(false)
 	c.artifact.RepositoryChanges = aggregateRepositoryChanges(c.artifact.Steps)
 	rollups := make([]SessionRollup, 0, len(c.artifact.Sessions))
@@ -985,6 +987,7 @@ func cloneCounts(counts model.TokenCounts) model.TokenCounts {
 
 func cloneUsage(usage *model.UsageRecord) model.UsageRecord {
 	cloned := *usage
+	cloned.Context = cloneContext(usage.Context)
 	cloned.Turns = make([]model.UsageRecord, len(usage.Turns))
 	for i := range usage.Turns {
 		cloned.Turns[i] = cloneUsage(&usage.Turns[i])

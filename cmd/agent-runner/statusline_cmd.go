@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -49,7 +50,9 @@ func handleStatuslineRecord(args []string, stdin io.Reader, stdout, stderr io.Wr
 	select {
 	case sig := <-signals:
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		<-done
+		// Killed above, so Wait's error is expected.
+		waitErr := <-done
+		_ = waitErr
 		if sig == syscall.SIGINT {
 			return 130
 		}
@@ -74,13 +77,14 @@ func recordClaudeStatusline(path string, payload []byte) {
 			Total *float64 `json:"total_cost_usd"`
 		} `json:"cost"`
 		Context struct {
-			Usage json.RawMessage `json:"current_usage"`
+			Usage  json.RawMessage `json:"current_usage"`
+			Window json.RawMessage `json:"context_window_size"`
 		} `json:"context_window"`
 	}
 	if json.Unmarshal(payload, &input) != nil {
 		return
 	}
-	record := cli.ClaudeStatusReport{RecordedAt: time.Now().UTC(), SessionID: input.SessionID, PromptID: input.PromptID, TotalCostUSD: input.Cost.Total, CurrentUsage: input.Context.Usage}
+	record := cli.ClaudeStatusReport{RecordedAt: time.Now().UTC(), SessionID: input.SessionID, PromptID: input.PromptID, TotalCostUSD: input.Cost.Total, CurrentUsage: input.Context.Usage, ContextWindowSize: parseClaudeContextWindow(input.Context.Window)}
 	raw, err := json.Marshal(record)
 	if err != nil {
 		return
@@ -96,4 +100,19 @@ func recordClaudeStatusline(path string, payload []byte) {
 	}
 	defer func() { _ = f.Close() }()
 	_, _ = f.Write(append(raw, '\n'))
+}
+
+// Window metadata is optional: an unsupported representation must not discard
+// the report's independently useful usage and cost fields.
+func parseClaudeContextWindow(raw json.RawMessage) *int64 {
+	var integer *int64
+	if json.Unmarshal(raw, &integer) == nil && integer != nil && *integer > 0 {
+		return integer
+	}
+	var number *float64
+	if json.Unmarshal(raw, &number) != nil || number == nil || *number <= 0 || *number >= float64(1<<63) || math.Trunc(*number) != *number {
+		return nil
+	}
+	value := int64(*number)
+	return &value
 }

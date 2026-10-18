@@ -736,7 +736,8 @@ func (a *CursorAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error) 
 		return UsageExtraction{}, fmt.Errorf("cursor: parse result usage: %w", err)
 	}
 	return UsageExtraction{Usage: model.UsageRecord{
-		Status: model.UsageCollected, CLI: "cursor", Provider: "cursor", Model: modelName,
+		Context: unsupportedContext("cursor"),
+		Status:  model.UsageCollected, CLI: "cursor", Provider: "cursor", Model: modelName,
 		Tokens: tokens, Source: "cursor:result-event", Completeness: completeness(complete),
 	}}, nil
 }

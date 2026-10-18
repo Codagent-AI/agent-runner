@@ -205,6 +205,8 @@ func invokeExternalTurn(input *AgentInvocation, runner ProcessRunner, log Logger
 // Cumulative sources retain their final snapshot for the metrics collector,
 // which already attributes against earlier steps and resumed attempts.
 func mergeExternalUsage(total, next *model.UsageRecord) {
+	measurement := total.Context
+	defer func() { total.Context = measurement }()
 	if total.CLI == "" {
 		*total = *next
 		return
@@ -385,6 +387,7 @@ type externalTurnUsage struct {
 func (u *externalTurnUsage) Add(result *AgentInvocationResult) {
 	u.turns = append(u.turns, result.Usage)
 	mergeExternalUsage(&u.usage, &result.Usage)
+	u.usage.Context = mergeContext(u.turns)
 	if result.EstimatedCostUSD != nil {
 		if u.cost == nil {
 			u.cost = new(float64)

@@ -8,8 +8,14 @@ import (
 )
 
 func unavailableUsage(cliName, source string, reason model.UnavailableReason) model.UsageRecord {
+	var measurement *model.ContextMeasurement
+	switch cliName {
+	case "cursor", "copilot", "opencode":
+		measurement = unsupportedContext(cliName)
+	}
 	return model.UsageRecord{
-		Status: model.UsageUnavailable, Reason: reason, CLI: cliName, Source: source,
+		Context: measurement,
+		Status:  model.UsageUnavailable, Reason: reason, CLI: cliName, Source: source,
 	}
 }
 

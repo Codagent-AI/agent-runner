@@ -310,7 +310,8 @@ func (a *CopilotAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error)
 		complete = complete && seen[key]
 	}
 	return UsageExtraction{Usage: model.UsageRecord{
-		Status: model.UsageCollected, CLI: "copilot", Provider: "github", Model: modelName,
+		Context: unsupportedContext("copilot"),
+		Status:  model.UsageCollected, CLI: "copilot", Provider: "github", Model: modelName,
 		Tokens: tokens, Source: "copilot:assistant.message", Completeness: completeness(complete),
 	}}, nil
 }

@@ -268,7 +268,8 @@ func (a *OpenCodeAdapter) ExtractUsage(rawStdout string) (UsageExtraction, error
 	}
 
 	result := UsageExtraction{Usage: model.UsageRecord{
-		Status: model.UsageCollected, CLI: "opencode", Provider: provider, Model: modelName,
+		Context: unsupportedContext("opencode"),
+		Status:  model.UsageCollected, CLI: "opencode", Provider: provider, Model: modelName,
 		Tokens: tokens, Source: "opencode:step_finish", Completeness: completeness(complete),
 	}}
 	if complete && totalsComplete {
