@@ -146,6 +146,7 @@ steps:
 
       Read the definition, then merge the lead's checklist into `{{change_dir}}/checklist.md`:
       - Keep every behavior from both checklists. Where two rows cover the same behavior, combine them into one row that keeps the stricter check, and cite both IDs.
+      - The checklist table's first header cell must be exactly `ID`. Combined rows cite their original IDs in the ID cell (for example `L-1, I-1`), never in the header.
       - Add a Source column: `lead`, `implementor`, or `both`.
       - Never drop a behavior or weaken its check. If the checklists disagree about what the definition requires, ask the lead.
       - Add a row, with Source `crosscheck`, for any behavior in the definition that both checklists miss.
@@ -175,7 +176,7 @@ steps:
       session: crosscheck-agent
       max: 2
       prompt: |
-        The merged checklist `{{change_dir}}/checklist.md` for {{change_label}} "{{change_name}}" fails the merge check; the check output lists each problem. Restore each missing ID as the merge step asked, as its own row or cited in the row that covers it, and replace each cited acceptance or human-only test with an automated test, a scripted command, or inspection. The implementor's original checklist is `{{session_dir}}/output/implementor-checklist.md`. Change no other file. If `{{change_dir}}` is inside this repository, commit only that file following the project's commit message conventions with the `[{{step_id}}]` prefix. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, explain why and end your response with the line `REPAIR_BLOCKED`.
+        The merged checklist `{{change_dir}}/checklist.md` for {{change_label}} "{{change_name}}" fails the merge check; the check output lists each problem. If the check reports the ID header, rename that header cell to exactly `ID`. Restore each missing ID as the merge step asked, as its own row or cited in the ID cell of the row that covers it, and replace each cited acceptance or human-only test with an automated test, a scripted command, or inspection. The implementor's original checklist is `{{session_dir}}/output/implementor-checklist.md`. Change no other file. If `{{change_dir}}` is inside this repository, commit only that file following the project's commit message conventions with the `[{{step_id}}]` prefix. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, explain why and end your response with the line `REPAIR_BLOCKED`.
 
   # The committed merge is the plan: check-evidence later compares the
   # checklist with this copy, so implementation cannot change a planned row.
