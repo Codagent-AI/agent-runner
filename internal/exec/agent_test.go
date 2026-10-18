@@ -248,7 +248,8 @@ func TestExecuteAgentStep(t *testing.T) {
 			t.Fatalf("extractAgentUsage() error = %v", err)
 		}
 		want := cli.UsageExtraction{Usage: model.UsageRecord{
-			Status: model.UsageUnavailable, Reason: model.UnavailableUnsupportedAdapter,
+			Context: &model.ContextMeasurement{Status: model.ContextUnavailable, Reason: model.UnavailableContextUnsupported, Source: "agent-runner"},
+			Status:  model.UsageUnavailable, Reason: model.UnavailableUnsupportedAdapter,
 			CLI: "fake", Source: "agent-runner",
 		}}
 		if diff := cmp.Diff(want, got); diff != "" {
@@ -269,7 +270,8 @@ func TestExecuteAgentStep(t *testing.T) {
 		}
 		end := findAuditEvent(auditLog.events, audit.EventStepEnd)
 		wantUsage := model.UsageRecord{
-			Status: model.UsageCollected, CLI: "claude", Provider: "anthropic", Model: "claude-sonnet-4-6",
+			Context: &model.ContextMeasurement{Status: model.ContextUnavailable, Reason: model.UnavailableContextUnclassifiedUpdate, Source: "claude:stream-json"},
+			Status:  model.UsageCollected, CLI: "claude", Provider: "anthropic", Model: "claude-sonnet-4-6",
 			Identity: model.InvocationIdentity{
 				RequestedCLI: "claude", EffectiveCLI: "claude", EffectiveProvider: "anthropic", EffectiveModel: "claude-sonnet-4-6",
 				ProviderSource: model.IdentitySourceAdapter,

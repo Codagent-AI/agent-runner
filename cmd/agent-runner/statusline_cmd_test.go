@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/codagent/agent-runner/internal/cli"
 )
 
 func TestStatuslineRecorderDelegate(t *testing.T) {
@@ -180,3 +182,50 @@ func TestStatuslinePipeHelper(t *testing.T) {
 		_ = child.Wait()
 	}
 }
+
+func TestStatuslineOptionalWindowDoesNotDiscardUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name, window string
+		want         *int64
+	}{
+		{"integer", "1000000", statuslineWindowPointer(1000000)},
+		{"decimal", "1000000.0", statuslineWindowPointer(1000000)},
+		{"exponent", "1e6", statuslineWindowPointer(1000000)},
+		{"missing", "", nil},
+		{"null", "null", nil},
+		{"invalid string", `"unknown"`, nil},
+		{"object", `{}`, nil},
+		{"fractional", "1000000.5", nil},
+		{"overflow", "1e100", nil},
+		{"negative", "-1", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "report")
+			window := ""
+			if tc.window != "" {
+				window = `,"context_window_size":` + tc.window
+			}
+			payload := `{"session_id":"session","prompt_id":"prompt","cost":{"total_cost_usd":0.42},"context_window":{"current_usage":{"input_tokens":1}` + window + `}}`
+			recordClaudeStatusline(path, []byte(payload))
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("report discarded: %v", err)
+			}
+			var report cli.ClaudeStatusReport
+			if err = json.Unmarshal(raw, &report); err != nil {
+				t.Fatal(err)
+			}
+			if report.SessionID != "session" || report.PromptID != "prompt" || report.TotalCostUSD == nil || *report.TotalCostUSD != 0.42 || string(report.CurrentUsage) != `{"input_tokens":1}` {
+				t.Fatalf("usage/cost lost: %s", raw)
+			}
+			if tc.want == nil {
+				if report.ContextWindowSize != nil {
+					t.Fatalf("invalid window retained: %s", raw)
+				}
+			} else if report.ContextWindowSize == nil || *report.ContextWindowSize != *tc.want {
+				t.Fatalf("window incorrect: %s", raw)
+			}
+		})
+	}
+}
+func statuslineWindowPointer(n int64) *int64 { return &n }

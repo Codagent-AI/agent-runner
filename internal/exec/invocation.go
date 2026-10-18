@@ -145,6 +145,7 @@ func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logge
 	}
 	usageContext := cli.UsageContext{Workdir: input.Workdir, Env: BuildAgentEnvironment(os.Environ(), dropEnv, input.Env)}
 	prepareInvocationUsage(input, &processOptions, direct, &usageContext)
+	usageContext.StartedAt = time.Now()
 	outcome, processResult, launched, crashed, runErr := runAgentProcess(
 		runner, input.Adapter, &processOptions, input.InvocationContext, log,
 		input.SuspendHook, input.ResumeHook, direct,
@@ -161,6 +162,9 @@ func InvokeAgent(input *AgentInvocation, runner ProcessRunner, fallbackLog Logge
 		crashed = true
 	}
 	extraction, usageErr := extractAgentUsage(input.Adapter, input.CLI, input.InvocationContext, processResult.Stdout, usageContext)
+	if !launched {
+		extraction.Usage.Context = nil
+	}
 	attachInvocationIdentity(&extraction.Usage, input.CLI, input.Model, input.Effort)
 	result := AgentInvocationResult{
 		Outcome: outcome, Stdout: processResult.Stdout, Stderr: processResult.Stderr,

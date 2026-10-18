@@ -88,7 +88,7 @@ func claudeSettingsRoot(work, home string, env []string) (string, error) {
 	return root, nil
 }
 
-func resolveClaudeStatusLine(uc UsageContext) (map[string]any, error) {
+func resolveClaudeStatusLine(uc *UsageContext) (map[string]any, error) {
 	work := uc.Workdir
 	if work == "" {
 		work, _ = os.Getwd()
@@ -97,7 +97,7 @@ func resolveClaudeStatusLine(uc UsageContext) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	home, config, err := claudeConfigHome(uc)
+	home, config, err := claudeConfigHome(*uc)
 	if err != nil {
 		return nil, err
 	}

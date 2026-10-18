@@ -31,7 +31,8 @@ func TestClaudeUsageExtraction(t *testing.T) {
 	want := UsageExtraction{
 		Usage: model.UsageRecord{
 			Status: model.UsageCollected, CLI: "claude", Provider: "anthropic",
-			Model: "claude-sonnet-4-6",
+			Context: &model.ContextMeasurement{Status: model.ContextAvailable, Source: "claude:stream-json", LastRequestInput: contextInt(115), PeakContext: contextInt(115)},
+			Model:   "claude-sonnet-4-6",
 			Tokens: model.TokenCounts{
 				model.TokenInput: 3, model.TokenCachedInput: 101,
 				model.TokenCacheWrite: 11, model.TokenOutput: 2,
@@ -174,7 +175,8 @@ func TestOpenCodeUsageExtraction(t *testing.T) {
 	wantCost := 0.0015
 	want := UsageExtraction{
 		Usage: model.UsageRecord{
-			Status: model.UsageCollected, CLI: "opencode",
+			Context: &model.ContextMeasurement{Status: model.ContextUnavailable, Reason: model.UnavailableContextUnsupported, Source: "opencode"},
+			Status:  model.UsageCollected, CLI: "opencode",
 			Tokens: model.TokenCounts{
 				model.TokenInput: 9751, model.TokenOutput: 7,
 				model.TokenReasoning: 13, model.TokenCachedInput: 1793,
@@ -201,7 +203,8 @@ func TestCopilotUsageExtraction(t *testing.T) {
 	adapter := &CopilotAdapter{}
 	extractor := requireUsageExtractor(t, adapter)
 	want := UsageExtraction{Usage: model.UsageRecord{
-		Status: model.UsageCollected, CLI: "copilot", Provider: "github", Model: "gpt-5.4-mini",
+		Context: &model.ContextMeasurement{Status: model.ContextUnavailable, Reason: model.UnavailableContextUnsupported, Source: "copilot"},
+		Status:  model.UsageCollected, CLI: "copilot", Provider: "github", Model: "gpt-5.4-mini",
 		Tokens: model.TokenCounts{model.TokenOutput: 148},
 		Source: "copilot:assistant.message", Completeness: model.CompletenessPartial,
 	}}
@@ -318,7 +321,8 @@ func TestCopilotStructuredHeadlessOutput(t *testing.T) {
 func TestCursorUsageExtraction(t *testing.T) {
 	extractor := requireUsageExtractor(t, &CursorAdapter{})
 	want := UsageExtraction{Usage: model.UsageRecord{
-		Status: model.UsageCollected, CLI: "cursor", Provider: "cursor", Model: "Auto",
+		Context: &model.ContextMeasurement{Status: model.ContextUnavailable, Reason: model.UnavailableContextUnsupported, Source: "cursor"},
+		Status:  model.UsageCollected, CLI: "cursor", Provider: "cursor", Model: "Auto",
 		Tokens: model.TokenCounts{
 			model.TokenInput: 13740, model.TokenOutput: 31,
 			model.TokenCachedInput: 4096, model.TokenCacheWrite: 0,
@@ -361,6 +365,14 @@ func TestUsageExtractionUnavailableAndMalformed(t *testing.T) {
 				Status: model.UsageUnavailable, Reason: model.UnavailableNoUsageEvent,
 				CLI: tt.cli, Source: tt.source,
 			}}
+			if tt.cli != "codex" {
+				source, reason := tt.cli, model.UnavailableContextUnsupported
+				if tt.cli == "claude" {
+					source = "claude:stream-json"
+					reason = model.UnavailableNoUsageEvent
+				}
+				want.Usage.Context = &model.ContextMeasurement{Status: model.ContextUnavailable, Reason: reason, Source: source}
+			}
 			if diff := cmp.Diff(want, got); diff != "" {
 				t.Fatalf("ExtractUsage() mismatch (-want +got):\n%s", diff)
 			}

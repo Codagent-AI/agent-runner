@@ -19,7 +19,7 @@ func TestInteractiveClaudeUsageE2E001(t *testing.T) {
 	root := t.TempDir()
 	runner := filepath.Join(root, "agent-runner")
 	buildAgentRunner(t, findRepoRoot(t), runner)
-	for _, mode := range []string{"final", "missing"} {
+	for _, mode := range []string{"final", "missing", "damaged"} {
 		t.Run(mode, func(t *testing.T) {
 			tmp := t.TempDir()
 			home := filepath.Join(tmp, "home")
@@ -94,10 +94,21 @@ steps:
 				}
 			}
 			artifact.Steps = agentSteps
-			if len(artifact.Steps) != 2 || artifact.Totals.UsageCoverage != model.CoverageComplete {
+			if len(artifact.Steps) != 2 || (mode != "damaged" && artifact.Totals.UsageCoverage != model.CoverageComplete) {
 				t.Fatalf("metrics: %s", raw)
 			}
 			for i, step := range artifact.Steps {
+				c := step.Usage.Context
+				if c == nil || c.PeakContext == nil || *c.PeakContext != []int64{107, 9}[i] || c.ContextWindowLimit == nil || *c.ContextWindowLimit != 1000000 {
+					t.Fatalf("context %d: %+v", i, c)
+				}
+				if mode == "damaged" {
+					if c.Status != model.ContextPartial || c.LastRequestInput != nil {
+						t.Fatalf("damaged context %+v", c)
+					}
+				} else if c.Status != model.ContextAvailable || c.LastRequestInput == nil || *c.LastRequestInput != []int64{107, 9}[i] {
+					t.Fatalf("context %+v", c)
+				}
 				var native *metrics.NativeMeasurement
 				for j := range artifact.NativeMeasurements {
 					candidate := &artifact.NativeMeasurements[j]
@@ -179,7 +190,7 @@ func TestInteractiveUsageFixtureProcess(t *testing.T) {
 	}
 	report := func(prompt string, cost float64, usage any) {
 		t.Helper()
-		payload, _ := json.Marshal(map[string]any{"session_id": session, "prompt_id": prompt, "cost": map[string]any{"total_cost_usd": cost}, "context_window": map[string]any{"current_usage": usage}})
+		payload, _ := json.Marshal(map[string]any{"session_id": session, "prompt_id": prompt, "cost": map[string]any{"total_cost_usd": cost}, "context_window": map[string]any{"current_usage": usage, "context_window_size": 1000000}})
 		cmd := exec.Command("sh", "-c", settings.StatusLine.Command)
 		cmd.Stdin = bytes.NewReader(payload)
 		cmd.Stdout = os.Stdout
@@ -203,7 +214,11 @@ func TestInteractiveUsageFixtureProcess(t *testing.T) {
 	tool := "tool-" + suffix
 	prompt := "prompt-" + suffix
 	tuple := func(output int) map[string]int {
-		return map[string]int{"input_tokens": 2, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 4, "output_tokens": output}
+		input := 2
+		if !resume {
+			input = 100
+		}
+		return map[string]int{"input_tokens": input, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 4, "output_tokens": output}
 	}
 	assistant := func(id, name string, output int, content []any) map[string]any {
 		return map[string]any{"type": "assistant", "timestamp": time.Now().UTC().Format(time.RFC3339Nano), "message": map[string]any{"id": id, "model": name, "usage": tuple(output), "content": content}}
@@ -231,6 +246,18 @@ func TestInteractiveUsageFixtureProcess(t *testing.T) {
 	appendEntry(parent, map[string]any{"type": "queue-operation", "timestamp": time.Now().UTC().Format(time.RFC3339Nano), "content": "<task-notification><tool-use-id>" + tool + "</tool-use-id><status>completed</status></task-notification>"})
 	appendEntry(parent, assistant("final-"+suffix, "opus", 2, []any{}))
 	appendEntry(parent, assistant("final-"+suffix, "opus", 8, []any{}))
+	appendEntry(parent, assistant("synthetic-"+suffix, "<synthetic>", 1000000, []any{}))
+	if mode == "damaged" {
+		f, err := os.OpenFile(parent, os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = f.WriteString("broken\n")
+		_ = f.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := completeInteractiveFixture(); err != nil {
 		t.Fatal(err)
 	}
