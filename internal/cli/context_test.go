@@ -121,3 +121,21 @@ func TestInteractiveContextUsesFinalMessageUsage(t *testing.T) {
 		t.Fatalf("missing final usage must not reuse prior values: %+v", c)
 	}
 }
+
+func TestInteractiveContextKeepsLatestKnownWindow(t *testing.T) {
+	f := newInteractiveUsageFixture(t)
+	f.write(f.path, assistantFixture("message", "opus", 1, 1))
+	start := time.Now().UTC()
+	f.uc.StartedAt = start
+	f.write(f.p.ReportPath,
+		ClaudeStatusReport{SessionID: f.session, RecordedAt: start.Add(-time.Second), ContextWindowSize: contextInt(9000000)},
+		ClaudeStatusReport{SessionID: f.session, RecordedAt: start.Add(time.Second), ContextWindowSize: contextInt(200000)},
+		ClaudeStatusReport{SessionID: f.session, RecordedAt: start.Add(3 * time.Second)},
+		ClaudeStatusReport{SessionID: "other", RecordedAt: start.Add(4 * time.Second), ContextWindowSize: contextInt(9000000)},
+		ClaudeStatusReport{SessionID: f.session, RecordedAt: start.Add(2 * time.Second), ContextWindowSize: contextInt(1000000)},
+	)
+	c := f.a.ExtractInteractiveUsage(f.p, f.uc).Usage.Context
+	if c == nil || !equalContextInt(c.ContextWindowLimit, contextInt(1000000)) {
+		t.Fatalf("latest known window lost: %+v", c)
+	}
+}

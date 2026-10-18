@@ -545,7 +545,7 @@ func interactiveClaudeContext(s *claudeInteractiveSpan, p *InteractiveUsagePlan,
 	var window *int64
 	var latest time.Time
 	for _, r := range reports {
-		if r.SessionID == p.SessionID && !r.RecordedAt.Before(start) && !r.RecordedAt.Before(latest) {
+		if r.SessionID == p.SessionID && r.ContextWindowSize != nil && !r.RecordedAt.Before(start) && !r.RecordedAt.Before(latest) {
 			latest = r.RecordedAt
 			window = r.ContextWindowSize
 		}

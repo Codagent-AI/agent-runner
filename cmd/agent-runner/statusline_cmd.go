@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -77,13 +78,13 @@ func recordClaudeStatusline(path string, payload []byte) {
 		} `json:"cost"`
 		Context struct {
 			Usage  json.RawMessage `json:"current_usage"`
-			Window *int64          `json:"context_window_size"`
+			Window json.RawMessage `json:"context_window_size"`
 		} `json:"context_window"`
 	}
 	if json.Unmarshal(payload, &input) != nil {
 		return
 	}
-	record := cli.ClaudeStatusReport{RecordedAt: time.Now().UTC(), SessionID: input.SessionID, PromptID: input.PromptID, TotalCostUSD: input.Cost.Total, CurrentUsage: input.Context.Usage, ContextWindowSize: input.Context.Window}
+	record := cli.ClaudeStatusReport{RecordedAt: time.Now().UTC(), SessionID: input.SessionID, PromptID: input.PromptID, TotalCostUSD: input.Cost.Total, CurrentUsage: input.Context.Usage, ContextWindowSize: parseClaudeContextWindow(input.Context.Window)}
 	raw, err := json.Marshal(record)
 	if err != nil {
 		return
@@ -99,4 +100,19 @@ func recordClaudeStatusline(path string, payload []byte) {
 	}
 	defer func() { _ = f.Close() }()
 	_, _ = f.Write(append(raw, '\n'))
+}
+
+// Window metadata is optional: an unsupported representation must not discard
+// the report's independently useful usage and cost fields.
+func parseClaudeContextWindow(raw json.RawMessage) *int64 {
+	var integer *int64
+	if json.Unmarshal(raw, &integer) == nil && integer != nil && *integer > 0 {
+		return integer
+	}
+	var number *float64
+	if json.Unmarshal(raw, &number) != nil || number == nil || *number <= 0 || *number >= float64(1<<63) || math.Trunc(*number) != *number {
+		return nil
+	}
+	value := int64(*number)
+	return &value
 }
