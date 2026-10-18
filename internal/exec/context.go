@@ -3,10 +3,11 @@ package exec
 import "github.com/codagent/agent-runner/internal/model"
 
 // mergeContext reduces turn gauges independently of cumulative usage counters.
-func mergeContext(turns []*model.ContextMeasurement) *model.ContextMeasurement {
+func mergeContext(turns []model.UsageRecord) *model.ContextMeasurement {
 	c := &model.ContextMeasurement{Status: model.ContextUnavailable, Reason: model.UnavailableNoUsageEvent, Source: "agent-runner"}
 	all := len(turns) > 0
-	for i, t := range turns {
+	for i := range turns {
+		t := turns[i].Context
 		if t == nil {
 			t = &model.ContextMeasurement{Status: model.ContextUnavailable, Reason: model.UnavailableContextNotRecorded}
 		}

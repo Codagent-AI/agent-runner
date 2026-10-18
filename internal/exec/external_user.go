@@ -387,11 +387,7 @@ type externalTurnUsage struct {
 func (u *externalTurnUsage) Add(result *AgentInvocationResult) {
 	u.turns = append(u.turns, result.Usage)
 	mergeExternalUsage(&u.usage, &result.Usage)
-	contexts := make([]*model.ContextMeasurement, len(u.turns))
-	for i := range u.turns {
-		contexts[i] = u.turns[i].Context
-	}
-	u.usage.Context = mergeContext(contexts)
+	u.usage.Context = mergeContext(u.turns)
 	if result.EstimatedCostUSD != nil {
 		if u.cost == nil {
 			u.cost = new(float64)

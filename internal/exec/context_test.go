@@ -14,13 +14,13 @@ func TestMergeContext(t *testing.T) {
 	unknown := &model.ContextMeasurement{Status: model.ContextUnavailable, Reason: model.UnavailableNoUsageEvent, Source: "test"}
 	for _, tc := range []struct {
 		name   string
-		turns  []*model.ContextMeasurement
+		turns  []model.UsageRecord
 		last   *int64
 		reason model.UnavailableReason
 	}{
-		{"partial peak", []*model.ContextMeasurement{partial, available}, contextValue(25000), partial.Reason},
-		{"unavailable final", []*model.ContextMeasurement{partial, available, unknown}, nil, unknown.Reason},
-		{"legacy final", []*model.ContextMeasurement{partial, available, nil}, nil, model.UnavailableContextNotRecorded},
+		{"partial peak", []model.UsageRecord{{Context: partial}, {Context: available}}, contextValue(25000), partial.Reason},
+		{"unavailable final", []model.UsageRecord{{Context: partial}, {Context: available}, {Context: unknown}}, nil, unknown.Reason},
+		{"legacy final", []model.UsageRecord{{Context: partial}, {Context: available}, {}}, nil, model.UnavailableContextNotRecorded},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := mergeContext(tc.turns)
@@ -77,11 +77,11 @@ func TestDefaultAgentUsageHasNoContextBeforeLaunch(t *testing.T) {
 func TestMergeContextAvailableTurns(t *testing.T) {
 	first := &model.ContextMeasurement{Status: model.ContextAvailable, PeakContext: contextValue(40000), LastRequestInput: contextValue(39000), ContextWindowLimit: contextValue(1000000)}
 	final := &model.ContextMeasurement{Status: model.ContextAvailable, PeakContext: contextValue(75000), LastRequestInput: contextValue(72000)}
-	c := mergeContext([]*model.ContextMeasurement{first, final})
+	c := mergeContext([]model.UsageRecord{{Context: first}, {Context: final}})
 	if c.Status != model.ContextAvailable || c.Reason != "" || c.PeakContext == nil || *c.PeakContext != 75000 || c.LastRequestInput == nil || *c.LastRequestInput != 72000 || c.ContextWindowLimit == nil || *c.ContextWindowLimit != 1000000 {
 		t.Fatalf("merged context %+v", c)
 	}
-	c = mergeContext([]*model.ContextMeasurement{nil, {Status: model.ContextUnavailable, Reason: model.UnavailableNoUsageEvent}})
+	c = mergeContext([]model.UsageRecord{{}, {Context: &model.ContextMeasurement{Status: model.ContextUnavailable, Reason: model.UnavailableNoUsageEvent}}})
 	if c.Status != model.ContextUnavailable || c.LastRequestInput != nil || c.PeakContext != nil || c.Reason != model.UnavailableNoUsageEvent {
 		t.Fatalf("unavailable context %+v", c)
 	}
