@@ -298,13 +298,16 @@ func (a *ClaudeAdapter) WaitForFinalReport(ctx context.Context, p InteractiveUsa
 				return
 			}
 		}
+		// Read reports first so a transcript append preceding a new report is
+		// included before matching. Otherwise a stale report can match the
+		// previous message while a newer message is already on disk.
+		if err = reportReader.read(ctx, false, reports.consume); err != nil {
+			return
+		}
 		if transcript != nil && transcript.read(ctx, false, func(line []byte, position int64) error {
 			span.consumeLine(line, position, true)
 			return nil
 		}) != nil {
-			return
-		}
-		if err = reportReader.read(ctx, false, reports.consume); err != nil {
 			return
 		}
 		if m, ok := span.messages[span.final]; ok && reports.matches(&m) {
