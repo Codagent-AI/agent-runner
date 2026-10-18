@@ -14,9 +14,10 @@ import (
 	"github.com/codagent/agent-runner/internal/model"
 )
 
+//nolint:gocritic // UsageContext is an immutable value shared by adapter capability interfaces.
 func (a *ClaudeAdapter) PrepareInteractiveUsage(sessionID string, _ bool, uc UsageContext) (InteractiveUsagePlan, error) {
 	p := InteractiveUsagePlan{SessionID: sessionID, Context: uc, ReportReason: model.UnavailableCostReportUnavailable}
-	root, parent, _, reason := claudeTranscriptPaths(sessionID, uc)
+	root, parent, _, reason := claudeTranscriptPaths(sessionID, &uc)
 	if reason == model.UnavailableTranscriptAmbiguous {
 		p.PrepareErr = reason
 	}
@@ -29,7 +30,7 @@ func (a *ClaudeAdapter) PrepareInteractiveUsage(sessionID string, _ bool, uc Usa
 			p.StartOffset = cp.Offset
 		}
 	}
-	line, err := resolveClaudeStatusLine(uc)
+	line, err := resolveClaudeStatusLine(&uc)
 	if err != nil {
 		p.ReportError = err.Error()
 		return p, nil
@@ -86,6 +87,7 @@ func createClaudeReport(dir string, name *string) (*os.File, error) {
 }
 
 type claudeSpanMessage struct {
+	context         contextObservation
 	model           string
 	tokens          model.TokenCounts
 	complete        bool
@@ -189,12 +191,13 @@ func interactiveMainAllocations(s *claudeInteractiveSpan) []model.UsageAllocatio
 	return allocations
 }
 
+//nolint:gocritic // UsageContext is an immutable value shared by adapter capability interfaces.
 func resolveInteractiveSpan(p *InteractiveUsagePlan, uc UsageContext) (store *os.Root, parentPath, subagentsPath string, result claudeInteractiveSpan) {
 	empty := claudeInteractiveSpan{reason: p.PrepareErr}
 	if p.PrepareErr != "" {
 		return nil, "", "", empty
 	}
-	root, parent, subs, reason := claudeTranscriptPaths(p.SessionID, uc)
+	root, parent, subs, reason := claudeTranscriptPaths(p.SessionID, &uc)
 	if root == "" {
 		if reason != model.UnavailableTranscriptAmbiguous {
 			reason = model.UnavailableTranscriptMissing
@@ -258,6 +261,8 @@ func (a *ClaudeAdapter) ExtractInteractiveUsage(p InteractiveUsagePlan, uc Usage
 	if len(u.Allocations) == 1 {
 		u.Model = u.Allocations[0].Model
 	}
+	p.Context.StartedAt = uc.StartedAt
+	u.Context = interactiveClaudeContext(&s, &p, reports, u.Reason)
 	cost, costReason := interactiveClaudeCost(&p, &s, reports, settled)
 	return UsageExtraction{Usage: u, EstimatedCostUSD: cost, CostUnavailableReason: costReason, CostReportError: p.ReportError}
 }
@@ -320,7 +325,7 @@ func (a *ClaudeAdapter) WaitForFinalReport(ctx context.Context, p InteractiveUsa
 }
 
 func openInteractiveClaudeTranscript(p *InteractiveUsagePlan) (*claudeJSONLReader, error) {
-	root, parent, _, reason := claudeTranscriptPaths(p.SessionID, p.Context)
+	root, parent, _, reason := claudeTranscriptPaths(p.SessionID, &p.Context)
 	if reason == model.UnavailableTranscriptAmbiguous {
 		return nil, errors.New("ambiguous Claude transcript")
 	}
@@ -375,11 +380,12 @@ func claudeUsageKey(tokens model.TokenCounts) [4]int64 {
 }
 
 type ClaudeStatusReport struct {
-	RecordedAt   time.Time       `json:"recorded_at"`
-	SessionID    string          `json:"session_id"`
-	PromptID     string          `json:"prompt_id"`
-	TotalCostUSD *float64        `json:"total_cost_usd"`
-	CurrentUsage json.RawMessage `json:"current_usage"`
+	RecordedAt        time.Time       `json:"recorded_at"`
+	SessionID         string          `json:"session_id"`
+	PromptID          string          `json:"prompt_id"`
+	TotalCostUSD      *float64        `json:"total_cost_usd"`
+	CurrentUsage      json.RawMessage `json:"current_usage"`
+	ContextWindowSize *int64          `json:"context_window_size,omitempty"`
 }
 
 func readClaudeReports(path string) []ClaudeStatusReport {
@@ -495,6 +501,7 @@ func (s *claudeInteractiveSpan) consumeMessage(e *claudeEntry, position int64) {
 		m.position = prior.position
 		m.timestamp = prior.timestamp
 	}
+	m.context = claudeContextObservation(e.Message.Usage)
 	counts, complete, err := tokenCountsFromObject(e.Message.Usage, claudeTokenFields)
 	switch {
 	case len(e.Message.Usage) == 0 || string(e.Message.Usage) == "null":
@@ -519,4 +526,33 @@ func (s *claudeInteractiveSpan) consumeMessage(e *claudeEntry, position int64) {
 	}
 	s.messages[id] = m
 	s.final = id
+}
+
+func interactiveClaudeContext(s *claudeInteractiveSpan, p *InteractiveUsagePlan, reports []ClaudeStatusReport, reason model.UnavailableReason) *model.ContextMeasurement {
+	messages := make([]claudeSpanMessage, 0, len(s.messages))
+	for _, m := range s.messages {
+		messages = append(messages, m)
+	}
+	sort.Slice(messages, func(i, j int) bool { return messages[i].position < messages[j].position })
+	obs := make([]contextObservation, 0, len(messages))
+	for _, m := range messages {
+		obs = append(obs, m.context)
+	}
+	start := p.Context.StartedAt
+	if start.IsZero() && len(messages) > 0 {
+		start = messages[0].timestamp
+	}
+	var window *int64
+	var latest time.Time
+	for _, r := range reports {
+		if r.SessionID == p.SessionID && r.ContextWindowSize != nil && !r.RecordedAt.Before(start) && !r.RecordedAt.Before(latest) {
+			latest = r.RecordedAt
+			window = r.ContextWindowSize
+		}
+	}
+	c := buildContext("claude:session-transcript", obs, window, s.reason != "" && s.reason != model.UnavailableNoUsageEvent)
+	if c.Status == model.ContextUnavailable && reason != "" {
+		c.Reason = reason
+	}
+	return c
 }

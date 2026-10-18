@@ -114,9 +114,34 @@ type InvocationIdentity struct {
 	EffortSource      IdentitySource `json:"effort_source,omitempty"`
 }
 
+// ContextStatus describes the evidence available for a context gauge.
+type ContextStatus string
+
+const (
+	ContextAvailable                     ContextStatus     = "available"
+	ContextPartial                       ContextStatus     = "partial"
+	ContextUnavailable                   ContextStatus     = "unavailable"
+	UnavailableContextUnsupported        UnavailableReason = "unsupported"
+	UnavailableContextUnclassifiedUpdate UnavailableReason = "context-unclassified-update"
+	UnavailableCodexRolloutNotFound      UnavailableReason = "codex-rollout-not-found"
+	UnavailableCodexRolloutUnsupported   UnavailableReason = "codex-rollout-unsupported"
+	UnavailableContextNotRecorded        UnavailableReason = "context-not-recorded"
+)
+
+// ContextMeasurement is a per-invocation gauge, independent of token counters.
+type ContextMeasurement struct {
+	Status             ContextStatus     `json:"status"`
+	Reason             UnavailableReason `json:"reason,omitempty"`
+	Source             string            `json:"source"`
+	LastRequestInput   *int64            `json:"last_request_input_tokens"`
+	PeakContext        *int64            `json:"peak_context_tokens"`
+	ContextWindowLimit *int64            `json:"context_window_limit_tokens"`
+}
+
 // UsageRecord is the typed usage value passed through audit events and stored
 // in the metrics artifact.
 type UsageRecord struct {
+	Context *ContextMeasurement `json:"context,omitempty"`
 	// Turns holds per-invocation reports for an external-user step. The metrics
 	// collector attributes cumulative counters before aggregating these reports.
 	Turns                    []UsageRecord      `json:"turns,omitempty"`

@@ -422,6 +422,7 @@ type InteractiveUsageCollector interface {
 }
 
 type UsageContext struct {
+	StartedAt       time.Time
 	StateDir        string
 	ReportName      *string // nil uses an isolated temporary report (standalone collectors)
 	InteractivePlan *InteractiveUsagePlan
