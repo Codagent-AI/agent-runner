@@ -23,9 +23,6 @@ func (a *CodexAdapter) ExtractUsageWithContext(stdout string, uc UsageContext) (
 
 //nolint:gocritic // UsageContext is an immutable value shared by adapter capability interfaces.
 func codexContext(stdout string, uc UsageContext) *model.ContextMeasurement {
-	unavailable := func(reason model.UnavailableReason) *model.ContextMeasurement {
-		return &model.ContextMeasurement{Status: model.ContextUnavailable, Reason: reason, Source: "codex:rollout"}
-	}
 	session := ""
 	scanner := newStreamScanner(strings.NewReader(stdout))
 	for scanner.Scan() {
@@ -38,7 +35,7 @@ func codexContext(stdout string, uc UsageContext) *model.ContextMeasurement {
 		}
 	}
 	if session == "" {
-		return unavailable(model.UnavailableNoUsageEvent)
+		return unavailableCodexContext(model.UnavailableNoUsageEvent)
 	}
 	home := ""
 	for _, entry := range uc.Env {
@@ -49,26 +46,23 @@ func codexContext(stdout string, uc UsageContext) *model.ContextMeasurement {
 	if home == "" {
 		dir, err := os.UserHomeDir()
 		if err != nil {
-			return unavailable(model.UnavailableCodexRolloutNotFound)
+			return unavailableCodexContext(model.UnavailableCodexRolloutNotFound)
 		}
 		home = filepath.Join(dir, ".codex")
 	}
 	path := findCodexRollout(filepath.Join(home, "sessions"), session)
 	if path == "" {
-		return unavailable(model.UnavailableCodexRolloutNotFound)
+		return unavailableCodexContext(model.UnavailableCodexRolloutNotFound)
 	}
 	f, err := os.Open(path) // #nosec G304 -- located in the effective Codex sessions directory
 	if err != nil {
-		return unavailable(model.UnavailableCodexRolloutNotFound)
+		return unavailableCodexContext(model.UnavailableCodexRolloutNotFound)
 	}
 	defer func() { _ = f.Close() }()
 	return readCodexContext(f, session, uc.StartedAt)
 }
 
 func readCodexContext(reader io.Reader, session string, startedAt time.Time) *model.ContextMeasurement {
-	unavailable := func(reason model.UnavailableReason) *model.ContextMeasurement {
-		return &model.ContextMeasurement{Status: model.ContextUnavailable, Reason: reason, Source: "codex:rollout"}
-	}
 	var records []codexContextResponse
 	compacted := map[string]bool{}
 	var window *int64
@@ -96,7 +90,7 @@ func readCodexContext(reader io.Reader, session string, startedAt time.Time) *mo
 			} `json:"payload"`
 		}
 		if json.Unmarshal(scanner.Bytes(), &event) != nil {
-			return unavailable(model.UnavailableParseFailure)
+			return unavailableCodexContext(model.UnavailableParseFailure)
 		}
 		if event.Timestamp.Before(startedAt) {
 			continue
@@ -121,10 +115,10 @@ func readCodexContext(reader io.Reader, session string, startedAt time.Time) *mo
 		}
 	}
 	if scanner.Err() != nil {
-		return unavailable(model.UnavailableParseFailure)
+		return unavailableCodexContext(model.UnavailableParseFailure)
 	}
 	if len(records) == 0 && nonzero {
-		c := unavailable(model.UnavailableCodexRolloutUnsupported)
+		c := unavailableCodexContext(model.UnavailableCodexRolloutUnsupported)
 		c.ContextWindowLimit = window
 		return c
 	}
@@ -180,4 +174,8 @@ func codexNonzeroUsage(counts map[string]int64) bool {
 		}
 	}
 	return false
+}
+
+func unavailableCodexContext(reason model.UnavailableReason) *model.ContextMeasurement {
+	return &model.ContextMeasurement{Status: model.ContextUnavailable, Reason: reason, Source: "codex:rollout"}
 }
