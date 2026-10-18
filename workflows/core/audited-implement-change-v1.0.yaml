@@ -150,7 +150,7 @@ steps:
       - Never drop a behavior or weaken its check. If the checklists disagree about what the definition requires, ask the lead.
       - Add a row, with Source `crosscheck`, for any behavior in the definition that both checklists miss.
       - Verify each behavior with an automated test (unit, integration, or end-to-end), a scripted command such as a build, lint, or verify script, or inspection. Where a row's check has an agent operate the product as a user would, including one of the test plan's acceptance (`AT-`) or human-only (`HT-`) tests, replace it with one of those; the checklist must not cite them. That testing happens once, in acceptance testing after the audit.
-      - Where a row's check could pass while its behavior is broken, strengthen it.
+      - Where a row's check could pass while its behavior is broken, strengthen it, using the fastest check that would catch the break: inspection or a unit or component test where one can show it. Keep integration and end-to-end tests to those the test plan names.
 
       Change no other file. If `{{change_dir}}` is inside this repository, commit only that file following the project's commit message conventions, prefixed `[{{step_id}}]`.
 
@@ -215,7 +215,7 @@ steps:
       - Never test the product yourself as a user would: do not use browser or other tools to click through it, type into it, or inspect screenshots to check that it works, and do not run the test plan's acceptance tests. The independent acceptance tester does that after the audit.
       - A reproduced spec violation stays open until it is fixed and verified, or the lead rules it is not a violation. Disputing it does not close it.
       - The session rules still apply: escalate to the lead (`session: lead-agent`), and stop if blocked. If you believe a check needs something you lack, ask the lead before leaving it unperformed.
-      - Run the broader test run (tier 2) once, after the maintainability pass, and then the repository's other required checks, such as lint and build.
+      - Run the broader test run (tier 2) once, after the maintainability pass, and then the repository's other required checks, such as lint and build. Evidence comes from that run and from targeted runs of the tests covering anything you change afterward; never rerun a whole suite only to refresh evidence.
 
       Commit following the project's commit message conventions, prefixing each message with `[{{step_id}}]`. {{artifact_validation_instruction}} Do not run Agent Validator.
 
@@ -264,7 +264,7 @@ steps:
 
       This audit is inspection only. Never run tests, builds, the product, or any other command that executes the change; read the code, the checklist, and the evidence. The implementor has run the checks, and acceptance testing follows.
 
-      - Check each row's status against the code and its evidence. The cited evidence files are in `{{session_dir}}/output/evidence/`; check that each one proves its claim for the current code, including the failure, error, and cleanup cases its row names.
+      - Check each row's status against the code and its evidence. The cited evidence files are in `{{session_dir}}/output/evidence/`; check that each one proves its claim for the current code, including the failure, error, and cleanup cases its row names. Evidence recorded before a later commit still counts unless that commit changed the code its row's Code cell names or code that code calls; a test added or changed later needs only its own run, not a fresh full run.
       - For a row checked by a test, read the test and confirm it asserts the row's behavior, including its failure and cleanup cases; a passing log of a test that does not is not evidence.
       - Find choices that silently weaken, omit, or reinterpret a requirement. When one's validity is unclear, ask the lead now (`session: lead-agent`, with the brief from earlier).
 
@@ -285,7 +285,7 @@ steps:
 
       Fix and verify each finding, following the codagent:implement-change skill, then rerun the affected checks and update their rows in `{{change_dir}}/checklist.md`, as the codagent:verify-behavior skill describes. A row whose code changed and whose check you did not rerun is `not verified`. Add a row, or change a row's planned cells, only where a finding asks for it. To dispute one, ask the lead now (`session: lead-agent`), and fix it unless the lead rules it is not a violation. Stop if blocked, as before. If there are no findings, change nothing.
 
-      After the fixes, run the broader test run (tier 2) once, choosing tests that cover what the fixes changed. Commit following the project's commit message conventions, prefixing each message with `[{{step_id}}]`. {{artifact_validation_instruction}} Do not run Agent Validator.
+      After the fixes, run the tests that cover what the fixes changed, as one targeted run within the broader run's 15 minutes (tier 2); do not rerun the whole suite. Commit following the project's commit message conventions, prefixing each message with `[{{step_id}}]`. {{artifact_validation_instruction}} Do not run Agent Validator.
 
   - id: check-findings-not-blocked
     script: check-not-blocked.sh
