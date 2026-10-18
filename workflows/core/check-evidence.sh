@@ -209,8 +209,9 @@ def header_cells(line):
     return ["id" if re.match(r"id(?![a-z0-9_-])", c) else c for c in (c.lower() for c in cells(line))]
 
 
-def id_table(path):
-    """Returns the header and rows of the first table with an ID column."""
+def id_table(path, required=()):
+    """Returns the header and rows of the first table with an ID column and
+    the required columns."""
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             lines = f.read().splitlines()
@@ -220,7 +221,7 @@ def id_table(path):
     header, rows = None, []
     for line in lines:
         if not line.lstrip().startswith("|"):
-            if header is not None and "id" in header:
+            if header is not None and {"id", *required} <= set(header):
                 break
             header, rows = None, []
             continue
@@ -228,7 +229,7 @@ def id_table(path):
             header = header_cells(line)
         elif not re.fullmatch(r"[\s:|-]*", line):
             rows.append(cells(line))
-    if header is None or "id" not in header:
+    if header is None or not {"id", *required} <= set(header):
         print(f"{path} has no Markdown table with an ID column")
         raise SystemExit(0)
     return header, rows
@@ -248,7 +249,7 @@ def named(id_cell, findings):
 
 plan_path = os.environ["PLAN_FILE"]
 plan_header, plan_rows = id_table(plan_path)
-header, rows = id_table(os.environ["CHECKLIST_FILE"])
+header, rows = id_table(os.environ["CHECKLIST_FILE"], ("status", "evidence"))
 columns = [c for c in plan_header if c and c not in DONE_COLUMNS]
 lost = [c for c in columns if c not in header]
 if lost:

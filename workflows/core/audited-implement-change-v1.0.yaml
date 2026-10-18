@@ -264,7 +264,7 @@ steps:
 
       This audit is inspection only. Never run tests, builds, the product, or any other command that executes the change; read the code, the checklist, and the evidence. The implementor has run the checks, and acceptance testing follows.
 
-      - Check each row's status against the code and its evidence. The cited evidence files are in `{{session_dir}}/output/evidence/`; check that each one proves its claim for the current code, including the failure, error, and cleanup cases its row names. Evidence recorded before a later commit still counts unless that commit changed code its row depends on; a test added or changed later needs only its own run, not a fresh full run.
+      - Check each row's status against the code and its evidence. The cited evidence files are in `{{session_dir}}/output/evidence/`; check that each one proves its claim for the current code, including the failure, error, and cleanup cases its row names. Evidence recorded before a later commit still counts unless that commit changed the code its row's Code cell names or code that code calls; a test added or changed later needs only its own run, not a fresh full run.
       - For a row checked by a test, read the test and confirm it asserts the row's behavior, including its failure and cleanup cases; a passing log of a test that does not is not evidence.
       - Find choices that silently weaken, omit, or reinterpret a requirement. When one's validity is unclear, ask the lead now (`session: lead-agent`, with the brief from earlier).
 

@@ -819,6 +819,13 @@ func TestCoreCheckEvidenceScript(t *testing.T) {
 			wantOutput: []string{"1 rows: 1 verified"},
 		},
 		{
+			name:       "an earlier ID table without Status and Evidence is not compared with the plan",
+			plan:       "| ID | Behavior | How to verify |\n|----|----|----|\n| L-1 | Export works | e2e |\n",
+			checklist:  "| ID | Source |\n|----|----|\n| L-1 | spec |\n\n" + header + "| L-1 | Export works | e2e | `export.log` | verified |\n",
+			evidence:   map[string]string{"export.log": "PASS\n"},
+			wantOutput: []string{"1 rows: 1 verified"},
+		},
+		{
 			name:      "a changed, removed, or added row fails before the audit",
 			plan:      "| ID | Behavior | How to verify |\n|----|----|----|\n| L-1 | Export works | e2e |\n| L-2 | Import works | unit |\n",
 			checklist: header + "| L-1 | Export works | build | `export.log` | verified |\n| I-9 | Extra | unit | `export.log` | verified |\n",
