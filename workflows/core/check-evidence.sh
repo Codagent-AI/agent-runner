@@ -203,7 +203,7 @@ def cells(line):
     return [" ".join(c.replace("\x01", "|").split()) for c in line.split("|")]
 
 
-def id_table(path):
+def id_table(path, planned=False):
     """Returns the header and rows of the first table with an ID column."""
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
@@ -223,7 +223,10 @@ def id_table(path):
         elif not re.fullmatch(r"[\s:|-]*", line):
             rows.append(cells(line))
     if header is None or "id" not in header:
-        print(f"{path} has no Markdown table with an ID column")
+        if planned:
+            print(f"the planned checklist {path} has no table with a header cell exactly ID; this is a merge-step defect that the evidence repair cannot fix")
+        else:
+            print(f"{path} has no Markdown table with an ID column")
         raise SystemExit(0)
     return header, rows
 
@@ -241,7 +244,7 @@ def named(id_cell, findings):
 
 
 plan_path = os.environ["PLAN_FILE"]
-plan_header, plan_rows = id_table(plan_path)
+plan_header, plan_rows = id_table(plan_path, planned=True)
 header, rows = id_table(os.environ["CHECKLIST_FILE"])
 columns = [c for c in plan_header if c and c not in DONE_COLUMNS]
 lost = [c for c in columns if c not in header]

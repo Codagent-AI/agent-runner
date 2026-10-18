@@ -6,7 +6,8 @@
 # in acceptance testing, and is never a checklist check.
 #
 # This checks that no ID was dropped, not that a combined row keeps the
-# stricter check.
+# stricter check. A table header cell must be exactly ID (case-insensitive,
+# ignoring surrounding whitespace), matching the evidence plan comparison.
 set -eu
 
 payload=$(cat)
@@ -49,7 +50,25 @@ def ids(prefix, text):
     return sorted({int(n) for n in found})
 
 
+def cells(line):
+    line = line.strip().replace("\\|", "\x01")
+    line = re.sub(r"^\|", "", line)
+    line = re.sub(r"\|$", "", line)
+    return [" ".join(c.replace("\x01", "|").split()) for c in line.split("|")]
+
+
 problems = []
+headers = []
+in_table = False
+for line in merged_text.splitlines():
+    if not line.lstrip().startswith("|"):
+        in_table = False
+    elif not in_table:
+        headers.append([c.lower() for c in cells(line)])
+        in_table = True
+if not any("id" in header for header in headers):
+    found = ", ".join(header[0] for header in headers) or "no table"
+    problems.append(f"no Markdown table has a header cell that is exactly ID (found: {found}); name the first column exactly ID and cite merged or original IDs in the row cells, not in the header")
 lead_ids = ids("L", lead_text)
 implementor_ids = ids("I", implementor_text)
 if not lead_ids:
@@ -69,7 +88,7 @@ if problems:
     print(f"checklist merge check: {merged_path} is not a complete merge:", file=sys.stderr)
     for p in problems:
         print(f"- {p}", file=sys.stderr)
-    print("Keep each ID as its own row or cite it in the row that covers it. Verify each behavior with an automated test, a scripted command, or inspection, never an acceptance or human-only test.", file=sys.stderr)
+    print("Name the first header cell exactly ID. Keep each ID as its own row or cite it in the row that covers it. Verify each behavior with an automated test, a scripted command, or inspection, never an acceptance or human-only test.", file=sys.stderr)
     sys.exit(1)
 
 print(f"checklist merge check: kept {len(lead_ids)} lead and {len(implementor_ids)} implementor IDs")
