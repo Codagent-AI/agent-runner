@@ -438,3 +438,36 @@ case "$*" in *' -s '*) printf '10\n';; *) printf abc;; esac
 		t.Fatalf("partial content given full identity: %+v", file.version)
 	}
 }
+
+func TestSkippedDirtyBaselineCannotClaimCreatedContent(t *testing.T) {
+	repo, session := t.TempDir(), t.TempDir()
+	path := filepath.Join(repo, "file")
+	if err := os.WriteFile(path, []byte("inherited finding\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(session, "output")
+	if err := os.Mkdir(output, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Runner streams consume the entry budget without consuming read budget.
+	for i := range maxObserveEntries {
+		if err := os.WriteFile(filepath.Join(output, fmt.Sprintf("_%05d.out", i)), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	observer := newOutputObserver(session, repo)
+	start := GitCheckpoint{Available: true, Worktree: []GitFileStat{{Path: "file", Fingerprint: "before"}}}
+	end := GitCheckpoint{Available: true, Worktree: []GitFileStat{{Path: "file", Fingerprint: "after"}}}
+	observer.start("step", &start)
+	if err := os.WriteFile(path, []byte("inherited finding\nstep addition\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, record := observer.end("step", &start, &end)
+	if record.Status != "truncated" || len(record.Files) != 1 {
+		t.Fatalf("missing baseline coverage: %+v", record)
+	}
+	file := record.Files[0]
+	if file.Before != nil || file.Contribution.Kind != "unresolved" || file.Contribution.Blob != "" || file.Contribution.Context == "" {
+		t.Fatalf("inherited content credited as a contribution: %+v", file)
+	}
+}

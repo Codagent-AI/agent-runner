@@ -578,7 +578,8 @@ func (o *outputObserver) start(prefix string, cp *GitCheckpoint) {
 			b.entries++
 			if b.entries > b.entryLimit {
 				mergeRecordStatus(&w.record, "truncated", "entry budget exhausted")
-				break
+				w.repo[path] = observedFile{reason: "entry budget exhausted"}
+				continue
 			}
 			f, err := o.readFile(o.repoRoot, path, b)
 			if err == nil {
