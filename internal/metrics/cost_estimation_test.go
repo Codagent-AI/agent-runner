@@ -3,12 +3,15 @@ package metrics
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/codagent/agent-runner/internal/pricing"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/cli"
@@ -301,5 +304,73 @@ func TestCostAttributionLimitationSurvivesCumulativeSnapshot(t *testing.T) {
 	c.Process(stepEvent(time.Now(), model.ExecutionIdentity{StepID: "limited", StepType: "agent", Kind: "step", AgentInvoked: true, CLI: "codex"}, u, nil, "success", 1))
 	if got := c.artifact.Steps[0]; got.CostUnavailableReason != model.UnavailableUsageIncomplete || got.EstimatedAPICostUSD != nil {
 		t.Fatalf("lost attribution limitation: %+v", got)
+	}
+}
+
+func TestCostTurnsRetainParentAttributionLimitations(t *testing.T) {
+	for _, missingTurn := range []bool{false, true} {
+		t.Run(fmt.Sprintf("missing-turn-%t", missingTurn), func(t *testing.T) {
+			u := pricedUsage()
+			u.Reason = model.UnavailableSessionSwitched
+			u.Turns = []model.UsageRecord{pricedUsage(), pricedUsage()}
+			// A later turn's optional field absence must not clear the parent's reason.
+			if missingTurn {
+				u.Turns = append(u.Turns, model.UsageRecord{CLI: "codex", Status: model.UsageUnavailable})
+			}
+			want := model.UnavailableUsageIncomplete
+			if missingTurn {
+				want = model.UnavailableTurnUnattributed
+			}
+			direct := estimateTurns(&u)
+			if direct.amount != nil || direct.reason != want || direct.estimate.PartialSubtotalUSD == nil || *direct.estimate.PartialSubtotalUSD != .268 {
+				t.Fatalf("direct outcome %+v", direct)
+			}
+			c := NewCollector(t.TempDir(), "run", "workflow", time.Now())
+			c.Process(stepEvent(time.Now(), model.ExecutionIdentity{StepID: "turns", StepType: "agent", Kind: "step", CLI: "codex", AgentInvoked: true}, u, nil, "success", 1))
+			got := c.artifact.Steps[0]
+			if got.EstimatedAPICostUSD != nil || got.CostBasis != "" || got.CostUnavailableReason != want || got.CostEstimate.PartialSubtotalUSD == nil || *got.CostEstimate.PartialSubtotalUSD != .268 {
+				t.Fatalf("collector record %+v", got)
+			}
+		})
+	}
+}
+
+func TestPriceTableFailureLeavesCostUnavailable(t *testing.T) {
+	original := loadPriceTable
+	t.Cleanup(func() { loadPriceTable = original })
+	tableErr := fmt.Errorf("invalid embedded price table")
+	loadPriceTable = func() (*pricing.Table, error) { return nil, tableErr }
+	for _, turns := range []bool{false, true} {
+		t.Run(fmt.Sprintf("turns-%t", turns), func(t *testing.T) {
+			c := NewCollector(t.TempDir(), "run", "workflow", time.Now())
+			u := pricedUsage()
+			if turns {
+				u.Turns = []model.UsageRecord{pricedUsage()}
+			}
+			c.Process(stepEvent(time.Now(), model.ExecutionIdentity{StepID: "cost", StepType: "agent", Kind: "step", CLI: "codex", AgentInvoked: true}, u, nil, "success", 1))
+			step := c.artifact.Steps[0]
+			if step.EstimatedAPICostUSD != nil || step.CostBasis != "" || step.CostUnavailableReason != model.UnavailableModelUnpriced {
+				t.Fatalf("cost %+v", step)
+			}
+			diagnostics := c.Errors()
+			if len(diagnostics) != 1 || !errors.Is(diagnostics[0], tableErr) {
+				t.Fatalf("diagnostics %v", diagnostics)
+			}
+		})
+	}
+}
+
+func TestCostExplicitProviderIsNeverReplaced(t *testing.T) {
+	for _, effective := range []bool{false, true} {
+		u := pricedUsage()
+		if effective {
+			u.Identity.EffectiveProvider = "other"
+		} else {
+			u.Provider = "other"
+		}
+		got := estimateCost(&u)
+		if got.amount != nil || got.reason != model.UnavailableModelUnpriced {
+			t.Fatalf("provider outcome %+v", got)
+		}
 	}
 }

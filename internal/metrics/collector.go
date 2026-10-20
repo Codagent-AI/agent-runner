@@ -342,7 +342,9 @@ func (c *Collector) processTerminal(event *audit.Event) {
 		if cost, cumulative := c.attributeCost(&identity, &usage); cumulative {
 			event.Data[DataEstimatedAPICostUSD] = cost
 		}
-		resolveCost(event, &record, &usage)
+		if err := resolveCost(event, &record, &usage); err != nil {
+			c.errors = append(c.errors, fmt.Errorf("estimate API-equivalent cost: %w", err))
+		}
 	}
 	c.artifact.Steps = append(c.artifact.Steps, record)
 }
@@ -1116,6 +1118,10 @@ func (c *Collector) attributeTurns(identity *model.ExecutionIdentity, input *mod
 			total.SubagentCollection = model.CompletenessPartial
 			total.SubagentCollectionReason = attributed.SubagentCollectionReason
 		}
+	}
+	if !attributionComplete(input) {
+		total.Completeness = model.CompletenessPartial
+		total.Reason = input.Reason
 	}
 	if !totalsComplete {
 		total.TokenTotals = nil

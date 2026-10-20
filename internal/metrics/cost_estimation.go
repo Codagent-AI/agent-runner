@@ -10,6 +10,8 @@ import (
 	"github.com/codagent/agent-runner/internal/pricing"
 )
 
+var loadPriceTable = pricing.Load
+
 // CostEstimate retains compact provenance; individual requests remain transient.
 type CostEstimate struct {
 	Policy              string   `json:"policy"`
@@ -20,6 +22,7 @@ type CostEstimate struct {
 	PartialSubtotalUSD  *float64 `json:"partial_subtotal_usd,omitempty"`
 }
 type costOutcome struct {
+	err      error
 	amount   *float64
 	reason   model.UnavailableReason
 	version  string
@@ -49,10 +52,10 @@ func estimateCost(u *model.UsageRecord) costOutcome {
 	if name == "" {
 		return fail(model.UnavailableModelUnknown)
 	}
-	table, err := pricing.Load()
+	table, err := loadPriceTable()
 	if err != nil {
-		panic(err)
-	} // Embedded data is validated by package tests.
+		return costOutcome{reason: model.UnavailableModelUnpriced, err: err}
+	}
 	provider := u.Identity.EffectiveProvider
 	if provider == "" {
 		provider = u.Provider
@@ -87,9 +90,9 @@ func estimateTurns(u *model.UsageRecord) costOutcome {
 	if u.Status != model.UsageCollected {
 		return costOutcome{reason: model.UnavailableUsageUnavailable}
 	}
-	table, err := pricing.Load()
+	table, err := loadPriceTable()
 	if err != nil {
-		panic(err)
+		return costOutcome{reason: model.UnavailableModelUnpriced, err: err}
 	}
 	result := costOutcome{version: table.Version, estimate: &CostEstimate{Policy: table.Policy}}
 	// Attribution failure outranks category or model failures on any other turn.
@@ -99,10 +102,17 @@ func estimateTurns(u *model.UsageRecord) costOutcome {
 			break
 		}
 	}
+	// Preserve turn-attribution precedence over a parent attribution limitation.
+	if result.reason == "" && !attributionComplete(u) {
+		result.reason = model.UnavailableUsageIncomplete
+	}
 	sum := new(big.Rat)
 	eligible := 0
 	for i := range u.Turns {
 		turn := estimateCost(&u.Turns[i])
+		if turn.err != nil {
+			result.err = turn.err
+		}
 		if turn.amount == nil {
 			if result.reason == "" {
 				result.reason = turn.reason
@@ -135,16 +145,20 @@ func estimateTurns(u *model.UsageRecord) costOutcome {
 	return result
 }
 
-func resolveCost(event *audit.Event, record *StepRecord, usage *model.UsageRecord) {
+func resolveCost(event *audit.Event, record *StepRecord, usage *model.UsageRecord) error {
+	var estimationErr error
 	if cost, ok := event.Data[DataEstimatedAPICostUSD].(*float64); ok && cost != nil {
 		value := *cost
 		record.EstimatedAPICostUSD = &value
 		record.CostBasis = model.CostBasisReported
 	} else if usage.CLI == "codex" && event.Type != audit.EventNestedAgentEnd {
-		outcome := estimateCost(usage)
+		var outcome costOutcome
 		if len(usage.Turns) > 0 {
 			outcome = estimateTurns(usage)
+		} else {
+			outcome = estimateCost(usage)
 		}
+		estimationErr = outcome.err
 		record.EstimatedAPICostUSD = outcome.amount
 		record.CostUnavailableReason = outcome.reason
 		record.PriceTableVersion = outcome.version
@@ -166,4 +180,5 @@ func resolveCost(event *audit.Event, record *StepRecord, usage *model.UsageRecor
 	if record.CostEstimate != nil {
 		event.Data["cost_estimate"] = record.CostEstimate
 	}
+	return estimationErr
 }
