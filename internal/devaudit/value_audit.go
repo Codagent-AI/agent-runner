@@ -488,6 +488,7 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 	result := GitEvidence{Attribution: "no_change", CommitSHAs: []string{}, DeferredSHAs: []string{}}
 	var files, added, deleted int64
 	pathsComplete := true
+	unavailableChanges := false
 	headMoved := false
 	attributed := []string{}
 	seen := map[string]bool{}
@@ -497,13 +498,14 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 	for index := range records {
 		record := &records[index]
 		if record.GitChanges == nil || !record.GitChanges.Available {
-			return GitEvidence{Attribution: "unavailable", CommitSHAs: []string{}, DeferredSHAs: []string{}, Reason: "Git checkpoint evidence unavailable"}
-		}
-		files += record.GitChanges.FilesChanged
-		added += record.GitChanges.LinesAdded
-		deleted += record.GitChanges.LinesDeleted
-		if record.GitStart == nil || record.GitEnd == nil || int64(len(audit.ChangedDirtyPaths(record.GitStart, record.GitEnd))) != record.GitChanges.FilesChanged {
-			pathsComplete = false
+			unavailableChanges = true
+		} else {
+			files += record.GitChanges.FilesChanged
+			added += record.GitChanges.LinesAdded
+			deleted += record.GitChanges.LinesDeleted
+			if record.GitStart == nil || record.GitEnd == nil || int64(len(audit.ChangedDirtyPaths(record.GitStart, record.GitEnd))) != record.GitChanges.FilesChanged {
+				pathsComplete = false
+			}
 		}
 		if record.GitEnd != nil && record.GitStart != nil && record.GitEnd.HEAD != record.GitStart.HEAD {
 			if commits == nil {
@@ -536,6 +538,9 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 			commitFiles = int64(len(paths))
 		}
 		return GitEvidence{Attribution: "attributed", CommitSHAs: attributed, DeferredSHAs: []string{}, FilesChanged: &commitFiles, LinesAdded: &commitAdded, LinesDeleted: &commitDeleted, ChangedPaths: paths}
+	}
+	if unavailableChanges {
+		return GitEvidence{Attribution: "unavailable", CommitSHAs: []string{}, DeferredSHAs: []string{}, Reason: "Git checkpoint evidence unavailable"}
 	}
 	if files != 0 || added != 0 || deleted != 0 {
 		result.Attribution = "working_tree"

@@ -106,6 +106,43 @@ func TestAggregateGitAttributesCommitsFromEveryRetriedAttempt(t *testing.T) {
 	}
 }
 
+func TestAggregateGitUnavailableChanges(t *testing.T) {
+	cases := []struct {
+		name           string
+		firstHEAD      string
+		secondHEAD     string
+		firstChanges   *audit.GitChangeCounts
+		secondChanges  *audit.GitChangeCounts
+		wantAttributed bool
+	}{
+		{name: "later unavailable attempt preserves commit", firstHEAD: "B", secondHEAD: "B", firstChanges: &audit.GitChangeCounts{Available: true}, secondChanges: &audit.GitChangeCounts{Available: false}, wantAttributed: true},
+		{name: "later missing changes preserve commit", firstHEAD: "B", secondHEAD: "B", firstChanges: &audit.GitChangeCounts{Available: true}, wantAttributed: true},
+		{name: "committing attempt has unavailable changes", firstHEAD: "B", secondHEAD: "B", secondChanges: &audit.GitChangeCounts{Available: true}, wantAttributed: true},
+		{name: "unavailable attempt precedes commit", firstHEAD: "A", secondHEAD: "B", secondChanges: &audit.GitChangeCounts{Available: true}, wantAttributed: true},
+		{name: "no head movement with one unavailable attempt", firstHEAD: "A", secondHEAD: "A", firstChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 2}, secondChanges: &audit.GitChangeCounts{Available: false}},
+		{name: "no head movement with all attempts unavailable", firstHEAD: "A", secondHEAD: "A", firstChanges: &audit.GitChangeCounts{Available: false}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			records := []metrics.StepRecord{
+				{ID: "implement", GitStart: &audit.GitCheckpoint{Available: true, HEAD: "A"}, GitEnd: &audit.GitCheckpoint{Available: true, HEAD: tc.firstHEAD, Commits: []string{"B"}}, GitChanges: tc.firstChanges},
+				{ID: "implement", GitStart: &audit.GitCheckpoint{Available: true, HEAD: tc.firstHEAD}, GitEnd: &audit.GitCheckpoint{Available: true, HEAD: tc.secondHEAD, Commits: []string{"B"}}, GitChanges: tc.secondChanges},
+			}
+			commits := map[string]snapshottedGitCommit{
+				"B": {SHA: "B", Subject: "[implement] x", FilesChanged: 1, LinesAdded: 5, LinesDeleted: 2, Paths: []string{"x.go"}},
+			}
+			want := GitEvidence{Attribution: "unavailable", CommitSHAs: []string{}, DeferredSHAs: []string{}, Reason: "Git checkpoint evidence unavailable"}
+			if tc.wantAttributed {
+				files, added, deleted := int64(1), int64(5), int64(2)
+				want = GitEvidence{Attribution: "attributed", CommitSHAs: []string{"B"}, DeferredSHAs: []string{}, FilesChanged: &files, LinesAdded: &added, LinesDeleted: &deleted, ChangedPaths: []string{"x.go"}}
+			}
+			if diff := cmp.Diff(want, aggregateGit(records, commits)); diff != "" {
+				t.Errorf("Git evidence (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestAggregateGitCountsRepeatedCommittedPathOnce(t *testing.T) {
 	cases := []struct {
 		name       string

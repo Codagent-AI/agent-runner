@@ -538,51 +538,15 @@ func TestCIWaitAddressedFeedbackAndLatestBotEvidence(t *testing.T) {
 
 // The start grace, not the poll interval, decides when an idle wait may finish.
 func TestCIWaitStopsAtGraceEndNotNextPoll(t *testing.T) {
-	collector, err := ReadAsset("core/ci_wait.py")
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "ci_wait.py")
-	if err := os.WriteFile(path, collector, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	fixture, err := json.Marshal(ciFixture())
-	if err != nil {
-		t.Fatal(err)
-	}
-	program := `import importlib.util, json, math, sys
-spec = importlib.util.spec_from_file_location("ci_wait", sys.argv[1])
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-# Advance a simulated clock on sleep, excluding process startup and scheduling.
-clock = 1000.0
-sleeps = []
-def sleep(seconds):
-    global clock
-    sleeps.append(seconds)
-    clock += seconds
-module.now = lambda: clock
-module.time.sleep = sleep
-snapshot = json.load(sys.stdin)["data"]
-collector = module.Collector(json.loads(sys.argv[2]))
-collector.resolve = lambda: None
-collector.graphql = lambda *args, **kwargs: snapshot
-report = collector.wait()
-assert len(sleeps) == 1 and math.isclose(sleeps[0], 0.1), sleeps
-assert math.isclose(clock - collector.started, 0.1), clock
-sys.stdout.write(report)
-`
 	for _, tt := range []struct{ name, inputs, want string }{
 		{"no expected bot", "", "CI_PASSED"},
 		{"expected bot never starts", `"review_bots":"coderabbitai",`, "CI_REVIEW_INCOMPLETE"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			input := fmt.Sprintf(`{%s"deadline_seconds":"3","poll_interval_seconds":"1","bot_start_grace_seconds":"0.1"}`, tt.inputs)
-			cmd := exec.Command("python3", "-c", program, path, input)
-			cmd.Stdin = strings.NewReader(string(fixture))
-			out, err := cmd.CombinedOutput()
-			if err != nil || !strings.HasSuffix(strings.TrimSpace(string(out)), tt.want) {
-				t.Fatalf("err=%v output=%s", err, out)
+			out, code, elapsed := runCIFixture(t, ciFixture(), input)
+			if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), tt.want) || elapsed > 700*time.Millisecond {
+				t.Fatalf("code=%d elapsed=%s output=%s", code, elapsed, out)
 			}
 		})
 	}
