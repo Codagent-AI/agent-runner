@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -887,11 +888,12 @@ func populateGitStats(commits []snapshottedGitCommit, ordered []string, stats []
 		if current == nil || len(fields) < 3 {
 			continue
 		}
-		var added, deleted int64
-		if _, err := fmt.Sscan(fields[0], &added); err != nil {
+		added, err := parseNumstatCount(fields[0])
+		if err != nil {
 			return fmt.Errorf("git commit statistics are invalid")
 		}
-		if _, err := fmt.Sscan(fields[1], &deleted); err != nil {
+		deleted, err := parseNumstatCount(fields[1])
+		if err != nil {
 			return fmt.Errorf("git commit statistics are invalid")
 		}
 		current.FilesChanged++
@@ -908,6 +910,14 @@ func populateGitStats(commits []snapshottedGitCommit, ordered []string, stats []
 		sort.Strings(commits[i].Paths)
 	}
 	return nil
+}
+
+func parseNumstatCount(s string) (int64, error) {
+	// Git reports binary files with a dash instead of a line count.
+	if s == "-" {
+		return 0, nil
+	}
+	return strconv.ParseInt(s, 10, 64)
 }
 
 func containsEveryCommit(commits []snapshottedGitCommit, want []string) bool {
