@@ -88,6 +88,9 @@ func patchSections(patch string) map[string]string {
 func patchSectionPath(section string) string {
 	path := ""
 	for _, line := range strings.Split(section, "\n") {
+		if strings.HasPrefix(line, "@@") {
+			break
+		}
 		if strings.HasPrefix(line, "+++ ") && line != "+++ /dev/null" {
 			path = decodePatchPath(strings.TrimPrefix(line, "+++ "))
 			break

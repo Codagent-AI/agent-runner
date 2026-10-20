@@ -265,7 +265,7 @@ func (o *outputObserver) readFile(root, path string, b *observeBudget) (observed
 	changed, hasChangeTime := fileChangeTime(info)
 	key := fmt.Sprintf("%s/%s:%d:%d:%d:%d", root, path, info.Size(), info.ModTime().UnixNano(), fileInode(info), changed.UnixNano())
 	if cached, ok := o.cache[filepath.Join(root, path)]; ok && hasChangeTime && cached.cacheKey == key && b.now().Sub(info.ModTime()) > maxObserveTime && b.now().Sub(changed) > maxObserveTime && cached.reason == "" {
-		return o.restoreCachedFile(&cached, b)
+		return cached, nil
 	}
 	limit := info.Size()
 	if limit > b.hashLimit {
@@ -436,6 +436,14 @@ func Contribution(before, after *FileVersion, beforeBytes []byte, afterReader io
 	}
 	return unresolved("versions not completely retained within diff bound", data)
 }
+func (o *outputObserver) readBlob(v *FileVersion, b *observeBudget) ([]byte, error) {
+	f, err := regularOpen(o.sessionDir, v.Blob)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return b.readBytes(f, min(v.Size, int64(maxVersionBytes)))
+}
 func (o *outputObserver) contribution(before, after *observedFile, root, path string, b *observeBudget) *Retained {
 	if after.reason != "" {
 		return &Retained{Kind: "unavailable", Reason: after.reason}
@@ -445,6 +453,13 @@ func (o *outputObserver) contribution(before, after *observedFile, root, path st
 	if before != nil {
 		bv = &before.version
 		data = before.data
+		if data == nil && bv.BlobComplete && bv.Size > 0 {
+			// Cache hits carry metadata only; the baseline blob is read lazily, and only for a changed file.
+			var err error
+			if data, err = o.readBlob(bv, b); err != nil {
+				return &Retained{Kind: "unavailable", Reason: err.Error()}
+			}
+		}
 	}
 	f, err := regularOpen(root, path)
 	if err != nil {
@@ -745,7 +760,7 @@ func textPrefix(data []byte, limit int) []byte {
 }
 
 // The cache contains only bounded metadata. Baseline bytes remain in the
-// content-addressed store and every restoration is charged to the step budget.
+// content-addressed store and are read, charged to the step budget, only when a changed file needs them.
 func (o *outputObserver) cacheFile(path string, file *observedFile) {
 	if _, exists := o.cache[path]; !exists && len(o.cache) >= maxCachedFiles {
 		clear(o.cache)
@@ -753,16 +768,6 @@ func (o *outputObserver) cacheFile(path string, file *observedFile) {
 	cached := *file
 	cached.data = nil
 	o.cache[path] = cached
-}
-func (o *outputObserver) restoreCachedFile(entry *observedFile, b *observeBudget) (observedFile, error) {
-	cached := *entry
-	file, err := regularOpen(o.sessionDir, cached.version.Blob)
-	if err != nil {
-		return observedFile{}, err
-	}
-	defer func() { _ = file.Close() }()
-	cached.data, err = b.readBytes(file, min(cached.version.Size, int64(maxVersionBytes)))
-	return cached, err
 }
 
 // Change timestamps prevent old, restored mtimes from reviving stale hashes.

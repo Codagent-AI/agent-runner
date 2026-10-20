@@ -300,12 +300,13 @@ func TestEvidenceCacheDetectsOldMtimeRewriteAndRetainsNoContent(t *testing.T) {
 			budget.hashLimit = 0
 		}
 	}
+	readBefore := budget.read
 	cached, err := observer.readFile(dir, "file", budget)
-	if err != nil || string(cached.data) != "old" {
-		t.Fatalf("cache hit: %q %v", cached.data, err)
+	if err != nil || !cached.version.IdentityComplete || cached.version.SHA256 != before.version.SHA256 {
+		t.Fatalf("stable metadata did not restore the complete cached identity: %+v %v", cached.version, err)
 	}
-	if !cached.version.IdentityComplete {
-		t.Fatal("stable metadata did not restore the complete cached identity")
+	if len(cached.data) != 0 || budget.read != readBefore {
+		t.Fatalf("cache hit read content: data=%q read=%d", cached.data, budget.read-readBefore)
 	}
 	budget.hashLimit = maxIdentityBytes
 	budget.now = time.Now
@@ -323,6 +324,47 @@ func TestEvidenceCacheDetectsOldMtimeRewriteAndRetainsNoContent(t *testing.T) {
 	}
 	if sameVersion(before.version, after.version) {
 		t.Fatal("same-size old-mtime rewrite used stale identity")
+	}
+}
+
+func TestCachedUnchangedFilesChargeNoReadBudgetButStillDiff(t *testing.T) {
+	session := t.TempDir()
+	root := filepath.Join(session, "output")
+	_ = os.Mkdir(root, 0o700)
+	a, b := filepath.Join(root, "a"), filepath.Join(root, "b")
+	_ = os.WriteFile(a, []byte("heading\nfinding\nfooter\n"), 0o600)
+	_ = os.WriteFile(b, []byte("unchanged\n"), 0o600)
+	if info, err := os.Stat(a); err != nil {
+		t.Fatal(err)
+	} else if _, ok := fileChangeTime(info); !ok {
+		t.Skip("platform has no change timestamp, so the cache is bypassed")
+	}
+	observer := newOutputObserver(session, "")
+	budget := func() *observeBudget {
+		bud := newObserveBudget()
+		bud.now = func() time.Time { return time.Now().Add(3 * time.Second) }
+		bud.boundary()
+		return bud
+	}
+	first := budget()
+	observer.observe(first)
+
+	second := budget()
+	second.readLimit = 1
+	baseline := observer.observe(second)
+	if baseline.status != "observed" || second.read != 0 {
+		t.Fatalf("unchanged cached files charged the budget: status=%q reason=%q read=%d", baseline.status, baseline.reason, second.read)
+	}
+
+	_ = os.WriteFile(a, []byte("new heading\nfinding\nnew footer\n"), 0o600)
+	third := budget()
+	after := observer.observe(third)
+	record := observer.delta(baseline, after, root, third, 0)
+	if len(record.Files) != 1 || record.Files[0].Path != "a" {
+		t.Fatalf("unexpected changed files: %+v", record.Files)
+	}
+	if c := record.Files[0].Contribution; c == nil || c.Kind != "diff" {
+		t.Fatalf("cache-restored baseline lost its diff contribution: %+v", c)
 	}
 }
 

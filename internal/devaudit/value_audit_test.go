@@ -300,3 +300,61 @@ func TestDirtyChangedPathsSkipsUnavailableCheckpoint(t *testing.T) {
 		t.Errorf("deferral paths (-want +got):\n%s", diff)
 	}
 }
+
+func TestAggregateGitUnavailableEndCheckpointWithDifferentHEADIsUnavailable(t *testing.T) {
+	records := []metrics.StepRecord{{
+		ID:       "commit",
+		GitStart: &audit.GitCheckpoint{Available: true, HEAD: "base"},
+		GitEnd:   &audit.GitCheckpoint{HEAD: "other", Reason: "Git capture failed"},
+	}}
+	got := aggregateGit(records, map[string]snapshottedGitCommit{})
+	if got.Attribution != "unavailable" || got.Reason != "Git checkpoint evidence unavailable" {
+		t.Fatalf("git evidence = %+v, want unavailable checkpoint evidence", got)
+	}
+}
+
+func TestDeferredCommitAttributionMixedCommitExcludesDeferredPath(t *testing.T) {
+	earlier := metrics.StepRecord{
+		ID:         "edit",
+		GitStart:   &audit.GitCheckpoint{Available: true, HEAD: "base-head"},
+		GitEnd:     &audit.GitCheckpoint{Available: true, HEAD: "base-head", Worktree: []audit.GitFileStat{{Path: "shared.txt", Added: 3}}},
+		GitChanges: &audit.GitChangeCounts{Available: true, FilesChanged: 1, LinesAdded: 3},
+	}
+	later := metrics.StepRecord{
+		ID:         "commit",
+		GitStart:   &audit.GitCheckpoint{Available: true, HEAD: "base-head"},
+		GitEnd:     &audit.GitCheckpoint{Available: true, HEAD: "new-head", Commits: []string{"commit-sha"}},
+		GitChanges: &audit.GitChangeCounts{Available: true},
+	}
+	for _, tc := range []struct {
+		name  string
+		stats []gitPathStat
+	}{
+		{"per-path stats", []gitPathStat{{Path: "own.txt", LinesAdded: 2, LinesDeleted: 1}, {Path: "shared.txt", LinesAdded: 3}}},
+		{"no per-path stats", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			commits := map[string]snapshottedGitCommit{
+				"commit-sha": {SHA: "commit-sha", Subject: "[commit] feat: add own and shared", Paths: []string{"own.txt", "shared.txt"}, FilesChanged: 2, LinesAdded: 5, LinesDeleted: 1, PathStats: tc.stats},
+			}
+			leaves := []LeafEvidence{
+				{Skeleton: ObservationSkeleton{Git: aggregateGit([]metrics.StepRecord{earlier}, commits)}},
+				{Skeleton: ObservationSkeleton{Git: aggregateGit([]metrics.StepRecord{later}, commits)}},
+			}
+			applyDeferredCommitAttribution(leaves)
+			got := leaves[1].Skeleton.Git
+			if got.Attribution != "attributed" || got.FilesChanged == nil || *got.FilesChanged != 1 {
+				t.Fatalf("committing leaf = %+v", got)
+			}
+			if tc.stats == nil {
+				if got.LinesAdded != nil || got.LinesDeleted != nil {
+					t.Fatalf("lines without per-path stats = %v/%v, want nil", got.LinesAdded, got.LinesDeleted)
+				}
+				return
+			}
+			if got.LinesAdded == nil || *got.LinesAdded != 2 || got.LinesDeleted == nil || *got.LinesDeleted != 1 {
+				t.Fatalf("lines = %v/%v, want 2/1", got.LinesAdded, got.LinesDeleted)
+			}
+		})
+	}
+}

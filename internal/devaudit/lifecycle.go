@@ -790,6 +790,13 @@ func snapshotReplayEvidenceAt(sessionDir, dir, executionSessionID string) (strin
 	return dir, nil
 }
 
+// gitPathStat is one path's numstat line counts; binary files count as zero lines.
+type gitPathStat struct {
+	Path         string `json:"path"`
+	LinesAdded   int64  `json:"lines_added"`
+	LinesDeleted int64  `json:"lines_deleted"`
+}
+
 type snapshottedGitCommit struct {
 	SHA              string   `json:"sha"`
 	Patch            string   `json:"patch,omitempty"`
@@ -800,6 +807,9 @@ type snapshottedGitCommit struct {
 	FilesChanged     int64    `json:"files_changed"`
 	LinesAdded       int64    `json:"lines_added"`
 	LinesDeleted     int64    `json:"lines_deleted"`
+	// PathStats holds per-path line counts, one entry per Paths entry, so a
+	// mixed commit can exclude paths already credited to an earlier step.
+	PathStats []gitPathStat `json:"path_stats,omitempty"`
 }
 
 type snapshottedGitEvidence struct {
@@ -908,6 +918,7 @@ func populateGitStats(commits []snapshottedGitCommit, ordered []string, stats []
 		current.LinesAdded += added
 		current.LinesDeleted += deleted
 		current.Paths = append(current.Paths, fields[2])
+		current.PathStats = append(current.PathStats, gitPathStat{Path: fields[2], LinesAdded: added, LinesDeleted: deleted})
 	}
 	for _, sha := range ordered {
 		if !seenStats[sha] {
@@ -916,6 +927,7 @@ func populateGitStats(commits []snapshottedGitCommit, ordered []string, stats []
 	}
 	for i := range commits {
 		sort.Strings(commits[i].Paths)
+		sort.SliceStable(commits[i].PathStats, func(a, b int) bool { return commits[i].PathStats[a].Path < commits[i].PathStats[b].Path })
 	}
 	return nil
 }
@@ -930,8 +942,8 @@ func parseNumstatCount(s string) (int64, error) {
 
 func containsEveryCommit(commits []snapshottedGitCommit, want []string) bool {
 	seen := map[string]int{}
-	for _, commit := range commits {
-		seen[commit.SHA]++
+	for i := range commits {
+		seen[commits[i].SHA]++
 	}
 	if len(seen) != len(want) {
 		return false

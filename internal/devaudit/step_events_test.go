@@ -301,3 +301,10 @@ now [check] step_end {"execution_session_id":"s","identity":{"step_id":"check","
 		})
 	}
 }
+
+func TestPatchSectionPathIgnoresHunkLinesOfDeletedFile(t *testing.T) {
+	patch := "diff --git a/query.sql b/query.sql\ndeleted file mode 100644\n--- a/query.sql\n+++ /dev/null\n@@ -1,2 +0,0 @@\n--- a comment\n-select 1;\n"
+	if got := patchSectionPath(patch); got != "query.sql" {
+		t.Fatalf("path %q", got)
+	}
+}
