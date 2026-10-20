@@ -54,17 +54,18 @@ type GitChangeCounts struct {
 }
 
 // CheckpointLogger augments executable leaf step boundary events. It never
-// returns errors or changes event outcomes: Git is optional evidence.
+// returns errors or changes event outcomes: Git and written files are optional evidence.
 type CheckpointLogger struct {
 	sink               EventLogger
 	projectRoot        string
 	executionSessionID string
 	mu                 sync.Mutex
 	starts             map[string]GitCheckpoint
+	evidence           *outputObserver
 }
 
-func NewCheckpointLogger(sink EventLogger, projectRoot, executionSessionID string) *CheckpointLogger {
-	return &CheckpointLogger{sink: sink, projectRoot: projectRoot, executionSessionID: executionSessionID, starts: make(map[string]GitCheckpoint)}
+func NewCheckpointLogger(sink EventLogger, projectRoot, executionSessionID, sessionDir string) *CheckpointLogger {
+	return &CheckpointLogger{sink: sink, projectRoot: projectRoot, executionSessionID: executionSessionID, starts: make(map[string]GitCheckpoint), evidence: newOutputObserver(sessionDir, projectRoot)}
 }
 
 func (l *CheckpointLogger) Emit(event Event) {
@@ -74,7 +75,7 @@ func (l *CheckpointLogger) Emit(event Event) {
 	}
 }
 
-// Decorate adds session and Git evidence without emitting. Pipelines use it
+// Decorate adds session, Git and written-file evidence without emitting. Pipelines use it
 // before their metrics projection so both artifacts see identical evidence.
 func (l *CheckpointLogger) Decorate(event Event) Event {
 	if event.Data == nil {
@@ -93,6 +94,7 @@ func (l *CheckpointLogger) Decorate(event Event) Event {
 			event.Data["git_end_checkpoint"] = GitCheckpoint{Reason: "ending checkpoint not yet observed"}
 			l.mu.Lock()
 			l.starts[event.Prefix] = checkpoint
+			l.evidence.start(event.Prefix, &checkpoint)
 			l.mu.Unlock()
 		}
 	case EventStepEnd:
@@ -110,6 +112,13 @@ func (l *CheckpointLogger) Decorate(event Event) Event {
 			event.Data["git_start_checkpoint"] = start
 			event.Data["git_end_checkpoint"] = end
 			event.Data["git_changes"] = deriveGitChanges(&start, &end)
+			l.mu.Lock()
+			writes, patch := l.evidence.end(event.Prefix, &start, &end)
+			l.mu.Unlock()
+			event.Data["output_writes"] = writes
+			if patch != nil {
+				event.Data["repository_patch"] = *patch
+			}
 		}
 	}
 	return event

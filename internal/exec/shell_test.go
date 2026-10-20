@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -435,4 +436,51 @@ func TestExecuteShellStepUsesValidatorMetricsCorrelation(t *testing.T) {
 		}
 	}
 
+}
+
+func TestStepStartMetricsSource(t *testing.T) {
+	stubValidatorCapabilities(t)
+	for _, kind := range []string{"shell", "shell interpolation failure", "script"} {
+		for _, source := range []string{"", "agent-validator"} {
+			t.Run(kind+"/"+source, func(t *testing.T) {
+				dir := t.TempDir()
+				ctx := model.NewRootContext(&model.RootContextOptions{WorkflowFile: filepath.Join(dir, "workflow.yaml"), SessionDir: dir})
+				recorder := &mockAuditLogger{}
+				ctx.AuditLogger = recorder
+				step := model.Step{ID: "check", Command: "echo ok", MetricsSource: source}
+				var err error
+				if kind == "script" {
+					step.Script = "check.sh"
+					if err := os.WriteFile(filepath.Join(dir, step.Script), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					_, err = ExecuteScriptStep(&step, ctx, &nestedMetricsScriptRunner{}, &mockLogger{})
+				} else {
+					if kind == "shell interpolation failure" {
+						step.Command = "echo {{missing.var}}"
+					}
+					_, err = ExecuteShellStep(&step, ctx, &mockRunner{}, &mockLogger{})
+				}
+				if kind == "shell interpolation failure" {
+					if err == nil {
+						t.Fatal("expected interpolation failure")
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				start := findAuditEvent(recorder.events, audit.EventStepStart)
+				if start == nil {
+					t.Fatalf("missing step_start: %+v", recorder.events)
+				}
+				got, present := start.Data["metrics_source"]
+				if source == "" {
+					if present {
+						t.Fatalf("empty metrics_source must be omitted: %+v", start.Data)
+					}
+				} else if !present || got != source {
+					t.Fatalf("metrics_source = %v, present=%v, want %q", got, present, source)
+				}
+			})
+		}
+	}
 }

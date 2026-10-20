@@ -31,8 +31,8 @@ func TestPopulateGitStatsCountsBinaryFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []snapshottedGitCommit{
-		{SHA: "commit-a", FilesChanged: 2, LinesAdded: 3, LinesDeleted: 1, Paths: []string{"src/a.ts", "src/assets/hero.png"}},
-		{SHA: "commit-b", FilesChanged: 1, LinesAdded: 2, Paths: []string{"README.md"}},
+		{SHA: "commit-a", FilesChanged: 2, LinesAdded: 3, LinesDeleted: 1, Paths: []string{"src/a.ts", "src/assets/hero.png"}, PathStats: []gitPathStat{{Path: "src/a.ts", LinesAdded: 3, LinesDeleted: 1}, {Path: "src/assets/hero.png"}}},
+		{SHA: "commit-b", FilesChanged: 1, LinesAdded: 2, Paths: []string{"README.md"}, PathStats: []gitPathStat{{Path: "README.md", LinesAdded: 2}}},
 	}
 	if diff := cmp.Diff(want, commits); diff != "" {
 		t.Fatalf("commits mismatch (-want +got):\n%s", diff)
@@ -87,7 +87,7 @@ func TestExportGitEvidencePreservesBinaryCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := snapshottedGitEvidence{Available: true, Commits: []snapshottedGitCommit{
-		{SHA: sha, Subject: "[implement] add image", Paths: []string{"hero.png"}, FilesChanged: 1},
+		{SHA: sha, Patch: "git-patches/" + sha + ".patch", Subject: "[implement] add image", Paths: []string{"hero.png"}, FilesChanged: 1, PathStats: []gitPathStat{{Path: "hero.png"}}},
 	}}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Fatalf("evidence mismatch (-want +got):\n%s", diff)
@@ -205,7 +205,7 @@ func TestReplayExcludesEvidenceWithoutHistoricalSessionOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, category := range []string{"audit_log", "validation", "artifact", "narrative", "native_session"} {
+	for _, category := range []string{"audit_log", "native_session"} {
 		count := 0
 		for _, reference := range prepared.Index.References {
 			if reference.Category == category {

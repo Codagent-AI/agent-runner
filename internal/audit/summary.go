@@ -586,3 +586,12 @@ func intField(data map[string]any, key string) *int {
 		return nil
 	}
 }
+
+// VisitAuditLines streams bounded audit records, including records larger than
+// bufio.Scanner's default token limit. Line numbers refer to the input artifact.
+func VisitAuditLines(r io.Reader, visit func(lineNo int, line string) error) error {
+	return visitAuditLines(r, visit)
+}
+
+// ParseAuditLine decodes one durable audit record without summarizing content.
+func ParseAuditLine(line string) (Event, error) { return parseAuditLine(line) }

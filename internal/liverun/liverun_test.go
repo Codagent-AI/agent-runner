@@ -16,6 +16,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/codagent/agent-runner/internal/audit"
 	iexec "github.com/codagent/agent-runner/internal/exec"
 )
 
@@ -685,5 +686,32 @@ func TestChunkWriter_IdleFlush(t *testing.T) {
 	cw.mu.Unlock()
 	if remaining != 0 {
 		t.Errorf("buf not flushed after idle timeout: len=%d", remaining)
+	}
+}
+
+func TestGeneratedOutputNamesAreRunnerOwned(t *testing.T) {
+	dir := t.TempDir()
+	runner := NewCoordinator(&captureProgram{}, dir).TUIProcessRunner(unusedRunner{}).(*tuiProcessRunner)
+	for _, prefix := range []string{"[step]", "[loop:1, repair, attempt:2, run]", "[a/b, x.y]"} {
+		for _, suffix := range []string{"", "-call-1", "-turn-2"} {
+			for _, ext := range []string{"out", "err"} {
+				for range 2 {
+					f, err := runner.openOutputFileWithSuffix(prefix, suffix, ext)
+					if err != nil {
+						t.Fatal(err)
+					}
+					_ = f.Close()
+				}
+			}
+		}
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "output"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if !audit.RunnerOwnedOutputName(entry.Name()) {
+			t.Error(entry.Name())
+		}
 	}
 }
