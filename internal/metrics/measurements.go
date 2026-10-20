@@ -288,6 +288,9 @@ func validatorStepProjection(head *MeasurementHead, record *measurements.Record,
 	step := StepRecord{RecordID: "measurement/" + head.Key, MeasurementKey: head.Key, ID: record.ID, Prefix: strings.Trim(head.Attribution.Prefix+"/"+head.Attribution.StepID, "/"), Kind: "nested-agent", Type: "agent", AgentInvoked: true, Attempt: 1, Outcome: p.Outcome, SessionID: p.SessionID, ExecutionSessionID: head.Attribution.ExecutionSessionID, ParentAttemptID: head.Attribution.ParentAttemptID, InvocationID: p.InvocationID, Role: "implementation-validator", Tool: "agent-validator", Usage: usage}
 	if usable {
 		step.EstimatedAPICostUSD = CompleteUSD(p.Costs)
+		if step.EstimatedAPICostUSD != nil {
+			step.CostBasis = model.CostBasisReported
+		}
 	}
 	if p.Lifecycle.StartedAt != nil && p.Lifecycle.EndedAt != nil {
 		start, e1 := time.Parse(time.RFC3339Nano, *p.Lifecycle.StartedAt)

@@ -20,6 +20,7 @@ type summaryMetrics struct {
 	tokens              model.TokenCounts
 	agentAttempts       int
 	usageReported       int
+	costEstimated       int
 	costReported        int
 	tokenTotals         model.TokenTotals
 	tokenTotalsReported int
@@ -131,7 +132,7 @@ func (m *Model) summaryFooterLines(totals *model.RunTotals, columns summaryColum
 	totalRow := summaryRow{
 		label: "Total", duration: formatDuration(totals.ActiveDurationMS),
 		tokens: summaryTotalTokenCells(totals.Tokens),
-		cost:   formatCoveredCost(totals.EstimatedAPICostUSD, totals.CostCoverage),
+		cost:   formatCoveredCost(totals.EstimatedAPICostUSD, totals.CostCoverage, totals.CostBasis),
 	}
 	footer := []string{"", renderSummaryTotalRow(totalRow, columns)}
 	footer = append(footer,
@@ -193,7 +194,7 @@ func measureSummaryColumns(rows []summaryRow, totals *model.RunTotals, termWidth
 	columns.step = max(columns.step, runewidth.StringWidth("Total"))
 	columns.duration = max(columns.duration, runewidth.StringWidth(formatDuration(totals.ActiveDurationMS)))
 	measureSummaryTokenColumns(&columns, summaryTotalTokenCells(totals.Tokens))
-	columns.cost = max(columns.cost, runewidth.StringWidth(formatCoveredCost(totals.EstimatedAPICostUSD, totals.CostCoverage)))
+	columns.cost = max(columns.cost, runewidth.StringWidth(formatCoveredCost(totals.EstimatedAPICostUSD, totals.CostCoverage, totals.CostBasis)))
 
 	// Keep the numeric columns intact on narrow terminals and spend whatever
 	// remains on the step label, truncating only that free-form column.
@@ -328,6 +329,9 @@ func aggregateOwnSummaryMetrics(node *StepNode, now time.Time) summaryMetrics {
 		}
 		if attempt.CostUSD != nil {
 			metrics.costUSD += *attempt.CostUSD
+			if attempt.CostBasis == "estimated" {
+				metrics.costEstimated++
+			}
 			metrics.pricedAttempts++
 		}
 		// Coverage denominators count only attempts that actually launched an
@@ -384,6 +388,7 @@ func (m *summaryMetrics) add(other *summaryMetrics) {
 	m.agentAttempts += other.agentAttempts
 	m.usageReported += other.usageReported
 	m.costReported += other.costReported
+	m.costEstimated += other.costEstimated
 	m.tokenTotalsReported += other.tokenTotalsReported
 	m.tokenTotals.Input += other.tokenTotals.Input
 	m.tokenTotals.Output += other.tokenTotals.Output
@@ -401,6 +406,9 @@ func formatSummaryCost(metrics *summaryMetrics) string {
 		return "—"
 	}
 	value := formatUSD(metrics.costUSD)
+	if metrics.costEstimated > 0 {
+		value = "~" + value
+	}
 	if metrics.agentAttempts > 0 && metrics.costReported < metrics.agentAttempts {
 		value += " (partial)"
 	}
@@ -443,6 +451,14 @@ func summaryTotalsFromMetrics(metrics *summaryMetrics) model.RunTotals {
 	if metrics.costReported > 0 {
 		cost := metrics.costUSD
 		totals.EstimatedAPICostUSD = &cost
+		basis := "reported"
+		if metrics.costEstimated > 0 {
+			basis = "estimated"
+			if metrics.costEstimated < metrics.pricedAttempts {
+				basis = "mixed"
+			}
+		}
+		totals.CostBasis = &basis
 	}
 	return totals
 }
@@ -471,11 +487,14 @@ func summaryCoverage(total, reported int) model.Coverage {
 	}
 }
 
-func formatCoveredCost(cost *float64, coverage model.Coverage) string {
+func formatCoveredCost(cost *float64, coverage model.Coverage, basis *string) string {
 	if cost == nil {
 		return "? (" + string(coverage) + ")"
 	}
 	value := formatUSD(*cost)
+	if basis != nil && (*basis == "estimated" || *basis == "mixed") {
+		value = "~" + value
+	}
 	if coverage != model.CoverageComplete {
 		value += " (" + string(coverage) + ")"
 	}

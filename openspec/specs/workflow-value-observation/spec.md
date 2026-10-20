@@ -155,3 +155,35 @@ The value audit SHALL NOT file or comment on GitHub issues, alter code or workfl
 - **WHEN** a value observation assigns negative value
 - **THEN** the auditor records the hypothesis without modifying code or filing a correctness issue from the value stage
 
+### Requirement: Observation cost carries its basis
+
+A value observation's cost field group SHALL record, next to its scalar USD cost, the basis of that cost: `reported` when every contributing leaf cost was CLI-reported or producer-reported, `estimated` when every one was a Runner estimate under `cost-estimation`, and `mixed` when both contributed. When the scalar cost is unknown, the basis SHALL be absent. The basis SHALL be derived from the source `run-metrics.json` records' cost bases, and the leaf's detailed local evidence SHALL keep each contributing record's basis.
+
+#### Scenario: Leaf with an estimated Codex cost
+- **WHEN** a leaf step's only contributing record is a Codex attempt with an estimated cost
+- **THEN** the observation's cost is that estimate, with basis `estimated`
+
+#### Scenario: Leaf mixing reported and estimated costs
+- **WHEN** a leaf's contributing records include a CLI-reported cost and a Runner estimate
+- **THEN** the observation's cost is their sum, with basis `mixed`
+
+#### Scenario: Leaf with unknown cost
+- **WHEN** one contributing record of a leaf has a null cost
+- **THEN** the observation's scalar cost stays unknown and it carries no basis
+
+### Requirement: Value credit separates detection from correction using step output and contributions
+
+When step output or written-file contributions are available, the value auditor SHALL use them to assign credit. Finding a problem SHALL be credited to the step whose own output or contribution first reported it. Correcting the problem SHALL be credited to the step whose own contribution implemented the correction. The same outcome SHALL NOT be rated `unique` for both steps. Content that the evidence marks as inherited or unresolved SHALL NOT be credited to the step it was presented with. When output and contributions are unavailable, the auditor SHALL reflect that in confidence and evidence coverage instead of inferring credit only from which steps ran next to each other.
+
+#### Scenario: Audit step finds a defect that a fix step corrects
+- **WHEN** an audit step's output reports a defect and a later fix step's patch corrects that defect
+- **THEN** the audit step is credited with detection, the fix step with correction, and the two are not both rated `unique` for the same outcome
+
+#### Scenario: Inherited ledger content is not credited
+- **WHEN** a step's whole-file context for a cumulative ledger includes rulings that earlier steps wrote
+- **THEN** the step's judgment credits only its own delta and not the earlier rulings
+
+#### Scenario: Neither output nor contributions are available
+- **WHEN** a leaf has no available step output and no available written-file contributions
+- **THEN** its observation does not record `complete` evidence coverage, and any credit inferred from neighbouring steps carries reduced confidence
+

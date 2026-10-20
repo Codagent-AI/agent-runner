@@ -126,11 +126,10 @@ func TestDeadlineBridgeINT001(t *testing.T) {
 	options.Context.AuditLogger = metrics.NewPipeline(metrics.NewCollector(dir, "test", "calls", time.Now()), logger)
 	h := NewAgentCallHandler(options)
 	client, _ := bridgeCallClient(t, h, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	// Include subprocess startup in the deadline budget even under parallel test load.
 	started := time.Now()
-	result, err := client.CallTool(ctx, &mcp.CallToolParams{Name: agentcall.ToolName, Arguments: map[string]any{"agent": "implementor", "prompt": "x", "timeout": "10s"}})
+	result, err := client.CallTool(ctx, &mcp.CallToolParams{Name: agentcall.ToolName, Arguments: map[string]any{"agent": "implementor", "prompt": "x", "timeout": "2s"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,11 +137,11 @@ func TestDeadlineBridgeINT001(t *testing.T) {
 	if response.Error == nil || response.Error.Code != agentcall.CodeTimedOut || response.Status != agentcall.StatusFailed || response.Details.Exit != "terminated" {
 		t.Fatalf("%+v", response)
 	}
-	if time.Since(started) > 15*time.Second {
+	if time.Since(started) > 3*time.Second {
 		t.Fatal("deadline failed to release blocked MCP request")
 	}
 	events := agentCallAuditEvents(logger.events)
-	if len(events) != 2 || events[1].Data["outcome"] != "failed" || events[1].Data["error_code"] != "timed_out" || events[1].Data["timeout"] != "10s" || events[1].Data["exit"] != "terminated" {
+	if len(events) != 2 || events[1].Data["outcome"] != "failed" || events[1].Data["error_code"] != "timed_out" || events[1].Data["timeout"] != "2s" || events[1].Data["exit"] != "terminated" {
 		t.Fatalf("deadline audit: %+v", events)
 	}
 	var artifact metrics.Artifact

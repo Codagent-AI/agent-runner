@@ -23,7 +23,29 @@ steps:
       printf 'completed\n' > audit-e2e-result.txt
 `
 
+const e2eContentWorkflow = `name: audit-e2e-content
+steps:
+  - id: seed
+    command: |
+      mkdir -p "{{session_dir}}/output"
+      printf 'earlier ledger content\n' > "{{session_dir}}/output/ledger.md"
+  - id: agent
+    agent: lead
+    mode: autonomous
+    session: new
+    prompt: |
+      AUDIT_E2E_SOURCE_APPEND={{session_dir}}/output/ledger.md
+  - id: commit
+    command: |
+      printf 'corrected project\n' > README.md
+      git add README.md
+      git commit -m '[commit] fix: correct project'
+  - id: empty
+    command: 'true'
+`
+
 func init() {
+	builtinworkflows.RegisterBuiltinAsset("spec-driven/audit-e2e-content-v1.0.yaml", []byte(e2eContentWorkflow))
 	builtinworkflows.RegisterBuiltinAsset("spec-driven/audit-e2e-v1.0.yaml", []byte(e2eWorkflow))
 	allowInsecureDevelopmentAuditTestURI = true
 	configureDetachedAuditCommand = func(command *exec.Cmd, auditSessionDir string) {

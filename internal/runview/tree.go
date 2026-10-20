@@ -219,6 +219,8 @@ func (n *StepNode) ensureFailure() *FailureEvidence {
 type AttemptMetrics struct {
 	Attempt      int
 	Usage        *model.UsageRecord
+	CostBasis    string
+	CostReason   string
 	CostUSD      *float64
 	DurationMs   *int64
 	Outcome      string
