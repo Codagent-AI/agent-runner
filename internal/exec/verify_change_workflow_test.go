@@ -28,6 +28,7 @@ type acceptanceRoundRunner struct {
 	readyInRound func(round int) bool
 	round        int
 	events       []string
+	invocations  []AgentProcessOptions
 	// breakStatusOnce deletes the acceptance status before the first
 	// verify-acceptance-handoff check so its rerun repair must restore it.
 	breakStatusOnce bool
@@ -80,6 +81,9 @@ func (r *acceptanceRoundRunner) RunScript(path string, stdin []byte, _ bool, _ s
 }
 
 func (r *acceptanceRoundRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, error) {
+	recorded := *options
+	recorded.Args = append([]string(nil), options.Args...)
+	r.invocations = append(r.invocations, recorded)
 	switch {
 	case strings.Contains(options.Prefix, "acceptance-test"):
 		scratchDir := filepath.Join(r.sessionDir, "scratch", "acceptance-test")
@@ -221,7 +225,7 @@ func TestBuiltinVerifyChangeLoadsStandalone(t *testing.T) {
 // runVerifyChangeAcceptance executes verify-change from prepare-acceptance to
 // the end with the given acceptance rounds and returns the observed events and
 // the final acceptance status.
-func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator, stopUnchanged, fixMode string, readyInRound func(int) bool, breakStatusOnce, validatorFails bool) (events []string, status, evidenceDir string) {
+func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator, stopUnchanged, fixMode string, readyInRound func(int) bool, breakStatusOnce, validatorFails bool, scope ...string) (events []string, status, evidenceDir string, invocations []AgentProcessOptions) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	// Keep the process fake independent of any installed Validator CLI.
@@ -262,16 +266,25 @@ func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator, stopUnchange
 		t: t, repo: repo, evidenceDir: evidenceDir, sessionDir: sessionDir, readyInRound: readyInRound,
 		breakStatusOnce: breakStatusOnce, validatorFails: validatorFails, fixMode: fixMode,
 	}
+	params := map[string]string{
+		"change_name":                     "add-export",
+		"change_dir":                      "changes/add-export",
+		"change_label":                    "change",
+		"artifact_validation_instruction": "Validate artifacts.",
+		"skip_validator":                  skipValidator,
+		"acceptance_rounds":               rounds,
+		"stop_unchanged_acceptance":       stopUnchanged,
+	}
+	for _, param := range workflow.Params {
+		if _, exists := params[param.Name]; !exists {
+			params[param.Name] = param.Default
+		}
+	}
+	if len(scope) > 0 {
+		params["acceptance_fix_scope"] = scope[0]
+	}
 	ctx := model.NewRootContext(&model.RootContextOptions{
-		Params: map[string]string{
-			"change_name":                     "add-export",
-			"change_dir":                      "changes/add-export",
-			"change_label":                    "change",
-			"artifact_validation_instruction": "Validate artifacts.",
-			"skip_validator":                  skipValidator,
-			"acceptance_rounds":               rounds,
-			"stop_unchanged_acceptance":       stopUnchanged,
-		},
+		Params:            params,
 		WorkflowFile:      verifyChangeRef,
 		SessionDir:        sessionDir,
 		NamedSessionDecls: map[string]string{"lead-agent": "lead", "acceptance-tester": "tester"},
@@ -292,7 +305,7 @@ func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator, stopUnchange
 	if err != nil {
 		t.Fatalf("read status: %v", err)
 	}
-	return runner.events, strings.TrimSpace(string(body)), evidenceDir
+	return runner.events, strings.TrimSpace(string(body)), evidenceDir, runner.invocations
 }
 
 func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
@@ -466,7 +479,7 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			if stopUnchanged == "" {
 				stopUnchanged = "false"
 			}
-			events, status, evidenceDir := runVerifyChangeAcceptance(t, tt.rounds, tt.skipValidator, stopUnchanged, tt.fixMode, tt.readyInRound, tt.breakStatus, tt.failValidator)
+			events, status, evidenceDir, _ := runVerifyChangeAcceptance(t, tt.rounds, tt.skipValidator, stopUnchanged, tt.fixMode, tt.readyInRound, tt.breakStatus, tt.failValidator)
 			if diff := cmp.Diff(tt.wantEvents, events); diff != "" {
 				t.Errorf("events mismatch (-want +got):\n%s", diff)
 			}
@@ -628,5 +641,193 @@ func TestBuiltinVerifyChangeSkipImplementationReview(t *testing.T) {
 				t.Errorf("events mismatch (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+func TestBuiltinVerifyChangeAcceptanceFixScope(t *testing.T) {
+	wf, err := loader.LoadWorkflow(verifyChangeRef, loader.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultScope := ""
+	for _, param := range wf.Params {
+		if param.Name == "acceptance_fix_scope" {
+			defaultScope = param.Default
+		}
+	}
+	if defaultScope == "" {
+		t.Fatal("missing scope default")
+	}
+	const sentinel = "SCOPE-SENTINEL-7f3a fix only what this change broke {{literal}}"
+	for _, scope := range [][]string{nil, {sentinel}} {
+		name := "omitted"
+		if scope != nil {
+			name = "custom"
+		}
+		t.Run(name, func(t *testing.T) {
+			_, status, _, calls := runVerifyChangeAcceptance(t, "2", "true", "false", "", func(round int) bool { return round == 2 }, false, false, scope...)
+			if status != "ACCEPTANCE_COMPLETE" {
+				t.Errorf("status = %s", status)
+			}
+			want := defaultScope
+			if scope != nil {
+				want = sentinel
+			}
+			fixes := 0
+			for _, call := range calls {
+				args := strings.Join(call.Args, " ")
+				if !strings.Contains(call.Prefix, "acceptance-fix") {
+					if strings.Contains(args, sentinel) {
+						t.Errorf("scope leaked to %s", call.Prefix)
+					}
+					continue
+				}
+				fixes++
+				if scope != nil && strings.Contains(args, defaultScope) {
+					t.Error("custom scope retains default")
+				}
+				if !strings.Contains(args, want) {
+					t.Errorf("fix invocation missing scope %q", want)
+				}
+			}
+			if fixes != 1 {
+				t.Errorf("fix invocations = %d, want 1", fixes)
+			}
+		})
+	}
+}
+
+// scopeValidationRunner runs only validation scripts. Any unexpected agent or
+// shell invocation is a test failure; the valid control may reach the review.
+type scopeValidationRunner struct {
+	t           *testing.T
+	shell       string
+	allowReview bool
+	agents      int
+	stderr      string
+}
+
+func (r *scopeValidationRunner) RunShell(string, bool, string) (ProcessResult, error) {
+	r.t.Fatal("unexpected shell invocation")
+	return ProcessResult{}, nil
+}
+func (r *scopeValidationRunner) RunScript(path string, stdin []byte, _ bool, _ string) (ProcessResult, error) {
+	result, err := runProcess(osexec.Command(r.shell, path), "", stdin)
+	if result.ExitCode != 0 {
+		r.stderr = result.Stderr
+	}
+	return result, err
+}
+func (r *scopeValidationRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, error) {
+	r.agents++
+	if !r.allowReview || !strings.Contains(options.Prefix, "review-assumptions") {
+		r.t.Fatalf("unexpected agent invocation: %s", options.Prefix)
+	}
+	return ProcessResult{Started: true, ExitCode: 0, Stdout: claudeUsageOutput("done", 0)}, nil
+}
+
+func scopeValidationParams(wf *model.Workflow) map[string]string {
+	params := map[string]string{}
+	for _, param := range wf.Params {
+		params[param.Name] = param.Default
+	}
+	params["change_name"] = "add-export"
+	params["change_dir"] = "changes/add-export"
+	params["change_label"] = "change"
+	params["artifact_validation_instruction"] = "Validate artifacts."
+	return params
+}
+
+func TestBuiltinVerifyChangeRejectsBlankScope(t *testing.T) {
+	shell, err := osexec.LookPath("sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	noJQ := t.TempDir()
+	for _, tool := range []string{"sh", "cat", "sed", "tr", "python3"} {
+		path, err := osexec.LookPath(tool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(path, filepath.Join(noJQ, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, mode := range []string{"host", "no-jq"} {
+		t.Run(mode, func(t *testing.T) {
+			if mode == "no-jq" {
+				t.Setenv("PATH", noJQ)
+			}
+			for _, row := range []struct {
+				name, value string
+				valid       bool
+			}{
+				{"empty", "", false}, {"spaces", "   ", false}, {"newline tab", "\n\t ", false},
+				{"form feed", "\f", false}, {"vertical tab", "\v", false}, {"valid", "Fix change defects.", true},
+			} {
+				t.Run(row.name, func(t *testing.T) {
+					wf, err := loader.LoadWorkflow(verifyChangeRef, loader.Options{})
+					if err != nil {
+						t.Fatal(err)
+					}
+					end := -1
+					for i := range wf.Steps {
+						if wf.Steps[i].ID == "review-assumptions" {
+							end = i
+						}
+					}
+					if end < 0 {
+						t.Fatal("missing assumption review")
+					}
+					params := scopeValidationParams(&wf)
+					params["acceptance_fix_scope"] = row.value
+					runner := &scopeValidationRunner{t: t, shell: shell, allowReview: row.valid}
+					ctx := model.NewRootContext(&model.RootContextOptions{Params: params, WorkflowFile: verifyChangeRef, SessionDir: t.TempDir(), NamedSessionDecls: map[string]string{"lead-agent": "lead"}})
+					head := model.Step{ID: "verify-head", Steps: wf.Steps[:end+1]}
+					outcome, err := DispatchStep(&head, ctx, runner, &mockGlob{}, &mockLogger{})
+					if row.valid {
+						if err != nil || outcome != OutcomeSuccess || runner.agents != 1 {
+							t.Fatalf("valid scope: outcome %s, error %v, agents %d", outcome, err, runner.agents)
+						}
+					} else {
+						if outcome != OutcomeFailed || runner.agents != 0 || !strings.Contains(runner.stderr, "acceptance_fix_scope") || (ctx.LastFailure == nil || ctx.LastFailure.StepID != "validate-acceptance-fix-scope") {
+							t.Fatalf("blank scope: outcome %s, error %v, agents %d, failed %+v, stderr %s", outcome, err, runner.agents, ctx.LastFailure, runner.stderr)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestBuiltinVerifyChangeSubWorkflowRejectsBlankScope(t *testing.T) {
+	shell, err := osexec.LookPath("sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := filepath.Join(t.TempDir(), "parent-v1.0.yaml")
+	body := `name: parent
+steps:
+  - id: verify
+    workflow: builtin:core/verify-change-v1.0.yaml
+    params:
+      change_name: add-export
+      change_dir: changes/add-export
+      change_label: change
+      artifact_validation_instruction: Validate artifacts.
+      acceptance_fix_scope: ""
+`
+	if err := os.WriteFile(parent, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wf, err := loader.LoadWorkflow(parent, loader.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &scopeValidationRunner{t: t, shell: shell}
+	ctx := model.NewRootContext(&model.RootContextOptions{WorkflowFile: parent, SessionDir: t.TempDir()})
+	outcome, err := DispatchStep(&wf.Steps[0], ctx, runner, &mockGlob{}, &mockLogger{})
+	if outcome != OutcomeFailed || runner.agents != 0 || !strings.Contains(runner.stderr, "acceptance_fix_scope") || (ctx.LastFailure == nil || ctx.LastFailure.StepID != "validate-acceptance-fix-scope") {
+		t.Fatalf("sub-workflow: outcome %s, error %v, agents %d, failed %+v, stderr %s", outcome, err, runner.agents, ctx.LastFailure, runner.stderr)
 	}
 }

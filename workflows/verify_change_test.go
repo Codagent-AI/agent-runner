@@ -1,9 +1,12 @@
 package builtinworkflows
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -76,6 +79,7 @@ func TestCoreVerifyChangeShape(t *testing.T) {
 		{Name: "acceptance_rounds", Default: "3"},
 		{Name: "skip_implementation_review", Default: "false"},
 		{Name: "stop_unchanged_acceptance", Default: "false"},
+		{Name: "acceptance_fix_scope", Default: defaultAcceptanceFixScope},
 	}
 	if diff := cmp.Diff(wantParams, params); diff != "" {
 		t.Errorf("verify-change params mismatch (-want +got):\n%s", diff)
@@ -85,6 +89,7 @@ func TestCoreVerifyChangeShape(t *testing.T) {
 		"validate-change-name",
 		"validate-skip-validator",
 		"validate-stop-unchanged-acceptance",
+		"validate-acceptance-fix-scope",
 		"validate-skip-implementation-review",
 		"review-assumptions",
 		"verify-assumptions-handoff",
@@ -1699,4 +1704,156 @@ func TestCoreAcceptancePushScript(t *testing.T) {
 			t.Fatalf("push = (%q, %v), want uncommitted-changes failure", out, err)
 		}
 	})
+}
+
+const defaultAcceptanceFixScope = "Resolve every high-confidence finding you can, including implementation, CI, PR-state, tooling, setup, and environmental problems."
+
+const originalAcceptanceFixPrompt = "The independent acceptance tester did not report {{change_label}} \"{{change_name}}\" ready for acceptance in round index {{acceptance_round}} (zero-based). Read its report, `{{session_dir}}/output/acceptance-findings.md`, and `{{session_dir}}/output/acceptance-round-status.txt`. Do not audit the tester's evidence files for completeness; the exploration log and handoff are written for the human acceptance session to read.\n\nTriage each finding into a fix you make, an escalation, or an entry in `{{session_dir}}/output/acceptance-assumptions.md`. A finding where the tester reproduced behavior that contradicts the approved specs, or that an ordinary user would clearly consider broken, may not be dismissed as \"not a defect\": fix it, or record it in the assumptions ledger as a decision needed from the user, with your reasoning. Resolve every high-confidence finding you can, including implementation, CI, PR-state, tooling, setup, and environmental problems. Preserve approved behavior, scope, and design; append ambiguity to the ledger instead of deciding it silently.\n\nWhen fixing an implementation defect found by acceptance testing, add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.\n\nIf a tracked file changes, run only the unit tests your fix affects, within 3 minutes, using a timeout (for example `timeout 180 <command>`); if a run times out, run a smaller set. Do not run integration, end-to-end, or full test suites here; the next acceptance round and CI cover them. Save the output of each test run or reproduction under `{{session_dir}}/output/evidence/` and name the file in any ledger entry that reports its result. {{artifact_validation_instruction}} Do not run Agent Validator, directly or through any skill, and do not push: the workflow runs validation and pushes in the steps after this one. Commit all related changes following the project's commit message conventions with the `[{{step_id}}]` prefix, and leave no tracked change uncommitted.\n\nDo not name a scope for the next round. The tester diffs against its recorded tested revision and sizes its next pass from what your fix moved. If the next round needs to run although you changed no tracked file, for example because you repaired the test environment or a result may have been flaky, write the reason to `{{session_dir}}/output/acceptance-retest-reason.txt`.\n\nIf a finding needs a decision only a human can make, record it in the assumptions ledger and fix what you safely can.\n"
+
+func TestCoreVerifyChangeAcceptanceFixScope(t *testing.T) {
+	wf := readBuiltinWorkflowForTest(t, verifyChangeRef)
+	indexes := stepIndexes(wf.Steps)
+	validation := findStep(wf.Steps, "validate-acceptance-fix-scope")
+	if validation == nil {
+		t.Fatal("missing scope validation")
+	}
+	if validation.Script != "validate-nonempty-param.sh" {
+		t.Errorf("validation script = %q", validation.Script)
+	}
+	if diff := cmp.Diff(map[string]string{"name": "acceptance_fix_scope", "value": "{{acceptance_fix_scope}}"}, validation.ScriptInputs); diff != "" {
+		t.Error(diff)
+	}
+	if indexes[validation.ID] >= indexes["review-assumptions"] {
+		t.Fatal("scope validation must precede agents")
+	}
+	fix := findStep(wf.Steps, "acceptance-fix")
+	if fix == nil {
+		t.Fatal("missing acceptance-fix")
+	}
+	const placeholder = "{{acceptance_fix_scope}}"
+	if strings.Count(fix.Prompt, placeholder) != 1 {
+		t.Fatal("scope placeholder must occur once")
+	}
+	if strings.Contains(fix.Prompt, defaultAcceptanceFixScope) {
+		t.Error("default scope remains hardcoded")
+	}
+	params := map[string]string{"acceptance_fix_scope": defaultAcceptanceFixScope}
+	// Preserve unrelated placeholders to compare the complete original template.
+	for _, name := range []string{"change_label", "change_name", "acceptance_round", "session_dir", "artifact_validation_instruction", "step_id"} {
+		params[name] = "{{" + name + "}}"
+	}
+	rendered, err := textfmt.InterpolateTyped(fix.Prompt, params, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(originalAcceptanceFixPrompt, rendered); diff != "" {
+		t.Errorf("default prompt changed (-want +got):\n%s", diff)
+	}
+	params["acceptance_fix_scope"] = "Fix only this change."
+	custom, err := textfmt.InterpolateTyped(fix.Prompt, params, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requirePromptContains(t, fix.ID, custom, "Fix only this change.", "may not be dismissed", "Preserve approved behavior, scope, and design")
+	walkSteps(wf.Steps, func(step *model.Step) {
+		if step.ID != "acceptance-fix" && strings.Contains(step.Prompt, placeholder) {
+			t.Errorf("%s prompt references scope", step.ID)
+		}
+		if strings.Contains(step.Command, placeholder) {
+			t.Errorf("%s command references scope", step.ID)
+		}
+		if step.Repair != nil && strings.Contains(step.Repair.Prompt, placeholder) {
+			t.Errorf("%s repair references scope", step.ID)
+		}
+		for name, value := range step.ScriptInputs {
+			if strings.Contains(value, placeholder) && (step.ID != validation.ID || name != "value") {
+				t.Errorf("%s input references scope", step.ID)
+			}
+		}
+	})
+	assets, err := ListAssets("core")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(assets, "validate-nonempty-param.sh") {
+		t.Fatal("validation script missing from embedded assets")
+	}
+}
+
+func TestValidateNonemptyParam(t *testing.T) {
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	noJQ := t.TempDir()
+	for _, tool := range []string{"cat", "sed", "tr"} {
+		path, err := exec.LookPath(tool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(path, filepath.Join(noJQ, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows := []struct {
+		name, value string
+		code        int
+	}{
+		{"empty", "", 1},
+		{"spaces", "   ", 1},
+		{"newline tab cr", "\n\t\r", 1},
+		{"text", "Fix defects.", 0},
+		{"quotes and backslash", "text \"quoted\" \\ text", 0},
+		{"leading quote", "\"text", 0},
+		{"multiline", "line\nline", 0},
+		{"value substring", "\"value\":\"\"", 0},
+		{"form feed", "\f", 1},
+		{"vertical tab", "\u000b", 1},
+		{"all ascii whitespace", " \t\n\u000b\f\r", 1},
+		{"literal form feed", "\\f", 0},
+		{"literal vertical tab", "\\u000b", 0},
+		{"backslash pair", "\\\\", 0},
+		{"lone backslash", "\\", 0},
+		{"nbsp", "\u00a0", 0},
+		{"line separator", "\u2028", 0},
+	}
+	for _, mode := range []string{"host", "no-jq"} {
+		t.Run(mode, func(t *testing.T) {
+			if mode == "host" {
+				if _, err := exec.LookPath("jq"); err != nil {
+					t.Skip("jq not installed")
+				}
+			}
+			for _, row := range rows {
+				t.Run(row.name, func(t *testing.T) {
+					payload, err := json.Marshal(map[string]string{"name": "acceptance_fix_scope", "value": row.value})
+					if err != nil {
+						t.Fatal(err)
+					}
+					cmd := exec.Command(shell, "core/validate-nonempty-param.sh")
+					if mode == "no-jq" {
+						cmd.Env = append(os.Environ(), "PATH="+noJQ)
+					}
+					cmd.Stdin = bytes.NewReader(payload)
+					var stderr bytes.Buffer
+					cmd.Stderr = &stderr
+					err = cmd.Run()
+					code := 0
+					if err != nil {
+						if exit, ok := err.(*exec.ExitError); ok {
+							code = exit.ExitCode()
+						} else {
+							t.Fatal(err)
+						}
+					}
+					if code != row.code {
+						t.Errorf("exit = %d, want %d; stderr %s", code, row.code, stderr.String())
+					}
+					if row.code != 0 && !strings.Contains(stderr.String(), "acceptance_fix_scope must not be empty") {
+						t.Errorf("missing param error: %s", stderr.String())
+					}
+				})
+			}
+		})
+	}
 }

@@ -30,6 +30,12 @@ params:
     required: false
     default: "false"
 
+  # Sets which findings the lead resolves in each acceptance fix. Callers can
+  # narrow it so unrelated problems go to the assumptions ledger instead.
+  - name: acceptance_fix_scope
+    required: false
+    default: "Resolve every high-confidence finding you can, including implementation, CI, PR-state, tooling, setup, and environmental problems."
+
 sessions:
   - name: lead-agent
     agent: lead
@@ -53,6 +59,12 @@ steps:
     script_inputs:
       name: stop_unchanged_acceptance
       value: "{{stop_unchanged_acceptance}}"
+
+  - id: validate-acceptance-fix-scope
+    script: validate-nonempty-param.sh
+    script_inputs:
+      name: acceptance_fix_scope
+      value: "{{acceptance_fix_scope}}"
 
   - id: validate-skip-implementation-review
     script: validate-boolean-param.sh
@@ -229,7 +241,7 @@ steps:
         prompt: |
           The independent acceptance tester did not report {{change_label}} "{{change_name}}" ready for acceptance in round index {{acceptance_round}} (zero-based). Read its report, `{{session_dir}}/output/acceptance-findings.md`, and `{{session_dir}}/output/acceptance-round-status.txt`. Do not audit the tester's evidence files for completeness; the exploration log and handoff are written for the human acceptance session to read.
 
-          Triage each finding into a fix you make, an escalation, or an entry in `{{session_dir}}/output/acceptance-assumptions.md`. A finding where the tester reproduced behavior that contradicts the approved specs, or that an ordinary user would clearly consider broken, may not be dismissed as "not a defect": fix it, or record it in the assumptions ledger as a decision needed from the user, with your reasoning. Resolve every high-confidence finding you can, including implementation, CI, PR-state, tooling, setup, and environmental problems. Preserve approved behavior, scope, and design; append ambiguity to the ledger instead of deciding it silently.
+          Triage each finding into a fix you make, an escalation, or an entry in `{{session_dir}}/output/acceptance-assumptions.md`. A finding where the tester reproduced behavior that contradicts the approved specs, or that an ordinary user would clearly consider broken, may not be dismissed as "not a defect": fix it, or record it in the assumptions ledger as a decision needed from the user, with your reasoning. {{acceptance_fix_scope}} Preserve approved behavior, scope, and design; append ambiguity to the ledger instead of deciding it silently.
 
           When fixing an implementation defect found by acceptance testing, add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
 

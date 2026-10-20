@@ -1,4 +1,4 @@
-- [ ] Implement the change described by these files using TDD, as `CLAUDE.md` requires: write each failing test before the code that makes it pass. Satisfy every spec scenario in `specs/` and every `INT-*` obligation in `test-plan.md`. `design.md` is the technical source of truth; the bullets below summarize it.
+- [x] Implement the change described by these files using TDD, as `CLAUDE.md` requires: write each failing test before the code that makes it pass. Satisfy every spec scenario in `specs/` and every `INT-*` obligation in `test-plan.md`. `design.md` is the technical source of truth; the bullets below summarize it.
   - [proposal.md](proposal.md), [design.md](design.md), [test-plan.md](test-plan.md), [decisions.md](decisions.md)
   - [specs/builtin-workflows/spec.md](specs/builtin-workflows/spec.md)
 
