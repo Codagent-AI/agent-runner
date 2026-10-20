@@ -384,7 +384,7 @@ func TestCIWaitReadsContinuationPages(t *testing.T) {
 			} else {
 				t.Setenv("CI_PAGE", writeCIPage(t, tt.page))
 			}
-			out, code, _ := runCIFixture(t, fixture, `{"deadline_seconds":"0.5","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
+			out, code, _ := runCIFixture(t, fixture, `{"deadline_seconds":"5","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
 			if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), tt.want) || !strings.Contains(out, tt.detail) {
 				t.Fatalf("code=%d report=%s", code, out)
 			}
@@ -402,7 +402,7 @@ func TestCIWaitPaginatesThreadRepliesBeforeDeferring(t *testing.T) {
 	}}
 	page := `{"data":{"node":{"comments":{"nodes":[{"author":{"login":"alice","__typename":"User"},"body":"deferred"}],"pageInfo":{"hasNextPage":false}}}}}`
 	t.Setenv("CI_PAGE", writeCIPage(t, page))
-	out, code, _ := runCIFixture(t, fixture, `{"deadline_seconds":"0.5","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
+	out, code, _ := runCIFixture(t, fixture, `{"deadline_seconds":"5","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
 	if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), "CI_PASSED") || !strings.Contains(out, "Deferred Threads") {
 		t.Fatalf("code=%d report=%s", code, out)
 	}
@@ -421,7 +421,7 @@ func TestCIWaitRechecksBotWhenHeadChanges(t *testing.T) {
 	second := ciFixture()
 	ciPR(second)["headRefOid"] = "newhead123456"
 	useCISequence(t, first, second)
-	out, code, _ := runCIFixture(t, first, `{"review_bots":"coderabbitai","deadline_seconds":"0.8","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
+	out, code, _ := runCIFixture(t, first, `{"review_bots":"coderabbitai","deadline_seconds":"10","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
 	if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), "CI_REVIEW_INCOMPLETE") || !strings.Contains(out, "**Head:** newhead") {
 		t.Fatalf("code=%d report=%s", code, out)
 	}
@@ -439,7 +439,7 @@ func TestCIWaitBotPendingThenSuccess(t *testing.T) {
 	}
 	first, second := makeSnapshot("PENDING"), makeSnapshot("SUCCESS")
 	useCISequence(t, first, second)
-	out, code, _ := runCIFixture(t, first, `{"review_bots":"coderabbitai","deadline_seconds":"0.8","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
+	out, code, _ := runCIFixture(t, first, `{"review_bots":"coderabbitai","deadline_seconds":"10","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
 	if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), "CI_PASSED") {
 		t.Fatalf("code=%d report=%s", code, out)
 	}
@@ -465,12 +465,12 @@ func TestCIWaitDiscoveredBotFailureIsCI(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			first, second := makeSnapshot("PENDING"), makeSnapshot("FAILURE")
 			useCISequence(t, first, second)
-			input := fmt.Sprintf(`{%s"deadline_seconds":"0.8","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`, tt.bots)
+			input := fmt.Sprintf(`{%s"deadline_seconds":"10","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`, tt.bots)
 			out, code, elapsed := runCIFixture(t, first, input)
 			if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), tt.want) || !strings.Contains(out, tt.detail) {
 				t.Fatalf("code=%d elapsed=%s report=%s", code, elapsed, out)
 			}
-			if tt.name == "discovered" && elapsed >= 700*time.Millisecond {
+			if tt.name == "discovered" && elapsed >= 5*time.Second {
 				t.Fatalf("failure waited until deadline: %s", elapsed)
 			}
 		})
@@ -527,7 +527,7 @@ func TestCIWaitAddressedFeedbackAndLatestBotEvidence(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			fixture := ciFixture()
 			tt.setup(ciPR(fixture))
-			input := fmt.Sprintf(`{%s"deadline_seconds":"0.8","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`, tt.inputs)
+			input := fmt.Sprintf(`{%s"deadline_seconds":"10","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`, tt.inputs)
 			out, code, _ := runCIFixture(t, fixture, input)
 			if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), tt.marker) {
 				t.Fatalf("code=%d report=%s", code, out)
@@ -537,15 +537,17 @@ func TestCIWaitAddressedFeedbackAndLatestBotEvidence(t *testing.T) {
 }
 
 // The start grace, not the poll interval, decides when an idle wait may finish.
+// Leave room for subprocess startup under concurrent checks while keeping the
+// elapsed bound below the poll interval so waiting for another poll still fails.
 func TestCIWaitStopsAtGraceEndNotNextPoll(t *testing.T) {
 	for _, tt := range []struct{ name, inputs, want string }{
 		{"no expected bot", "", "CI_PASSED"},
 		{"expected bot never starts", `"review_bots":"coderabbitai",`, "CI_REVIEW_INCOMPLETE"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			input := fmt.Sprintf(`{%s"deadline_seconds":"3","poll_interval_seconds":"1","bot_start_grace_seconds":"0.1"}`, tt.inputs)
+			input := fmt.Sprintf(`{%s"deadline_seconds":"20","poll_interval_seconds":"10","bot_start_grace_seconds":"0.1"}`, tt.inputs)
 			out, code, elapsed := runCIFixture(t, ciFixture(), input)
-			if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), tt.want) || elapsed > 700*time.Millisecond {
+			if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), tt.want) || elapsed > 5*time.Second {
 				t.Fatalf("code=%d elapsed=%s output=%s", code, elapsed, out)
 			}
 		})

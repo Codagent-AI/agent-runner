@@ -498,3 +498,73 @@ func TestBinaryFileKeepsRecordObserved(t *testing.T) {
 		t.Fatalf("binary identity not recorded: %+v", f.After)
 	}
 }
+
+func TestStepEvidenceRecoversOrphanedWindows(t *testing.T) {
+	dir := t.TempDir()
+	output := filepath.Join(dir, "output")
+	if err := os.Mkdir(output, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	observer := newOutputObserver(dir, "")
+	cp := &GitCheckpoint{}
+	write := func(name string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(output, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	observer.start("parent", cp)
+	write("parent")
+	observer.start("orphan", cp)
+	write("orphan")
+	observer.start("nested-orphan", cp)
+	write("nested-orphan")
+	// An unrelated end must not consume a live window.
+	if record, _ := observer.end("unknown", cp, cp); record.Status != "unavailable" || len(observer.windows) != 3 {
+		t.Fatalf("unknown end: %+v windows=%d", record, len(observer.windows))
+	}
+	record, _ := observer.end("parent", cp, cp)
+	if record.Status != "truncated" || !strings.Contains(record.Reason, "orphan") || len(record.Files) != 1 || record.Files[0].Path != "parent" {
+		t.Fatalf("parent should retain its own segment and mark the orphan interval incomplete: %+v", record)
+	}
+	if len(observer.windows) != 0 {
+		t.Fatalf("orphan windows retained: %d", len(observer.windows))
+	}
+	observer.start("next", cp)
+	write("next")
+	record, repository := observer.end("next", cp, cp)
+	if record.Status != "observed" || len(record.Files) != 1 || record.Files[0].Path != "next" || repository == nil {
+		t.Fatalf("later evidence failed: %+v repository=%+v", record, repository)
+	}
+}
+
+func TestRestoredDeletedDirtyFileIsUnresolved(t *testing.T) {
+	repo, session := t.TempDir(), t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	path := filepath.Join(repo, "file")
+	content := []byte("inherited finding\n")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "initial")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	logger := NewCheckpointLogger(nil, repo, "s", session)
+	logger.Decorate(Event{Type: EventStepStart, Prefix: "[restore]", Data: map[string]any{"command": "restore"}})
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	event := logger.Decorate(Event{Type: EventStepEnd, Prefix: "[restore]"})
+	record := event.Data["repository_patch"].(WriteRecord)
+	if record.Status != "unavailable" || len(record.Files) != 1 {
+		t.Fatalf("record = %+v", record)
+	}
+	file := record.Files[0]
+	if file.Before != nil || file.Contribution == nil || file.Contribution.Kind != "unresolved" || file.Contribution.Blob != "" || file.Contribution.Context == "" {
+		t.Fatalf("inherited content credited: %+v", file)
+	}
+}

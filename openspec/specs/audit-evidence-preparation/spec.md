@@ -220,6 +220,15 @@ Contribution references SHALL follow the final cross-leaf Git attribution, inclu
 - **WHEN** the retained delta for a step-written file was truncated at recording time
 - **THEN** the leaf marks that artifact evidence as truncated and references the retained local evidence
 
+#### Scenario: Parent ends with unfinished descendant observations
+- **WHEN** a step ends while descendant observation windows have no matching end
+- **THEN** the observer discards those orphaned windows, retains the parent's completed segments, and marks the omitted interval as truncated
+- **AND** later steps continue to record output and repository evidence normally
+
+#### Scenario: Restoring a file deleted before the step
+- **WHEN** a tracked file is already deleted at step start and the step restores it
+- **THEN** the restored content is unresolved context rather than a newly created contribution
+
 ### Requirement: Leaf evidence attribution is explicit
 
 Evidence preparation SHALL attach detailed evidence to a leaf only through explicit attribution: the leaf's step path and execution session on audit events, its written-file records, and the existing Git attribution rules. Snapshot files that have no such attribution SHALL remain in the local evidence index for read-only drill-in, but SHALL NOT be attached to any leaf.
@@ -235,4 +244,3 @@ The automatic audit-launch snapshot SHALL include the Runner-retained written-fi
 #### Scenario: Automatic audit of a run with written files
 - **WHEN** an eligible run completes after its steps wrote output files and committed changes
 - **THEN** the automatic audit snapshot contains the retained deltas and the attributed commit patches, and later changes to the run directory do not alter them
-

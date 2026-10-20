@@ -587,9 +587,12 @@ func (o *outputObserver) start(prefix string, cp *GitCheckpoint) {
 				continue
 			}
 			f, err := o.readFile(o.repoRoot, path, b)
-			if err == nil {
+			switch {
+			case err == nil:
 				w.repo[path] = f
-			} else if !os.IsNotExist(err) {
+			case os.IsNotExist(err):
+				w.repo[path] = observedFile{reason: "absent at step start"}
+			default:
 				w.repo[path] = observedFile{reason: err.Error()}
 			}
 		}
@@ -598,12 +601,21 @@ func (o *outputObserver) start(prefix string, cp *GitCheckpoint) {
 }
 func (o *outputObserver) end(prefix string, start, end *GitCheckpoint) (output WriteRecord, repository *WriteRecord) {
 	n := len(o.windows)
-	if n == 0 || o.windows[n-1].prefix != prefix {
+	for n > 0 && o.windows[n-1].prefix != prefix {
+		n--
+	}
+	if n == 0 {
 		return WriteRecord{Status: "unavailable", Reason: "observation window unavailable", Files: []FileWrite{}}, nil
 	}
 	w := o.windows[n-1]
 	w.budget.boundary()
 	obs := o.observe(w.budget)
+	if n < len(o.windows) {
+		// Keep the matched window's closed segments, but do not credit the
+		// unfinished descendants' interval to their parent.
+		w.baseline = obs
+		mergeRecordStatus(&w.record, "truncated", "orphaned observation windows discarded")
+	}
 	o.closeSegment(w, obs)
 	repo := o.repositoryPatch(w, start, end)
 	o.windows = o.windows[:n-1]
