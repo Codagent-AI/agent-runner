@@ -135,7 +135,7 @@ func estimateTurns(u *model.UsageRecord) costOutcome {
 	return result
 }
 
-func (c *Collector) resolveCost(event *audit.Event, record *StepRecord, usage *model.UsageRecord) {
+func resolveCost(event *audit.Event, record *StepRecord, usage *model.UsageRecord) {
 	if cost, ok := event.Data[DataEstimatedAPICostUSD].(*float64); ok && cost != nil {
 		value := *cost
 		record.EstimatedAPICostUSD = &value

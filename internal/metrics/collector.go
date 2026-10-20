@@ -342,7 +342,7 @@ func (c *Collector) processTerminal(event *audit.Event) {
 		if cost, cumulative := c.attributeCost(&identity, &usage); cumulative {
 			event.Data[DataEstimatedAPICostUSD] = cost
 		}
-		c.resolveCost(event, &record, &usage)
+		resolveCost(event, &record, &usage)
 	}
 	c.artifact.Steps = append(c.artifact.Steps, record)
 }

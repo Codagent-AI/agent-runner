@@ -487,12 +487,12 @@ func summaryCoverage(total, reported int) model.Coverage {
 	}
 }
 
-func formatCoveredCost(cost *float64, coverage model.Coverage, bases ...*string) string {
+func formatCoveredCost(cost *float64, coverage model.Coverage, basis *string) string {
 	if cost == nil {
 		return "? (" + string(coverage) + ")"
 	}
 	value := formatUSD(*cost)
-	if len(bases) > 0 && bases[0] != nil && (*bases[0] == "estimated" || *bases[0] == "mixed") {
+	if basis != nil && (*basis == "estimated" || *basis == "mixed") {
 		value = "~" + value
 	}
 	if coverage != model.CoverageComplete {
