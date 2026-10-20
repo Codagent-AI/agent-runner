@@ -103,7 +103,7 @@ The `model` field on `step_start` SHALL be the **resolved** model — that is, t
 
 If no model can be resolved (the step has no `model:` override and no profile store / profile default is available to fall back on), the `model` field SHALL be emitted as an empty string.
 
-The usage record on `step_end` SHALL follow the `agent-usage-collection` capability: distinct token categories with provenance and completeness, or an explicit unavailable state. `estimated_api_cost_usd` SHALL follow the `cost-capture` capability: the CLI-reported USD value, or null. Unavailable usage and absent cost SHALL be emitted as explicit null/unavailable values, never as zeros.
+The usage record on `step_end` SHALL follow the `agent-usage-collection` capability: distinct token categories with provenance and completeness, or an explicit unavailable state. `estimated_api_cost_usd` SHALL follow the `cost-capture` capability: the CLI-reported USD value, the Codex estimate defined by `cost-estimation`, or null. A non-null cost SHALL be accompanied by `cost_basis` (`reported` or `estimated`). An estimate SHALL also carry `price_table_version` and its estimate evidence. A null Codex cost SHALL carry `cost_unavailable_reason`. Unavailable usage and absent cost SHALL be emitted as explicit null/unavailable values, never as zeros.
 
 #### Scenario: Agent step start
 - **WHEN** a headless agent step starts with session strategy `resume` and resolved session ID `abc-123`
@@ -116,6 +116,14 @@ The usage record on `step_end` SHALL follow the `agent-usage-collection` capabil
 #### Scenario: Agent step end includes usage and cost
 - **WHEN** an autonomous-headless agent step completes with collected usage and a CLI-reported cost
 - **THEN** the `step_end` entry includes the token-usage record (categories, provenance, completeness) and `estimated_api_cost_usd`
+
+#### Scenario: Codex step end includes estimated cost
+- **WHEN** an autonomous-headless Codex step completes with an eligible estimate
+- **THEN** the `step_end` entry includes `estimated_api_cost_usd`, `cost_basis` `estimated`, and `price_table_version`
+
+#### Scenario: Codex step end with ineligible estimate
+- **WHEN** a Codex step completes whose estimate is ineligible
+- **THEN** the `step_end` entry carries a null `estimated_api_cost_usd`, no `cost_basis`, and `cost_unavailable_reason`
 
 #### Scenario: Agent step end with unavailable usage
 - **WHEN** an agent step completes but usage could not be collected (interactive context or parse failure)
@@ -187,7 +195,7 @@ When a step fails due to a caught runtime error (interpolation failure, missing 
 
 ### Requirement: Run end usage and cost totals
 
-The `run_end` entry SHALL include the run's aggregated metrics: per-category token totals across all steps of the run (cumulative across resume sessions) with the usage-coverage indicator; canonical processed input, output, and overall token totals with their coverage indicator; and the run-level cost total with its coverage indicator, per the `cost-capture` capability. Token totals SHALL follow the aggregation semantics of the `run-metrics-artifact` capability: only reported values are summed, canonical totals are included only when an adapter can obtain them without double-counting, steps with unavailable usage contribute nothing, and unreported categories are absent rather than zero. When no step reported canonical totals or cost, the corresponding total SHALL be null with coverage `none`.
+The `run_end` entry SHALL include the run's aggregated metrics: per-category token totals across all steps of the run (cumulative across resume sessions) with the usage-coverage indicator; canonical processed input, output, and overall token totals with their coverage indicator; and the run-level cost total with its coverage indicator, cost-basis indicator, and per-basis subtotals, per the `cost-capture` capability. Token totals SHALL follow the aggregation semantics of the `run-metrics-artifact` capability: only reported values are summed, canonical totals are included only when an adapter can obtain them without double-counting, steps with unavailable usage contribute nothing, and unreported categories are absent rather than zero. When no step reported canonical totals or cost, the corresponding total SHALL be null with coverage `none`.
 
 #### Scenario: Run end carries aggregated totals
 - **WHEN** a run ends after agent steps consumed tokens and some reported cost
@@ -204,6 +212,10 @@ The `run_end` entry SHALL include the run's aggregated metrics: per-category tok
 #### Scenario: Run end with mixed usage availability
 - **WHEN** a run ends containing one agent step with a full usage record and one whose usage is unavailable
 - **THEN** the `run_end` entry's token totals equal the reporting step's values with usage coverage `partial`; no zeros are substituted
+
+#### Scenario: Run end carries the cost basis
+- **WHEN** a run ends after a Claude step with a reported cost and a Codex step with an estimated cost
+- **THEN** the `run_end` entry's cost total includes both, with cost basis `mixed` and matching per-basis subtotals
 
 ### Requirement: Run start profile set data
 
