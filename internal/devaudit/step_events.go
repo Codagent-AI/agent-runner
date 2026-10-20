@@ -20,6 +20,7 @@ type stepEvent struct {
 	attempt, line                   int
 	stepType, mode, command, stdout string
 	missingReason                   string
+	MetricsSource                   string
 	stdoutTruncated                 bool
 	outputWrites, repositoryPatch   *audit.WriteRecord
 	start, end                      audit.GitCheckpoint
@@ -63,6 +64,7 @@ func readStepEvents(snapshot string) (stepEventIndex, error) {
 		startKey := stepEventKey(session, event.Prefix)
 		if event.Type == audit.EventStepStart {
 			entry := stepEvent{}
+			entry.MetricsSource, _ = event.Data["metrics_source"].(string)
 			entry.mode, _ = event.Data["mode"].(string)
 			entry.command, _ = event.Data["script"].(string)
 			if cmd, ok := event.Data["command"].(string); ok {
@@ -104,6 +106,11 @@ func readStepEvents(snapshot string) (stepEventIndex, error) {
 	return result, err
 }
 func validatorLeaf(artifact *metrics.Artifact, session, path string, events []stepEvent) bool {
+	for i := range events {
+		if events[i].MetricsSource == "agent-validator" {
+			return true
+		}
+	}
 	for i := range artifact.Steps {
 		r := &artifact.Steps[i]
 		if r.ExecutionSessionID == session && r.Tool == "agent-validator" && (r.Prefix == path || logicalPath(r.Prefix, r.ID) == path || logicalPath(r.Prefix, "") == path) {

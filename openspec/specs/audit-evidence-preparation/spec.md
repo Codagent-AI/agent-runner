@@ -163,6 +163,7 @@ When a leaf has no recorded output, the leaf SHALL report narrative evidence as 
 #### Scenario: Validator script output
 - **WHEN** a validator check script step records its output on `step_end`
 - **THEN** that step's leaf includes the output as available validation evidence
+- **AND** a step declaring `metrics_source: agent-validator` is identified as validator output even without a validator measurement record
 
 #### Scenario: Similarly named steps
 - **WHEN** a run contains steps `audit` and `audit-fix`, each with recorded output

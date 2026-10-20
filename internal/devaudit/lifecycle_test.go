@@ -87,7 +87,7 @@ func TestExportGitEvidencePreservesBinaryCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := snapshottedGitEvidence{Available: true, Commits: []snapshottedGitCommit{
-		{SHA: sha, Subject: "[implement] add image", Paths: []string{"hero.png"}, FilesChanged: 1},
+		{SHA: sha, Patch: "git-patches/" + sha + ".patch", Subject: "[implement] add image", Paths: []string{"hero.png"}, FilesChanged: 1},
 	}}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Fatalf("evidence mismatch (-want +got):\n%s", diff)

@@ -4,6 +4,7 @@ package devaudit
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -250,4 +251,53 @@ func TestDuplicateEventsDoNotHideMissingAttempts(t *testing.T) {
 		}
 	}
 	t.Fatalf("missing attempt hidden by duplicate events: %+v", index.events[key])
+}
+
+func TestValidatorScriptMetricsSourceWithoutMeasurement(t *testing.T) {
+	for _, source := range []string{"agent-validator", "", "other-tool"} {
+		t.Run(source, func(t *testing.T) {
+			dir := t.TempDir()
+			log := fmt.Sprintf(`now [check] step_start {"execution_session_id":"s","script":"run-validator.sh","metrics_source":%q}
+now [check] step_end {"execution_session_id":"s","identity":{"step_id":"check","step_type":"script","attempt":1},"stdout":"checks passed","output_writes":{"status":"observed","files":[{"path":"report.txt","change":"created","contribution":{"kind":"created","blob":"report"}}]},"git_start_checkpoint":{"available":true},"git_end_checkpoint":{"available":true}}
+`, source)
+			for name, content := range map[string]string{"audit.log": log, "report": "check report"} {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Only the script step exists; no validator measurement is present.
+			artifact := metrics.Artifact{Steps: []metrics.StepRecord{{ID: "check", Type: "script", Kind: "step", Attempt: 1, ExecutionSessionID: "s"}}}
+			leaves := buildLeaves(&Request{SnapshotPath: dir, ExecutionSessionID: "s"}, &artifact, nil, nil)
+			if len(leaves) != 1 {
+				t.Fatalf("leaves = %+v", leaves)
+			}
+			wantOutput, wantFile := "narrative", "artifact"
+			if source == "agent-validator" {
+				wantOutput, wantFile = "validation", "validation"
+			}
+			var output, file bool
+			for _, ref := range leaves[0].Evidence {
+				if ref.Detail == "checks passed" {
+					output = true
+					if ref.Category != wantOutput || ref.Status != "available" {
+						t.Errorf("output = %+v, want available %s", ref, wantOutput)
+					}
+				}
+				if ref.Path == "report.txt" {
+					file = true
+					if ref.Category != wantFile || ref.Status != "available" {
+						t.Errorf("file = %+v, want available %s", ref, wantFile)
+					}
+				}
+			}
+			if !output || !file {
+				t.Fatalf("missing content: %+v", leaves[0])
+			}
+			for _, omitted := range leaves[0].OmittedCategories {
+				if source == "agent-validator" && omitted == "validation_unavailable" {
+					t.Errorf("declared validator output marked unavailable: %+v", leaves[0])
+				}
+			}
+		})
+	}
 }
