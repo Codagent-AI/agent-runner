@@ -581,7 +581,8 @@ func attributeBoundaryCommits(records []metrics.StepRecord, commits map[string]s
 	pathStats := map[string]gitPathStat{}
 	seen := map[string]bool{}
 	pathsComplete := true
-	for _, record := range records {
+	for index := range records {
+		record := &records[index]
 		for _, sha := range record.GitEnd.Commits {
 			commit, exists := commits[sha]
 			if !exists || !strings.HasPrefix(commit.Subject, "["+record.ID+"]") || seen[sha] {
