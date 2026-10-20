@@ -240,7 +240,7 @@ steps:
           If a finding needs a decision only a human can make, record it in the assumptions ledger and fix what you safely can.
 
       # Exits nonzero, ending the rounds, when stop_unchanged_acceptance is set
-      # and the fix left the tested revision unchanged with no retest reason.
+      # and the fix left the tested tree unchanged with no retest reason.
       # The remaining findings go to the acceptance handoff.
       - id: check-acceptance-progress
         skip_if: 'sh: test {{stop_unchanged_acceptance}} != true'
@@ -249,10 +249,10 @@ steps:
         command: |
           evidence="{{session_dir}}/output"
           tested=$(sed '/^[[:space:]]*$/d' "$evidence/acceptance-tested-revision.txt" 2>/dev/null | tail -n 1 | tr -d '[:space:]')
-          if [ "$(git rev-parse HEAD)" != "$tested" ] || [ -n "$(git status --porcelain --untracked-files=no)" ] || [ -s "$evidence/acceptance-retest-reason.txt" ]; then
+          if [ -z "$tested" ] || ! git diff --quiet "$tested" HEAD -- 2>/dev/null || [ -n "$(git status --porcelain --untracked-files=no)" ] || [ -s "$evidence/acceptance-retest-reason.txt" ]; then
             exit 0
           fi
-          echo "the acceptance fix left the tested revision unchanged and gave no retest reason; ending the acceptance rounds" >&2
+          echo "the acceptance fix left the tested tree unchanged and gave no retest reason; ending the acceptance rounds" >&2
           exit 1
 
       - id: acceptance-validator
