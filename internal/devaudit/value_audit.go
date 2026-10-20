@@ -1867,8 +1867,15 @@ func withCrosscheckOutputSchema(cliName string, args []string, outputDir, label 
 		cleanupSchema()
 		_ = os.Remove(responsePath)
 	}
-	structured = append([]string(nil), args[:len(args)-1]...)
-	structured = append(structured, "--output-schema", schemaPath, "--output-last-message", responsePath, args[len(args)-1])
+	// LOCAL LIVE-VERIFICATION PATCH (not part of either PR): the Codex adapter
+	// ends its flags with "--", so options must go before that separator.
+	end := len(args) - 1
+	if end > 0 && args[end-1] == "--" {
+		end--
+	}
+	structured = append([]string(nil), args[:end]...)
+	structured = append(structured, "--output-schema", schemaPath, "--output-last-message", responsePath)
+	structured = append(structured, args[end:]...)
 	return structured, responsePath, cleanup, nil
 }
 
