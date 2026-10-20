@@ -266,20 +266,10 @@ func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator, stopUnchange
 		t: t, repo: repo, evidenceDir: evidenceDir, sessionDir: sessionDir, readyInRound: readyInRound,
 		breakStatusOnce: breakStatusOnce, validatorFails: validatorFails, fixMode: fixMode,
 	}
-	params := map[string]string{
-		"change_name":                     "add-export",
-		"change_dir":                      "changes/add-export",
-		"change_label":                    "change",
-		"artifact_validation_instruction": "Validate artifacts.",
-		"skip_validator":                  skipValidator,
-		"acceptance_rounds":               rounds,
-		"stop_unchanged_acceptance":       stopUnchanged,
-	}
-	for _, param := range workflow.Params {
-		if _, exists := params[param.Name]; !exists {
-			params[param.Name] = param.Default
-		}
-	}
+	params := verifyChangeParams(&workflow)
+	params["skip_validator"] = skipValidator
+	params["acceptance_rounds"] = rounds
+	params["stop_unchanged_acceptance"] = stopUnchanged
 	if len(scope) > 0 {
 		params["acceptance_fix_scope"] = scope[0]
 	}
@@ -726,7 +716,7 @@ func (r *scopeValidationRunner) RunAgent(options *AgentProcessOptions) (ProcessR
 	return ProcessResult{Started: true, ExitCode: 0, Stdout: claudeUsageOutput("done", 0)}, nil
 }
 
-func scopeValidationParams(wf *model.Workflow) map[string]string {
+func verifyChangeParams(wf *model.Workflow) map[string]string {
 	params := map[string]string{}
 	for _, param := range wf.Params {
 		params[param.Name] = param.Default
@@ -779,7 +769,7 @@ func TestBuiltinVerifyChangeRejectsBlankScope(t *testing.T) {
 					if end < 0 {
 						t.Fatal("missing assumption review")
 					}
-					params := scopeValidationParams(&wf)
+					params := verifyChangeParams(&wf)
 					params["acceptance_fix_scope"] = row.value
 					runner := &scopeValidationRunner{t: t, shell: shell, allowReview: row.valid}
 					ctx := model.NewRootContext(&model.RootContextOptions{Params: params, WorkflowFile: verifyChangeRef, SessionDir: t.TempDir(), NamedSessionDecls: map[string]string{"lead-agent": "lead"}})
