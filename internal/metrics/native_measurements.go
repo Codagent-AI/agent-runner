@@ -274,6 +274,21 @@ func accumulateFields(fields map[string]FieldAggregate, tokens map[string]measur
 }
 
 func (n *NativeMeasurement) collectReportedCost(step *StepRecord, legacy bool) {
+	if step.CostEstimate != nil && (step.CostBasis == model.CostBasisEstimated || step.CostEstimate.PartialSubtotalUSD != nil) {
+		amount := step.EstimatedAPICostUSD
+		coverage := "full"
+		var reason *string
+		if amount == nil {
+			amount = step.CostEstimate.PartialSubtotalUSD
+			coverage = "partial"
+			r := string(step.CostUnavailableReason)
+			reason = &r
+		}
+		n.Costs = append(n.Costs, measurements.Cost{ID: "estimated-cost", Scope: "attempt", Coverage: coverage, Overlap: "established", Source: "provider_usage", Currency: measurements.StringEvidence{Availability: "available", Value: pointer("USD")}, Amount: measurements.Value{Availability: "available", Value: amount, Source: pointer("provider_usage"), Origin: pointer("derived"), Precision: pointer("approximate"), Derivation: pointer(step.CostEstimate.Policy + "@" + step.PriceTableVersion), Reason: reason}})
+		n.Limitations = append(n.Limitations, step.CostEstimate.Limitations...)
+		return
+	}
+
 	// These adapters obtain this compatibility field directly from their
 	// structured provider result or interactive status-line report; Runner does
 	// no price estimation. Legacy or unknown sources retain uncertainty instead

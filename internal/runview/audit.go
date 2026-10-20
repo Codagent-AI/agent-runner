@@ -972,6 +972,7 @@ func (t *Tree) applyAgentCallEnd(event RawEvent, tokens []prefixToken) {
 			metrics.CostUSD = &value
 		}
 	}
+	readCostBasis(&metrics, event.Data)
 	call.Attempts = []AttemptMetrics{metrics}
 }
 
@@ -1356,6 +1357,7 @@ func applyStepEnd(n *StepNode, data map[string]any) {
 			metrics.CostUSD = &value
 		}
 	}
+	readCostBasis(&metrics, data)
 	for i, a := range n.Attempts {
 		if a.Attempt == attempt {
 			n.Attempts[i] = metrics
@@ -1659,4 +1661,12 @@ func boolField(data map[string]any, key string) (val, ok bool) {
 	}
 	val, ok = v.(bool)
 	return val, ok
+}
+
+func readCostBasis(metrics *AttemptMetrics, data map[string]any) {
+	metrics.CostBasis, _ = data["cost_basis"].(string)
+	metrics.CostReason, _ = data["cost_unavailable_reason"].(string)
+	if metrics.CostUSD != nil && metrics.CostBasis == "" {
+		metrics.CostBasis = "reported"
+	}
 }

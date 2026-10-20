@@ -608,6 +608,7 @@ func TestCollectorAggregatesCoverageAndIterations(t *testing.T) {
 		ActiveDurationMS: 5000, Tokens: model.TokenCounts{model.TokenInput: 10}, UsageCoverage: model.CoveragePartial,
 		TokenTotalCoverage:  model.CoverageNone,
 		EstimatedAPICostUSD: &cost, CostCoverage: model.CoveragePartial,
+		CostBasis: pointer("reported"), CostByBasis: map[string]float64{"reported": cost},
 	}
 	if diff := cmp.Diff(want, totals); diff != "" {
 		t.Fatalf("totals mismatch (-want +got):\n%s", diff)

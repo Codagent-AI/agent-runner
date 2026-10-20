@@ -141,7 +141,8 @@ type ContextMeasurement struct {
 // UsageRecord is the typed usage value passed through audit events and stored
 // in the metrics artifact.
 type UsageRecord struct {
-	Context *ContextMeasurement `json:"context,omitempty"`
+	RequestEvidence *RequestEvidence    `json:"-"`
+	Context         *ContextMeasurement `json:"context,omitempty"`
 	// Turns holds per-invocation reports for an external-user step. The metrics
 	// collector attributes cumulative counters before aggregating these reports.
 	Turns                    []UsageRecord      `json:"turns,omitempty"`
@@ -197,11 +198,42 @@ const (
 
 // RunTotals contains aggregate metrics for all attempts known to a run.
 type RunTotals struct {
-	ActiveDurationMS    int64        `json:"active_duration_ms"`
-	Tokens              TokenCounts  `json:"tokens"`
-	UsageCoverage       Coverage     `json:"usage_coverage"`
-	TokenTotals         *TokenTotals `json:"token_totals"`
-	TokenTotalCoverage  Coverage     `json:"token_total_coverage"`
-	EstimatedAPICostUSD *float64     `json:"estimated_api_cost_usd"`
-	CostCoverage        Coverage     `json:"cost_coverage"`
+	CostBasis           *string            `json:"cost_basis"`
+	CostByBasis         map[string]float64 `json:"cost_by_basis,omitempty"`
+	ActiveDurationMS    int64              `json:"active_duration_ms"`
+	Tokens              TokenCounts        `json:"tokens"`
+	UsageCoverage       Coverage           `json:"usage_coverage"`
+	TokenTotals         *TokenTotals       `json:"token_totals"`
+	TokenTotalCoverage  Coverage           `json:"token_total_coverage"`
+	EstimatedAPICostUSD *float64           `json:"estimated_api_cost_usd"`
+	CostCoverage        Coverage           `json:"cost_coverage"`
 }
+
+// RequestUsage contains one billed model response. Cache writes are a subset of input.
+type RequestUsage struct {
+	Input, Cached, Output int64
+	CacheWrite            *int64
+}
+
+// RequestEvidence is transient rollout evidence used before serializing usage.
+type RequestEvidence struct {
+	Source   string
+	Status   UsageStatus
+	Reason   UnavailableReason
+	Requests []RequestUsage
+}
+
+type CostBasis string
+
+const (
+	CostBasisReported                  CostBasis         = "reported"
+	CostBasisEstimated                 CostBasis         = "estimated"
+	UnavailableUsageUnavailable        UnavailableReason = "usage-unavailable"
+	UnavailableUsageIncomplete         UnavailableReason = "usage-incomplete"
+	UnavailableRequiredCategoryMissing UnavailableReason = "required-category-missing"
+	UnavailableTurnUnattributed        UnavailableReason = "turn-unattributed"
+	UnavailableModelUnknown            UnavailableReason = "model-unknown"
+	UnavailableModelUnpriced           UnavailableReason = "model-unpriced"
+	UnavailableContextBandUnknown      UnavailableReason = "context-band-unknown"
+	UnavailableRequestEvidenceMismatch UnavailableReason = "request-evidence-mismatch"
+)

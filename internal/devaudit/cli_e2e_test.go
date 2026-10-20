@@ -91,7 +91,7 @@ func TestE2E001TaggedCLIAutomaticAuditCompletesAndRetriesWithoutDuplicate(t *tes
 	if got := fixture.server.rowCount(); got != 1 {
 		t.Fatalf("sheet row count = %d, want 1", got)
 	}
-	if fixture.server.headerPuts != 1 || len(fixture.server.rows[0]) != 38 || fixture.server.rows[0][0] != sheetRowSchemaVersion || fixture.server.rows[0][36] != "" {
+	if fixture.server.headerPuts != 1 || len(fixture.server.rows[0]) != 39 || fixture.server.rows[0][0] != sheetRowSchemaVersion || fixture.server.rows[0][36] != "" {
 		t.Fatalf("Codex sheet projection = %+v", fixture.server.rows)
 	}
 	calls := fixture.modelCallCount()
@@ -196,7 +196,7 @@ func TestTaggedClaudeAuditCompletesAllStages(t *testing.T) {
 	if usage := report.JudgeUsage; usage == nil || usage.AttemptCount != 2 || usage.TotalTokens == nil || usage.TokenCoverage != model.CoverageComplete || usage.CostUSD == nil || *usage.CostUSD != 0.5 || usage.CostCoverage != model.CoverageComplete {
 		t.Fatalf("Claude judge usage = %+v", usage)
 	}
-	if fixture.server.headerPuts != 1 || len(fixture.server.rows[0]) != 38 || fixture.server.rows[0][36] != "0.5" {
+	if fixture.server.headerPuts != 1 || len(fixture.server.rows[0]) != 39 || fixture.server.rows[0][36] != "0.5" {
 		t.Fatalf("Claude sheet projection = %+v", fixture.server.rows)
 	}
 	if got := fixture.server.rowCount(); got != 1 {
@@ -642,10 +642,10 @@ func (s *auditSheetsServer) serveHTTP(writer http.ResponseWriter, request *http.
 	case request.Method == http.MethodGet && strings.Contains(request.URL.Path, "1:1"):
 		header := stepValueHeader
 		if s.upgraded {
-			header = stepValueHeaderV2
+			header = stepValueHeaderV3
 		}
 		_ = json.NewEncoder(writer).Encode(map[string]any{"values": [][]string{header}})
-	case request.Method == http.MethodPut && strings.Contains(request.URL.Path, "AF1:AL1"):
+	case request.Method == http.MethodPut && strings.Contains(request.URL.Path, "AF1:AM1"):
 		s.upgraded = true
 		s.headerPuts++
 		_, _ = writer.Write([]byte(`{}`))

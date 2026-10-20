@@ -85,6 +85,7 @@ type GitEvidence struct {
 }
 
 type CostEvidence struct {
+	CostBasis    *string  `json:"cost_basis,omitempty"`
 	DurationMS   *int64   `json:"duration_ms"`
 	CostUSD      *float64 `json:"cost_usd"`
 	TotalTokens  *int64   `json:"total_tokens"`
@@ -381,6 +382,7 @@ func leafCosts(records []metrics.StepRecord) (evidence CostEvidence, finalOutcom
 	var durationKnown bool
 	tokensKnown, costKnown := true, true
 	var cost float64
+	bases := map[string]struct{}{}
 	models := map[string]struct{}{}
 	outcome := "unknown"
 	iterations := 0
@@ -408,6 +410,7 @@ func leafCosts(records []metrics.StepRecord) (evidence CostEvidence, finalOutcom
 			costKnown = false
 		} else {
 			cost += *record.EstimatedAPICostUSD
+			bases[recordCostBasis(record)] = struct{}{}
 		}
 	}
 	var durationPtr *int64
@@ -422,7 +425,7 @@ func leafCosts(records []metrics.StepRecord) (evidence CostEvidence, finalOutcom
 	if costKnown {
 		costPtr = &cost
 	}
-	return CostEvidence{DurationMS: durationPtr, CostUSD: costPtr, TotalTokens: tokensPtr, SourceModels: sortedKeys(models)}, outcome, iterations
+	return CostEvidence{CostBasis: costBasisFor(bases, costKnown), DurationMS: durationPtr, CostUSD: costPtr, TotalTokens: tokensPtr, SourceModels: sortedKeys(models)}, outcome, iterations
 }
 
 func referencesForLeaf(records []metrics.StepRecord, executionSessionID string) []EvidenceReference {
@@ -1979,4 +1982,24 @@ func prepareModelWorkspace(request *Request) (string, error) {
 		return "", err
 	}
 	return workspace, nil
+}
+
+func costBasisFor(bases map[string]struct{}, known bool) *string {
+	if !known || len(bases) == 0 {
+		return nil
+	}
+	basis := "mixed"
+	if len(bases) == 1 {
+		for key := range bases {
+			basis = key
+		}
+	}
+	return &basis
+}
+
+func recordCostBasis(record *metrics.StepRecord) string {
+	if record.CostBasis == "" {
+		return "reported"
+	}
+	return string(record.CostBasis)
 }

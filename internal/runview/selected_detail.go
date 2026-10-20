@@ -418,9 +418,17 @@ func detailMetrics(node *StepNode) []string {
 		lines = append(lines, "tokens: "+formatTokenCounts(latest.Usage.Tokens))
 	}
 	if latest.CostUSD == nil {
-		lines = append(lines, "cost: ?")
+		value := "cost: ?"
+		if latest.CostReason != "" {
+			value += " (" + latest.CostReason + ")"
+		}
+		lines = append(lines, value)
 	} else {
-		lines = append(lines, "cost: "+formatUSD(*latest.CostUSD))
+		value := formatUSD(*latest.CostUSD)
+		if latest.CostBasis == "estimated" {
+			value = "~" + value + " (API-equivalent estimate)"
+		}
+		lines = append(lines, "cost: "+value)
 	}
 	return lines
 }

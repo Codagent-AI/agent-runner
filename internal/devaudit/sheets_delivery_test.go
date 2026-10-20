@@ -227,7 +227,7 @@ func TestINT006DeliverReportUsesExactAllowlistAndDeduplicatesAmbiguousAppend(t *
 		case r.URL.Path == "/token":
 			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "access", "token_type": "Bearer"})
 		case r.Method == http.MethodGet && r.URL.Path == "/v4/spreadsheets/sheet/values/'audit'!1:1":
-			_ = json.NewEncoder(w).Encode(map[string]any{"values": [][]string{stepValueHeaderV2}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"values": [][]string{stepValueHeaderV3}})
 		case r.Method == http.MethodGet && r.URL.Path == "/v4/spreadsheets/sheet/values/'audit'!B:B":
 			ids := [][]string{{"observation_id"}}
 			for _, row := range writes {
@@ -292,7 +292,7 @@ func TestProjectFromRemoteStripsHostProtocolCredentialsAndLocalPaths(t *testing.
 }
 
 func expectedDeliveryRow() []string {
-	return []string{"step_value_v2", "obs-1", "2026-09-01T00:00:00Z", "Codagent-AI/agent-runner", "core:example", "source", "session", "audit", "automatic", "success", "build", "success", "new", "", "", "", "a,z", "no_change", "", "", "", "", "high", "intended", "unique", "confirmed", "high", "complete", "judge", "value-rubric-v3", "High-level result.", "", "", "", "", "", "", ""}
+	return []string{"step_value_v3", "obs-1", "2026-09-01T00:00:00Z", "Codagent-AI/agent-runner", "core:example", "source", "session", "audit", "automatic", "success", "build", "success", "new", "", "", "", "a,z", "no_change", "", "", "", "", "high", "intended", "unique", "confirmed", "high", "complete", "judge", "value-rubric-v3", "High-level result.", "", "", "", "", "", "", "", ""}
 }
 
 func writeJSON(t *testing.T, path string, value any) {
@@ -337,7 +337,7 @@ func TestRetryReportAdoptsLocalDestinationForUnconfiguredSandboxReport(t *testin
 		case r.URL.Path == "/token":
 			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "access", "token_type": "Bearer"})
 		case r.Method == http.MethodGet && r.URL.Path == "/v4/spreadsheets/sheet/values/'audit'!1:1":
-			_ = json.NewEncoder(w).Encode(map[string]any{"values": [][]string{stepValueHeaderV2}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"values": [][]string{stepValueHeaderV3}})
 		case r.Method == http.MethodGet && r.URL.Path == "/v4/spreadsheets/sheet/values/'audit'!B:B":
 			_ = json.NewEncoder(w).Encode(map[string]any{"values": [][]string{{"observation_id"}}})
 		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v4/spreadsheets/sheet/"):
