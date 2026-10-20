@@ -1,0 +1,48 @@
+name: step-evidence
+steps:
+  - id: create
+    command: |
+      mkdir -p "{{session_dir}}/output"
+      printf 'heading\nfinding\nfooter\n' > "{{session_dir}}/output/findings.md"
+      printf stream > "{{session_dir}}/output/_x_.out"
+  - id: append
+    command: printf 'appended section\n' >> "{{session_dir}}/output/findings.md"
+  - id: rounds
+    loop:
+      max: 2
+      as_index: round_index
+    steps:
+      - id: round
+        command: printf "{{round_index}}\n" > "{{session_dir}}/output/round.md"
+  - id: delete
+    command: rm "{{session_dir}}/output/round.md"
+  - id: scratch
+    command: mkdir -p "{{session_dir}}/scratch"; printf scratch > "{{session_dir}}/scratch/ignored"
+  - id: repair-check
+    command: |
+      if [ -f "{{session_dir}}/repaired" ]; then
+        printf 'C\n' >> "{{session_dir}}/output/ledger.md"
+      else
+        printf 'A\n' >> "{{session_dir}}/output/ledger.md"
+        exit 1
+      fi
+    repair:
+      agent: lead
+      prompt: repair evidence fixture
+      max: 1
+  - id: scattered
+    command: printf 'new heading\nfinding\nnew footer\nappended section\n' > "{{session_dir}}/output/findings.md"
+  - id: large-baseline
+    command: head -c 1048577 /dev/zero | tr '\000' x > "{{session_dir}}/output/large-ledger.md"
+  - id: large-append
+    command: printf 'large append\n' >> "{{session_dir}}/output/large-ledger.md"
+  - id: binary
+    command: printf '\000binary' > "{{session_dir}}/output/binary"
+  - id: edit-one
+    command: printf 'first\n' > tracked
+  - id: edit-two
+    command: printf 'second\n' > tracked
+  - id: script
+    script: step-evidence-script.sh
+  - id: empty
+    command: 'true'

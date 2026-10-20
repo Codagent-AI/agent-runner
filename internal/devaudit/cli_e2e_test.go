@@ -538,7 +538,23 @@ import json, sys, os
 with open(sys.argv[1], encoding="utf-8") as stream:
     prompt = stream.read()
 output_path = sys.argv[2]
+source_marker = "AUDIT_E2E_SOURCE_APPEND="
+if source_marker in prompt:
+    path = prompt.split(source_marker, 1)[1].splitlines()[0].strip()
+    with open(path, "a", encoding="utf-8") as stream:
+        stream.write("agent appended finding\n")
+    text = "source agent found a defect"
+    if output_path:
+        with open(output_path, "w", encoding="utf-8") as stream:
+            stream.write(text)
+    print(json.dumps({"type":"thread.started","thread_id":"source-agent"}))
+    print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":text}}))
+    print(json.dumps({"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":4}}))
+    sys.exit(0)
 if prompt.startswith("You are judging workflow-step value"):
+    if os.environ.get("AUDIT_E2E_JUDGE_PROMPT"):
+        with open(os.environ["AUDIT_E2E_JUDGE_PROMPT"], "a", encoding="utf-8") as stream:
+            stream.write(prompt)
     package = json.loads(prompt.rsplit("\n\n", 1)[1])
     result = {"batch_id": package["batch_id"], "observations": []}
     for leaf in package["leaves"]:
@@ -669,4 +685,89 @@ func (s *auditSheetsServer) failNextAppend() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.failAppend = true
+}
+
+func TestE2E001CLIReplayContentGroundedPackages(t *testing.T) {
+	fixture := newCLIAuditFixture(t)
+	promptLog := filepath.Join(fixture.root, "judge-prompt")
+	fixture.env = append(fixture.env, "AUDIT_E2E_JUDGE_PROMPT="+promptLog)
+	fixture.run(true, "-C", fixture.project, "--headless", "spec-driven:audit-e2e-content")
+	source := fixture.onlyRunDir()
+	sessions := readE2EMetrics(t, source).Sessions
+	if len(sessions) != 1 {
+		t.Fatal(sessions)
+	}
+	before := fixture.gitState()
+	beforeHead := contentGit(t, fixture.project, "rev-parse", "HEAD")
+	fixture.run(true, "audit", "replay", source, "--session", sessions[0].ExecutionSessionID)
+	link := fixture.waitForLinks(source, 1, true)[0]
+	auditDir := filepath.Join(filepath.Dir(source), link.AuditRunID)
+	data, err := os.ReadFile(filepath.Join(auditDir, "value-packages.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var packages []ValuePackage
+	if err = json.Unmarshal(data, &packages); err != nil {
+		t.Fatal(err)
+	}
+	agentOutput, agentAppend, commitPatch, none := false, false, false, false
+	for _, pkg := range packages {
+		for _, leaf := range pkg.Leaves {
+			for _, ref := range leaf.Evidence {
+				if leaf.Skeleton.StepID == "agent" {
+					for _, omitted := range leaf.OmittedCategories {
+						if omitted == "narrative_unavailable" || omitted == "artifact_unavailable" {
+							t.Fatalf("recorded agent content marked missing: %s", omitted)
+						}
+					}
+				}
+				switch leaf.Skeleton.StepID {
+				case "agent":
+					if ref.Category == "narrative" && strings.Contains(ref.Detail, "source agent found a defect") {
+						agentOutput = true
+					}
+					if ref.Contribution == "append" && ref.Detail == "agent appended finding\n" {
+						agentAppend = true
+					}
+				case "commit":
+					if ref.Contribution == "commit_patch" && strings.Contains(ref.Detail, "corrected project") {
+						commitPatch = true
+					}
+				case "empty":
+					if ref.Category == "artifact" && ref.Status == "none_produced" {
+						none = true
+					}
+				}
+			}
+		}
+	}
+	if !agentOutput || !agentAppend || !commitPatch || !none {
+		t.Fatalf("output %v append %v commit %v none %v\n%s", agentOutput, agentAppend, commitPatch, none, data)
+	}
+	prompt, err := os.ReadFile(promptLog)
+	if err != nil || !strings.Contains(string(prompt), "source agent found a defect") {
+		t.Fatalf("judge input: %v %s", err, prompt)
+	}
+	report := readE2EReport(t, auditDir)
+	if report.DeliveryState != "delivered" {
+		t.Fatal(report.DeliveryState)
+	}
+	for _, row := range report.Values.Observations {
+		if row.RubricVersion != "value-rubric-v3" {
+			t.Fatal(row.RubricVersion)
+		}
+	}
+	fixture.server.mu.Lock()
+	for _, row := range fixture.server.rows {
+		if row[29] != "value-rubric-v3" {
+			t.Errorf("delivered rubric = %q", row[29])
+		}
+	}
+	fixture.server.mu.Unlock()
+	if got := contentGit(t, fixture.project, "rev-parse", "HEAD"); got != beforeHead {
+		t.Fatal("replay changed source HEAD")
+	}
+	if got := fixture.gitState(); got != before {
+		t.Fatalf("replay changed source: %q => %q", before, got)
+	}
 }

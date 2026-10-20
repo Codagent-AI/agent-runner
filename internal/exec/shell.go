@@ -122,7 +122,11 @@ func emitAudit(ctx *model.ExecutionContext, event audit.Event) {
 func emitShellInterpolationFailure(ctx *model.ExecutionContext, step *model.Step, err error) {
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
-	emitStepStart(ctx, prefix, startTime, map[string]any{"command": step.Command})
+	startData := map[string]any{"command": step.Command}
+	if step.MetricsSource != "" {
+		startData["metrics_source"] = step.MetricsSource
+	}
+	emitStepStart(ctx, prefix, startTime, startData)
 	emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{"error": err.Error()}, step)
 }
 
@@ -257,7 +261,11 @@ func ExecuteShellStep(
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
 	setRunnerPrefix(runner, prefix)
-	emitStepStart(ctx, prefix, startTime, map[string]any{"command": truncateForAudit(prep.Command)})
+	startData := map[string]any{"command": truncateForAudit(prep.Command)}
+	if step.MetricsSource != "" {
+		startData["metrics_source"] = step.MetricsSource
+	}
+	emitStepStart(ctx, prefix, startTime, startData)
 
 	run := runPreparedShellCheck(step, ctx, runner, prep)
 	if step.MetricsSource != "" {
