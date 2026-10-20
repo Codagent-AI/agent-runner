@@ -570,11 +570,7 @@ func (o *outputObserver) start(prefix string, cp *GitCheckpoint) {
 	if n := len(o.windows); n > 0 {
 		p := o.windows[n-1]
 		p.budget.boundary()
-		segment := o.delta(p.baseline, obs, filepath.Join(o.sessionDir, "output"), p.budget, p.segment)
-		p.record.Files = append(p.record.Files, segment.Files...)
-		if segment.Status != "observed" {
-			mergeRecordStatus(&p.record, segment.Status, segment.Reason)
-		}
+		o.closeSegment(p, obs)
 	}
 	w := &outputWindow{prefix: prefix, baseline: obs, budget: b, record: WriteRecord{Status: "observed", Files: []FileWrite{}}, repo: map[string]observedFile{}}
 	if cp.Available {
@@ -602,11 +598,7 @@ func (o *outputObserver) end(prefix string, start, end *GitCheckpoint) (output W
 	w := o.windows[n-1]
 	w.budget.boundary()
 	obs := o.observe(w.budget)
-	segment := o.delta(w.baseline, obs, filepath.Join(o.sessionDir, "output"), w.budget, w.segment)
-	w.record.Files = append(w.record.Files, segment.Files...)
-	if segment.Status != "observed" {
-		mergeRecordStatus(&w.record, segment.Status, segment.Reason)
-	}
+	o.closeSegment(w, obs)
 	repo := o.repositoryPatch(w, start, end)
 	o.windows = o.windows[:n-1]
 	if n > 1 {
@@ -615,6 +607,13 @@ func (o *outputObserver) end(prefix string, start, end *GitCheckpoint) (output W
 		p.segment++
 	}
 	return w.record, repo
+}
+func (o *outputObserver) closeSegment(w *outputWindow, obs observation) {
+	segment := o.delta(w.baseline, obs, filepath.Join(o.sessionDir, "output"), w.budget, w.segment)
+	w.record.Files = append(w.record.Files, segment.Files...)
+	if segment.Status != "observed" {
+		mergeRecordStatus(&w.record, segment.Status, segment.Reason)
+	}
 }
 func (o *outputObserver) repositoryPatch(w *outputWindow, start, end *GitCheckpoint) *WriteRecord {
 	if !start.Available || !end.Available {
