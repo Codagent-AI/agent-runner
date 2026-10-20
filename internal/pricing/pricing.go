@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"slices"
 	"sync"
 
 	"github.com/codagent/agent-runner/internal/model"
@@ -83,13 +84,8 @@ func (t *Table) Lookup(provider, name string) (Entry, bool) {
 		if e.Provider != provider {
 			continue
 		}
-		if e.Model == name {
+		if e.Model == name || slices.Contains(e.Aliases, name) {
 			return *e, true
-		}
-		for _, alias := range e.Aliases {
-			if alias == name {
-				return *e, true
-			}
 		}
 	}
 	return Entry{}, false
