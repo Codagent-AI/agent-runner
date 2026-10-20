@@ -15,7 +15,7 @@
   - **Without `jq`:**
     1. Extract the raw string body after `"value":"` up to the first `"`.
     2. Replace every escaped backslash pair (`\\`) with a non-whitespace placeholder.
-    3. Delete literal spaces, the escapes `\t`, `\n`, `\r`, and `\f`, and `\u0009`, `\u000a`, `\u000b`, `\u000c`, `\u000d`, and ` ` (hex case-insensitive).
+    3. Delete literal spaces, the escapes `\t`, `\n`, `\r`, and `\f`, and `\u0009`, `\u000a`, `\u000b`, `\u000c`, `\u000d`, and `\u0020` (hex case-insensitive).
     4. Reject if nothing remains.
   - The new file is under `workflows/core/`, so it is embedded with the namespace. Confirm that any embed or asset-list test (for example `workflows/embed_test.go`) picks it up or is updated.
 
