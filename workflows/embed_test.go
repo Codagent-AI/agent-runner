@@ -762,6 +762,59 @@ func TestCoreCommitChangePlanSkipValidatorControlsValidatorBaseline(t *testing.T
 	})
 }
 
+func TestCoreCommitChangePlanSkipsSymlinkedOpenSpec(t *testing.T) {
+	script, err := ReadAsset("core/commit-change-plan.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(core/commit-change-plan.sh): %v", err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		skipField string
+		wantCalls string
+	}{
+		{name: "default advances baseline", wantCalls: "skip\n"},
+		{name: "skip validator", skipField: `,"skip_validator":"true"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repoDir, run, validatorLog := newCommitChangePlanFixture(t, script)
+			externalDir := t.TempDir()
+			if err := os.Rename(filepath.Join(repoDir, "openspec", "changes"), filepath.Join(externalDir, "changes")); err != nil {
+				t.Fatalf("move plan outside repository: %v", err)
+			}
+			openspecDir := filepath.Join(repoDir, "openspec")
+			if err := os.Remove(openspecDir); err != nil {
+				t.Fatalf("remove openspec directory: %v", err)
+			}
+			if err := os.Symlink(externalDir, openspecDir); err != nil {
+				t.Fatalf("symlink openspec directory: %v", err)
+			}
+			headBefore := string(runGitOutput(t, repoDir, "rev-parse", "HEAD"))
+
+			out, err := run(`{"change_name":"demo","change_dir":"openspec/changes/demo"` + tc.skipField + `}`)
+			if err != nil {
+				t.Fatalf("commit-change-plan: %v\n%s", err, out)
+			}
+			for _, want := range []string{"openspec/changes/demo", "openspec is a symbolic link", "by hand in the repository that holds the OpenSpec project"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("output = %q, want %q", out, want)
+				}
+			}
+			if headAfter := string(runGitOutput(t, repoDir, "rev-parse", "HEAD")); headAfter != headBefore {
+				t.Fatal("symlinked plan created a commit")
+			}
+			runGitOutput(t, repoDir, "diff", "--cached", "--quiet")
+			calls, err := os.ReadFile(validatorLog)
+			if err != nil && !os.IsNotExist(err) {
+				t.Fatalf("read validator log: %v", err)
+			}
+			if got := string(calls); got != tc.wantCalls {
+				t.Fatalf("agent-validator calls = %q, want %q", got, tc.wantCalls)
+			}
+		})
+	}
+}
+
 // newCommitChangePlanFixture creates a git repository with an uncommitted
 // openspec/changes/demo plan and a fake agent-validator that records its
 // arguments. It returns the repository, a script runner, and the log path.
