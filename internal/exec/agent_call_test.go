@@ -696,7 +696,7 @@ func TestPrepareAgentCallRuntimeStampsParentExecutionAttempt(t *testing.T) {
 	workdir := t.TempDir()
 	sessionDir := t.TempDir()
 	collector := metrics.NewCollector(sessionDir, "run", "wf", time.Now())
-	pipeline := metrics.NewExecutionPipeline(collector, nil, sessionDir, "exec-1")
+	pipeline := metrics.NewExecutionPipeline(collector, nil, sessionDir, "exec-1", sessionDir)
 	ctx := model.NewRootContext(&model.RootContextOptions{
 		WorkflowFile: "workflow.yaml", ProjectRoot: workdir, WorkingDir: workdir,
 	})

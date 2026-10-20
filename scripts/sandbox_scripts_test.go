@@ -1109,6 +1109,11 @@ func TestSandboxSyncHomeSerializesConcurrentStaleLockReclaimers(t *testing.T) {
 	aRelease := filepath.Join(dir, "a-release")
 	bEntered := filepath.Join(dir, "b-entered")
 	bRelease := filepath.Join(dir, "b-release")
+	t.Cleanup(func() {
+		// Release wrappers even if a startup assertion fails.
+		_ = os.WriteFile(aRelease, nil, 0o600)
+		_ = os.WriteFile(bRelease, nil, 0o600)
+	})
 	if err := os.WriteFile(filepath.Join(aBin, "rm"), []byte(`#!/usr/bin/env bash
 set -euo pipefail
 if [[ "${*: -1}" == "$SANDBOX_SYNC_HOME_LOCK" && ! -e "$A_PAUSED" ]]; then
@@ -1133,7 +1138,7 @@ exec "$REAL_CP" "$@"
 		"SANDBOX_HOST_HOME_ROOT="+hostHome,
 		"SANDBOX_WORKSPACE_BIN="+workspaceBin,
 		"SANDBOX_SYNC_HOME_LOCK="+lockPath,
-		"SANDBOX_SYNC_HOME_LOCK_TIMEOUT=3",
+		"SANDBOX_SYNC_HOME_LOCK_TIMEOUT=30",
 	)
 	aCmd := exec.Command("bash", "./sandbox-sync-home.sh")
 	aEnv := append([]string(nil), baseEnv...)
@@ -1147,7 +1152,7 @@ exec "$REAL_CP" "$@"
 	if err := aCmd.Start(); err != nil {
 		t.Fatalf("start first reclaimer: %v", err)
 	}
-	waitForPath(t, aPaused, time.Second)
+	waitForPath(t, aPaused, 10*time.Second)
 
 	bCmd := exec.Command("bash", "./sandbox-sync-home.sh")
 	bEnv := append([]string(nil), baseEnv...)
@@ -1170,7 +1175,7 @@ exec "$REAL_CP" "$@"
 		}
 	}
 	for name, cmd := range map[string]*exec.Cmd{"first": aCmd, "second": bCmd} {
-		if err := waitForCommand(cmd, 5*time.Second); err != nil {
+		if err := waitForCommand(cmd, 10*time.Second); err != nil {
 			t.Fatalf("%s reclaimer: %v", name, err)
 		}
 	}

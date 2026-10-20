@@ -24,9 +24,9 @@ import (
 )
 
 const (
-	evidenceSchemaVersion  = 1
+	evidenceSchemaVersion  = 2
 	valueSchemaVersion     = "step_value_v1"
-	rubricVersion          = "value-rubric-v2"
+	rubricVersion          = "value-rubric-v3"
 	defaultPackageBytes    = 256 * 1024
 	defaultLeafDetailBytes = 32 * 1024
 	// Claude receives the output schema inline as one argv string, and Linux
@@ -50,6 +50,12 @@ type Fingerprints struct {
 
 type EvidenceReference struct {
 	ID                       string `json:"id"`
+	Ref                      string `json:"ref,omitempty"`
+	Contribution             string `json:"contribution,omitempty"`
+	Reason                   string `json:"reason,omitempty"`
+	Path                     string `json:"path,omitempty"`
+	Segment                  int    `json:"segment,omitempty"`
+	Omitted                  int    `json:"omitted,omitempty"`
 	Category                 string `json:"category"`
 	Status                   string `json:"status"`
 	ProducerExecutionSession string `json:"producer_execution_session"`
@@ -60,21 +66,26 @@ type EvidenceReference struct {
 }
 
 type GitEvidence struct {
-	Attribution  string   `json:"attribution"`
-	CommitSHAs   []string `json:"commit_shas,omitempty"`
-	DeferredSHAs []string `json:"deferred_commit_shas,omitempty"`
-	FilesChanged *int64   `json:"files_changed"`
-	LinesAdded   *int64   `json:"lines_added"`
-	LinesDeleted *int64   `json:"lines_deleted"`
-	Reason       string   `json:"reason,omitempty"`
-	ChangedPaths []string `json:"changed_paths,omitempty"`
+	Attribution         string   `json:"attribution"`
+	CommitSHAs          []string `json:"commit_shas,omitempty"`
+	DeferredSHAs        []string `json:"deferred_commit_shas,omitempty"`
+	FilesChanged        *int64   `json:"files_changed"`
+	LinesAdded          *int64   `json:"lines_added"`
+	LinesDeleted        *int64   `json:"lines_deleted"`
+	Reason              string   `json:"reason,omitempty"`
+	ChangedPaths        []string `json:"changed_paths,omitempty"`
+	ChangedPathsOmitted int      `json:"changed_paths_omitted,omitempty"`
 	// DeferralPaths lists the working-tree ChangedPaths still dirty at the
 	// step's final checkpoint. Deferred-commit matching uses it so a path the
 	// step removed cannot claim a later commit. Never serialized.
 	DeferralPaths []string `json:"-"`
+	// PathStats sums an attributed commit's per-path line counts; nil when any
+	// commit lacks them. Never serialized.
+	PathStats map[string]gitPathStat `json:"-"`
 }
 
 type CostEvidence struct {
+	CostBasis    *string  `json:"cost_basis,omitempty"`
 	DurationMS   *int64   `json:"duration_ms"`
 	CostUSD      *float64 `json:"cost_usd"`
 	TotalTokens  *int64   `json:"total_tokens"`
@@ -162,7 +173,7 @@ func PrepareEvidence(request Request) (PreparedValueAudit, error) { //nolint:goc
 		return PreparedValueAudit{}, err
 	}
 	if request.Trigger == "replay" {
-		for _, category := range []string{"audit_log", "validation", "artifact", "narrative", "native_session"} {
+		for _, category := range []string{"audit_log", "native_session"} {
 			if hasEvidenceCategoryReference(references, category) {
 				continue
 			}
@@ -251,7 +262,11 @@ func readMetrics(path string) (metrics.Artifact, error) {
 	return artifact, nil
 }
 
-func buildLeaves(request *Request, artifact *metrics.Artifact, refs []EvidenceReference, commits map[string]snapshottedGitCommit) []LeafEvidence {
+func buildLeaves(request *Request, artifact *metrics.Artifact, _ []EvidenceReference, commits map[string]snapshottedGitCommit) []LeafEvidence {
+	events, eventErr := readStepEvents(request.SnapshotPath)
+	if eventErr != nil {
+		events = stepEventIndex{events: map[string][]stepEvent{}, reason: "audit.log unavailable: " + eventErr.Error()}
+	}
 	groups := map[string][]metrics.StepRecord{}
 	for index := range artifact.Steps {
 		record := &artifact.Steps[index]
@@ -269,12 +284,23 @@ func buildLeaves(request *Request, artifact *metrics.Artifact, refs []EvidenceRe
 	leaves := make([]LeafEvidence, 0, len(keys))
 	for _, key := range keys {
 		records := groups[key]
-		sort.SliceStable(records, func(i, j int) bool { return records[i].RecordID < records[j].RecordID })
-		leaf := leafFromRecords(request, artifact, key, records, refs, commits)
+		sort.SliceStable(records, func(i, j int) bool { return records[i].Attempt < records[j].Attempt })
+		events.completeAttempts(request.ExecutionSessionID, key, records)
+		leaf := leafFromRecords(request, artifact, key, records, commits)
+		leaf.Evidence = append(leaf.Evidence, stepReferences(request.SnapshotPath, request.ExecutionSessionID, key, events, artifact, &leaf.Skeleton.Git)...)
 		attachMeasurementEvidence(&leaf, artifact, keys, request.ExecutionSessionID)
 		leaves = append(leaves, leaf)
 	}
+	sort.SliceStable(leaves, func(i, j int) bool {
+		a := events.events[stepEventKey(request.ExecutionSessionID, leaves[i].Skeleton.StepID)]
+		b := events.events[stepEventKey(request.ExecutionSessionID, leaves[j].Skeleton.StepID)]
+		return firstStepLine(a) < firstStepLine(b)
+	})
 	applyDeferredCommitAttribution(leaves)
+	attachCommitReferences(leaves, commits, request.SnapshotPath)
+	for i := range leaves {
+		leaves[i].OmittedCategories = missingEvidenceCategories(leaves[i].Evidence)
+	}
 	return leaves
 }
 
@@ -304,11 +330,59 @@ func logicalPath(prefix, id string) string {
 	return strings.Join(append(parts, id), "/")
 }
 
-func leafFromRecords(request *Request, artifact *metrics.Artifact, path string, records []metrics.StepRecord, refs []EvidenceReference, commits map[string]snapshottedGitCommit) LeafEvidence {
+func leafFromRecords(request *Request, artifact *metrics.Artifact, path string, records []metrics.StepRecord, commits map[string]snapshottedGitCommit) LeafEvidence {
+	cost, outcome, iterations := leafCosts(records)
+	lineage := "new"
+	for index := range artifact.Steps {
+		record := &artifact.Steps[index]
+		if valueLeaf(record) && record.ExecutionSessionID != request.ExecutionSessionID && logicalPath(record.Prefix, record.ID) == path {
+			lineage = "overlap"
+			break
+		}
+	}
+	observedAt := ""
+	for _, session := range artifact.Sessions {
+		if session.ExecutionSessionID == request.ExecutionSessionID {
+			observedAt = session.EndedAt
+			if observedAt == "" {
+				observedAt = session.LastObservedAt
+			}
+			break
+		}
+	}
+	skeleton := ObservationSkeleton{
+		SchemaVersion: valueSchemaVersion, ObservationID: observationID(request.AuditRunID, request.ExecutionSessionID, path), ObservedAtUTC: observedAt,
+		Project: sanitizeProject(request.Project), Workflow: request.SourceWorkflow, SourceRunID: request.SourceRunID, ExecutionSessionID: request.ExecutionSessionID, AuditRunID: request.AuditRunID,
+		Trigger: request.Trigger, StepID: path, Lineage: lineage, StepOutcome: outcome,
+		SourceOutcome: selectedSessionOutcome(artifact, request.ExecutionSessionID),
+		Cost:          cost, Git: aggregateGit(records, commits),
+	}
+	leafRefs := referencesForLeaf(records, request.ExecutionSessionID)
+	gitDetail, _ := json.Marshal(skeleton.Git)
+	leafRefs = append(leafRefs, EvidenceReference{ID: "git-" + skeleton.ObservationID, Category: "git", Status: "available", ProducerExecutionSession: request.ExecutionSessionID, Lineage: skeleton.Lineage, Detail: string(gitDetail)})
+	if len(skeleton.Git.CommitSHAs) > 0 {
+		summaries := []snapshottedGitCommit{}
+		for _, sha := range skeleton.Git.CommitSHAs {
+			summary := commits[sha]
+			summary.PathStats = nil
+			summaries = append(summaries, summary)
+		}
+		detail, _ := json.Marshal(summaries)
+		leafRefs = append(leafRefs, EvidenceReference{ID: "commit-summary-" + skeleton.ObservationID, Category: "commit_summary", Status: "available", ProducerExecutionSession: request.ExecutionSessionID, Lineage: skeleton.Lineage, Detail: string(detail)})
+	}
+	sort.Slice(leafRefs, func(i, j int) bool {
+		return evidencePriority(leafRefs[i].Category) < evidencePriority(leafRefs[j].Category) || (evidencePriority(leafRefs[i].Category) == evidencePriority(leafRefs[j].Category) && leafRefs[i].ID < leafRefs[j].ID)
+	})
+	omitted := missingEvidenceCategories(leafRefs)
+	return LeafEvidence{Skeleton: skeleton, Attempts: len(records), Iterations: iterations, Evidence: leafRefs, OmittedCategories: omitted}
+}
+
+func leafCosts(records []metrics.StepRecord) (evidence CostEvidence, finalOutcome string, iterationCount int) {
 	var duration, tokens int64
 	var durationKnown bool
 	tokensKnown, costKnown := true, true
 	var cost float64
+	bases := map[string]struct{}{}
 	models := map[string]struct{}{}
 	outcome := "unknown"
 	iterations := 0
@@ -336,6 +410,7 @@ func leafFromRecords(request *Request, artifact *metrics.Artifact, path string, 
 			costKnown = false
 		} else {
 			cost += *record.EstimatedAPICostUSD
+			bases[recordCostBasis(record)] = struct{}{}
 		}
 	}
 	var durationPtr *int64
@@ -350,62 +425,13 @@ func leafFromRecords(request *Request, artifact *metrics.Artifact, path string, 
 	if costKnown {
 		costPtr = &cost
 	}
-	lineage := "new"
-	for index := range artifact.Steps {
-		record := &artifact.Steps[index]
-		if valueLeaf(record) && record.ExecutionSessionID != request.ExecutionSessionID && logicalPath(record.Prefix, record.ID) == path {
-			lineage = "overlap"
-			break
-		}
-	}
-	observedAt := ""
-	for _, session := range artifact.Sessions {
-		if session.ExecutionSessionID == request.ExecutionSessionID {
-			observedAt = session.EndedAt
-			if observedAt == "" {
-				observedAt = session.LastObservedAt
-			}
-			break
-		}
-	}
-	skeleton := ObservationSkeleton{
-		SchemaVersion: valueSchemaVersion, ObservationID: observationID(request.AuditRunID, request.ExecutionSessionID, path), ObservedAtUTC: observedAt,
-		Project: sanitizeProject(request.Project), Workflow: request.SourceWorkflow, SourceRunID: request.SourceRunID, ExecutionSessionID: request.ExecutionSessionID, AuditRunID: request.AuditRunID,
-		Trigger: request.Trigger, StepID: path, Lineage: lineage, StepOutcome: outcome,
-		SourceOutcome: selectedSessionOutcome(artifact, request.ExecutionSessionID),
-		Cost:          CostEvidence{DurationMS: durationPtr, CostUSD: costPtr, TotalTokens: tokensPtr, SourceModels: sortedKeys(models)}, Git: aggregateGit(records, commits),
-	}
-	leafRefs := referencesForLeaf(refs, records, request.ExecutionSessionID)
-	gitDetail, _ := json.Marshal(skeleton.Git)
-	leafRefs = append(leafRefs, EvidenceReference{ID: "git-" + skeleton.ObservationID, Category: "git", Status: "available", ProducerExecutionSession: request.ExecutionSessionID, Lineage: skeleton.Lineage, Detail: string(gitDetail)})
-	if len(skeleton.Git.CommitSHAs) > 0 {
-		summaries := []snapshottedGitCommit{}
-		for _, sha := range skeleton.Git.CommitSHAs {
-			summaries = append(summaries, commits[sha])
-		}
-		detail, _ := json.Marshal(summaries)
-		leafRefs = append(leafRefs, EvidenceReference{ID: "commit-summary-" + skeleton.ObservationID, Category: "commit_summary", Status: "available", ProducerExecutionSession: request.ExecutionSessionID, Lineage: skeleton.Lineage, Detail: string(detail)})
-	}
-	sort.Slice(leafRefs, func(i, j int) bool {
-		return evidencePriority(leafRefs[i].Category) < evidencePriority(leafRefs[j].Category) || (evidencePriority(leafRefs[i].Category) == evidencePriority(leafRefs[j].Category) && leafRefs[i].ID < leafRefs[j].ID)
-	})
-	omitted := missingEvidenceCategories(leafRefs)
-	return LeafEvidence{Skeleton: skeleton, Attempts: len(records), Iterations: iterations, Evidence: leafRefs, OmittedCategories: omitted}
+	return CostEvidence{CostBasis: costBasisFor(bases, costKnown), DurationMS: durationPtr, CostUSD: costPtr, TotalTokens: tokensPtr, SourceModels: sortedKeys(models)}, outcome, iterations
 }
 
-func referencesForLeaf(refs []EvidenceReference, records []metrics.StepRecord, executionSessionID string) []EvidenceReference {
+func referencesForLeaf(records []metrics.StepRecord, executionSessionID string) []EvidenceReference {
 	result := []EvidenceReference{}
 	metricsDetail, _ := json.Marshal(records)
-	result = append(result, EvidenceReference{ID: "metrics-" + records[0].RecordID, Category: "metrics", Status: "available", ProducerExecutionSession: executionSessionID, Lineage: "new", Detail: string(metricsDetail)})
-	for _, ref := range refs {
-		for index := range records {
-			record := &records[index]
-			if (ref.Category == "validation" || ref.Category == "artifact" || ref.Category == "narrative") && strings.Contains(strings.ToLower(ref.LocalPath), strings.ToLower(record.ID)) {
-				result = append(result, ref)
-				break
-			}
-		}
-	}
+	result = append(result, EvidenceReference{ID: "metrics-" + observationID("", executionSessionID, logicalPath(records[0].Prefix, records[0].ID)), Category: "metrics", Status: "available", ProducerExecutionSession: executionSessionID, Lineage: "new", Detail: string(metricsDetail)})
 	sort.Slice(result, func(i, j int) bool {
 		return evidencePriority(result[i].Category) < evidencePriority(result[j].Category) || (evidencePriority(result[i].Category) == evidencePriority(result[j].Category) && result[i].ID < result[j].ID)
 	})
@@ -415,15 +441,28 @@ func referencesForLeaf(refs []EvidenceReference, records []metrics.StepRecord, e
 func missingEvidenceCategories(refs []EvidenceReference) []string {
 	required := []string{"metrics", "git", "commit_summary", "validation", "artifact", "narrative", "native_session"}
 	seen := map[string]bool{}
-	for _, ref := range refs {
-		if ref.Status == "available" {
+	for evidenceIndex := range refs {
+		ref := &refs[evidenceIndex]
+		if ref.Status == "available" || ref.Status == "none_produced" {
 			seen[ref.Category] = true
+		}
+	}
+	for i := range refs {
+		ref := &refs[i]
+		if strings.HasPrefix(ref.ID, "written-coverage-") {
+			seen[ref.Category] = oneOf(ref.Status, "available", "none_produced", "partial")
 		}
 	}
 	missing := []string{}
 	for _, category := range required {
 		if !seen[category] {
 			missing = append(missing, category+"_unavailable")
+		}
+	}
+	for evidenceIndex := range refs {
+		ref := &refs[evidenceIndex]
+		if ref.Status == "partial" {
+			missing = append(missing, "partial_"+ref.Category)
 		}
 	}
 	return missing
@@ -489,6 +528,15 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 	pathsComplete := true
 	for index := range records {
 		record := &records[index]
+		if record.GitStart != nil && record.GitEnd != nil && (!record.GitStart.Available || !record.GitEnd.Available) {
+			return GitEvidence{Attribution: "unavailable", CommitSHAs: []string{}, DeferredSHAs: []string{}, Reason: "Git checkpoint evidence unavailable"}
+		}
+		if record.GitEnd != nil && record.GitStart != nil && record.GitEnd.HEAD != record.GitStart.HEAD {
+			if commits == nil {
+				return GitEvidence{Attribution: "unavailable", CommitSHAs: []string{}, DeferredSHAs: []string{}, Reason: "Git commit metadata is unavailable"}
+			}
+			return attributeBoundaryCommits(record, commits)
+		}
 		if record.GitChanges == nil || !record.GitChanges.Available {
 			return GitEvidence{Attribution: "unavailable", CommitSHAs: []string{}, DeferredSHAs: []string{}, Reason: "Git checkpoint evidence unavailable"}
 		}
@@ -498,31 +546,7 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 		if record.GitStart == nil || record.GitEnd == nil || int64(len(audit.ChangedDirtyPaths(record.GitStart, record.GitEnd))) != record.GitChanges.FilesChanged {
 			pathsComplete = false
 		}
-		if record.GitEnd != nil && record.GitStart != nil && record.GitEnd.HEAD != record.GitStart.HEAD {
-			if commits == nil {
-				return GitEvidence{Attribution: "unavailable", CommitSHAs: []string{}, DeferredSHAs: []string{}, Reason: "Git commit metadata is unavailable"}
-			}
-			attributed := []string{}
-			var commitFiles, commitAdded, commitDeleted int64
-			paths := []string{}
-			for _, sha := range record.GitEnd.Commits {
-				commit, exists := commits[sha]
-				if !exists || !strings.HasPrefix(commit.Subject, "["+record.ID+"]") {
-					continue
-				}
-				attributed = append(attributed, sha)
-				commitFiles += commit.FilesChanged
-				commitAdded += commit.LinesAdded
-				commitDeleted += commit.LinesDeleted
-				paths = append(paths, commit.Paths...)
-			}
-			if len(attributed) == 0 {
-				return GitEvidence{Attribution: "ambiguous", CommitSHAs: []string{}, DeferredSHAs: []string{}, Reason: "no boundary commit has this step's exact prefix"}
-			}
-			sort.Strings(attributed)
-			sort.Strings(paths)
-			return GitEvidence{Attribution: "attributed", CommitSHAs: attributed, DeferredSHAs: []string{}, FilesChanged: &commitFiles, LinesAdded: &commitAdded, LinesDeleted: &commitDeleted, ChangedPaths: paths}
-		}
+
 	}
 	if files != 0 || added != 0 || deleted != 0 {
 		result.Attribution = "working_tree"
@@ -536,6 +560,39 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 		result.FilesChanged, result.LinesAdded, result.LinesDeleted = &zero, &zero, &zero
 	}
 	return result
+}
+
+func attributeBoundaryCommits(record *metrics.StepRecord, commits map[string]snapshottedGitCommit) GitEvidence {
+	attributed := []string{}
+	var commitFiles, commitAdded, commitDeleted int64
+	paths := []string{}
+	pathStats := map[string]gitPathStat{}
+	for _, sha := range record.GitEnd.Commits {
+		commit, exists := commits[sha]
+		if !exists || !strings.HasPrefix(commit.Subject, "["+record.ID+"]") {
+			continue
+		}
+		attributed = append(attributed, sha)
+		commitFiles += commit.FilesChanged
+		commitAdded += commit.LinesAdded
+		commitDeleted += commit.LinesDeleted
+		paths = append(paths, commit.Paths...)
+		if len(commit.PathStats) != len(commit.Paths) {
+			pathStats = nil
+		}
+		for _, stat := range commit.PathStats {
+			if pathStats != nil {
+				total := pathStats[stat.Path]
+				pathStats[stat.Path] = gitPathStat{Path: stat.Path, LinesAdded: total.LinesAdded + stat.LinesAdded, LinesDeleted: total.LinesDeleted + stat.LinesDeleted}
+			}
+		}
+	}
+	if len(attributed) == 0 {
+		return GitEvidence{Attribution: "ambiguous", CommitSHAs: []string{}, DeferredSHAs: []string{}, Reason: "no boundary commit has this step's exact prefix"}
+	}
+	sort.Strings(attributed)
+	sort.Strings(paths)
+	return GitEvidence{Attribution: "attributed", CommitSHAs: attributed, DeferredSHAs: []string{}, FilesChanged: &commitFiles, LinesAdded: &commitAdded, LinesDeleted: &commitDeleted, ChangedPaths: paths, PathStats: pathStats}
 }
 
 // dirtyChangedPaths returns the start-to-end dirty-path delta across records,
@@ -584,8 +641,8 @@ func readGitEvidence(path string) map[string]snapshottedGitCommit {
 		return nil
 	}
 	commits := make(map[string]snapshottedGitCommit, len(evidence.Commits))
-	for _, commit := range evidence.Commits {
-		commits[commit.SHA] = commit
+	for i := range evidence.Commits {
+		commits[evidence.Commits[i].SHA] = evidence.Commits[i]
 	}
 	return commits
 }
@@ -595,6 +652,7 @@ func applyDeferredCommitAttribution(leaves []LeafEvidence) {
 		if leaves[index].Skeleton.Git.Attribution != "attributed" {
 			continue
 		}
+		deferredPaths := map[string]bool{}
 		for prior := 0; prior < index; prior++ {
 			if leaves[prior].Skeleton.Git.Attribution != "working_tree" || leaves[prior].Skeleton.Git.FilesChanged == nil || *leaves[prior].Skeleton.Git.FilesChanged == 0 {
 				continue
@@ -604,10 +662,39 @@ func applyDeferredCommitAttribution(leaves []LeafEvidence) {
 			}
 			leaves[prior].Skeleton.Git.Attribution = "deferred_commit"
 			leaves[prior].Skeleton.Git.DeferredSHAs = append(leaves[prior].Skeleton.Git.DeferredSHAs, leaves[index].Skeleton.Git.CommitSHAs...)
-			leaves[index].Skeleton.Git.Attribution = "no_change"
+			for _, path := range leaves[prior].Skeleton.Git.DeferralPaths {
+				deferredPaths[path] = true
+			}
+
+		}
+		git := &leaves[index].Skeleton.Git
+		remaining := 0
+		for _, path := range git.ChangedPaths {
+			if !deferredPaths[path] {
+				remaining++
+			}
+		}
+		switch {
+		case len(git.ChangedPaths) > 0 && remaining == 0:
+			git.Attribution = "no_change"
 			zero := int64(0)
-			leaves[index].Skeleton.Git.FilesChanged, leaves[index].Skeleton.Git.LinesAdded, leaves[index].Skeleton.Git.LinesDeleted = &zero, &zero, &zero
-			break
+			git.FilesChanged, git.LinesAdded, git.LinesDeleted = &zero, &zero, &zero
+		case remaining < len(git.ChangedPaths):
+			// A mixed commit must not count the deferred paths again.
+			files := int64(remaining)
+			git.FilesChanged = &files
+			if git.PathStats == nil {
+				git.LinesAdded, git.LinesDeleted = nil, nil
+				break
+			}
+			var added, deleted int64
+			for path, stat := range git.PathStats {
+				if !deferredPaths[path] {
+					added += stat.LinesAdded
+					deleted += stat.LinesDeleted
+				}
+			}
+			git.LinesAdded, git.LinesDeleted = &added, &deleted
 		}
 	}
 }
@@ -697,7 +784,8 @@ func evidencePriority(category string) int {
 }
 
 func hasEvidenceCategory(refs []EvidenceReference, category string) bool {
-	for _, ref := range refs {
+	for evidenceIndex := range refs {
+		ref := &refs[evidenceIndex]
 		if ref.Category == category && ref.Status == "available" {
 			return true
 		}
@@ -706,7 +794,8 @@ func hasEvidenceCategory(refs []EvidenceReference, category string) bool {
 }
 
 func hasEvidenceCategoryReference(refs []EvidenceReference, category string) bool {
-	for _, ref := range refs {
+	for evidenceIndex := range refs {
+		ref := &refs[evidenceIndex]
 		if ref.Category == category {
 			return true
 		}
@@ -761,17 +850,6 @@ func buildValuePackages(leaves []LeafEvidence) ([]ValuePackage, error) {
 	return packages, nil
 }
 
-func boundLeafDetail(leaf *LeafEvidence) LeafEvidence {
-	result := *leaf
-	result.Evidence = append([]EvidenceReference(nil), leaf.Evidence...)
-	for len(result.Evidence) > 0 && encodedJSONBytes(result) > defaultLeafDetailBytes {
-		result.Evidence = result.Evidence[:len(result.Evidence)-1]
-		result.OmittedCategories = append(result.OmittedCategories, "truncated_default_evidence")
-	}
-	sort.Strings(result.OmittedCategories)
-	return result
-}
-
 func encodedJSONBytes(value any) int {
 	data, _ := json.Marshal(value)
 	return len(data)
@@ -785,7 +863,8 @@ func persistPrepared(request *Request, prepared *PreparedValueAudit) error {
 		return err
 	}
 	manifest := map[string]string{}
-	for _, ref := range prepared.Index.References {
+	for evidenceIndex := range prepared.Index.References {
+		ref := &prepared.Index.References[evidenceIndex]
 		if ref.LocalPath != "" {
 			manifest[ref.ID] = filepath.Join(request.SnapshotPath, ref.LocalPath)
 		}
@@ -910,7 +989,8 @@ func ValidateValueOutputs(request Request, prepared PreparedValueAudit, outputs 
 		seenBatches[batch.BatchID] = struct{}{}
 		knownRefs := map[string]struct{}{}
 		for index := range pkg.Leaves {
-			for _, ref := range pkg.Leaves[index].Evidence {
+			for evidenceIndex := range pkg.Leaves[index].Evidence {
+				ref := &pkg.Leaves[index].Evidence[evidenceIndex]
 				if ref.Status == "available" {
 					knownRefs[ref.ID] = struct{}{}
 				}
@@ -995,8 +1075,9 @@ func incompleteLeafEvidence(leaf *LeafEvidence) bool {
 	if len(leaf.OmittedCategories) != 0 {
 		return true
 	}
-	for _, ref := range leaf.Evidence {
-		if ref.Status != "available" {
+	for evidenceIndex := range leaf.Evidence {
+		ref := &leaf.Evidence[evidenceIndex]
+		if ref.Status != "available" && ref.Status != "none_produced" {
 			return true
 		}
 	}
@@ -1155,13 +1236,15 @@ func validateValueStage(request *Request) error {
 func allEvidenceReferences(index *EvidenceIndex) []EvidenceReference {
 	references := append([]EvidenceReference(nil), index.References...)
 	seen := map[string]bool{}
-	for _, reference := range references {
+	for evidenceIndex := range references {
+		reference := &references[evidenceIndex]
 		seen[reference.ID] = true
 	}
 	for leafIndex := range index.Leaves {
-		for _, reference := range index.Leaves[leafIndex].Evidence {
+		for evidenceIndex := range index.Leaves[leafIndex].Evidence {
+			reference := &index.Leaves[leafIndex].Evidence[evidenceIndex]
 			if !seen[reference.ID] {
-				references = append(references, reference)
+				references = append(references, *reference)
 				seen[reference.ID] = true
 			}
 		}
@@ -1177,7 +1260,8 @@ type consultationLedgerEntry struct {
 
 func consultationLedger(observations []ValueObservation, references []EvidenceReference) []consultationLedgerEntry {
 	categories := map[string]string{}
-	for _, reference := range references {
+	for evidenceIndex := range references {
+		reference := &references[evidenceIndex]
 		categories[reference.ID] = reference.Category
 	}
 	ledger := []consultationLedgerEntry{}
@@ -1425,6 +1509,8 @@ func valueAuditPrompt(pkg ValuePackage) (string, error) {
 Judge each step's marginal contribution, not how much activity occurred or whether it merely completed successfully. Successful execution alone is not evidence of value. Ground the judgment in the concrete result and its downstream effect. Git changes and directly attributed commits are primary evidence when present. Do not equate no repository change with no value: planning, review, validation, and decision steps can be valuable through their artifacts and consequences.
 
 Assess benefit relative to resource use. Consider trustworthy duration, tokens, and monetary cost together with attempts and iterations; an unavailable metric is unknown, not zero. A costly step may still be high value when it uniquely prevents or corrects consequential problems, while a cheap successful step may be low value when it adds little. Use unique_contribution to identify overlap with other steps and downstream_evidence to distinguish claimed benefit from confirmed benefit.
+
+Use each step's own output and append, created, diff (only + and - lines; unchanged lines are context), and commit_patch contributions as primary evidence. Give no credit for context_possibly_inherited, commit_patch_confirmation, or unresolved content. Credit detection to the step whose own output or contribution first reported the problem, and correction to the step whose contribution implemented the fix. Never rate both unique for the same outcome. Missing output lowers confidence and coverage; do not infer credit from neighbouring steps alone.
 
 Compare related leaves available in the batch and use lineage to understand nested review or validation work. Distinguish the contribution of a detector and remediation step: credit finding a real problem to the detector, credit implementing the correction to the fixer, and avoid double-crediting the same outcome. Do not invent comparisons to leaves or evidence that are unavailable.
 
@@ -1816,7 +1902,8 @@ func valueOutputSchema(pkg ValuePackage) map[string]any {
 	seenConsultations := map[string]bool{}
 	for leafIndex := range pkg.Leaves {
 		leaf := &pkg.Leaves[leafIndex]
-		for _, reference := range leaf.Evidence {
+		for evidenceIndex := range leaf.Evidence {
+			reference := &leaf.Evidence[evidenceIndex]
 			if reference.Status == "available" && !seenConsultations[reference.ID] {
 				consultations = append(consultations, reference.ID)
 				seenConsultations[reference.ID] = true
@@ -1895,4 +1982,24 @@ func prepareModelWorkspace(request *Request) (string, error) {
 		return "", err
 	}
 	return workspace, nil
+}
+
+func costBasisFor(bases map[string]struct{}, known bool) *string {
+	if !known || len(bases) == 0 {
+		return nil
+	}
+	basis := "mixed"
+	if len(bases) == 1 {
+		for key := range bases {
+			basis = key
+		}
+	}
+	return &basis
+}
+
+func recordCostBasis(record *metrics.StepRecord) string {
+	if record.CostBasis == "" {
+		return "reported"
+	}
+	return string(record.CostBasis)
 }

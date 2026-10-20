@@ -241,7 +241,7 @@ func TestExecuteCheckStepBuildsFailureRecordWithGuardedExecution(t *testing.T) {
 	t.Run("failure record attempt matches the check's own audit identity.attempt", func(t *testing.T) {
 		sessionDir := t.TempDir()
 		collector := metrics.NewCollector(sessionDir, "run", "wf", time.Now())
-		pipeline := metrics.NewExecutionPipeline(collector, nil, sessionDir, "exec-1")
+		pipeline := metrics.NewExecutionPipeline(collector, nil, sessionDir, "exec-1", sessionDir)
 		ctx := makeCtx()
 		ctx.AuditLogger = pipeline
 		step := model.Step{ID: "verify-draft-pr", Command: "exit 1"}

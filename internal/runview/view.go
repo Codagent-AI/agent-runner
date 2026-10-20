@@ -786,6 +786,7 @@ func (m *Model) renderLegend() string {
 	b.WriteString("\n  ")
 	b.WriteString(tuistyle.SelectedStyle.Render("Live Navigation"))
 	b.WriteString("\n\n")
+	b.WriteString("  ~  estimated API-equivalent cost\n")
 	b.WriteString("  t  follow selected response\n")
 	b.WriteString("  l  jump to active step and resume auto-follow\n")
 

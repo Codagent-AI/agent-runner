@@ -18,13 +18,13 @@ import (
 func (a *CodexAdapter) ExtractUsageWithContext(stdout string, uc UsageContext) (UsageExtraction, error) {
 	result, err := a.ExtractUsage(stdout)
 	if err == nil {
-		result.Usage.Context = codexContext(stdout, uc)
+		result.Usage.Context, result.Usage.RequestEvidence = codexContext(stdout, uc)
 	}
 	return result, err
 }
 
 //nolint:gocritic // UsageContext is an immutable value shared by adapter capability interfaces.
-func codexContext(stdout string, uc UsageContext) *model.ContextMeasurement {
+func codexContext(stdout string, uc UsageContext) (*model.ContextMeasurement, *model.RequestEvidence) {
 	session := ""
 	scanner := newStreamScanner(strings.NewReader(stdout))
 	for scanner.Scan() {
@@ -37,7 +37,7 @@ func codexContext(stdout string, uc UsageContext) *model.ContextMeasurement {
 		}
 	}
 	if session == "" {
-		return unavailableCodexContext(model.UnavailableNoUsageEvent)
+		return unavailableCodexContext(model.UnavailableNoUsageEvent), unavailableCodexRequests(model.UnavailableCodexRolloutNotFound)
 	}
 	home := ""
 	for _, entry := range uc.Env {
@@ -48,23 +48,23 @@ func codexContext(stdout string, uc UsageContext) *model.ContextMeasurement {
 	if home == "" {
 		dir, err := os.UserHomeDir()
 		if err != nil {
-			return unavailableCodexContext(model.UnavailableCodexRolloutNotFound)
+			return unavailableCodexContext(model.UnavailableCodexRolloutNotFound), unavailableCodexRequests(model.UnavailableCodexRolloutNotFound)
 		}
 		home = filepath.Join(dir, ".codex")
 	}
 	path := findCodexRollout(filepath.Join(home, "sessions"), session)
 	if path == "" {
-		return unavailableCodexContext(model.UnavailableCodexRolloutNotFound)
+		return unavailableCodexContext(model.UnavailableCodexRolloutNotFound), unavailableCodexRequests(model.UnavailableCodexRolloutNotFound)
 	}
 	f, err := os.Open(path) // #nosec G304 -- located in the effective Codex sessions directory
 	if err != nil {
-		return unavailableCodexContext(model.UnavailableCodexRolloutNotFound)
+		return unavailableCodexContext(model.UnavailableCodexRolloutNotFound), unavailableCodexRequests(model.UnavailableCodexRolloutNotFound)
 	}
 	defer func() { _ = f.Close() }()
-	return readCodexContext(f, session, uc.StartedAt)
+	return readCodexRollout(f, session, uc.StartedAt)
 }
 
-func readCodexContext(reader io.Reader, session string, startedAt time.Time) *model.ContextMeasurement {
+func readCodexRollout(reader io.Reader, session string, startedAt time.Time) (*model.ContextMeasurement, *model.RequestEvidence) {
 	acc := codexRolloutAccumulator{session: session, compacted: map[string]bool{}}
 	line := 0
 	// Rollout lines (compacted replacement history, large tool outputs) can be
@@ -73,7 +73,7 @@ func readCodexContext(reader io.Reader, session string, startedAt time.Time) *mo
 	for {
 		raw, readErr := br.ReadBytes('\n')
 		if readErr != nil && readErr != io.EOF {
-			return unavailableCodexContext(model.UnavailableParseFailure)
+			return unavailableCodexContext(model.UnavailableParseFailure), unavailableCodexRequests(model.UnavailableParseFailure)
 		}
 		if len(raw) == 0 {
 			break // a trailing newline at EOF is not an extra line
@@ -86,10 +86,10 @@ func readCodexContext(reader io.Reader, session string, startedAt time.Time) *mo
 			Payload   json.RawMessage `json:"payload"`
 		}
 		if json.Unmarshal(raw, &event) != nil {
-			return unavailableCodexContext(model.UnavailableParseFailure)
+			return unavailableCodexContext(model.UnavailableParseFailure), unavailableCodexRequests(model.UnavailableParseFailure)
 		}
 		if !event.Timestamp.Before(startedAt) && !acc.apply(event.Type, event.Payload, line) {
-			return unavailableCodexContext(model.UnavailableParseFailure)
+			return unavailableCodexContext(model.UnavailableParseFailure), unavailableCodexRequests(model.UnavailableParseFailure)
 		}
 		if readErr == io.EOF {
 			break
@@ -98,17 +98,19 @@ func readCodexContext(reader io.Reader, session string, startedAt time.Time) *mo
 	if len(acc.records) == 0 && acc.nonzero {
 		c := unavailableCodexContext(model.UnavailableCodexRolloutUnsupported)
 		c.ContextWindowLimit = acc.window
-		return c
+		return c, acc.requestEvidence()
 	}
-	return reduceCodexContext(acc.records, acc.compacted, line, acc.window)
+	return reduceCodexContext(acc.records, acc.compacted, line, acc.window), acc.requestEvidence()
 }
 
 type codexRolloutAccumulator struct {
-	session   string
-	records   []codexContextResponse
-	compacted map[string]bool
-	window    *int64
-	nonzero   bool
+	session        string
+	requests       []model.RequestUsage
+	requestFailure bool
+	records        []codexContextResponse
+	compacted      map[string]bool
+	window         *int64
+	nonzero        bool
 }
 
 // apply folds one in-window record into the accumulator. It returns false when
@@ -131,7 +133,10 @@ func (a *codexRolloutAccumulator) apply(eventType string, payload json.RawMessag
 			Thread   string `json:"thread_id"`
 			Response string `json:"response_id"`
 			Usage    struct {
-				Input *int64 `json:"input_tokens"`
+				Input      *int64 `json:"input_tokens"`
+				Cached     *int64 `json:"cached_input_tokens"`
+				Output     *int64 `json:"output_tokens"`
+				CacheWrite *int64 `json:"cache_write_input_tokens"`
 			} `json:"usage"`
 		}
 		if !decodeCodexPayload(payload, &p) {
@@ -139,6 +144,11 @@ func (a *codexRolloutAccumulator) apply(eventType string, payload json.RawMessag
 		}
 		if p.Thread == a.session {
 			a.records = append(a.records, codexContextResponse{p.Response, p.Usage.Input, line})
+			if p.Usage.Input == nil || p.Usage.Cached == nil || p.Usage.Output == nil {
+				a.requestFailure = true
+			} else {
+				a.requests = append(a.requests, model.RequestUsage{Input: *p.Usage.Input, Cached: *p.Usage.Cached, Output: *p.Usage.Output, CacheWrite: p.Usage.CacheWrite})
+			}
 		}
 	case "event_msg":
 		// Only token_count payloads are decoded in full; any other event_msg is
@@ -231,4 +241,17 @@ func codexNonzeroUsage(counts map[string]int64) bool {
 
 func unavailableCodexContext(reason model.UnavailableReason) *model.ContextMeasurement {
 	return &model.ContextMeasurement{Status: model.ContextUnavailable, Reason: reason, Source: "codex:rollout"}
+}
+
+func unavailableCodexRequests(reason model.UnavailableReason) *model.RequestEvidence {
+	return &model.RequestEvidence{Source: "codex:rollout", Status: model.UsageUnavailable, Reason: reason}
+}
+func (a *codexRolloutAccumulator) requestEvidence() *model.RequestEvidence {
+	if a.requestFailure {
+		return unavailableCodexRequests(model.UnavailableParseFailure)
+	}
+	if len(a.requests) == 0 {
+		return unavailableCodexRequests(model.UnavailableCodexRolloutUnsupported)
+	}
+	return &model.RequestEvidence{Source: "codex:rollout", Status: model.UsageCollected, Requests: a.requests}
 }

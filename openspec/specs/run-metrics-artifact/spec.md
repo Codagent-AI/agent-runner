@@ -51,9 +51,9 @@ In the compatibility views, per-category token totals SHALL be the sum of the va
 
 Schema v4 SHALL retain each accepted producer invocation and model-attempt record intact, including its selected revision, digest, and measurement version, separately from original Runner run/session/parent attribution. The artifact SHALL expose invocation membership, delivery state and gaps, and independent history, collection, per-model, and field-level completeness. External consumers SHALL require neither private Validator storage nor Runner's recovery journal. Compatibility step fields and scalar totals SHALL be derived views and MUST NOT be counted again alongside authoritative measurement heads.
 
-The authoritative per-field v4 aggregates SHALL retain known subtotals and available/partial/unavailable states, precision, and contributing/partial/missing attempt coverage. A partial value SHALL retain its reason and MUST NOT become a complete value merely because numeric. Categories MAY overlap; a grand total SHALL require established non-overlapping semantics. Per-model allocations, unallocated evidence, allocation/identity joins, and provider-reported cost scope/currency/coverage/overlap SHALL survive unchanged. Scalar USD views SHALL use only unambiguous full attempt-level reported USD evidence and MUST NOT promote partial, allocation-only, or overlapping costs to full attempt cost. Source versions and aggregate interpretation SHALL be explicit; unsupported or conflicting actual heads SHALL not contribute numerically or be replaced by older compatible heads.
+The authoritative per-field v4 aggregates SHALL retain known subtotals and available/partial/unavailable states, precision, and contributing/partial/missing attempt coverage. A partial value SHALL retain its reason and MUST NOT become a complete value merely because numeric. Categories MAY overlap; a grand total SHALL require established non-overlapping semantics. Per-model allocations, unallocated evidence, allocation/identity joins, and provider-reported cost scope/currency/coverage/overlap SHALL survive unchanged. Scalar USD views SHALL use only unambiguous full attempt-level USD evidence: CLI-reported evidence, or a Runner estimate that meets the full-attempt eligibility rule of `cost-estimation`. They MUST NOT promote partial, allocation-only, or overlapping costs, or a partial estimate subtotal, to full attempt cost. Source versions and aggregate interpretation SHALL be explicit; unsupported or conflicting actual heads SHALL not contribute numerically or be replaced by older compatible heads.
 
-Native measurements SHALL carry attempt-scoped `reported-cost` evidence for captured costs from `claude:result-event`, interactive Claude `claude:session-transcript`, and `opencode:step_finish`. These costs SHALL have full coverage and established overlap; the interactive Claude cost SHALL use the attributable CLI-reported delta defined by `cost-capture`.
+Native measurements SHALL carry attempt-scoped `reported-cost` evidence for captured costs from `claude:result-event`, interactive Claude `claude:session-transcript`, and `opencode:step_finish`. These costs SHALL have full coverage and established overlap; the interactive Claude cost SHALL use the attributable CLI-reported delta defined by `cost-capture`. Native measurements of eligible Codex attempts SHALL carry one attempt-scoped `estimated-cost` instead. It has full coverage and established overlap, currency USD, origin `derived`, precision `approximate`, and a derivation naming the valuation policy and price-table version, and it carries the estimate's limitations (such as `cache_writes_unobserved`). Ineligible Codex attempts SHALL carry no full-coverage cost. They MAY carry a known estimated subtotal only with `partial` coverage and the ineligibility reason. Nested Validator projections SHALL keep deriving their cost only from producer cost evidence.
 
 #### Scenario: Interactive Claude reported cost
 - **WHEN** an autonomous-interactive Claude attempt has an attributable reported USD cost
@@ -104,6 +104,23 @@ Native measurements SHALL carry attempt-scoped `reported-cost` evidence for capt
 #### Scenario: Measurement version differs from outer artifact version
 - **WHEN** v4 contains a measurement v1 record
 - **THEN** its original version and digest remain unchanged and aggregate interpretation is declared independently
+
+#### Scenario: Codex estimated cost evidence
+- **WHEN** an autonomous-headless Codex attempt has an eligible estimate
+- **THEN** its native measurement contains exactly one `estimated-cost` with scope `attempt`, coverage `full`, overlap `established`, origin `derived`, and precision `approximate`
+- **AND** the compatibility step's `estimated_api_cost_usd` equals that amount
+
+#### Scenario: Partial estimate subtotal not promoted
+- **WHEN** an external-user Codex step has eligible estimates for some turns and an unattributed turn
+- **THEN** any retained estimated subtotal has `partial` coverage, the step's `estimated_api_cost_usd` is null, and the step counts as missing cost in compatibility cost coverage
+
+#### Scenario: Nested Validator projection unchanged
+- **WHEN** a nested Validator attempt's producer evidence has token usage and no full attempt-level USD cost
+- **THEN** its projected step's `estimated_api_cost_usd` is null and no Runner estimate is attached across measurement refreshes
+
+#### Scenario: Costed nested projection keeps its basis across refresh
+- **WHEN** a run holds a nested Validator projection with a producer-reported full attempt-level USD cost of $0.40 and a native Codex step with an estimated $0.98, and the artifact's measurements are refreshed and the artifact reloaded
+- **THEN** the projection's cost basis is `reported` after every refresh and reload, the run and session totals' cost basis is `mixed`, and `cost_by_basis` is $0.40 reported and $0.98 estimated, summing to the $1.38 total
 
 ### Requirement: Execution attempts are append-only
 
@@ -436,4 +453,32 @@ When Agent Runner resumes a run whose existing `run-metrics.json` records attemp
 #### Scenario: Schema version unchanged
 - **WHEN** an artifact with context measurements is written
 - **THEN** its schema version is the same as an artifact without them, because the fields are additive and backward compatible
+
+### Requirement: Cost basis in step records and totals
+
+Each step record SHALL expose its cost basis (`reported`, `estimated`, or absent when the cost is null). Nested producer projections SHALL derive their basis on every measurement refresh, not only on load: a projected producer full attempt-level USD cost is `reported`. A record with an estimated cost SHALL also expose the price-table version used. A Codex record whose estimate is ineligible SHALL expose the ineligibility reason. Run-level totals and each execution-session rollup SHALL expose a cost-basis indicator (`reported`, `estimated`, `mixed`, or null when cost coverage is `none`) and the cost subtotal per basis, alongside the existing cost total and coverage. These are additive fields: the existing `estimated_api_cost_usd` fields and totals keep their names and include estimates, so existing consumers include Codex estimates without changes. The schema version SHALL remain 4, because the change is backward compatible.
+
+#### Scenario: Estimated step record
+- **WHEN** a Codex step receives an eligible estimate
+- **THEN** its record shows `estimated_api_cost_usd`, cost basis `estimated`, and the price-table version
+
+#### Scenario: Ineligible Codex record
+- **WHEN** a Codex step's estimate is ineligible because its band cannot be decided
+- **THEN** its record shows a null `estimated_api_cost_usd`, no cost basis, and reason `context-band-unknown`
+
+#### Scenario: Session rollup basis
+- **WHEN** a resumed run's first execution session ran only Claude steps with reported costs and its second ran only eligible Codex steps
+- **THEN** the first session rollup's cost basis is `reported`, the second's is `estimated`, and the run totals' is `mixed`, each with matching per-basis subtotals
+
+#### Scenario: Existing consumer reads totals
+- **WHEN** a consumer reads only `totals.estimated_api_cost_usd` and `totals.cost_coverage` from a mixed Claude and Codex run
+- **THEN** the total includes both the reported and the estimated costs
+
+### Requirement: Artifacts written before cost estimation
+
+When Runner loads a `run-metrics.json` written before cost estimation existed, it SHALL NOT re-price earlier Codex records: their `estimated_api_cost_usd` stays null and they carry no estimate reason. Existing non-null costs SHALL be given cost basis `reported`, since only CLI-reported costs existed before. Totals SHALL be recomputed with the cost-basis indicator from the retained records.
+
+#### Scenario: Earlier Codex records stay unpriced
+- **WHEN** a run created by an earlier binary, containing a Codex step with null cost and a Claude step with reported cost, is resumed and runs an eligible Codex step
+- **THEN** the earlier Codex step stays null, the Claude step's basis is `reported`, the new Codex step is `estimated`, the run's cost basis is `mixed`, and cost coverage is `partial`
 

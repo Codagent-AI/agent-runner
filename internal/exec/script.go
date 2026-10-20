@@ -91,7 +91,11 @@ func runScriptCheck(step *model.Step, ctx *model.ExecutionContext, runner Proces
 func ExecuteScriptStep(step *model.Step, ctx *model.ExecutionContext, runner ProcessRunner, log Logger) (StepOutcome, error) {
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
-	emitStepStart(ctx, prefix, startTime, map[string]any{"script": step.Script})
+	startData := map[string]any{"script": step.Script}
+	if step.MetricsSource != "" {
+		startData["metrics_source"] = step.MetricsSource
+	}
+	emitStepStart(ctx, prefix, startTime, startData)
 
 	log.Printf("  script: %s\n", step.Script)
 	switch ps := runner.(type) {
