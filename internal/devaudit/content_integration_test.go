@@ -40,6 +40,74 @@ func contentRepo(t *testing.T) string {
 	return repo
 }
 
+func TestRetriedLeafRetainsEveryCommitPatch(t *testing.T) {
+	repo := contentRepo(t)
+	snapshot := t.TempDir()
+	previous := contentGit(t, repo, "rev-parse", "HEAD")
+	records := []metrics.StepRecord{}
+	shas := []string{}
+	for attempt, text := range []string{"first change", "second change"} {
+		if err := os.WriteFile(filepath.Join(repo, "file"), []byte(text+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		contentGit(t, repo, "add", ".")
+		contentGit(t, repo, "commit", "-m", "[implement] fix: "+text)
+		sha := contentGit(t, repo, "rev-parse", "HEAD")
+		shas = append(shas, sha)
+		records = append(records, metrics.StepRecord{
+			ID: "implement", Kind: "step", Type: "agent", ExecutionSessionID: "one", Attempt: attempt + 1,
+			GitStart: &audit.GitCheckpoint{Available: true, HEAD: previous},
+			GitEnd:   &audit.GitCheckpoint{Available: true, HEAD: sha, Commits: []string{sha}},
+		})
+		previous = sha
+	}
+	// A later leaf must not acquire the retried leaf's second commit.
+	records = append(records, metrics.StepRecord{
+		ID: "later", Kind: "step", Type: "agent", ExecutionSessionID: "one", Attempt: 1,
+		GitStart:   &audit.GitCheckpoint{Available: true, HEAD: previous},
+		GitEnd:     &audit.GitCheckpoint{Available: true, HEAD: previous},
+		GitChanges: &audit.GitChangeCounts{Available: true},
+	})
+	artifact := &metrics.Artifact{Steps: records}
+	data, err := json.Marshal(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(snapshot, metrics.FileName), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := exportGitEvidence(repo, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	commits := readGitEvidence(filepath.Join(snapshot, "git-evidence.json"))
+	leaves := buildLeaves(&Request{AuditRunID: "audit", ExecutionSessionID: "one", SnapshotPath: snapshot}, artifact, nil, commits)
+	if len(leaves) != 2 {
+		t.Fatalf("got %d leaves, want 2", len(leaves))
+	}
+	for _, leaf := range leaves {
+		if leaf.Skeleton.StepID == "later" {
+			if len(leaf.Skeleton.Git.CommitSHAs) != 0 || len(leaf.Skeleton.Git.DeferredSHAs) != 0 {
+				t.Fatalf("later leaf acquired commits: %+v", leaf.Skeleton.Git)
+			}
+			continue
+		}
+		if leaf.Skeleton.Git.Attribution != "attributed" || len(leaf.Skeleton.Git.CommitSHAs) != 2 {
+			t.Errorf("retried leaf git = %+v, want both attributed commits", leaf.Skeleton.Git)
+		}
+		for attempt, sha := range shas {
+			found := false
+			for _, ref := range leaf.Evidence {
+				if ref.Contribution == "commit_patch" && ref.LocalPath == "git-patches/"+sha+".patch" && ref.Status == "available" && strings.Contains(ref.Detail, "+"+[]string{"first change", "second change"}[attempt]) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("attempt %d commit %s missing available commit_patch", attempt+1, sha)
+			}
+		}
+	}
+}
+
 func TestINT003ReplayContentOwnershipAndDeferredPatches(t *testing.T) {
 	repo := contentRepo(t)
 	source := t.TempDir()
