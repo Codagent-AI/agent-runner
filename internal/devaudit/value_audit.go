@@ -487,6 +487,11 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 	result := GitEvidence{Attribution: "no_change", CommitSHAs: []string{}, DeferredSHAs: []string{}}
 	var files, added, deleted int64
 	pathsComplete := true
+	headMoved := false
+	attributed := []string{}
+	seen := map[string]struct{}{}
+	var commitFiles, commitAdded, commitDeleted int64
+	paths := []string{}
 	for index := range records {
 		record := &records[index]
 		if record.GitChanges == nil || !record.GitChanges.Available {
@@ -502,27 +507,31 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 			if commits == nil {
 				return GitEvidence{Attribution: "unavailable", CommitSHAs: []string{}, DeferredSHAs: []string{}, Reason: "Git commit metadata is unavailable"}
 			}
-			attributed := []string{}
-			var commitFiles, commitAdded, commitDeleted int64
-			paths := []string{}
+			headMoved = true
 			for _, sha := range record.GitEnd.Commits {
 				commit, exists := commits[sha]
 				if !exists || !strings.HasPrefix(commit.Subject, "["+record.ID+"]") {
 					continue
 				}
+				if _, exists := seen[sha]; exists {
+					continue
+				}
+				seen[sha] = struct{}{}
 				attributed = append(attributed, sha)
 				commitFiles += commit.FilesChanged
 				commitAdded += commit.LinesAdded
 				commitDeleted += commit.LinesDeleted
 				paths = append(paths, commit.Paths...)
 			}
-			if len(attributed) == 0 {
-				return GitEvidence{Attribution: "ambiguous", CommitSHAs: []string{}, DeferredSHAs: []string{}, Reason: "no boundary commit has this step's exact prefix"}
-			}
-			sort.Strings(attributed)
-			sort.Strings(paths)
-			return GitEvidence{Attribution: "attributed", CommitSHAs: attributed, DeferredSHAs: []string{}, FilesChanged: &commitFiles, LinesAdded: &commitAdded, LinesDeleted: &commitDeleted, ChangedPaths: paths}
 		}
+	}
+	if headMoved {
+		if len(attributed) == 0 {
+			return GitEvidence{Attribution: "ambiguous", CommitSHAs: []string{}, DeferredSHAs: []string{}, Reason: "no boundary commit has this step's exact prefix"}
+		}
+		sort.Strings(attributed)
+		sort.Strings(paths)
+		return GitEvidence{Attribution: "attributed", CommitSHAs: attributed, DeferredSHAs: []string{}, FilesChanged: &commitFiles, LinesAdded: &commitAdded, LinesDeleted: &commitDeleted, ChangedPaths: paths}
 	}
 	if files != 0 || added != 0 || deleted != 0 {
 		result.Attribution = "working_tree"

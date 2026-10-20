@@ -48,6 +48,64 @@ func TestSelectedSessionOutcome(t *testing.T) {
 	}
 }
 
+func TestAggregateGitAttributesCommitsFromEveryRetriedAttempt(t *testing.T) {
+	cases := []struct {
+		name         string
+		firstSubject string
+		secondSHAs   []string
+		wantSHAs     []string
+		wantFiles    int64
+		wantAdded    int64
+		wantDeleted  int64
+		wantPaths    []string
+	}{
+		{
+			name: "both attempts commit", firstSubject: "[implement] first change",
+			secondSHAs: []string{"C"}, wantSHAs: []string{"B", "C"},
+			wantFiles: 3, wantAdded: 12, wantDeleted: 5, wantPaths: []string{"a.go", "shared.go", "z.go"},
+		},
+		{
+			name: "first attempt has no prefixed commit", firstSubject: "unrelated change",
+			secondSHAs: []string{"C"}, wantSHAs: []string{"C"},
+			wantFiles: 2, wantAdded: 7, wantDeleted: 3, wantPaths: []string{"a.go", "shared.go"},
+		},
+		{
+			name: "overlapping boundaries count each commit once", firstSubject: "[implement] first change",
+			secondSHAs: []string{"C", "B", "C"}, wantSHAs: []string{"B", "C"},
+			wantFiles: 3, wantAdded: 12, wantDeleted: 5, wantPaths: []string{"a.go", "shared.go", "z.go"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			records := []metrics.StepRecord{
+				{
+					ID:         "implement",
+					GitStart:   &audit.GitCheckpoint{Available: true, HEAD: "A"},
+					GitEnd:     &audit.GitCheckpoint{Available: true, HEAD: "B", Commits: []string{"B"}},
+					GitChanges: &audit.GitChangeCounts{Available: true},
+				},
+				{
+					ID:         "implement",
+					GitStart:   &audit.GitCheckpoint{Available: true, HEAD: "B"},
+					GitEnd:     &audit.GitCheckpoint{Available: true, HEAD: "C", Commits: tc.secondSHAs},
+					GitChanges: &audit.GitChangeCounts{Available: true},
+				},
+			}
+			commits := map[string]snapshottedGitCommit{
+				"B": {SHA: "B", Subject: tc.firstSubject, FilesChanged: 1, LinesAdded: 5, LinesDeleted: 2, Paths: []string{"z.go"}},
+				"C": {SHA: "C", Subject: "[implement] second change", FilesChanged: 2, LinesAdded: 7, LinesDeleted: 3, Paths: []string{"shared.go", "a.go"}},
+			}
+			want := GitEvidence{
+				Attribution: "attributed", CommitSHAs: tc.wantSHAs, DeferredSHAs: []string{},
+				FilesChanged: &tc.wantFiles, LinesAdded: &tc.wantAdded, LinesDeleted: &tc.wantDeleted, ChangedPaths: tc.wantPaths,
+			}
+			if diff := cmp.Diff(want, aggregateGit(records, commits)); diff != "" {
+				t.Errorf("Git evidence (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestAggregateGitExcludesPreexistingDirtyPaths(t *testing.T) {
 	start := &audit.GitCheckpoint{Available: true,
 		Worktree:  []audit.GitFileStat{{Path: "a", Added: 3, Deleted: 1}, {Path: "a2", Added: 1}},
