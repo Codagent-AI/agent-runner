@@ -384,7 +384,15 @@ func TestCIWaitReadsContinuationPages(t *testing.T) {
 			} else {
 				t.Setenv("CI_PAGE", writeCIPage(t, tt.page))
 			}
-			out, code, _ := runCIFixture(t, fixture, `{"deadline_seconds":"0.5","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
+			// Allow PR lookup and continuation calls to finish under full-suite
+			// load; this test checks pagination rather than timeout behavior.
+			deadline := 10 * time.Second
+			if tt.page == "fail" {
+				// An unread page keeps polling until the deadline.
+				deadline = 6 * time.Second
+			}
+			input := fmt.Sprintf(`{"deadline_seconds":"%g","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1","call_timeout_seconds":"5"}`, deadline.Seconds())
+			out, code, _ := runCIFixture(t, fixture, input)
 			if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), tt.want) || !strings.Contains(out, tt.detail) {
 				t.Fatalf("code=%d report=%s", code, out)
 			}
