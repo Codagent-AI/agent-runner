@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -526,19 +527,21 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 	result := GitEvidence{Attribution: "no_change", CommitSHAs: []string{}, DeferredSHAs: []string{}}
 	var files, added, deleted int64
 	pathsComplete := true
+	unavailableChanges := false
+	boundaries := []metrics.StepRecord{}
 	for index := range records {
 		record := &records[index]
 		if record.GitStart != nil && record.GitEnd != nil && (!record.GitStart.Available || !record.GitEnd.Available) {
-			return GitEvidence{Attribution: "unavailable", CommitSHAs: []string{}, DeferredSHAs: []string{}, Reason: "Git checkpoint evidence unavailable"}
+			unavailableChanges = true
+			continue
 		}
 		if record.GitEnd != nil && record.GitStart != nil && record.GitEnd.HEAD != record.GitStart.HEAD {
-			if commits == nil {
-				return GitEvidence{Attribution: "unavailable", CommitSHAs: []string{}, DeferredSHAs: []string{}, Reason: "Git commit metadata is unavailable"}
-			}
-			return attributeBoundaryCommits(record, commits)
+			boundaries = append(boundaries, *record)
+			continue
 		}
 		if record.GitChanges == nil || !record.GitChanges.Available {
-			return GitEvidence{Attribution: "unavailable", CommitSHAs: []string{}, DeferredSHAs: []string{}, Reason: "Git checkpoint evidence unavailable"}
+			unavailableChanges = true
+			continue
 		}
 		files += record.GitChanges.FilesChanged
 		added += record.GitChanges.LinesAdded
@@ -547,6 +550,15 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 			pathsComplete = false
 		}
 
+	}
+	if len(boundaries) > 0 {
+		if commits == nil {
+			return GitEvidence{Attribution: "unavailable", CommitSHAs: []string{}, DeferredSHAs: []string{}, Reason: "Git commit metadata is unavailable"}
+		}
+		return attributeBoundaryCommits(boundaries, commits)
+	}
+	if unavailableChanges {
+		return GitEvidence{Attribution: "unavailable", CommitSHAs: []string{}, DeferredSHAs: []string{}, Reason: "Git checkpoint evidence unavailable"}
 	}
 	if files != 0 || added != 0 || deleted != 0 {
 		result.Attribution = "working_tree"
@@ -562,28 +574,35 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 	return result
 }
 
-func attributeBoundaryCommits(record *metrics.StepRecord, commits map[string]snapshottedGitCommit) GitEvidence {
+func attributeBoundaryCommits(records []metrics.StepRecord, commits map[string]snapshottedGitCommit) GitEvidence {
 	attributed := []string{}
 	var commitFiles, commitAdded, commitDeleted int64
 	paths := []string{}
 	pathStats := map[string]gitPathStat{}
-	for _, sha := range record.GitEnd.Commits {
-		commit, exists := commits[sha]
-		if !exists || !strings.HasPrefix(commit.Subject, "["+record.ID+"]") {
-			continue
-		}
-		attributed = append(attributed, sha)
-		commitFiles += commit.FilesChanged
-		commitAdded += commit.LinesAdded
-		commitDeleted += commit.LinesDeleted
-		paths = append(paths, commit.Paths...)
-		if len(commit.PathStats) != len(commit.Paths) {
-			pathStats = nil
-		}
-		for _, stat := range commit.PathStats {
-			if pathStats != nil {
-				total := pathStats[stat.Path]
-				pathStats[stat.Path] = gitPathStat{Path: stat.Path, LinesAdded: total.LinesAdded + stat.LinesAdded, LinesDeleted: total.LinesDeleted + stat.LinesDeleted}
+	seen := map[string]bool{}
+	pathsComplete := true
+	for index := range records {
+		record := &records[index]
+		for _, sha := range record.GitEnd.Commits {
+			commit, exists := commits[sha]
+			if !exists || !strings.HasPrefix(commit.Subject, "["+record.ID+"]") || seen[sha] {
+				continue
+			}
+			seen[sha] = true
+			attributed = append(attributed, sha)
+			pathsComplete = pathsComplete && int64(len(commit.Paths)) == commit.FilesChanged
+			commitFiles += commit.FilesChanged
+			commitAdded += commit.LinesAdded
+			commitDeleted += commit.LinesDeleted
+			paths = append(paths, commit.Paths...)
+			if len(commit.PathStats) != len(commit.Paths) {
+				pathStats = nil
+			}
+			for _, stat := range commit.PathStats {
+				if pathStats != nil {
+					total := pathStats[stat.Path]
+					pathStats[stat.Path] = gitPathStat{Path: stat.Path, LinesAdded: total.LinesAdded + stat.LinesAdded, LinesDeleted: total.LinesDeleted + stat.LinesDeleted}
+				}
 			}
 		}
 	}
@@ -592,6 +611,10 @@ func attributeBoundaryCommits(record *metrics.StepRecord, commits map[string]sna
 	}
 	sort.Strings(attributed)
 	sort.Strings(paths)
+	paths = slices.Compact(paths)
+	if pathsComplete {
+		commitFiles = int64(len(paths))
+	}
 	return GitEvidence{Attribution: "attributed", CommitSHAs: attributed, DeferredSHAs: []string{}, FilesChanged: &commitFiles, LinesAdded: &commitAdded, LinesDeleted: &commitDeleted, ChangedPaths: paths, PathStats: pathStats}
 }
 
