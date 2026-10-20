@@ -416,9 +416,6 @@ func sortedBlobPaths(blobs map[string]bool) []string {
 func (index *stepEventIndex) completeAttempts(session, path string, records []metrics.StepRecord) {
 	key := stepEventKey(session, path)
 	events := index.events[key]
-	if len(events) >= len(records) {
-		return
-	}
 	known := map[int]bool{}
 	for i := range events {
 		known[events[i].attempt] = true

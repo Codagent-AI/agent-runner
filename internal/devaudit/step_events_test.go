@@ -236,3 +236,15 @@ func TestAuditLogAccessCannotEscapeEvidenceRoot(t *testing.T) {
 		t.Fatalf("outside evidence changed: %q %v", got, err)
 	}
 }
+
+func TestDuplicateEventsDoNotHideMissingAttempts(t *testing.T) {
+	key := stepEventKey("s", "x")
+	index := stepEventIndex{events: map[string][]stepEvent{key: {{attempt: 2}, {attempt: 2}}}}
+	index.completeAttempts("s", "x", []metrics.StepRecord{{Attempt: 1}, {Attempt: 2}})
+	for _, event := range index.events[key] {
+		if event.attempt == 1 && event.missingReason == "no output recorded" && event.outputWrites == nil {
+			return
+		}
+	}
+	t.Fatalf("missing attempt hidden by duplicate events: %+v", index.events[key])
+}
