@@ -369,8 +369,8 @@ steps:
   # The lead's record and the implementor's maintainability pass replace
   # verify-change's own assumption review and simplification. Its Validator
   # loop is the change's only pre-PR Validator run.
-  # stop_unchanged_acceptance ends the acceptance rounds when a fix changes
-  # nothing and asks for no retest.
+  # stop_unchanged_acceptance ends the acceptance rounds when a fix leaves
+  # the tested tree unchanged and asks for no retest.
   - id: verify-change
     workflow: verify-change-v1.0.yaml
     params:

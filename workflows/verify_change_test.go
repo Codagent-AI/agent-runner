@@ -1162,6 +1162,115 @@ func TestCoreVerifyChangeAcceptanceProgressCheck(t *testing.T) {
 	}
 }
 
+func TestCoreVerifyChangeAcceptanceProgressBehavior(t *testing.T) {
+	workflow := readBuiltinWorkflowForTest(t, verifyChangeRef)
+	step := findStep(workflow.Steps, "check-acceptance-progress")
+	if step == nil {
+		t.Fatal("check-acceptance-progress step not found")
+	}
+	for _, tc := range []struct {
+		name     string
+		setup    func(t *testing.T, dir, evidence string)
+		wantExit int
+	}{
+		{name: "same revision", wantExit: 1},
+		{
+			name: "untracked file only",
+			setup: func(t *testing.T, dir, evidence string) {
+				mustWriteFile(t, filepath.Join(dir, "untracked.txt"), "scratch\n")
+			},
+			wantExit: 1,
+		},
+		{
+			name: "new commit with unchanged tree",
+			setup: func(t *testing.T, dir, evidence string) {
+				runGit(t, dir, "commit", "-q", "--allow-empty", "-m", "tree-neutral fix")
+			},
+			wantExit: 1,
+		},
+		{
+			name: "committed tracked change",
+			setup: func(t *testing.T, dir, evidence string) {
+				mustWriteFile(t, filepath.Join(dir, "file.txt"), "two\n")
+				runGit(t, dir, "add", "file.txt")
+				runGit(t, dir, "commit", "-q", "-m", "fix")
+			},
+		},
+		{
+			name: "committed gitlink change with submodules ignored",
+			setup: func(t *testing.T, dir, evidence string) {
+				runGit(t, dir, "config", "diff.ignoreSubmodules", "all")
+				runGit(t, dir, "update-index", "--add", "--cacheinfo", "160000,"+strings.Repeat("1", 40)+",sub")
+				runGit(t, dir, "commit", "-q", "-m", "add gitlink")
+				tested := strings.TrimSpace(string(runGitOutput(t, dir, "rev-parse", "HEAD")))
+				mustWriteFile(t, filepath.Join(evidence, "acceptance-tested-revision.txt"), tested+"\n")
+				runGit(t, dir, "update-index", "--cacheinfo", "160000,"+strings.Repeat("2", 40)+",sub")
+				runGit(t, dir, "commit", "-q", "-m", "move gitlink")
+			},
+		},
+		{
+			name: "retest reason",
+			setup: func(t *testing.T, dir, evidence string) {
+				mustWriteFile(t, filepath.Join(evidence, "acceptance-retest-reason.txt"), "repaired test environment\n")
+			},
+		},
+		{
+			name: "uncommitted tracked change",
+			setup: func(t *testing.T, dir, evidence string) {
+				mustWriteFile(t, filepath.Join(dir, "file.txt"), "two\n")
+			},
+		},
+		{
+			name: "missing tested revision",
+			setup: func(t *testing.T, dir, evidence string) {
+				removeFile(t, filepath.Join(evidence, "acceptance-tested-revision.txt"))
+			},
+		},
+		{
+			name: "empty tested revision",
+			setup: func(t *testing.T, dir, evidence string) {
+				mustWriteFile(t, filepath.Join(evidence, "acceptance-tested-revision.txt"), "")
+			},
+		},
+		{
+			name: "unknown tested revision",
+			setup: func(t *testing.T, dir, evidence string) {
+				mustWriteFile(t, filepath.Join(evidence, "acceptance-tested-revision.txt"), strings.Repeat("0", 40)+"\n")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, head := gitRepo(t)
+			sessionDir := t.TempDir()
+			evidence := filepath.Join(sessionDir, "output")
+			if err := os.MkdirAll(evidence, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			mustWriteFile(t, filepath.Join(evidence, "acceptance-tested-revision.txt"), head+"\n")
+			if tc.setup != nil {
+				tc.setup(t, dir, evidence)
+			}
+			cmd := exec.Command("sh", "-c", strings.ReplaceAll(step.Command, "{{session_dir}}", sessionDir))
+			cmd.Dir = dir
+			out, err := cmd.CombinedOutput()
+			gotExit := 0
+			if err != nil {
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					gotExit = exitErr.ExitCode()
+				} else {
+					t.Fatalf("run acceptance progress check: %v\n%s", err, out)
+				}
+			}
+			if gotExit != tc.wantExit {
+				t.Errorf("acceptance progress exit = %d, want %d\n%s", gotExit, tc.wantExit, out)
+			}
+			if tc.wantExit == 1 && !strings.Contains(string(out), "the acceptance fix left the tested tree unchanged") {
+				t.Errorf("stop output = %q, want the unchanged-tree explanation", out)
+			}
+		})
+	}
+}
+
 func TestCoreVerifyChangeAcceptanceScratchDirectory(t *testing.T) {
 	workflow := readBuiltinWorkflowForTest(t, verifyChangeRef)
 	reset := findStep(workflow.Steps, "reset-round-evidence")
