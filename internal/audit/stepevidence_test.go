@@ -331,15 +331,40 @@ func TestEvidenceCacheHasEntryBound(t *testing.T) {
 	observer := newOutputObserver(t.TempDir(), "")
 	budget := newObserveBudget()
 	budget.boundary()
-	for i := 0; i < maxObservedFiles+1; i++ {
+	for i := 0; i < maxCachedFiles+1; i++ {
 		path := fmt.Sprintf("file-%d", i)
 		_ = os.WriteFile(filepath.Join(dir, path), []byte("x"), 0o600)
 		if _, err := observer.readFile(dir, path, budget); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if len(observer.cache) > maxObservedFiles {
+	if len(observer.cache) > maxCachedFiles {
 		t.Fatalf("cache entries %d", len(observer.cache))
+	}
+}
+
+// The output root and the repository share one cache, so a step at both
+// supported maxima must keep every live entry instead of clearing at every
+// boundary and rehashing everything.
+func TestEvidenceCacheHoldsOutputAndRepositoryMaxima(t *testing.T) {
+	output, repo := t.TempDir(), t.TempDir()
+	observer := newOutputObserver(t.TempDir(), "")
+	budget := newObserveBudget()
+	budget.boundary()
+	read := func(root, path string) {
+		_ = os.WriteFile(filepath.Join(root, path), []byte("x"), 0o600)
+		if _, err := observer.readFile(root, path, budget); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < maxObservedFiles; i++ {
+		read(output, fmt.Sprintf("out-%d", i))
+	}
+	for i := 0; i < maxTrackedFingerprintPaths+maxUntrackedFiles; i++ {
+		read(repo, fmt.Sprintf("repo-%d", i))
+	}
+	if _, ok := observer.cache[filepath.Join(output, "out-0")]; !ok {
+		t.Fatalf("cache was cleared within supported maxima: %d entries", len(observer.cache))
 	}
 }
 

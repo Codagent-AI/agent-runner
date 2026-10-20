@@ -19,7 +19,10 @@ import (
 )
 
 const (
-	maxObservedFiles     = 2000
+	maxObservedFiles = 2000
+	// Output-root and repository observations share one cache, so it must
+	// hold both supported maxima, with headroom for paths that disappear.
+	maxCachedFiles       = 2 * (maxObservedFiles + maxTrackedFingerprintPaths + maxUntrackedFiles)
 	maxObserveEntries    = 10000
 	maxObserveDepth      = 16
 	maxObserveRead       = 64 << 20
@@ -731,7 +734,7 @@ func textPrefix(data []byte, limit int) []byte {
 // The cache contains only bounded metadata. Baseline bytes remain in the
 // content-addressed store and every restoration is charged to the step budget.
 func (o *outputObserver) cacheFile(path string, file *observedFile) {
-	if _, exists := o.cache[path]; !exists && len(o.cache) >= maxObservedFiles {
+	if _, exists := o.cache[path]; !exists && len(o.cache) >= maxCachedFiles {
 		clear(o.cache)
 	}
 	cached := *file
