@@ -249,7 +249,7 @@ steps:
         command: |
           evidence="{{session_dir}}/output"
           tested=$(sed '/^[[:space:]]*$/d' "$evidence/acceptance-tested-revision.txt" 2>/dev/null | tail -n 1 | tr -d '[:space:]')
-          if [ -z "$tested" ] || ! git diff --quiet "$tested" HEAD -- 2>/dev/null || [ -n "$(git status --porcelain --untracked-files=no)" ] || [ -s "$evidence/acceptance-retest-reason.txt" ]; then
+          if [ -z "$tested" ] || [ "$(git rev-parse --verify --quiet "$tested^{tree}" 2>/dev/null)" != "$(git rev-parse --verify --quiet 'HEAD^{tree}' 2>/dev/null)" ] || [ -n "$(git status --porcelain --untracked-files=no)" ] || [ -s "$evidence/acceptance-retest-reason.txt" ]; then
             exit 0
           fi
           echo "the acceptance fix left the tested tree unchanged and gave no retest reason; ending the acceptance rounds" >&2

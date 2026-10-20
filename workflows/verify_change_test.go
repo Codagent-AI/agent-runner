@@ -1197,6 +1197,18 @@ func TestCoreVerifyChangeAcceptanceProgressBehavior(t *testing.T) {
 			},
 		},
 		{
+			name: "committed gitlink change with submodules ignored",
+			setup: func(t *testing.T, dir, evidence string) {
+				runGit(t, dir, "config", "diff.ignoreSubmodules", "all")
+				runGit(t, dir, "update-index", "--add", "--cacheinfo", "160000,"+strings.Repeat("1", 40)+",sub")
+				runGit(t, dir, "commit", "-q", "-m", "add gitlink")
+				tested := strings.TrimSpace(string(runGitOutput(t, dir, "rev-parse", "HEAD")))
+				mustWriteFile(t, filepath.Join(evidence, "acceptance-tested-revision.txt"), tested+"\n")
+				runGit(t, dir, "update-index", "--cacheinfo", "160000,"+strings.Repeat("2", 40)+",sub")
+				runGit(t, dir, "commit", "-q", "-m", "move gitlink")
+			},
+		},
+		{
 			name: "retest reason",
 			setup: func(t *testing.T, dir, evidence string) {
 				mustWriteFile(t, filepath.Join(evidence, "acceptance-retest-reason.txt"), "repaired test environment\n")
