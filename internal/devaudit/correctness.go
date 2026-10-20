@@ -266,7 +266,8 @@ func invokeCrosscheckCorrectnessWithAttempt(request *Request) (output Correctnes
 
 func correctnessOutputSchema(references []EvidenceReference) map[string]any {
 	known := []string{}
-	for _, reference := range references {
+	for i := range references {
+		reference := &references[i]
 		if reference.Status == "available" {
 			known = append(known, reference.ID)
 		}
@@ -393,9 +394,11 @@ func PublishCorrectness(request Request, prepared PreparedValueAudit, output Cor
 		return CorrectnessResult{}, fmt.Errorf("frozen evidence changed after preparation")
 	}
 	known := map[string]EvidenceReference{}
-	for _, ref := range allEvidenceReferences(&prepared.Index) {
+	refs := allEvidenceReferences(&prepared.Index)
+	for i := range refs {
+		ref := &refs[i]
 		if ref.Status == "available" {
-			known[ref.ID] = ref
+			known[ref.ID] = *ref
 		}
 	}
 	result := CorrectnessResult{SchemaVersion: correctnessSchema, Findings: []Finding{}}
@@ -696,9 +699,11 @@ func republishRejectedFindings(auditSessionDir string, runner CommandRunner) ([]
 		return nil, fmt.Errorf("decode local report: %w", err)
 	}
 	known := map[string]EvidenceReference{}
-	for _, reference := range allEvidenceReferences(&report.Evidence) {
+	refs := allEvidenceReferences(&report.Evidence)
+	for i := range refs {
+		reference := &refs[i]
 		if reference.Status == "available" {
-			known[reference.ID] = reference
+			known[reference.ID] = *reference
 		}
 	}
 	request := Request{
@@ -995,7 +1000,8 @@ func assembleLocalReportStage(request *Request) error {
 
 func correctnessConsultationLedger(findings []Finding, references []EvidenceReference) []correctnessConsultation {
 	categories := map[string]string{}
-	for _, reference := range references {
+	for i := range references {
+		reference := &references[i]
 		categories[reference.ID] = reference.Category
 	}
 	entries := []correctnessConsultation{}

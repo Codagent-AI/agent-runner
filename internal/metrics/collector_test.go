@@ -48,7 +48,7 @@ func TestExecutionPipelineAssignsInvocationIdentityToLifecycleAndMetricRecords(t
 	dir := t.TempDir()
 	started := mustTime(t, "2026-07-17T10:00:00Z")
 	sink := &recordingSink{}
-	pipeline := NewExecutionPipeline(NewCollector(dir, "run", "workflow", started), sink, t.TempDir(), "execution-1")
+	pipeline := NewExecutionPipeline(NewCollector(dir, "run", "workflow", started), sink, t.TempDir(), "execution-1", "")
 	pipeline.Emit(event(audit.EventRunStart, started, nil))
 	pipeline.Emit(audit.Event{Timestamp: started.Add(500 * time.Millisecond).Format(time.RFC3339Nano), Prefix: "[one]", Type: audit.EventStepStart, Data: map[string]any{"command": "one"}})
 	identity := agentIdentity("one", true)
@@ -182,7 +182,7 @@ func TestPipelineAttemptForMatchesAssignedIdentityAttempt(t *testing.T) {
 	dir := t.TempDir()
 	started := mustTime(t, "2026-07-17T10:00:00Z")
 	collector := NewCollector(dir, "run-1", "workflow", started)
-	pipeline := NewExecutionPipeline(collector, nil, t.TempDir(), "execution-1")
+	pipeline := NewExecutionPipeline(collector, nil, t.TempDir(), "execution-1", "")
 	identity := model.ExecutionIdentity{StepID: "open-draft-pr", Prefix: "[open-draft-pr]", StepType: "agent", Kind: "step"}
 
 	predicted := pipeline.AttemptFor(&identity)

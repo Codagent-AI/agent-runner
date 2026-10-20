@@ -529,7 +529,7 @@ func buildExecutionContext(
 	}
 	metricsCollector := metrics.NewCollector(sessionDir, sessionID, workflow.Name, runStart)
 	executionSessionID := uuid.NewString()
-	auditEventLogger := metrics.NewExecutionPipeline(metricsCollector, auditSink, opts.ProjectRoot, executionSessionID)
+	auditEventLogger := metrics.NewExecutionPipeline(metricsCollector, auditSink, opts.ProjectRoot, executionSessionID, sessionDir)
 
 	var profileStore any
 	if opts.ProfileStore != nil {

@@ -21,3 +21,8 @@ func openUntrackedFileNoFollow(path string) (*os.File, error) {
 	}
 	return file, nil
 }
+
+// Root-relative no-follow opens also avoid blocking on a file replaced by a FIFO.
+func rootOpenNoFollow(root *os.Root, path string) (*os.File, error) {
+	return root.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+}

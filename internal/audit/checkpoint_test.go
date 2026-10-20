@@ -252,7 +252,7 @@ func TestCheckpointLoggerRecordsExecutableStepBoundaries(t *testing.T) {
 	runGit(t, repo, "commit", "-m", "initial")
 
 	sink := &capturedLogger{}
-	logger := NewCheckpointLogger(sink, repo, "execution-1")
+	logger := NewCheckpointLogger(sink, repo, "execution-1", "")
 	started := time.Now().UTC()
 	logger.Emit(Event{Timestamp: started.Format(time.RFC3339Nano), Prefix: "[write]", Type: EventStepStart, Data: map[string]any{"command": "write"}})
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("one\ntwo\n"), 0o600); err != nil {
@@ -287,7 +287,7 @@ func TestCheckpointLoggerRecordsExecutableStepBoundaries(t *testing.T) {
 
 func TestCheckpointLoggerRecordsUnavailableEvidenceWithoutChangingEvent(t *testing.T) {
 	sink := &capturedLogger{}
-	logger := NewCheckpointLogger(sink, t.TempDir(), "execution-1")
+	logger := NewCheckpointLogger(sink, t.TempDir(), "execution-1", "")
 	logger.Emit(Event{Timestamp: time.Now().UTC().Format(time.RFC3339Nano), Prefix: "[write]", Type: EventStepStart, Data: map[string]any{"command": "write"}})
 	logger.Emit(Event{Timestamp: time.Now().UTC().Format(time.RFC3339Nano), Prefix: "[write]", Type: EventStepEnd, Data: map[string]any{"outcome": "success"}})
 
@@ -311,7 +311,7 @@ func TestCheckpointLoggerCountsCommittedStepChanges(t *testing.T) {
 	runGit(t, repo, "commit", "-m", "initial")
 
 	sink := &capturedLogger{}
-	logger := NewCheckpointLogger(sink, repo, "execution-1")
+	logger := NewCheckpointLogger(sink, repo, "execution-1", "")
 	started := time.Now().UTC()
 	logger.Emit(Event{Timestamp: started.Format(time.RFC3339Nano), Prefix: "[commit]", Type: EventStepStart, Data: map[string]any{"command": "commit"}})
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("one\ntwo\n"), 0o600); err != nil {

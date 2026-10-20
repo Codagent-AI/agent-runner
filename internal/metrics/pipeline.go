@@ -19,11 +19,11 @@ func NewPipeline(collector *Collector, sink audit.EventLogger) *Pipeline {
 }
 
 // NewExecutionPipeline adds one durable Runner invocation identity to every
-// event and records centralized Git evidence before it reaches durable sinks.
-func NewExecutionPipeline(collector *Collector, sink audit.EventLogger, projectRoot, executionSessionID string) *Pipeline {
+// event and records Git and written-file evidence before it reaches durable sinks.
+func NewExecutionPipeline(collector *Collector, sink audit.EventLogger, projectRoot, executionSessionID, sessionDir string) *Pipeline {
 	return &Pipeline{
 		collector: collector, sink: sink, executionSessionID: executionSessionID,
-		checkpoints: audit.NewCheckpointLogger(nil, projectRoot, executionSessionID),
+		checkpoints: audit.NewCheckpointLogger(nil, projectRoot, executionSessionID, sessionDir),
 	}
 }
 

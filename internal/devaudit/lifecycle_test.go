@@ -133,7 +133,7 @@ func TestReplayExcludesEvidenceWithoutHistoricalSessionOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, category := range []string{"audit_log", "validation", "artifact", "narrative", "native_session"} {
+	for _, category := range []string{"audit_log", "native_session"} {
 		count := 0
 		for _, reference := range prepared.Index.References {
 			if reference.Category == category {

@@ -727,10 +727,9 @@ func localWorkflowSibling(baseDir, workflowPath, reference, projectRoot string) 
 	return "", false
 }
 
-// snapshotReplayEvidenceAt retains only metrics whose durable session
-// ownership is known at or before the selected session. Run outputs and other
-// detail artifacts are intentionally omitted because older runs do not record
-// enough ownership metadata to prove which execution session produced them.
+// snapshotReplayEvidenceAt retains metrics, audit events, and referenced blobs
+// whose durable ownership is known at or before the selected session. Unowned
+// run-directory files remain excluded from historical replay.
 func snapshotReplayEvidenceAt(sessionDir, dir, executionSessionID string) (string, error) {
 	data, err := os.ReadFile(filepath.Join(sessionDir, metrics.FileName)) // #nosec G304 -- fixed evidence file beneath a resolved run directory.
 	if err != nil {
@@ -784,16 +783,22 @@ func snapshotReplayEvidenceAt(sessionDir, dir, executionSessionID string) (strin
 	if err := stateio.WriteJSONAtomic(filepath.Join(dir, metrics.FileName), artifact); err != nil {
 		return "", err
 	}
+	if err := snapshotReplayContent(sessionDir, dir, allowed); err != nil {
+		return "", err
+	}
 	return dir, nil
 }
 
 type snapshottedGitCommit struct {
-	SHA          string   `json:"sha"`
-	Subject      string   `json:"subject"`
-	Paths        []string `json:"paths"`
-	FilesChanged int64    `json:"files_changed"`
-	LinesAdded   int64    `json:"lines_added"`
-	LinesDeleted int64    `json:"lines_deleted"`
+	SHA              string   `json:"sha"`
+	Patch            string   `json:"patch,omitempty"`
+	PatchTruncated   bool     `json:"patch_truncated,omitempty"`
+	PatchUnavailable string   `json:"patch_unavailable,omitempty"`
+	Subject          string   `json:"subject"`
+	Paths            []string `json:"paths"`
+	FilesChanged     int64    `json:"files_changed"`
+	LinesAdded       int64    `json:"lines_added"`
+	LinesDeleted     int64    `json:"lines_deleted"`
 }
 
 type snapshottedGitEvidence struct {
@@ -860,6 +865,9 @@ func exportGitEvidence(projectRoot, snapshotDir string) error {
 	}
 	if err := populateGitStats(evidence.Commits, ordered, stats); err != nil {
 		return persistGitEvidence(snapshotDir, evidence, err.Error())
+	}
+	for i := range evidence.Commits {
+		exportCommitPatch(projectRoot, snapshotDir, &evidence.Commits[i])
 	}
 	return persistGitEvidence(snapshotDir, evidence, "")
 }
