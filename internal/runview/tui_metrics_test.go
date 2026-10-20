@@ -37,8 +37,8 @@ func TestApplyEventAppendsAttemptMetricsAndRunTotals(t *testing.T) {
 
 	node := tree.Root.Children[0]
 	wantAttempts := []AttemptMetrics{
-		{Attempt: 1, Usage: collectedUsageRecord(10, 2), CostUSD: float64Pointer(0.25), DurationMs: int64Pointer(1200), Outcome: "failed", AgentInvoked: true},
-		{Attempt: 2, Usage: collectedUsageRecord(7, 3), CostUSD: float64Pointer(0.15), DurationMs: int64Pointer(800), Outcome: "success", AgentInvoked: true},
+		{Attempt: 1, Usage: collectedUsageRecord(10, 2), CostBasis: "reported", CostUSD: float64Pointer(0.25), DurationMs: int64Pointer(1200), Outcome: "failed", AgentInvoked: true},
+		{Attempt: 2, Usage: collectedUsageRecord(7, 3), CostBasis: "reported", CostUSD: float64Pointer(0.15), DurationMs: int64Pointer(800), Outcome: "success", AgentInvoked: true},
 	}
 	if diff := cmp.Diff(wantAttempts, node.Attempts); diff != "" {
 		t.Fatalf("attempts mismatch (-want +got):\n%s", diff)

@@ -2,12 +2,12 @@
 title: Usage And Cost Tracking
 group: Usage
 order: 1
-description: How Agent Runner collects, displays, and stores token usage, duration, and CLI-reported cost.
+description: How Agent Runner collects, displays, and stores token usage, duration, and reported or estimated cost.
 ---
 
 # Usage And Cost Tracking
 
-Agent Runner records duration for every completed step. For agent steps, it also collects token usage and USD cost when the agent CLI includes those values in its structured output.
+Agent Runner records duration for every completed step. For agent steps, it also collects token usage and CLI-reported USD cost, and estimates API-equivalent cost for eligible native Codex invocations.
 
 Agent Runner uses the CLI you already have installed and authenticated. It does not require a separate API key for metrics collection. A subscription-backed CLI works the same way: if the CLI reports usage or cost, Agent Runner records it.
 
@@ -23,7 +23,7 @@ The run summary has these columns:
 | Cache write | Input tokens written to a provider cache. |
 | Output | Output tokens reported by the CLI. |
 | Reasoning | Reasoning tokens reported separately by the CLI. |
-| Cost | The USD cost reported by the CLI. |
+| Cost | CLI-reported USD cost, or a `~` API-equivalent estimate for Codex. |
 
 CLIs do not all report the same token categories. Agent Runner preserves the categories it receives instead of filling missing categories with zeroes.
 
@@ -34,12 +34,12 @@ The summary also shows canonical processed-token totals when an adapter can calc
 | CLI | Token usage | Canonical totals | USD cost |
 | --- | --- | --- | --- |
 | Claude Code | Input, cache read, cache write, output | Yes | Yes, from `total_cost_usd` when reported |
-| Codex | Input, cached input, output, reasoning | Yes | No |
+| Codex | Input, cached input, output, reasoning | Yes | API-equivalent estimate when eligible |
 | OpenCode | Input, cache read, cache write, output, reasoning | Yes | Yes, from reported step cost |
 | Copilot | Available token metrics from assistant events | No | No; AI Credits are not converted to USD |
 | Cursor | Best-effort input, cache read, cache write, output | No | No |
 
-The cost value comes directly from the CLI and may differ from your provider's final bill. Agent Runner has no pricing catalog, does no token-times-rate math, and does not convert credits into dollars.
+Reported cost comes directly from the CLI and may differ from your provider's final bill. Codex estimates use the embedded price table described below. Agent Runner does not convert credits into dollars.
 
 For Claude Code, Agent Runner captures `total_cost_usd` whenever the final result event includes it. This does not depend on Agent Runner having an Anthropic API key. Your normal Claude Code authentication is enough to run the step. If Claude omits the field, Agent Runner leaves cost unavailable. Claude reports `total_cost_usd` cumulatively for the session, so a step that resumes or inherits a Claude session records the difference from the prior value for that session. When no prior value was observed in the run, or an intervening invocation on the session reported none, that step's cost is unavailable.
 
@@ -73,6 +73,7 @@ Other shell, script, UI, loop, group, and sub-workflow steps do not call an agen
 | `0` | The CLI explicitly reported zero. |
 | A dash | The category is absent or does not apply to this step. |
 | `?` | Usage or cost was expected but could not be collected. |
+| `~` | API-equivalent cost estimate; also marks totals containing estimates. |
 | `(partial)` | The displayed total includes reporting steps, but at least one eligible agent step did not report the metric. |
 
 These symbols apply to the TUI. In `run-metrics.json`, unavailable usage remains a structured `unavailable` record with a reason, while missing cost is `null`.
@@ -113,7 +114,7 @@ Each run stores a versioned file beside `state.json` and `audit.log`:
 
 - one append-only record per step attempt, accepted agent call, or structured nested model invocation;
 - stable role/tool identity and separate requested/effective CLI, model, and effort identity with provenance;
-- duration, outcome, nesting identity, usage provenance, raw token categories, canonical non-overlapping totals, and reported cost;
+- duration, outcome, nesting identity, usage provenance, raw token categories, canonical non-overlapping totals, and cost with its reported or estimated basis;
 - execution-session durations for interrupted and resumed runs;
 - durable execution-session IDs and per-session rollups, plus explicit unknown
   coverage for legacy records that cannot be assigned safely;
@@ -162,3 +163,50 @@ A development audit records each launched value-batch and correctness judge atte
 `local-report.json` contains one `judge_usage` summary per audit. Its total tokens and cost sum the attempts that reported them, with separate `complete`, `partial`, or `none` coverage. A `none` total is null. A resumed output from an older audit with no usage record counts as an unavailable attempt.
 
 The external value worksheet uses `step_value_v2` rows. Seven columns follow the original `step_value_v1` columns: `judge_cli`, `judge_effort`, `audit_judge_attempts`, `audit_judge_total_tokens`, `audit_judge_token_coverage`, `audit_judge_cost_usd`, and `audit_judge_cost_coverage`. These are totals for the whole audit and appear on every step observation row. Count them **once per `audit_run_id`** when aggregating audits; summing them across step rows duplicates the cost. Older pending reports can still deliver, with unknown judge totals left empty.
+
+## Codex cost estimation
+
+Native Codex steps, agent calls, and external-user turns use the
+`openai-standard-request-level` policy. This is a comparison figure, not actual
+subscription spend. Each request is priced from its rollout usage at Standard
+rates: short context through 272,000 input tokens, long context above that
+threshold. Cached input and cache-write input are subsets of input; remaining
+input is billed at the ordinary input rate. Output already includes reasoning.
+An absent cache-write field is treated as zero and labeled
+`cache_writes_unobserved`. Batch, Flex, and priority tiers are not modeled.
+
+A CLI-reported cost always takes precedence. Other CLIs and nested Validator
+attempts receive no Runner estimate. Estimates require the input, cached-input,
+and output categories, complete attribution, a priced effective model, and
+per-request evidence that reconciles exactly with the invocation's attributed
+tokens. Resumed invocations use their delta; external-user turns are priced
+separately using each turn's model. An incomplete attempt has a null scalar cost;
+a known turn subtotal remains partial native evidence only.
+
+Step records and audit events carry `cost_basis` (`reported` or `estimated`).
+Estimates also carry `price_table_version` and `cost_estimate` with the policy,
+model, request count, long-context count, limitations, and any
+`partial_subtotal_usd`. Run totals and execution-session rollups carry
+`cost_basis` (`reported`, `estimated`, `mixed`, or null) and `cost_by_basis`
+subtotals. The artifact remains schema v4. Older costs become `reported` on
+load; historical Codex records are never re-priced.
+
+Ineligible Codex estimates carry `cost_unavailable_reason`, using the first
+failed eligibility check: `usage-unavailable`, `turn-unattributed`,
+`usage-incomplete`, `required-category-missing`, `model-unknown`,
+`model-unpriced`, `context-band-unknown`, or `request-evidence-mismatch`.
+A missing reasoning breakdown alone does not prevent pricing. Selected detail
+shows the reason, or labels an estimate as `API-equivalent estimate`. The `~`
+marker and partial-coverage indicator are independent.
+
+Development-audit observations preserve cost basis. Delivered Sheets rows use
+`step_value_v3`, which appends `cost_basis` after the existing judge columns.
+Unknown costs and bases have empty cells. Existing v1 and v2 headers are upgraded
+only when the required trailing cells are empty; older pending reports retain an
+empty basis. Judge costs retain their existing reported-cost semantics.
+
+To update rates, edit `internal/pricing/prices.json`, bump its `version`, update
+each changed entry's `effective_date` and published `source`, and run
+`go test ./internal/pricing`. Names and explicit aliases match exactly. Prices
+are embedded in the binary; pricing requires no network request or separate API
+key, and there are no runtime overrides.

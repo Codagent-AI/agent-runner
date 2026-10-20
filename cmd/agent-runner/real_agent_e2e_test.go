@@ -27,6 +27,7 @@ import (
 	"github.com/codagent/agent-runner/internal/cli"
 	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
+	"github.com/codagent/agent-runner/internal/pricing"
 	"github.com/codagent/agent-runner/internal/runview"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
@@ -522,6 +523,9 @@ steps:
 			c := step.Usage.Context
 			if c == nil || c.Status != model.ContextAvailable || c.PeakContext == nil || c.LastRequestInput == nil || *c.LastRequestInput <= 0 || *c.PeakContext < *c.LastRequestInput || c.ContextWindowLimit == nil {
 				t.Fatalf("%s context: %+v", agent, c)
+			}
+			if agent == "codex" {
+				assertRealCodexCost(t, &step, home)
 			}
 			if agent == "codex" && c.Source != "codex:rollout" {
 				t.Fatalf("source: %s", c.Source)
@@ -1124,6 +1128,10 @@ steps:
 	cmd.Env = env
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		text := strings.ToLower(string(output))
+		if childCLI == "codex" && (strings.Contains(text, "not logged in") || strings.Contains(text, "unauthorized") || strings.Contains(text, "authentication") || strings.Contains(text, "login required") || strings.Contains(text, "please run /login")) {
+			t.Skipf("Codex cannot authenticate with isolated session storage: %s", output)
+		}
 		t.Fatalf("follow-up E2E: %v\n%s", err, output)
 	}
 	read := func(file string) agentcall.Response {
@@ -1152,6 +1160,27 @@ steps:
 	for _, commit := range first.Details.Git.Commits {
 		if strings.Contains(runGit("show", commit.SHA+":notes.txt"), token) {
 			t.Fatal("token stored before resume")
+		}
+	}
+	if childCLI == "codex" {
+		runDir := latestWorkflowRunDir(t, home, dir, name)
+		raw, err := os.ReadFile(filepath.Join(runDir, metrics.FileName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var artifact metrics.Artifact
+		if err = json.Unmarshal(raw, &artifact); err != nil {
+			t.Fatal(err)
+		}
+		checked := 0
+		for _, step := range artifact.Steps {
+			if step.Usage != nil && step.Usage.CLI == "codex" {
+				assertRealCodexCost(t, &step, home)
+				checked++
+			}
+		}
+		if checked < 3 {
+			t.Fatalf("expected three Codex calls, got %d", checked)
 		}
 	}
 	// Read persisted Runner evidence and the native transcript in the isolated HOME.
@@ -1374,4 +1403,74 @@ func appendEnvOverride(env []string, key, value string) []string {
 		}
 	}
 	return append(out, key+"="+value)
+}
+
+// E2E-002 uses only isolated native storage and the embedded table.
+func assertRealCodexCost(t *testing.T, step *metrics.StepRecord, home string) {
+	t.Helper()
+	if step.CostUnavailableReason == model.UnavailableRequestEvidenceMismatch || step.CostUnavailableReason == model.UnavailableContextBandUnknown {
+		t.Fatalf("Codex rollout reconciliation failed: %+v", step)
+	}
+	table, err := pricing.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := step.Usage.Identity.EffectiveModel
+	if name == "" {
+		name = step.Usage.Model
+	}
+	entry, priced := table.Lookup("openai", name)
+	if !priced {
+		if step.CostUnavailableReason != model.UnavailableModelUnpriced {
+			t.Fatalf("unpriced model %s: %s", name, step.CostUnavailableReason)
+		}
+		t.Logf("Codex model %s has no embedded price", name)
+		return
+	}
+	if step.EstimatedAPICostUSD == nil || *step.EstimatedAPICostUSD <= 0 || step.CostBasis != model.CostBasisEstimated {
+		t.Fatalf("Codex cost %+v", step)
+	}
+	raw := step.Usage.RawCumulative
+	if raw[model.TokenInput] <= step.Usage.Tokens[model.TokenInput] {
+		return
+	}
+	var requests []model.RequestUsage
+	err = filepath.WalkDir(filepath.Join(home, ".codex", "sessions"), func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(d.Name(), "-"+step.SessionID+".jsonl") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			var event struct {
+				Type    string `json:"type"`
+				Payload struct {
+					Thread string `json:"thread_id"`
+					Usage  struct {
+						Input      int64  `json:"input_tokens"`
+						Cached     int64  `json:"cached_input_tokens"`
+						Output     int64  `json:"output_tokens"`
+						CacheWrite *int64 `json:"cache_write_input_tokens"`
+					} `json:"usage"`
+				} `json:"payload"`
+			}
+			if json.Unmarshal([]byte(line), &event) == nil && event.Type == "token_usage_record" && event.Payload.Thread == step.SessionID {
+				u := event.Payload.Usage
+				requests = append(requests, model.RequestUsage{Input: u.Input, Cached: u.Cached, Output: u.Output, CacheWrite: u.CacheWrite})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cumulative := pricing.Estimate(entry, requests)
+	if cumulative.Reason != "" || cumulative.AmountUSD <= *step.EstimatedAPICostUSD {
+		t.Fatalf("resumed cost %v must be below cumulative %v", *step.EstimatedAPICostUSD, cumulative)
+	}
 }
