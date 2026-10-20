@@ -91,9 +91,10 @@ func leafModelPopulation(artifact *metrics.Artifact, keys []string, session, pat
 	}
 	return population, hasChildren
 }
-func leafModelScalars(population []*metrics.StepRecord, gaps []string) (tokenResult *int64, costResult *float64, dispatches int, models map[string]struct{}) {
+func leafModelScalars(population []*metrics.StepRecord, gaps []string) (tokenResult *int64, costResult *float64, dispatches int, models map[string]struct{}, basis *string) {
 	var tokens int64
 	var cost float64
+	bases := map[string]struct{}{}
 	dispatches = 0
 	models = map[string]struct{}{}
 	tokenKnown, costKnown := len(gaps) == 0, len(gaps) == 0
@@ -114,6 +115,7 @@ func leafModelScalars(population []*metrics.StepRecord, gaps []string) (tokenRes
 			costKnown = false
 		} else {
 			cost += *record.EstimatedAPICostUSD
+			bases[recordCostBasis(record)] = struct{}{}
 		}
 	}
 	if tokenKnown {
@@ -122,7 +124,7 @@ func leafModelScalars(population []*metrics.StepRecord, gaps []string) (tokenRes
 	if costKnown {
 		costResult = &cost
 	}
-	return tokenResult, costResult, dispatches, models
+	return tokenResult, costResult, dispatches, models, costBasisFor(bases, costKnown)
 }
 func (e *leafModelEvidence) observedModels() []string {
 	models := map[string]struct{}{}
@@ -149,7 +151,7 @@ func attachMeasurementEvidence(leaf *LeafEvidence, artifact *metrics.Artifact, k
 		return
 	}
 	var models map[string]struct{}
-	leaf.Skeleton.Cost.TotalTokens, leaf.Skeleton.Cost.CostUSD, evidence.Dispatches, models = leafModelScalars(population, evidence.Gaps)
+	leaf.Skeleton.Cost.TotalTokens, leaf.Skeleton.Cost.CostUSD, evidence.Dispatches, models, leaf.Skeleton.Cost.CostBasis = leafModelScalars(population, evidence.Gaps)
 	for _, observed := range evidence.observedModels() {
 		models[observed] = struct{}{}
 	}

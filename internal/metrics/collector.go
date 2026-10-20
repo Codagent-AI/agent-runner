@@ -78,38 +78,42 @@ type SessionRecord struct {
 }
 
 type StepRecord struct {
-	LegacyMeasurement        bool                   `json:"legacy_measurement,omitempty"`
-	MeasurementKey           string                 `json:"measurement_key,omitempty"`
-	RecordID                 string                 `json:"record_id"`
-	Prefix                   string                 `json:"prefix"`
-	ID                       string                 `json:"id"`
-	Kind                     string                 `json:"kind"`
-	Type                     string                 `json:"type"`
-	Attempt                  int                    `json:"attempt"`
-	Iteration                *int                   `json:"iteration"`
-	Outcome                  string                 `json:"outcome"`
-	DurationMS               int64                  `json:"duration_ms"`
-	SessionID                string                 `json:"session_id,omitempty"`
-	AgentInvoked             bool                   `json:"agent_invoked"`
-	Role                     string                 `json:"role,omitempty"`
-	Tool                     string                 `json:"tool,omitempty"`
-	Usage                    *model.UsageRecord     `json:"usage"`
-	EstimatedAPICostUSD      *float64               `json:"estimated_api_cost_usd"`
-	CallID                   string                 `json:"call_id,omitempty"`
-	InvocationID             string                 `json:"invocation_id,omitempty"`
-	ParentAttemptID          string                 `json:"parent_attempt_id,omitempty"`
-	TargetKind               string                 `json:"target_kind,omitempty"`
-	TargetName               string                 `json:"target_name,omitempty"`
-	Timeout                  string                 `json:"timeout,omitempty"`
-	FollowUpOf               string                 `json:"follow_up_of,omitempty"`
-	ErrorCode                string                 `json:"error_code,omitempty"`
-	Exit                     string                 `json:"exit,omitempty"`
-	GitState                 string                 `json:"git_state,omitempty"`
-	ExecutionSessionID       string                 `json:"execution_session_id,omitempty"`
-	ExecutionSessionCoverage string                 `json:"execution_session_coverage,omitempty"`
-	GitStart                 *audit.GitCheckpoint   `json:"git_start,omitempty"`
-	GitEnd                   *audit.GitCheckpoint   `json:"git_end,omitempty"`
-	GitChanges               *audit.GitChangeCounts `json:"git_changes,omitempty"`
+	CostBasis                model.CostBasis         `json:"cost_basis,omitempty"`
+	PriceTableVersion        string                  `json:"price_table_version,omitempty"`
+	CostUnavailableReason    model.UnavailableReason `json:"cost_unavailable_reason,omitempty"`
+	CostEstimate             *CostEstimate           `json:"cost_estimate,omitempty"`
+	LegacyMeasurement        bool                    `json:"legacy_measurement,omitempty"`
+	MeasurementKey           string                  `json:"measurement_key,omitempty"`
+	RecordID                 string                  `json:"record_id"`
+	Prefix                   string                  `json:"prefix"`
+	ID                       string                  `json:"id"`
+	Kind                     string                  `json:"kind"`
+	Type                     string                  `json:"type"`
+	Attempt                  int                     `json:"attempt"`
+	Iteration                *int                    `json:"iteration"`
+	Outcome                  string                  `json:"outcome"`
+	DurationMS               int64                   `json:"duration_ms"`
+	SessionID                string                  `json:"session_id,omitempty"`
+	AgentInvoked             bool                    `json:"agent_invoked"`
+	Role                     string                  `json:"role,omitempty"`
+	Tool                     string                  `json:"tool,omitempty"`
+	Usage                    *model.UsageRecord      `json:"usage"`
+	EstimatedAPICostUSD      *float64                `json:"estimated_api_cost_usd"`
+	CallID                   string                  `json:"call_id,omitempty"`
+	InvocationID             string                  `json:"invocation_id,omitempty"`
+	ParentAttemptID          string                  `json:"parent_attempt_id,omitempty"`
+	TargetKind               string                  `json:"target_kind,omitempty"`
+	TargetName               string                  `json:"target_name,omitempty"`
+	Timeout                  string                  `json:"timeout,omitempty"`
+	FollowUpOf               string                  `json:"follow_up_of,omitempty"`
+	ErrorCode                string                  `json:"error_code,omitempty"`
+	Exit                     string                  `json:"exit,omitempty"`
+	GitState                 string                  `json:"git_state,omitempty"`
+	ExecutionSessionID       string                  `json:"execution_session_id,omitempty"`
+	ExecutionSessionCoverage string                  `json:"execution_session_coverage,omitempty"`
+	GitStart                 *audit.GitCheckpoint    `json:"git_start,omitempty"`
+	GitEnd                   *audit.GitCheckpoint    `json:"git_end,omitempty"`
+	GitChanges               *audit.GitChangeCounts  `json:"git_changes,omitempty"`
 }
 
 // SessionRollup exposes work attributable to exactly one Runner invocation.
@@ -338,10 +342,7 @@ func (c *Collector) processTerminal(event *audit.Event) {
 		if cost, cumulative := c.attributeCost(&identity, &usage); cumulative {
 			event.Data[DataEstimatedAPICostUSD] = cost
 		}
-		if cost, ok := event.Data[DataEstimatedAPICostUSD].(*float64); ok && cost != nil {
-			value := *cost
-			record.EstimatedAPICostUSD = &value
-		}
+		c.resolveCost(event, &record, &usage)
 	}
 	c.artifact.Steps = append(c.artifact.Steps, record)
 }
@@ -383,7 +384,7 @@ func (c *Collector) attribute(identity *model.ExecutionIdentity, input *model.Us
 
 	if !sessionWasResumed(identity) {
 		usage.Status = model.UsageCollected
-		usage.Reason = ""
+		usage.Reason = input.Reason
 		usage.Tokens = cloneCounts(raw)
 		usage.TokenTotals = cloneTokenTotals(usage.RawCumulativeTokenTotals)
 		return usage
@@ -413,7 +414,7 @@ func (c *Collector) attribute(identity *model.ExecutionIdentity, input *model.Us
 		delta[category] = current - prior[category]
 	}
 	usage.Status = model.UsageCollected
-	usage.Reason = ""
+	usage.Reason = input.Reason
 	usage.Tokens = delta
 	if usage.RawCumulativeTokenTotals != nil && totalsFound {
 		current := usage.RawCumulativeTokenTotals
@@ -593,6 +594,7 @@ func totalsForRecords(records []StepRecord, activeDuration int64) model.RunTotal
 		if step.EstimatedAPICostUSD != nil {
 			costReported++
 			cost += *step.EstimatedAPICostUSD
+			addCostBasis(&totals, step)
 		}
 	}
 	totals.UsageCoverage = coverage(agents, usageReported, usagePartial)
@@ -603,6 +605,7 @@ func totalsForRecords(records []StepRecord, activeDuration int64) model.RunTotal
 	totals.CostCoverage = coverage(agents, costReported, 0)
 	if costReported > 0 {
 		totals.EstimatedAPICostUSD = &cost
+		totals.CostBasis = summaryCostBasis(totals.CostByBasis)
 	}
 	return totals
 }
@@ -712,15 +715,7 @@ func (c *Collector) rehydrate(sessionStart time.Time) {
 		artifact.Steps = []StepRecord{}
 	}
 	migrated := artifact.SchemaVersion != SchemaVersion
-	if artifact.SchemaVersion == 1 {
-		migrateSchemaV1(&artifact)
-	}
-	if artifact.SchemaVersion == 1 || artifact.SchemaVersion == 2 {
-		migrateSchemaV2(&artifact)
-	}
-	if artifact.SchemaVersion <= 3 {
-		migrateSchemaV3(&artifact)
-	}
+	prepareLoadedArtifact(&artifact)
 	c.artifact = artifact
 	c.artifact.SchemaVersion = SchemaVersion
 	c.refreshAggregatesLocked()
@@ -987,6 +982,17 @@ func cloneCounts(counts model.TokenCounts) model.TokenCounts {
 
 func cloneUsage(usage *model.UsageRecord) model.UsageRecord {
 	cloned := *usage
+	if usage.RequestEvidence != nil {
+		evidence := *usage.RequestEvidence
+		evidence.Requests = append([]model.RequestUsage(nil), evidence.Requests...)
+		for i := range evidence.Requests {
+			if v := evidence.Requests[i].CacheWrite; v != nil {
+				value := *v
+				evidence.Requests[i].CacheWrite = &value
+			}
+		}
+		cloned.RequestEvidence = &evidence
+	}
 	cloned.Context = cloneContext(usage.Context)
 	cloned.Turns = make([]model.UsageRecord, len(usage.Turns))
 	for i := range usage.Turns {
@@ -1018,6 +1024,16 @@ func cloneTokenTotals(totals *model.TokenTotals) *model.TokenTotals {
 
 func cloneTotals(input *model.RunTotals) model.RunTotals {
 	totals := *input
+	if input.CostBasis != nil {
+		v := *input.CostBasis
+		totals.CostBasis = &v
+	}
+	if input.CostByBasis != nil {
+		totals.CostByBasis = make(map[string]float64, len(input.CostByBasis))
+		for k, v := range input.CostByBasis {
+			totals.CostByBasis[k] = v
+		}
+	}
 	totals.Tokens = cloneCounts(input.Tokens)
 	totals.TokenTotals = cloneTokenTotals(input.TokenTotals)
 	if input.EstimatedAPICostUSD != nil {
@@ -1060,6 +1076,7 @@ func (c *Collector) attributeTurns(identity *model.ExecutionIdentity, input *mod
 	totalsComplete := true
 	for i := range input.Turns {
 		attributed := c.attribute(&currentIdentity, &input.Turns[i])
+		total.Turns[i] = attributed
 		if i+1 < len(input.Turns) {
 			currentIdentity.SessionResumed = true
 		}
@@ -1104,4 +1121,47 @@ func (c *Collector) attributeTurns(identity *model.ExecutionIdentity, input *mod
 		total.TokenTotals = nil
 	}
 	return total
+}
+
+func normalizeCostBasis(records []StepRecord) {
+	for i := range records {
+		if records[i].EstimatedAPICostUSD != nil && records[i].CostBasis == "" {
+			records[i].CostBasis = model.CostBasisReported
+		}
+	}
+}
+func addCostBasis(totals *model.RunTotals, step *StepRecord) {
+	if totals.CostByBasis == nil {
+		totals.CostByBasis = map[string]float64{}
+	}
+	basis := string(step.CostBasis)
+	if basis == "" {
+		basis = "reported"
+	}
+	totals.CostByBasis[basis] += *step.EstimatedAPICostUSD
+}
+func summaryCostBasis(bases map[string]float64) *string {
+	if len(bases) == 0 {
+		return nil
+	}
+	basis := "mixed"
+	if len(bases) == 1 {
+		for key := range bases {
+			basis = key
+		}
+	}
+	return &basis
+}
+
+func prepareLoadedArtifact(artifact *Artifact) {
+	if artifact.SchemaVersion == 1 {
+		migrateSchemaV1(artifact)
+	}
+	if artifact.SchemaVersion == 1 || artifact.SchemaVersion == 2 {
+		migrateSchemaV2(artifact)
+	}
+	if artifact.SchemaVersion <= 3 {
+		migrateSchemaV3(artifact)
+	}
+	normalizeCostBasis(artifact.Steps)
 }

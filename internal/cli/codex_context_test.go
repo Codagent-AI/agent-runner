@@ -72,6 +72,7 @@ func TestCodexContextPrivateHomeINT001(t *testing.T) {
 				t.Fatalf("window %+v", c)
 			}
 			got.Usage.Context = nil
+			got.Usage.RequestEvidence = nil
 			if diff := cmp.Diff(baseline, got); diff != "" {
 				t.Fatal(diff)
 			}
@@ -136,4 +137,61 @@ func TestReadCodexContextTolerantReading(t *testing.T) {
 			t.Fatalf("context %+v", c)
 		}
 	})
+}
+
+func TestCodexRequestEvidenceINT001(t *testing.T) {
+	home := t.TempDir()
+	source := filepath.Join(home, "source")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CODEX_HOME", source)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	if err := os.MkdirAll(filepath.Join(source, "sessions"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	private, err := prepareCodexRunnerHome(&CompletionCommand{Executable: "/bin/true", Args: []string{"step", "complete"}}, nil, ContextAutonomousHeadless, "pricing-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(source, "sessions", "rollout-test-S.jsonl")
+	line := func(ts, thread, usage string) string {
+		return `{"timestamp":"` + ts + `","type":"token_usage_record","payload":{"thread_id":"` + thread + `","response_id":"R","usage":` + usage + `}}` + "\n"
+	}
+	full := `{"input_tokens":300000,"cached_input_tokens":200000,"cache_write_input_tokens":20000,"output_tokens":2000}`
+	data := line("2026-10-20T00:00:00Z", "S", full) + line("2026-10-20T00:00:01Z", "other", full) + line("2026-10-20T00:00:01Z", "S", full) + `{"timestamp":"2026-10-20T00:00:01Z","type":"compacted","payload":{"compaction_response_id":"R"}}` + "\n" + line("2026-10-20T00:00:01Z", "S", `{"input_tokens":10,"cached_input_tokens":0,"output_tokens":1}`) + line("2026-10-20T00:00:01Z", "S", `{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":1}`)
+	uc := UsageContext{Env: []string{"CODEX_HOME=" + private}, StartedAt: time.Date(2026, 10, 20, 0, 0, 1, 0, time.UTC)}
+	stdout := `{"type":"thread.started","thread_id":"S"}` + "\n" + `{"type":"turn.completed","usage":{"input_tokens":300010,"cached_input_tokens":200000,"output_tokens":2001}}`
+	for _, tt := range []struct {
+		name, data string
+		reason     model.UnavailableReason
+	}{
+		{"full", data, ""}, {"malformed", line("2026-10-20T00:00:01Z", "S", `"bad"`), model.UnavailableParseFailure}, {"old format", `{"timestamp":"2026-10-20T00:00:01Z","type":"event_msg","payload":{"type":"token_count"}}`, model.UnavailableCodexRolloutUnsupported}, {"missing", "", model.UnavailableCodexRolloutNotFound},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.data == "" {
+				_ = os.Remove(path)
+			} else if err := os.WriteFile(path, []byte(tt.data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := (&CodexAdapter{}).ExtractUsageWithContext(stdout, uc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Usage.Completeness != model.CompletenessPartial || got.Usage.Reason != "" {
+				t.Fatalf("field absence must not set reason: %+v", got.Usage)
+			}
+			evidence := got.Usage.RequestEvidence
+			if evidence == nil || evidence.Reason != tt.reason {
+				t.Fatalf("evidence %+v", evidence)
+			}
+			if tt.reason == "" {
+				if evidence.Status != model.UsageCollected || len(evidence.Requests) != 3 || evidence.Requests[0].Input != 300000 || *evidence.Requests[0].CacheWrite != 20000 || evidence.Requests[1].CacheWrite != nil || evidence.Requests[2].CacheWrite == nil || *evidence.Requests[2].CacheWrite != 0 {
+					t.Fatalf("evidence %+v", evidence)
+				}
+			}
+			raw, _ := json.Marshal(got.Usage)
+			if strings.Contains(string(raw), "Requests") || strings.Contains(string(raw), "request_evidence") {
+				t.Fatal(string(raw))
+			}
+		})
+	}
 }

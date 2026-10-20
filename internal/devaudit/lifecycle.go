@@ -764,9 +764,10 @@ func snapshotReplayEvidenceAt(sessionDir, dir, executionSessionID string) (strin
 	}
 	artifact.Steps = steps
 	rollups := make([]metrics.SessionRollup, 0, len(artifact.SessionRollups))
-	for _, rollup := range artifact.SessionRollups {
+	for i := range artifact.SessionRollups {
+		rollup := &artifact.SessionRollups[i]
 		if _, ok := allowed[rollup.ExecutionSessionID]; ok {
-			rollups = append(rollups, rollup)
+			rollups = append(rollups, *rollup)
 		}
 	}
 	artifact.SessionRollups = rollups
