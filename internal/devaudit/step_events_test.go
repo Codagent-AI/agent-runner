@@ -3,6 +3,7 @@
 package devaudit
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -186,5 +187,52 @@ func TestUnresolvedAndMissingBlobRemainPartial(t *testing.T) {
 		if kind == "unresolved" && (refs[1].Contribution != "context_possibly_inherited" || !strings.Contains(refs[1].Detail, "earlier finding")) {
 			t.Fatal(refs)
 		}
+	}
+}
+
+func TestExportCommitPatchRejectsUnsafeObjectIDs(t *testing.T) {
+	for _, sha := range []string{"../escape", "--output=outside", strings.Repeat("a", 39), strings.Repeat("g", 40), strings.Repeat("a", 65)} {
+		snapshot := t.TempDir()
+		commit := snapshottedGitCommit{SHA: sha}
+		exportCommitPatch(t.TempDir(), snapshot, &commit)
+		if commit.PatchUnavailable != "invalid commit object ID" || commit.Patch != "" {
+			t.Fatalf("%q: %+v", sha, commit)
+		}
+		entries, err := os.ReadDir(snapshot)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("invalid SHA wrote files: %v %v", entries, err)
+		}
+	}
+}
+
+func TestAuditLogAccessCannotEscapeEvidenceRoot(t *testing.T) {
+	source := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.log")
+	content := []byte("now step_end {\"execution_session_id\":\"s\"}\n")
+	if err := os.WriteFile(outside, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(source, "audit.log")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := readStepEvents(source); err == nil {
+		t.Fatal("read audit log outside snapshot root")
+	}
+	if err := os.Remove(filepath.Join(source, "audit.log")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "audit.log"), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(dest, "audit.log")); err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshotReplayContent(source, dest, map[string]struct{}{"s": {}}); err == nil {
+		t.Fatal("wrote replay log outside snapshot root")
+	}
+	got, err := os.ReadFile(outside)
+	if err != nil || !bytes.Equal(got, content) {
+		t.Fatalf("outside evidence changed: %q %v", got, err)
 	}
 }

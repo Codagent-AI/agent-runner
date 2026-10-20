@@ -2,6 +2,7 @@ package audit
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -275,5 +276,140 @@ func TestRecentMtimeRehashesSameMetadata(t *testing.T) {
 	z := o.observe(b)
 	if sameVersion(a.files["file"].version, z.files["file"].version) {
 		t.Fatal("recent same-metadata rewrite used stale hash")
+	}
+}
+
+func TestEvidenceCacheDetectsOldMtimeRewriteAndRetainsNoContent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file")
+	stamp := time.Unix(100, 0)
+	_ = os.WriteFile(path, []byte("old"), 0o600)
+	_ = os.Chtimes(path, stamp, stamp)
+	observer := newOutputObserver(t.TempDir(), "")
+	budget := newObserveBudget()
+	budget.boundary()
+	before, err := observer.readFile(dir, "file", budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Advance past the recent-change guard to exercise an actual cache hit.
+	budget.now = func() time.Time { return time.Now().Add(3 * time.Second) }
+	budget.boundary()
+	if info, e := os.Stat(path); e == nil {
+		if _, ok := fileChangeTime(info); ok {
+			budget.hashLimit = 0
+		}
+	}
+	cached, err := observer.readFile(dir, "file", budget)
+	if err != nil || string(cached.data) != "old" {
+		t.Fatalf("cache hit: %q %v", cached.data, err)
+	}
+	if !cached.version.IdentityComplete {
+		t.Fatal("stable metadata did not restore the complete cached identity")
+	}
+	budget.hashLimit = maxIdentityBytes
+	budget.now = time.Now
+	budget.boundary()
+	for _, entry := range observer.cache {
+		if len(entry.data) != 0 {
+			t.Fatal("cache retains file content")
+		}
+	}
+	_ = os.WriteFile(path, []byte("new"), 0o600)
+	_ = os.Chtimes(path, stamp, stamp)
+	after, err := observer.readFile(dir, "file", budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sameVersion(before.version, after.version) {
+		t.Fatal("same-size old-mtime rewrite used stale identity")
+	}
+}
+
+func TestEvidenceCacheHasEntryBound(t *testing.T) {
+	dir := t.TempDir()
+	observer := newOutputObserver(t.TempDir(), "")
+	budget := newObserveBudget()
+	budget.boundary()
+	for i := 0; i < maxObservedFiles+1; i++ {
+		path := fmt.Sprintf("file-%d", i)
+		_ = os.WriteFile(filepath.Join(dir, path), []byte("x"), 0o600)
+		if _, err := observer.readFile(dir, path, budget); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(observer.cache) > maxObservedFiles {
+		t.Fatalf("cache entries %d", len(observer.cache))
+	}
+}
+
+func TestGitVersionFailuresAreNotMissingFiles(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	_ = os.WriteFile(filepath.Join(repo, "file"), []byte("base"), 0o600)
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "initial")
+	observer := newOutputObserver(t.TempDir(), repo)
+	budget := newObserveBudget()
+	budget.boundary()
+	head, err := gitOutput(repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	head = strings.TrimSpace(head)
+	if _, err = observer.gitVersion(head, "missing", budget); !os.IsNotExist(err) {
+		t.Fatalf("missing path: %v", err)
+	}
+	if _, err = observer.gitVersion(strings.Repeat("0", 40), "file", budget); err == nil || os.IsNotExist(err) {
+		t.Fatalf("missing revision should be unavailable: %v", err)
+	}
+	bin := t.TempDir()
+	_ = os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\necho 'fatal: temporary object read failure' >&2\nexit 128\n"), 0o700)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if _, err = observer.gitVersion(head, "file", budget); err == nil || os.IsNotExist(err) {
+		t.Fatalf("git failure misclassified: %v", err)
+	}
+}
+
+func TestRepositoryBaselineFailureHasNoFabricatedVersion(t *testing.T) {
+	for _, reason := range []string{"permission denied", "read budget exhausted"} {
+		t.Run(reason, func(t *testing.T) {
+			repo := t.TempDir()
+			_ = os.WriteFile(filepath.Join(repo, "file"), []byte("new content"), 0o600)
+			observer := newOutputObserver(t.TempDir(), repo)
+			budget := newObserveBudget()
+			budget.boundary()
+			window := &outputWindow{budget: budget, repo: map[string]observedFile{"file": {reason: reason}}}
+			start := GitCheckpoint{Available: true, Worktree: []GitFileStat{{Path: "file", Fingerprint: "before"}}}
+			end := GitCheckpoint{Available: true, Worktree: []GitFileStat{{Path: "file", Fingerprint: "after"}}}
+			record := observer.repositoryPatch(window, &start, &end)
+			if record.Status != observationStatus(reason) || !strings.Contains(record.Reason, reason) {
+				t.Fatalf("%+v", record)
+			}
+			if len(record.Files) != 1 || record.Files[0].Before != nil || record.Files[0].Contribution.Kind != "unresolved" {
+				t.Fatalf("fabricated baseline: %+v", record)
+			}
+		})
+	}
+}
+
+func TestShortGitBlobHasNoPartialIdentity(t *testing.T) {
+	bin := t.TempDir()
+	script := `#!/bin/sh
+case "$*" in *' -s '*) printf '10\n';; *) printf abc;; esac
+`
+	_ = os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o700)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	observer := newOutputObserver(t.TempDir(), t.TempDir())
+	budget := newObserveBudget()
+	budget.boundary()
+	file, err := observer.gitVersion(strings.Repeat("a", 40), "file", budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.version.IdentityComplete || file.version.SHA256 != "" || file.version.BlobComplete {
+		t.Fatalf("partial content given full identity: %+v", file.version)
 	}
 }

@@ -11,10 +11,16 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/codagent/agent-runner/internal/audit"
 )
 
 func exportCommitPatch(projectRoot, snapshot string, commit *snapshottedGitCommit) {
-	command := exec.Command("git", "-C", projectRoot, "show", "--no-ext-diff", "--no-textconv", "--format=%H%n%s", "--patch", commit.SHA)
+	if !audit.ValidGitObjectID(commit.SHA) {
+		commit.PatchUnavailable = "invalid commit object ID"
+		return
+	}
+	command := exec.Command("git", "-C", projectRoot, "show", "--no-ext-diff", "--no-textconv", "--format=%H%n%s", "--patch", "--end-of-options", commit.SHA, "--") // #nosec G204 -- full hexadecimal object ID validated above; Git options and paths are delimited.
 	pipe, err := command.StdoutPipe()
 	if err != nil {
 		commit.PatchUnavailable = err.Error()

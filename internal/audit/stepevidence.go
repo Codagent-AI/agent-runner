@@ -259,9 +259,10 @@ func (o *outputObserver) readFile(root, path string, b *observeBudget) (observed
 	if err != nil {
 		return observedFile{}, err
 	}
-	key := fmt.Sprintf("%s/%s:%d:%d:%d", root, path, info.Size(), info.ModTime().UnixNano(), fileInode(info))
-	if cached, ok := o.cache[filepath.Join(root, path)]; ok && cached.cacheKey == key && b.now().Sub(info.ModTime()) > maxObserveTime && cached.reason == "" {
-		return cached, nil
+	changed, hasChangeTime := fileChangeTime(info)
+	key := fmt.Sprintf("%s/%s:%d:%d:%d:%d", root, path, info.Size(), info.ModTime().UnixNano(), fileInode(info), changed.UnixNano())
+	if cached, ok := o.cache[filepath.Join(root, path)]; ok && hasChangeTime && cached.cacheKey == key && b.now().Sub(info.ModTime()) > maxObserveTime && b.now().Sub(changed) > maxObserveTime && cached.reason == "" {
+		return o.restoreCachedFile(&cached, b)
 	}
 	limit := info.Size()
 	if limit > b.hashLimit {
@@ -283,7 +284,7 @@ func (o *outputObserver) readFile(root, path string, b *observeBudget) (observed
 	if err != nil {
 		result.reason = err.Error()
 	}
-	o.cache[filepath.Join(root, path)] = result
+	o.cacheFile(filepath.Join(root, path), &result)
 	return result, nil
 }
 func (o *outputObserver) observe(b *observeBudget) observation {
@@ -638,13 +639,12 @@ func (o *outputObserver) repositoryPatch(w *outputWindow, start, end *GitCheckpo
 	dirty := flattenCheckpoint(start)
 	for _, path := range paths {
 		if f, ok := w.repo[path]; ok {
-			before.files[path] = f
+			before.addBaseline(path, &f)
 		} else if _, wasDirty := dirty[path]; !wasDirty {
 			f, err := o.gitVersion(start.HEAD, path, w.budget)
 			if err == nil {
-				before.files[path] = f
+				before.addBaseline(path, &f)
 			} else if !errors.Is(err, os.ErrNotExist) {
-				before.files[path] = observedFile{reason: err.Error()}
 				before.status = observationStatus(err.Error())
 				before.reason = err.Error()
 			}
@@ -661,17 +661,27 @@ func (o *outputObserver) repositoryPatch(w *outputWindow, start, end *GitCheckpo
 	return &r
 }
 func (o *outputObserver) gitVersion(head, path string, b *observeBudget) (observedFile, error) {
+	if !ValidGitObjectID(head) {
+		return observedFile{}, fmt.Errorf("invalid Git revision object ID")
+	}
 	object := head + ":" + path
-	cmd := exec.Command("git", "-C", o.repoRoot, "cat-file", "-s", object)
+	cmd := exec.Command("git", "-C", o.repoRoot, "cat-file", "-s", "--", object) // #nosec G204 -- validated object ID, literal Git path, no shell, and options terminated.
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	sizeText, err := cmd.Output()
 	if err != nil {
-		return observedFile{}, os.ErrNotExist
+		if missingGitPath(err, head) {
+			if _, revisionErr := gitOutput(o.repoRoot, "cat-file", "-e", "--", head+"^{commit}"); revisionErr != nil {
+				return observedFile{}, fmt.Errorf("git baseline revision unavailable: %w", revisionErr)
+			}
+			return observedFile{}, os.ErrNotExist
+		}
+		return observedFile{}, fmt.Errorf("read Git baseline size: %w", err)
 	}
 	var size int64
 	if _, err = fmt.Sscan(string(sizeText), &size); err != nil {
 		return observedFile{}, err
 	}
-	cmd = exec.Command("git", "-C", o.repoRoot, "cat-file", "blob", object)
+	cmd = exec.Command("git", "-C", o.repoRoot, "cat-file", "blob", "--", object) // #nosec G204 -- validated object ID and literal Git path; -- prevents option injection.
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return observedFile{}, err
@@ -694,7 +704,7 @@ func (o *outputObserver) gitVersion(head, path string, b *observeBudget) (observ
 	if limit == size && waitErr != nil {
 		return observedFile{}, waitErr
 	}
-	v := FileVersion{Size: size, IdentityComplete: limit == size, Binary: bytes.IndexByte(data, 0) >= 0 || !utf8.Valid(data)}
+	v := FileVersion{Size: size, IdentityComplete: limit == size && int64(len(data)) == size, Binary: bytes.IndexByte(data, 0) >= 0 || !utf8.Valid(data)}
 	if v.IdentityComplete {
 		hash := sha256.Sum256(data)
 		v.SHA256 = fmt.Sprintf("%x", hash)
@@ -716,4 +726,71 @@ func textPrefix(data []byte, limit int) []byte {
 		n--
 	}
 	return data[:n]
+}
+
+// The cache contains only bounded metadata. Baseline bytes remain in the
+// content-addressed store and every restoration is charged to the step budget.
+func (o *outputObserver) cacheFile(path string, file *observedFile) {
+	if _, exists := o.cache[path]; !exists && len(o.cache) >= maxObservedFiles {
+		clear(o.cache)
+	}
+	cached := *file
+	cached.data = nil
+	o.cache[path] = cached
+}
+func (o *outputObserver) restoreCachedFile(entry *observedFile, b *observeBudget) (observedFile, error) {
+	cached := *entry
+	file, err := regularOpen(o.sessionDir, cached.version.Blob)
+	if err != nil {
+		return observedFile{}, err
+	}
+	defer func() { _ = file.Close() }()
+	cached.data, err = b.readBytes(file, min(cached.version.Size, int64(maxVersionBytes)))
+	return cached, err
+}
+
+// Change timestamps prevent old, restored mtimes from reviving stale hashes.
+// Platforms without such a timestamp conservatively bypass the cache.
+func fileChangeTime(info os.FileInfo) (time.Time, bool) {
+	stat := reflect.ValueOf(info.Sys())
+	if stat.Kind() == reflect.Pointer {
+		stat = stat.Elem()
+	}
+	if stat.Kind() != reflect.Struct {
+		return time.Time{}, false
+	}
+	for _, name := range []string{"Ctim", "Ctimespec"} {
+		field := stat.FieldByName(name)
+		if !field.IsValid() || field.Kind() != reflect.Struct {
+			continue
+		}
+		sec, nsec := field.FieldByName("Sec"), field.FieldByName("Nsec")
+		if sec.CanInt() && nsec.CanInt() {
+			return time.Unix(sec.Int(), nsec.Int()), true
+		}
+	}
+	return time.Time{}, false
+}
+
+// ValidGitObjectID accepts full SHA-1 or SHA-256 object IDs, never revisions,
+// option-like strings or filesystem paths from an edited evidence artifact.
+func ValidGitObjectID(id string) bool {
+	return (len(id) == 40 || len(id) == 64) && strings.Trim(id, "0123456789abcdef") == ""
+}
+func missingGitPath(err error, head string) bool {
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 128 {
+		return false
+	}
+	message := string(exit.Stderr)
+	return strings.HasPrefix(message, "fatal: path ") && (strings.Contains(message, " does not exist in '"+head+"'") || strings.Contains(message, " exists on disk, but not in '"+head+"'"))
+}
+
+func (obs *observation) addBaseline(path string, file *observedFile) {
+	if file.reason != "" {
+		obs.status = observationStatus(file.reason)
+		obs.reason = file.reason
+		return
+	}
+	obs.files[path] = *file
 }

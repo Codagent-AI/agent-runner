@@ -41,7 +41,7 @@ func decodeEventField(data map[string]any, key string, target any) bool {
 }
 func readStepEvents(snapshot string) (stepEventIndex, error) {
 	result := stepEventIndex{events: map[string][]stepEvent{}}
-	file, err := os.Open(filepath.Join(snapshot, "audit.log"))
+	file, err := openEvidenceFile(snapshot, "audit.log", os.O_RDONLY)
 	if os.IsNotExist(err) {
 		result.missing = true
 		return result, nil
@@ -318,7 +318,7 @@ func readSnapshotContent(snapshot, rel string, limit int) (string, error) {
 // snapshotReplayContent admits only durable session-owned events and copies
 // only the blobs those events reference. Legacy, unowned lines are excluded.
 func snapshotReplayContent(source, dest string, allowed map[string]struct{}) error {
-	input, err := os.Open(filepath.Join(source, "audit.log"))
+	input, err := openEvidenceFile(source, "audit.log", os.O_RDONLY)
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -326,7 +326,7 @@ func snapshotReplayContent(source, dest string, allowed map[string]struct{}) err
 		return err
 	}
 	defer func() { _ = input.Close() }()
-	output, err := os.OpenFile(filepath.Join(dest, "audit.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	output, err := openEvidenceFile(dest, "audit.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC)
 	if err != nil {
 		return err
 	}
@@ -452,4 +452,14 @@ func firstStepLine(events []stepEvent) int {
 		}
 	}
 	return line
+}
+
+// Scope audit-log opens to the resolved evidence directory, including symlinks.
+func openEvidenceFile(dir, name string, flags int) (*os.File, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	return root.OpenFile(name, flags, 0o600)
 }
