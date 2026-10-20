@@ -64,11 +64,6 @@ func codexContext(stdout string, uc UsageContext) (*model.ContextMeasurement, *m
 	return readCodexRollout(f, session, uc.StartedAt)
 }
 
-func readCodexContext(reader io.Reader, session string, startedAt time.Time) *model.ContextMeasurement {
-	context, _ := readCodexRollout(reader, session, startedAt)
-	return context
-}
-
 func readCodexRollout(reader io.Reader, session string, startedAt time.Time) (*model.ContextMeasurement, *model.RequestEvidence) {
 	acc := codexRolloutAccumulator{session: session, compacted: map[string]bool{}}
 	line := 0
