@@ -384,6 +384,9 @@ func (o *outputObserver) visitOutputPath(r *os.Root, root, path string, depth in
 	}
 	return nil
 }
+
+const binaryContentReason = "binary content"
+
 func observationStatus(reason string) string {
 	if strings.Contains(reason, "budget exhausted") {
 		return "truncated"
@@ -404,7 +407,7 @@ func Contribution(before, after *FileVersion, beforeBytes []byte, afterReader io
 		return Retained{}, nil
 	}
 	if after.Binary || (before != nil && before.Binary) {
-		return Retained{Kind: "unavailable", Reason: "binary content"}, nil
+		return Retained{Kind: "unavailable", Reason: binaryContentReason}, nil
 	}
 	unresolved := func(reason string, data []byte) (Retained, []byte) {
 		return Retained{Kind: "unresolved", Reason: reason, Truncated: int64(len(data)) < after.Size || len(data) > maxContributionBytes}, textPrefix(data, maxContributionBytes)
@@ -542,7 +545,9 @@ func (o *outputObserver) classifyContribution(w *FileWrite, baselineKnown, basel
 		w.Contribution.Context = w.Contribution.Blob
 		w.Contribution.Blob = ""
 	}
-	if w.Contribution.Kind == "unavailable" {
+	// Binary content limits only this file's contribution; it is not an
+	// observation failure, so the record keeps its own status.
+	if w.Contribution.Kind == "unavailable" && w.Contribution.Reason != binaryContentReason {
 		mergeRecordStatus(result, observationStatus(w.Contribution.Reason), w.Contribution.Reason)
 	}
 }

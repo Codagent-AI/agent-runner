@@ -471,3 +471,30 @@ func TestSkippedDirtyBaselineCannotClaimCreatedContent(t *testing.T) {
 		t.Fatalf("inherited content credited as a contribution: %+v", file)
 	}
 }
+
+// Binary content is a per-file limitation, not an observation failure: the
+// record stays observed and only the file's contribution is unavailable.
+func TestBinaryFileKeepsRecordObserved(t *testing.T) {
+	dir := t.TempDir()
+	output := filepath.Join(dir, "output")
+	_ = os.MkdirAll(output, 0o700)
+	l := NewCheckpointLogger(nil, "", "session", dir)
+	l.Decorate(Event{Type: EventStepStart, Prefix: "[binary]", Data: map[string]any{"script": "test"}})
+	if err := os.WriteFile(filepath.Join(output, "binary"), []byte("\x00binary"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := l.Decorate(Event{Type: EventStepEnd, Prefix: "[binary]"}).Data["output_writes"].(WriteRecord)
+	if r.Status != "observed" || r.Reason != "" {
+		t.Fatalf("record = %s %q, want observed with no reason", r.Status, r.Reason)
+	}
+	if len(r.Files) != 1 {
+		t.Fatalf("files = %+v", r.Files)
+	}
+	f := r.Files[0]
+	if f.Contribution == nil || f.Contribution.Kind != "unavailable" || f.Contribution.Reason != "binary content" {
+		t.Fatalf("contribution = %+v", f.Contribution)
+	}
+	if f.After == nil || !f.After.Binary || !f.After.IdentityComplete || f.After.SHA256 == "" {
+		t.Fatalf("binary identity not recorded: %+v", f.After)
+	}
+}

@@ -169,7 +169,8 @@ printf '%s\n' '{"type":"thread.started","thread_id":"repair"}' '{"type":"item.co
 	if r := records["[delete]"][0]; len(r.Files) != 1 || r.Files[0].Change != "deleted" {
 		t.Fatal(r)
 	}
-	if r := records["[binary]"][0]; r.Files[0].Contribution.Kind != "unavailable" {
+	// Binary content limits only the file's contribution, not the record.
+	if r := records["[binary]"][0]; r.Status != "observed" || r.Files[0].Contribution.Kind != "unavailable" {
 		t.Fatal(r)
 	}
 	for _, id := range []string{"edit-one", "edit-two"} {

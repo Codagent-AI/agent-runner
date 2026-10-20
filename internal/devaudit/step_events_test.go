@@ -61,6 +61,9 @@ func TestArtifactCoverage(t *testing.T) {
 		{"truncated", &audit.WriteRecord{Status: "truncated", Reason: "bound", Files: []audit.FileWrite{}}, true, "partial"},
 		{"empty", &audit.WriteRecord{Status: "observed", Files: []audit.FileWrite{}}, true, "none_produced"},
 		{"no git", &audit.WriteRecord{Status: "observed", Files: []audit.FileWrite{}}, false, "unavailable"},
+		// A binary file limits only its own contribution, so the leaf is
+		// partial rather than having produced nothing creditable.
+		{"binary file", &audit.WriteRecord{Status: "observed", Files: []audit.FileWrite{{Path: "binary", Change: "created", After: &audit.FileVersion{Size: 7, IdentityComplete: true, Binary: true}, Contribution: &audit.Retained{Kind: "unavailable", Reason: "binary content"}}}}, true, "partial"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			events := stepEventIndex{events: map[string][]stepEvent{stepEventKey("s", "x"): {{outputWrites: tc.record, start: audit.GitCheckpoint{Available: tc.git}, end: audit.GitCheckpoint{Available: tc.git}}}}}
