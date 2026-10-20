@@ -1814,6 +1814,8 @@ func TestValidateNonemptyParam(t *testing.T) {
 		{"literal vertical tab", "\\u000b", 0},
 		{"backslash pair", "\\\\", 0},
 		{"lone backslash", "\\", 0},
+		{"nul", "\x00", 0},
+		{"nul with whitespace", " \x00\t\n", 0},
 		{"nbsp", "\u00a0", 0},
 		{"line separator", "\u2028", 0},
 	}

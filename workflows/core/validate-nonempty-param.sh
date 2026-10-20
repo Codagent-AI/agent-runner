@@ -5,8 +5,9 @@ payload=$(cat)
 
 if command -v jq >/dev/null 2>&1; then
   name=$(printf '%s' "$payload" | jq -r '.name // "parameter"')
-  value=$(printf '%s' "$payload" | jq -r '.value // ""')
-  content=$(printf '%s' "$value" | LC_ALL=C tr -d ' \t\n\v\f\r')
+  # Preserve NUL content across shell command substitution.
+  content=$(printf '%s' "$payload" | jq -r '.value // ""' |
+    LC_ALL=C tr -d ' \t\n\v\f\r' | tr '\000' x)
 else
   name=$(printf '%s\n' "$payload" | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
   # Neutralize literal backslashes before removing JSON whitespace escapes.
