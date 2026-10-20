@@ -720,17 +720,7 @@ func TestCoreCommitChangePlanSkipValidatorControlsValidatorBaseline(t *testing.T
 				runGitOutput(t, tempDir, "commit", "-m", "chore: pre-commit plan")
 			}
 			if tc.symlinked {
-				externalDir := t.TempDir()
-				if err := os.Rename(filepath.Join(tempDir, "openspec", "changes"), filepath.Join(externalDir, "changes")); err != nil {
-					t.Fatalf("move plan outside repository: %v", err)
-				}
-				openspecDir := filepath.Join(tempDir, "openspec")
-				if err := os.Remove(openspecDir); err != nil {
-					t.Fatalf("remove openspec directory: %v", err)
-				}
-				if err := os.Symlink(externalDir, openspecDir); err != nil {
-					t.Fatalf("symlink openspec directory: %v", err)
-				}
+				symlinkOpenSpecOutsideRepository(t, tempDir)
 			}
 			headBefore := strings.TrimSpace(string(runGitOutput(t, tempDir, "rev-parse", "HEAD")))
 
@@ -768,6 +758,21 @@ func TestCoreCommitChangePlanSkipValidatorControlsValidatorBaseline(t *testing.T
 		})
 	}
 
+	t.Run("symlinked missing change directory rejected", func(t *testing.T) {
+		tempDir, run, validatorLog := newCommitChangePlanFixture(t, script)
+		symlinkOpenSpecOutsideRepository(t, tempDir)
+		out, err := run(`{"change_name":"missing","change_dir":"openspec/changes/missing"}`)
+		if err == nil {
+			t.Fatalf("missing symlinked change directory succeeded:\n%s", out)
+		}
+		if !strings.Contains(out, "openspec/changes/missing") {
+			t.Fatalf("output = %q, want missing change directory named", out)
+		}
+		if _, err := os.Stat(validatorLog); !os.IsNotExist(err) {
+			t.Fatalf("missing change directory ran agent-validator (stat err %v)", err)
+		}
+	})
+
 	t.Run("invalid value rejected before committing", func(t *testing.T) {
 		tempDir, run, validatorLog := newCommitChangePlanFixture(t, script)
 		headBefore := strings.TrimSpace(string(runGitOutput(t, tempDir, "rev-parse", "HEAD")))
@@ -785,6 +790,23 @@ func TestCoreCommitChangePlanSkipValidatorControlsValidatorBaseline(t *testing.T
 			t.Fatalf("invalid skip_validator ran agent-validator (stat err %v)", err)
 		}
 	})
+}
+
+// symlinkOpenSpecOutsideRepository moves the fixture's openspec/changes tree
+// into an external directory and replaces openspec with a symlink to it.
+func symlinkOpenSpecOutsideRepository(t *testing.T, repoDir string) {
+	t.Helper()
+	externalDir := t.TempDir()
+	if err := os.Rename(filepath.Join(repoDir, "openspec", "changes"), filepath.Join(externalDir, "changes")); err != nil {
+		t.Fatalf("move plan outside repository: %v", err)
+	}
+	openspecDir := filepath.Join(repoDir, "openspec")
+	if err := os.Remove(openspecDir); err != nil {
+		t.Fatalf("remove openspec directory: %v", err)
+	}
+	if err := os.Symlink(externalDir, openspecDir); err != nil {
+		t.Fatalf("symlink openspec directory: %v", err)
+	}
 }
 
 // newCommitChangePlanFixture creates a git repository with an uncommitted
