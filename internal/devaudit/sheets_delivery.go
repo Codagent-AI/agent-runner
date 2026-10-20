@@ -25,15 +25,17 @@ import (
 const connectionFileName = "development-audit-connection.json"
 
 // stepValueHeader is the original step_value_v1 worksheet header. Local
-// observations keep valueSchemaVersion; only delivered rows use the v2 layout.
+// observations keep valueSchemaVersion; only delivered rows use the v3 layout.
 var stepValueHeader = []string{
 	"schema_version", "observation_id", "observed_at_utc", "project", "workflow", "source_run_id", "execution_session_id", "audit_run_id", "trigger", "source_outcome", "step_id", "step_outcome", "lineage", "duration_ms", "cost_usd", "total_tokens", "source_models", "git_attribution", "commit_shas", "files_changed", "lines_added", "lines_deleted", "overall_value", "change_effect", "unique_contribution", "downstream_evidence", "confidence", "evidence_coverage", "judge_model", "rubric_version", "note",
 }
 
-const sheetRowSchemaVersion = "step_value_v2"
+const sheetRowSchemaVersion = "step_value_v3"
 
 var judgeHeader = []string{"judge_cli", "judge_effort", "audit_judge_attempts", "audit_judge_total_tokens", "audit_judge_token_coverage", "audit_judge_cost_usd", "audit_judge_cost_coverage"}
 var stepValueHeaderV2 = append(append([]string{}, stepValueHeader...), judgeHeader...)
+
+var stepValueHeaderV3 = append(append([]string{}, stepValueHeaderV2...), "cost_basis")
 
 var allowInsecureDevelopmentAuditTestURI bool
 
@@ -365,19 +367,23 @@ func (r SheetsReporter) validateHeader(ctx context.Context, token string, destin
 		return err
 	}
 	if len(response.Values) == 1 {
-		if equalStrings(response.Values[0], stepValueHeaderV2) {
+		found := response.Values[0]
+		for len(found) > 0 && found[len(found)-1] == "" {
+			found = found[:len(found)-1]
+		}
+		if equalStrings(found, stepValueHeaderV3) {
 			return nil
 		}
-		if equalStrings(response.Values[0], stepValueHeader) {
-			return r.upgradeHeader(ctx, token, destination)
+		if equalStrings(found, stepValueHeader) || equalStrings(found, stepValueHeaderV2) {
+			return r.upgradeHeader(ctx, token, destination, len(found))
 		}
 	}
-	return fmt.Errorf("worksheet header does not match step_value_v2")
+	return fmt.Errorf("worksheet header does not match step_value_v3")
 }
 
-func (r SheetsReporter) upgradeHeader(ctx context.Context, token string, destination DestinationState) error {
-	first, last := sheetColumn(len(stepValueHeader)+1), sheetColumn(len(stepValueHeaderV2))
-	return r.writeValues(ctx, token, destination, http.MethodPut, a1Range(destination.Tab, first+"1:"+last+"1"), "?valueInputOption=RAW", [][]string{judgeHeader}, "upgrade worksheet header")
+func (r SheetsReporter) upgradeHeader(ctx context.Context, token string, destination DestinationState, found int) error {
+	first, last := sheetColumn(found+1), sheetColumn(len(stepValueHeaderV3))
+	return r.writeValues(ctx, token, destination, http.MethodPut, a1Range(destination.Tab, first+"1:"+last+"1"), "?valueInputOption=RAW", [][]string{stepValueHeaderV3[found:]}, "upgrade worksheet header")
 }
 
 func (r SheetsReporter) existingObservationIDs(ctx context.Context, token string, destination DestinationState) (map[string]struct{}, error) {
@@ -418,7 +424,7 @@ func (r SheetsReporter) getJSON(ctx context.Context, token string, destination D
 }
 
 func (r SheetsReporter) append(ctx context.Context, token string, destination DestinationState, rows [][]string) error {
-	return r.writeValues(ctx, token, destination, http.MethodPost, a1Range(destination.Tab, "A:"+sheetColumn(len(stepValueHeaderV2))), ":append?valueInputOption=RAW&insertDataOption=INSERT_ROWS", rows, "append worksheet rows")
+	return r.writeValues(ctx, token, destination, http.MethodPost, a1Range(destination.Tab, "A:"+sheetColumn(len(stepValueHeaderV3))), ":append?valueInputOption=RAW&insertDataOption=INSERT_ROWS", rows, "append worksheet rows")
 }
 
 // writeValues sends rows to a worksheet values endpoint; suffix carries the
@@ -492,9 +498,9 @@ func projectObservation(observation *ValueObservation, summary *JudgeUsageSummar
 		observation.OverallValue, observation.ChangeEffect, observation.UniqueContribution, observation.DownstreamEvidence, observation.Confidence, observation.EvidenceCoverage, observation.JudgeModel, observation.RubricVersion, observation.Note,
 	}
 	if summary == nil {
-		return append(row, observation.JudgeCLI, observation.JudgeEffort, "", "", "", "", ""), nil
+		return append(row, observation.JudgeCLI, observation.JudgeEffort, "", "", "", "", "", costBasisCell(&observation.Cost)), nil
 	}
-	return append(row, summary.CLI, summary.Effort, strconv.Itoa(summary.AttemptCount), intString(summary.TotalTokens), string(summary.TokenCoverage), floatString(summary.CostUSD), string(summary.CostCoverage)), nil
+	return append(row, summary.CLI, summary.Effort, strconv.Itoa(summary.AttemptCount), intString(summary.TotalTokens), string(summary.TokenCoverage), floatString(summary.CostUSD), string(summary.CostCoverage), costBasisCell(&observation.Cost)), nil
 }
 
 func sanitizeProject(project string) string {
@@ -687,4 +693,11 @@ func MigrateReportDestination(auditSessionDir, spreadsheetID, tab string) error 
 	report.Destination = DestinationState{State: "configured", SpreadsheetID: strings.TrimSpace(spreadsheetID), Tab: strings.TrimSpace(tab)}
 	report.DeliveryState = "pending"
 	return stateio.WriteJSONAtomic(path, report)
+}
+
+func costBasisCell(cost *CostEvidence) string {
+	if cost.CostUSD == nil || cost.CostBasis == nil {
+		return ""
+	}
+	return *cost.CostBasis
 }

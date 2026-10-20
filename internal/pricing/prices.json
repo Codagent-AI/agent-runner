@@ -1,0 +1,111 @@
+{
+  "version": "2026-10-20.1",
+  "policy": "openai-standard-request-level",
+  "entries": [
+    {
+      "provider": "openai",
+      "model": "gpt-6.1-sol",
+      "aliases": [],
+      "effective_date": "2026-10-20",
+      "source": "https://openai.com/api/pricing/",
+      "tier": "standard",
+      "threshold_input_tokens": 272000,
+      "short": {
+        "input": 2,
+        "cached_input": 0.1,
+        "cache_write": 2.5,
+        "output": 10
+      },
+      "long": {
+        "input": 4,
+        "cached_input": 0.2,
+        "cache_write": 5,
+        "output": 15
+      }
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-6-luna",
+      "aliases": [],
+      "effective_date": "2026-10-20",
+      "source": "https://openai.com/api/pricing/",
+      "tier": "standard",
+      "threshold_input_tokens": 272000,
+      "short": {
+        "input": 0.1,
+        "cached_input": 0.01,
+        "cache_write": 0.125,
+        "output": 0.5
+      },
+      "long": {
+        "input": 0.2,
+        "cached_input": 0.02,
+        "cache_write": 0.25,
+        "output": 0.75
+      }
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-6-sol",
+      "aliases": [],
+      "effective_date": "2026-10-20",
+      "source": "https://openai.com/api/pricing/",
+      "tier": "standard",
+      "threshold_input_tokens": 272000,
+      "short": {
+        "input": 2,
+        "cached_input": 0.2,
+        "cache_write": 2.5,
+        "output": 10
+      },
+      "long": {
+        "input": 4,
+        "cached_input": 0.4,
+        "cache_write": 5,
+        "output": 15
+      }
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-6-astra",
+      "aliases": [],
+      "effective_date": "2026-10-20",
+      "source": "https://openai.com/api/pricing/",
+      "tier": "standard",
+      "threshold_input_tokens": 272000,
+      "short": {
+        "input": 10,
+        "cached_input": 1,
+        "cache_write": 12.5,
+        "output": 50
+      },
+      "long": {
+        "input": 20,
+        "cached_input": 2,
+        "cache_write": 25,
+        "output": 75
+      }
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-5.6-sol",
+      "aliases": [],
+      "effective_date": "2026-10-20",
+      "source": "https://openai.com/api/pricing/",
+      "tier": "standard",
+      "threshold_input_tokens": 272000,
+      "short": {
+        "input": 4,
+        "cached_input": 0.4,
+        "cache_write": 5,
+        "output": 20
+      },
+      "long": {
+        "input": 8,
+        "cached_input": 0.8,
+        "cache_write": 10,
+        "output": 30
+      }
+    }
+  ]
+}
