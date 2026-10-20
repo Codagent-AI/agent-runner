@@ -276,17 +276,8 @@ func (o *outputObserver) readFile(root, path string, b *observeBudget) (observed
 		return observedFile{}, err
 	}
 	v := FileVersion{Size: info.Size(), MtimeNS: info.ModTime().UnixNano(), inode: fileInode(info), IdentityComplete: info.Size() <= b.hashLimit && int64(len(data)) == info.Size(), Binary: bytes.IndexByte(data, 0) >= 0 || !utf8.Valid(data)}
-	if v.IdentityComplete {
-		hash := sha256.Sum256(data)
-		v.SHA256 = fmt.Sprintf("%x", hash)
-	}
-	data = data[:min(len(data), maxVersionBytes)]
-	v.Blob, err = o.store.put(data, b)
-	v.BlobComplete = err == nil && int64(len(data)) == v.Size
-	result := observedFile{version: v, data: data, cacheKey: key}
-	if err != nil {
-		result.reason = err.Error()
-	}
+	result := o.retainVersion(v, data, b)
+	result.cacheKey = key
 	o.cacheFile(filepath.Join(root, path), &result)
 	return result, nil
 }
@@ -708,18 +699,23 @@ func (o *outputObserver) gitVersion(head, path string, b *observeBudget) (observ
 		return observedFile{}, waitErr
 	}
 	v := FileVersion{Size: size, IdentityComplete: limit == size && int64(len(data)) == size, Binary: bytes.IndexByte(data, 0) >= 0 || !utf8.Valid(data)}
+	return o.retainVersion(v, data, b), nil
+}
+
+func (o *outputObserver) retainVersion(v FileVersion, data []byte, b *observeBudget) observedFile {
 	if v.IdentityComplete {
 		hash := sha256.Sum256(data)
 		v.SHA256 = fmt.Sprintf("%x", hash)
 	}
 	data = data[:min(len(data), maxVersionBytes)]
+	var err error
 	v.Blob, err = o.store.put(data, b)
-	v.BlobComplete = err == nil && int64(len(data)) == size
+	v.BlobComplete = err == nil && int64(len(data)) == v.Size
 	f := observedFile{version: v, data: data}
 	if err != nil {
 		f.reason = err.Error()
 	}
-	return f, nil
+	return f
 }
 
 // textPrefix never splits a UTF-8 encoding at the retention boundary.
