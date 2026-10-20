@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/metrics"
 	"github.com/codagent/agent-runner/internal/model"
@@ -21,6 +23,76 @@ import (
 	"github.com/codagent/agent-runner/internal/runner"
 	"github.com/codagent/agent-runner/internal/stateio"
 )
+
+func TestPopulateGitStatsCountsBinaryFiles(t *testing.T) {
+	commits := []snapshottedGitCommit{{SHA: "commit-a"}, {SHA: "commit-b"}}
+	stats := []byte("commit-a\n\n-\t-\tsrc/assets/hero.png\n3\t1\tsrc/a.ts\n\ncommit-b\n\n2\t0\tREADME.md\n")
+	if err := populateGitStats(commits, []string{"commit-a", "commit-b"}, stats); err != nil {
+		t.Fatal(err)
+	}
+	want := []snapshottedGitCommit{
+		{SHA: "commit-a", FilesChanged: 2, LinesAdded: 3, LinesDeleted: 1, Paths: []string{"src/a.ts", "src/assets/hero.png"}},
+		{SHA: "commit-b", FilesChanged: 1, LinesAdded: 2, Paths: []string{"README.md"}},
+	}
+	if diff := cmp.Diff(want, commits); diff != "" {
+		t.Fatalf("commits mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPopulateGitStatsRejectsInvalidCounts(t *testing.T) {
+	for _, counts := range []string{"x\t1", "1\tx", "3x\t1", "1\t3x"} {
+		t.Run(counts, func(t *testing.T) {
+			commits := []snapshottedGitCommit{{SHA: "commit-a"}}
+			err := populateGitStats(commits, []string{"commit-a"}, []byte("commit-a\n\n"+counts+"\tfoo\n"))
+			if err == nil || err.Error() != "git commit statistics are invalid" {
+				t.Fatalf("error = %v, want invalid statistics", err)
+			}
+		})
+	}
+}
+
+func TestExportGitEvidencePreservesBinaryCommit(t *testing.T) {
+	project := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		output, err := exec.Command("git", append([]string{"-C", project}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	git("init")
+	git("config", "user.email", "audit@example.test")
+	git("config", "user.name", "Audit Test")
+	if err := os.WriteFile(filepath.Join(project, "hero.png"), []byte{'P', 'N', 'G', 0, 1, 2}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "hero.png")
+	git("commit", "-m", "[implement] add image")
+	sha := git("rev-parse", "HEAD")
+	snapshot := t.TempDir()
+	artifact := metrics.Artifact{Steps: []metrics.StepRecord{{GitEnd: &audit.GitCheckpoint{Commits: []string{sha}}}}}
+	if err := stateio.WriteJSONAtomic(filepath.Join(snapshot, metrics.FileName), artifact); err != nil {
+		t.Fatal(err)
+	}
+	if err := exportGitEvidence(project, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(snapshot, "git-evidence.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got snapshottedGitEvidence
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	want := snapshottedGitEvidence{Available: true, Commits: []snapshottedGitCommit{
+		{SHA: sha, Subject: "[implement] add image", Paths: []string{"hero.png"}, FilesChanged: 1},
+	}}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("evidence mismatch (-want +got):\n%s", diff)
+	}
+}
 
 func TestReplayExcludesEvidenceWithoutHistoricalSessionOwnership(t *testing.T) {
 	home := t.TempDir()
