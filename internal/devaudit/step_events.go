@@ -301,12 +301,7 @@ func readSnapshotContent(snapshot, rel string, limit int) (string, error) {
 	if rel == "" || !filepath.IsLocal(filepath.FromSlash(rel)) {
 		return "", fmt.Errorf("invalid snapshot reference")
 	}
-	root, err := os.OpenRoot(snapshot)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = root.Close() }()
-	f, err := root.Open(rel)
+	f, err := openEvidenceFile(snapshot, rel, os.O_RDONLY)
 	if err != nil {
 		return "", err
 	}
