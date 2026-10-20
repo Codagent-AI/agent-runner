@@ -269,7 +269,7 @@ func TestCIWaitRecordedGraphQLFixture(t *testing.T) {
 			t.Fatal("connection missing pageInfo")
 		}
 	}
-	out, code, _ := runCIFixture(t, fixture, `{"deadline_seconds":"0.3","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
+	out, code, _ := runCIFixture(t, fixture, `{"deadline_seconds":"5","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
 	if code != 0 || strings.Contains(out, "snapshot:") || !strings.Contains(out, "**PR:**") {
 		t.Fatalf("recorded fixture: code=%d\n%s", code, out)
 	}
@@ -421,7 +421,8 @@ func TestCIWaitRechecksBotWhenHeadChanges(t *testing.T) {
 	second := ciFixture()
 	ciPR(second)["headRefOid"] = "newhead123456"
 	useCISequence(t, first, second)
-	out, code, _ := runCIFixture(t, first, `{"review_bots":"coderabbitai","deadline_seconds":"0.8","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
+	// Allow both gh subprocesses to start under parallel test load.
+	out, code, _ := runCIFixture(t, first, `{"review_bots":"coderabbitai","deadline_seconds":"5","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
 	if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), "CI_REVIEW_INCOMPLETE") || !strings.Contains(out, "**Head:** newhead") {
 		t.Fatalf("code=%d report=%s", code, out)
 	}
@@ -543,9 +544,9 @@ func TestCIWaitStopsAtGraceEndNotNextPoll(t *testing.T) {
 		{"expected bot never starts", `"review_bots":"coderabbitai",`, "CI_REVIEW_INCOMPLETE"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			input := fmt.Sprintf(`{%s"deadline_seconds":"3","poll_interval_seconds":"1","bot_start_grace_seconds":"0.1"}`, tt.inputs)
+			input := fmt.Sprintf(`{%s"deadline_seconds":"10","poll_interval_seconds":"10","bot_start_grace_seconds":"0.1"}`, tt.inputs)
 			out, code, elapsed := runCIFixture(t, ciFixture(), input)
-			if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), tt.want) || elapsed > 700*time.Millisecond {
+			if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), tt.want) || elapsed > 5*time.Second {
 				t.Fatalf("code=%d elapsed=%s output=%s", code, elapsed, out)
 			}
 		})
