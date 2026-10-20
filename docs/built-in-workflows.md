@@ -73,6 +73,13 @@ independently archived small changes can accumulate on one feature branch.
 `openspec:scaffold` runs `openspec init --tools none` so the project has OpenSpec directories without
 installing OpenSpec agent skills or slash commands.
 
+You can keep the OpenSpec project in another repository through an `openspec` symlink.
+Add `/openspec` (with the leading slash) to `.git/info/exclude` so dirty-tree checks and
+`git add -A` ignore the symlink. Plan-commit steps skip the commit; commit the external
+repository by hand, and its changes will not appear in this repository's PR. The archive
+step reports success without verifying a commit. Agents can only write through the
+symlink in YOLO mode.
+
 ## Spec-Driven
 
 | Workflow | Purpose |

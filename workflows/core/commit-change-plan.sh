@@ -67,6 +67,20 @@ case "$change_dir" in
     ;;
 esac
 
+if [ -L openspec ]; then
+  case "$change_dir" in
+    openspec/*)
+      if [ ! -d "$change_dir" ]; then
+        printf 'commit-change-plan: change directory not found: %s\n' "$change_dir" >&2
+        exit 1
+      fi
+      printf 'commit-change-plan: openspec is a symbolic link; %s is not committed here. Commit it by hand in the repository that holds the OpenSpec project.\n' "$change_dir"
+      advance_validator_baseline
+      exit 0
+      ;;
+  esac
+fi
+
 if git diff --cached --quiet -- "$change_dir" &&
    git diff --quiet -- "$change_dir" &&
    [ -z "$(git ls-files --others --exclude-standard -- "$change_dir")" ] &&

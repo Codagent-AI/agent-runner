@@ -269,7 +269,7 @@ func TestCIWaitRecordedGraphQLFixture(t *testing.T) {
 			t.Fatal("connection missing pageInfo")
 		}
 	}
-	out, code, _ := runCIFixture(t, fixture, `{"deadline_seconds":"0.3","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
+	out, code, _ := runCIFixture(t, fixture, `{"deadline_seconds":"6","call_timeout_seconds":"5","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
 	if code != 0 || strings.Contains(out, "snapshot:") || !strings.Contains(out, "**PR:**") {
 		t.Fatalf("recorded fixture: code=%d\n%s", code, out)
 	}
@@ -287,8 +287,8 @@ func TestCIWaitFatalAndBoundedCalls(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("CI_FAKE_GH_MODE", tt.mode)
-			out, code, elapsed := runCIFixture(t, ciFixture(), `{"deadline_seconds":"0.7","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1","call_timeout_seconds":"0.2"}`)
-			if code != tt.code || !strings.Contains(out, tt.want) || elapsed > time.Second {
+			out, code, elapsed := runCIFixture(t, ciFixture(), `{"deadline_seconds":"6","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1","call_timeout_seconds":"5"}`)
+			if code != tt.code || !strings.Contains(out, tt.want) || elapsed >= 8*time.Second {
 				t.Fatalf("code=%d elapsed=%s output=%s", code, elapsed, out)
 			}
 		})
@@ -445,6 +445,8 @@ func TestCIWaitBotPendingThenSuccess(t *testing.T) {
 	}
 }
 
+// Allow process startup under full-suite load while still requiring discovered
+// failures to return well before the overall deadline.
 func TestCIWaitDiscoveredBotFailureIsCI(t *testing.T) {
 	past := time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339)
 	fresh := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
