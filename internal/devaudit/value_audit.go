@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -489,8 +490,9 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 	pathsComplete := true
 	headMoved := false
 	attributed := []string{}
-	seen := map[string]struct{}{}
+	seen := map[string]bool{}
 	var commitFiles, commitAdded, commitDeleted int64
+	commitPathsComplete := true
 	paths := []string{}
 	for index := range records {
 		record := &records[index]
@@ -510,18 +512,16 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 			headMoved = true
 			for _, sha := range record.GitEnd.Commits {
 				commit, exists := commits[sha]
-				if !exists || !strings.HasPrefix(commit.Subject, "["+record.ID+"]") {
+				if !exists || !strings.HasPrefix(commit.Subject, "["+record.ID+"]") || seen[sha] {
 					continue
 				}
-				if _, exists := seen[sha]; exists {
-					continue
-				}
-				seen[sha] = struct{}{}
+				seen[sha] = true
 				attributed = append(attributed, sha)
 				commitFiles += commit.FilesChanged
 				commitAdded += commit.LinesAdded
 				commitDeleted += commit.LinesDeleted
 				paths = append(paths, commit.Paths...)
+				commitPathsComplete = commitPathsComplete && int64(len(commit.Paths)) == commit.FilesChanged
 			}
 		}
 	}
@@ -531,6 +531,10 @@ func aggregateGit(records []metrics.StepRecord, commits map[string]snapshottedGi
 		}
 		sort.Strings(attributed)
 		sort.Strings(paths)
+		paths = slices.Compact(paths)
+		if commitPathsComplete {
+			commitFiles = int64(len(paths))
+		}
 		return GitEvidence{Attribution: "attributed", CommitSHAs: attributed, DeferredSHAs: []string{}, FilesChanged: &commitFiles, LinesAdded: &commitAdded, LinesDeleted: &commitDeleted, ChangedPaths: paths}
 	}
 	if files != 0 || added != 0 || deleted != 0 {
