@@ -49,3 +49,49 @@ func TestValidateValueBatchOmitsRejectedOptionalNotes(t *testing.T) {
 		})
 	}
 }
+
+func TestUnsafeValueNoteSlashHandling(t *testing.T) {
+	allowed := []string{
+		"verified F-2/F-3/F-4 in the downstream run",
+		"diff was +243/-100 lines",
+		"PR is MERGEABLE/CLEAN.",
+		"result is pass/fail dependent",
+		"requires this and/or that",
+		"Corrections fix empty/environment-leg semantics.",
+		"works w/o retries, i.e./e.g. fine",
+		"Node.js/React.js stack mentioned",
+		"ratio 3/4 (about 75%)",
+		"16ms task-compliance script, no output recorded.",
+		"",
+	}
+	blocked := []string{
+		"see /Users/alice/private.txt",
+		"wrote /tmp/y",
+		"read ~/notes",
+		"ran ./run.sh",
+		"opened ../secret",
+		"file C:\\Users\\x",
+		"file C:/Users/x",
+		"edited internal/devaudit/value_audit.go.",
+		"edited (internal/value_audit.go)",
+		"path=/etc/passwd",
+		"under src/a/b",
+		"see https://example.test/evidence",
+		"token=abc",
+		"uses ghp_abc123",
+		"key sk-abc",
+		"key (SK-abc)",
+		"multiple\nlines",
+		strings.Repeat("x", 281),
+	}
+	for _, note := range allowed {
+		if reason := unsafeValueNote(note); reason != "" {
+			t.Errorf("note %q withheld: %s", note, reason)
+		}
+	}
+	for _, note := range blocked {
+		if reason := unsafeValueNote(note); reason == "" {
+			t.Errorf("note %q was allowed", note)
+		}
+	}
+}

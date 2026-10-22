@@ -11,10 +11,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/codagent/agent-runner/internal/audit"
@@ -1167,12 +1169,67 @@ func unsafeValueNote(note string) string {
 	if utf8.RuneCountInString(note) > 280 || strings.ContainsAny(note, "\r\n") {
 		return "a bounded single line"
 	}
-	lower := strings.ToLower(note)
-	if strings.Contains(note, "://") || strings.ContainsAny(note, "\\") || strings.Contains(note, "/") ||
-		strings.Contains(lower, "ghp_") || strings.Contains(lower, "sk-") || strings.Contains(lower, "token=") {
+	if strings.Contains(note, "://") || strings.ContainsAny(note, "\\") || containsPathToken(note) ||
+		secretMarkerPattern.MatchString(note) {
 		return "unsafe detailed evidence"
 	}
 	return ""
+}
+
+// pathRootDirs are leading directory names that mark a multi-segment token as
+// a repository path even when its last segment has no file extension.
+var pathRootDirs = map[string]bool{
+	"internal": true, "cmd": true, "src": true, "pkg": true, "lib": true, "bin": true,
+	"test": true, "tests": true, "testdata": true, "docs": true, "openspec": true,
+	"workflows": true, "scripts": true, "tmp": true, "var": true, "etc": true,
+	"usr": true, "home": true, "users": true, "private": true, "node_modules": true,
+}
+
+// secretMarkerPattern matches token prefixes that start a word, so that
+// "task-compliance" is not mistaken for an "sk-" key.
+var secretMarkerPattern = regexp.MustCompile(`(?i)(^|[^a-z0-9_])(ghp_|sk-)|token=`)
+
+var fileExtensionPattern = regexp.MustCompile(`^[^.]+\.[A-Za-z][A-Za-z0-9]{1,7}$`)
+
+// containsPathToken reports whether any token of the note looks like a
+// filesystem path. Slashes in ordinary prose ("pass/fail", "F-2/F-3/F-4",
+// "+243/-100", "MERGEABLE/CLEAN") are allowed. A token is a path when it
+// starts with "/", "~/", "./" or "../" (a drive letter such as "C:/" is split
+// at the colon and so starts with "/"), or when it has a single slash and its
+// last segment is a file name with an extension and no earlier segment has a
+// dot ("internal/value_audit.go"), or when it has two or more slashes and
+// either ends in a file name with an extension or starts with a known
+// directory name ("src/a/b"). Backslashes are rejected separately.
+func containsPathToken(note string) bool {
+	tokens := strings.FieldsFunc(note, func(r rune) bool {
+		return unicode.IsSpace(r) || strings.ContainsRune("\"'`()[]{}<>,;:=|", r)
+	})
+	for _, token := range tokens {
+		token = strings.TrimRight(token, ".!?")
+		if isPathToken(token) {
+			return true
+		}
+	}
+	return false
+}
+
+func isPathToken(token string) bool {
+	if !strings.Contains(token, "/") {
+		return false
+	}
+	if len(token) > 1 && strings.HasPrefix(token, "/") ||
+		strings.HasPrefix(token, "~/") || strings.HasPrefix(token, "./") || strings.HasPrefix(token, "../") {
+		return true
+	}
+	segments := strings.Split(token, "/")
+	last := segments[len(segments)-1]
+	if !fileExtensionPattern.MatchString(last) {
+		last = ""
+	}
+	if len(segments) == 2 {
+		return last != "" && !strings.Contains(segments[0], ".")
+	}
+	return last != "" || pathRootDirs[strings.ToLower(segments[0])]
 }
 
 func loadPreparedValueAudit(auditSessionDir string) (PreparedValueAudit, error) {
