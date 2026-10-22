@@ -20,10 +20,10 @@ func TestValidateValueBatchOmitsRejectedOptionalNotes(t *testing.T) {
 		"High-level correction persisted.",
 	} {
 		t.Run(note, func(t *testing.T) {
-			judgment := ModelValueJudgment{ObservationID: "observation", OverallValue: "medium", ChangeEffect: "intended", UniqueContribution: "unique", DownstreamEvidence: "supporting", Confidence: "medium", EvidenceCoverage: "partial", Note: note}
+			judgment := ModelValueJudgment{ObservationID: "observation", OverallValue: "medium", ChangeEffect: "intended", UniqueContribution: "unique", CreditRole: "production", DownstreamEvidence: "supporting", Confidence: "medium", EvidenceCoverage: "partial", Note: note}
 			batch := ModelValueBatch{BatchID: "value-001", Observations: []ModelValueJudgment{judgment}}
 			pkg := ValuePackage{BatchID: batch.BatchID, Leaves: []LeafEvidence{{Skeleton: ObservationSkeleton{ObservationID: judgment.ObservationID}}}}
-			result, diagnostics, err := validateValueBatch(&Request{}, pkg, &batch, nil)
+			result, diagnostics, err := validateValueBatch(&Request{}, pkg, &batch, nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -43,7 +43,7 @@ func TestValidateValueBatchOmitsRejectedOptionalNotes(t *testing.T) {
 				t.Fatal("original model judgment was modified")
 			}
 			batch.Observations[0].OverallValue = "invented"
-			if _, _, err := validateValueBatch(&Request{}, pkg, &batch, nil); err == nil {
+			if _, _, err := validateValueBatch(&Request{}, pkg, &batch, nil, nil); err == nil {
 				t.Fatal("invalid judgment accepted")
 			}
 		})

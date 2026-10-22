@@ -40,7 +40,8 @@ class SmokeTest(unittest.TestCase):
             auditor={"cli": "codex", "model": "smoke-model", "reasoning_effort": "low"}))
         observation = dict(identity, observation_id="observation", step_id="source-agent",
                            overall_value="medium", change_effect="intended",
-                           unique_contribution="unique", downstream_evidence="supporting",
+                           unique_contribution="unique", credit_role="production",
+                           shared_outcome_with=[], downstream_evidence="supporting",
                            confidence="high", evidence_coverage="partial")
         values = {"schema_version": 1, "observations": [observation]}
         self.write(self.audit / "value-observations.json", values)
@@ -180,6 +181,7 @@ exit 0'''
         self.assertEqual(json.loads(output.read_text()), {"batch_id": "value-001", "observations": [{
             "observation_id": "observation", "overall_value": "medium",
             "change_effect": "intended", "unique_contribution": "unique",
+            "credit_role": "production", "shared_outcome_with": [],
             "downstream_evidence": "supporting", "confidence": "high",
             "evidence_coverage": "partial"}]})
 

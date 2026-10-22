@@ -63,7 +63,7 @@ func TestCostBasisObservationAndSheetINT005(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(row) != 39 || row[38] != tt.want || (tt.want == "" && row[14] != "") {
+		if len(row) != 41 || row[38] != tt.want || (tt.want == "" && row[14] != "") {
 			t.Fatalf("projected row %v", row)
 		}
 		population := make([]*metrics.StepRecord, len(records))
@@ -75,7 +75,7 @@ func TestCostBasisObservationAndSheetINT005(t *testing.T) {
 			t.Fatalf("measurement basis %v", measurementBasis)
 		}
 	}
-	for _, old := range [][]string{stepValueHeader, stepValueHeaderV2, stepValueHeaderV3} {
+	for _, old := range [][]string{stepValueHeader, stepValueHeaderV2, stepValueHeaderV3, stepValueHeaderV4} {
 		header := append(append([]string{}, old...), "", "")
 		puts := 0
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -91,7 +91,7 @@ func TestCostBasisObservationAndSheetINT005(t *testing.T) {
 				Values [][]string `json:"values"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			if !equalStrings(body.Values[0], stepValueHeaderV3[len(old):]) {
+			if !equalStrings(body.Values[0], stepValueHeaderV4[len(old):]) {
 				t.Errorf("trailing upgrade %v", body.Values)
 			}
 			if !strings.Contains(r.URL.Path, sheetColumn(len(old)+1)+"1:") {
@@ -103,7 +103,7 @@ func TestCostBasisObservationAndSheetINT005(t *testing.T) {
 		if err := reporter.validateHeader(context.Background(), "token", DestinationState{SpreadsheetID: "sheet", Tab: "audit"}); err != nil {
 			t.Fatal(err)
 		}
-		if (puts == 0) != (len(old) == len(stepValueHeaderV3)) {
+		if (puts == 0) != (len(old) == len(stepValueHeaderV4)) {
 			t.Fatal("wrong header mutation")
 		}
 		header = append(append([]string{}, old...), "occupied")

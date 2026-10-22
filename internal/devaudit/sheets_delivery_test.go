@@ -227,7 +227,7 @@ func TestINT006DeliverReportUsesExactAllowlistAndDeduplicatesAmbiguousAppend(t *
 		case r.URL.Path == "/token":
 			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "access", "token_type": "Bearer"})
 		case r.Method == http.MethodGet && r.URL.Path == "/v4/spreadsheets/sheet/values/'audit'!1:1":
-			_ = json.NewEncoder(w).Encode(map[string]any{"values": [][]string{stepValueHeaderV3}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"values": [][]string{stepValueHeaderV4}})
 		case r.Method == http.MethodGet && r.URL.Path == "/v4/spreadsheets/sheet/values/'audit'!B:B":
 			ids := [][]string{{"observation_id"}}
 			for _, row := range writes {
@@ -256,7 +256,7 @@ func TestINT006DeliverReportUsesExactAllowlistAndDeduplicatesAmbiguousAppend(t *
 	}
 	report := LocalReport{AuditRunID: "audit", DeliveryState: "pending", Destination: DestinationState{State: "configured", SpreadsheetID: "sheet", Tab: "audit"}, Values: ValueValidationResult{Observations: []ValueObservation{{
 		ObservationSkeleton: ObservationSkeleton{SchemaVersion: valueSchemaVersion, ObservationID: "obs-1", ObservedAtUTC: "2026-09-01T00:00:00Z", Project: "Codagent-AI/agent-runner", Workflow: "core:example", SourceRunID: "source", ExecutionSessionID: "session", AuditRunID: "audit", Trigger: "automatic", SourceOutcome: "success", StepID: "build", StepOutcome: "success", Lineage: "new", Cost: CostEvidence{SourceModels: []string{"z", "a"}}, Git: GitEvidence{Attribution: "no_change"}},
-		OverallValue:        "high", ChangeEffect: "intended", UniqueContribution: "unique", DownstreamEvidence: "confirmed", Confidence: "high", EvidenceCoverage: "complete", JudgeModel: "judge", RubricVersion: rubricVersion, Note: "High-level result.",
+		OverallValue:        "high", ChangeEffect: "intended", UniqueContribution: "unique", CreditRole: "detection", SharedOutcomeWith: []string{"obs-3", "obs-2"}, DownstreamEvidence: "confirmed", Confidence: "high", EvidenceCoverage: "complete", JudgeModel: "judge", RubricVersion: rubricVersion, Note: "High-level result.",
 	}}}}
 	// Reconfiguration applies to future audits only: this completed report must
 	// continue to use the destination it froze at local-report assembly.
@@ -292,7 +292,7 @@ func TestProjectFromRemoteStripsHostProtocolCredentialsAndLocalPaths(t *testing.
 }
 
 func expectedDeliveryRow() []string {
-	return []string{"step_value_v3", "obs-1", "2026-09-01T00:00:00Z", "Codagent-AI/agent-runner", "core:example", "source", "session", "audit", "automatic", "success", "build", "success", "new", "", "", "", "a,z", "no_change", "", "", "", "", "high", "intended", "unique", "confirmed", "high", "complete", "judge", "value-rubric-v3", "High-level result.", "", "", "", "", "", "", "", ""}
+	return []string{"step_value_v4", "obs-1", "2026-09-01T00:00:00Z", "Codagent-AI/agent-runner", "core:example", "source", "session", "audit", "automatic", "success", "build", "success", "new", "", "", "", "a,z", "no_change", "", "", "", "", "high", "intended", "unique", "confirmed", "high", "complete", "judge", "value-rubric-v4", "High-level result.", "", "", "", "", "", "", "", "", "detection", "obs-2,obs-3"}
 }
 
 func writeJSON(t *testing.T, path string, value any) {
@@ -337,7 +337,7 @@ func TestRetryReportAdoptsLocalDestinationForUnconfiguredSandboxReport(t *testin
 		case r.URL.Path == "/token":
 			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "access", "token_type": "Bearer"})
 		case r.Method == http.MethodGet && r.URL.Path == "/v4/spreadsheets/sheet/values/'audit'!1:1":
-			_ = json.NewEncoder(w).Encode(map[string]any{"values": [][]string{stepValueHeaderV3}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"values": [][]string{stepValueHeaderV4}})
 		case r.Method == http.MethodGet && r.URL.Path == "/v4/spreadsheets/sheet/values/'audit'!B:B":
 			_ = json.NewEncoder(w).Encode(map[string]any{"values": [][]string{{"observation_id"}}})
 		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v4/spreadsheets/sheet/"):
@@ -360,7 +360,7 @@ func TestRetryReportAdoptsLocalDestinationForUnconfiguredSandboxReport(t *testin
 	dir := t.TempDir()
 	report := LocalReport{AuditRunID: "audit", DeliveryState: "pending", Destination: DestinationState{State: "unavailable", Diagnostic: "reporting destination is not configured"}, Values: ValueValidationResult{Observations: []ValueObservation{{
 		ObservationSkeleton: ObservationSkeleton{SchemaVersion: valueSchemaVersion, ObservationID: "obs-1", ObservedAtUTC: "2026-09-01T00:00:00Z", Project: "Codagent-AI/and-scene", Workflow: "core:implement-change", SourceRunID: "source", ExecutionSessionID: "session", AuditRunID: "audit", Trigger: "replay", SourceOutcome: "success", StepID: "build", StepOutcome: "success", Lineage: "new", Git: GitEvidence{Attribution: "no_change"}},
-		OverallValue:        "high", ChangeEffect: "intended", UniqueContribution: "unique", DownstreamEvidence: "confirmed", Confidence: "high", EvidenceCoverage: "complete", JudgeModel: "judge", RubricVersion: rubricVersion, Note: "Result.",
+		OverallValue:        "high", ChangeEffect: "intended", UniqueContribution: "unique", CreditRole: "production", DownstreamEvidence: "confirmed", Confidence: "high", EvidenceCoverage: "complete", JudgeModel: "judge", RubricVersion: rubricVersion, Note: "Result.",
 	}}}}
 	writeJSON(t, filepath.Join(dir, "local-report.json"), report)
 	if err := RetryReport(dir); err != nil {

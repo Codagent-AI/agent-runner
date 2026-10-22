@@ -29,7 +29,7 @@ import (
 const (
 	evidenceSchemaVersion  = 2
 	valueSchemaVersion     = "step_value_v1"
-	rubricVersion          = "value-rubric-v3"
+	rubricVersion          = "value-rubric-v4"
 	defaultPackageBytes    = 256 * 1024
 	defaultLeafDetailBytes = 32 * 1024
 	// Claude receives the output schema inline as one argv string, and Linux
@@ -943,6 +943,8 @@ type ModelValueJudgment struct {
 	OverallValue       string   `json:"overall_value"`
 	ChangeEffect       string   `json:"change_effect"`
 	UniqueContribution string   `json:"unique_contribution"`
+	CreditRole         string   `json:"credit_role"`
+	SharedOutcomeWith  []string `json:"shared_outcome_with"`
 	DownstreamEvidence string   `json:"downstream_evidence"`
 	Confidence         string   `json:"confidence"`
 	EvidenceCoverage   string   `json:"evidence_coverage"`
@@ -968,6 +970,8 @@ type ValueObservation struct {
 	OverallValue       string   `json:"overall_value"`
 	ChangeEffect       string   `json:"change_effect"`
 	UniqueContribution string   `json:"unique_contribution"`
+	CreditRole         string   `json:"credit_role"`
+	SharedOutcomeWith  []string `json:"shared_outcome_with"`
 	DownstreamEvidence string   `json:"downstream_evidence"`
 	Confidence         string   `json:"confidence"`
 	EvidenceCoverage   string   `json:"evidence_coverage"`
@@ -1003,6 +1007,14 @@ func ValidateValueOutputs(request Request, prepared PreparedValueAudit, outputs 
 	observations := []ValueObservation{}
 	diagnostics := []string{}
 	seenBatches := map[string]struct{}{}
+	// A shared outcome may span batches, so membership is checked against every
+	// observation in the audit rather than only the current batch.
+	knownObservations := map[string]struct{}{}
+	for _, pkg := range prepared.Packages {
+		for index := range pkg.Leaves {
+			knownObservations[pkg.Leaves[index].Skeleton.ObservationID] = struct{}{}
+		}
+	}
 	for _, pkg := range prepared.Packages {
 		batch := findValueBatch(outputs, pkg.BatchID)
 		if batch == nil {
@@ -1021,7 +1033,7 @@ func ValidateValueOutputs(request Request, prepared PreparedValueAudit, outputs 
 				}
 			}
 		}
-		validated, batchDiagnostics, err := validateValueBatch(&request, pkg, batch, knownRefs)
+		validated, batchDiagnostics, err := validateValueBatch(&request, pkg, batch, knownRefs, knownObservations)
 		if err != nil {
 			return ValueValidationResult{}, err
 		}
@@ -1047,7 +1059,7 @@ func findValueBatch(outputs []ModelValueBatch, batchID string) *ModelValueBatch 
 	return nil
 }
 
-func validateValueBatch(request *Request, pkg ValuePackage, batch *ModelValueBatch, knownRefs map[string]struct{}) ([]ValueObservation, []string, error) {
+func validateValueBatch(request *Request, pkg ValuePackage, batch *ModelValueBatch, knownRefs, knownObservations map[string]struct{}) ([]ValueObservation, []string, error) {
 	expected, incomplete := expectedValueObservations(pkg)
 	if len(batch.Observations) != len(expected) {
 		return nil, nil, fmt.Errorf("%s observations = %d, want %d", pkg.BatchID, len(batch.Observations), len(expected))
@@ -1068,6 +1080,10 @@ func validateValueBatch(request *Request, pkg ValuePackage, batch *ModelValueBat
 		if err := validateJudgment(&judgment, knownRefs); err != nil {
 			return nil, nil, fmt.Errorf("%s observation %q: %w", pkg.BatchID, judgment.ObservationID, err)
 		}
+		// Like notes, a bad shared id is dropped rather than failing the audit.
+		shared, sharedDiagnostics := validateSharedOutcome(judgment.ObservationID, judgment.SharedOutcomeWith, knownObservations)
+		judgment.SharedOutcomeWith = shared
+		diagnostics = append(diagnostics, sharedDiagnostics...)
 		if incomplete[judgment.ObservationID] && judgment.EvidenceCoverage == "complete" {
 			return nil, nil, fmt.Errorf("%s observation %q claims complete coverage despite omitted evidence", pkg.BatchID, judgment.ObservationID)
 		}
@@ -1112,7 +1128,8 @@ func incompleteLeafEvidence(leaf *LeafEvidence) bool {
 func valueObservation(skeleton *ObservationSkeleton, judgment *ModelValueJudgment, provenance BatchProvenance) ValueObservation {
 	return ValueObservation{
 		ObservationSkeleton: *skeleton, OverallValue: judgment.OverallValue, ChangeEffect: judgment.ChangeEffect,
-		UniqueContribution: judgment.UniqueContribution, DownstreamEvidence: judgment.DownstreamEvidence,
+		UniqueContribution: judgment.UniqueContribution, CreditRole: judgment.CreditRole,
+		SharedOutcomeWith: append([]string{}, judgment.SharedOutcomeWith...), DownstreamEvidence: judgment.DownstreamEvidence,
 		Confidence: judgment.Confidence, EvidenceCoverage: judgment.EvidenceCoverage, Note: judgment.Note,
 		Consultations: append([]string(nil), judgment.Consultations...), JudgeModel: provenance.Model, JudgeCLI: provenance.CLI,
 		JudgeEffort: provenance.Effort, JudgeSessionID: provenance.SessionID, RubricVersion: rubricVersion,
@@ -1129,6 +1146,9 @@ func validateJudgment(judgment *ModelValueJudgment, knownRefs map[string]struct{
 	if !oneOf(judgment.UniqueContribution, "unique", "complementary", "duplicative", "not_applicable", "unknown") {
 		return fmt.Errorf("invalid unique_contribution")
 	}
+	if !oneOf(judgment.CreditRole, creditRoles...) {
+		return fmt.Errorf("invalid credit_role")
+	}
 	if !oneOf(judgment.DownstreamEvidence, "confirmed", "supporting", "none", "contradicted", "unavailable") {
 		return fmt.Errorf("invalid downstream_evidence")
 	}
@@ -1144,6 +1164,34 @@ func validateJudgment(judgment *ModelValueJudgment, knownRefs map[string]struct{
 		}
 	}
 	return nil
+}
+
+// creditRoles names the part a step played in an outcome, so a consumer can
+// count one outcome once when several steps share credit for it.
+var creditRoles = []string{"detection", "correction", "detection_and_correction", "production", "none", "unknown"}
+
+// validateSharedOutcome returns the deduplicated ids that name other
+// observations in this audit, and a reason-only diagnostic (never the id) for
+// each id it drops.
+func validateSharedOutcome(observationID string, shared []string, knownObservations map[string]struct{}) (ids, diagnostics []string) {
+	result := make([]string, 0, len(shared))
+	seen := make(map[string]struct{}, len(shared))
+	for _, id := range shared {
+		if id == observationID {
+			diagnostics = append(diagnostics, "shared_outcome_with id dropped: names the observation itself")
+			continue
+		}
+		if _, exists := knownObservations[id]; !exists {
+			diagnostics = append(diagnostics, "shared_outcome_with id dropped: unknown observation")
+			continue
+		}
+		if _, duplicate := seen[id]; duplicate {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	return result, diagnostics
 }
 
 func oneOf(value string, allowed ...string) bool {
@@ -1590,15 +1638,15 @@ Judge each step's marginal contribution, not how much activity occurred or wheth
 
 Assess benefit relative to resource use. Consider trustworthy duration, tokens, and monetary cost together with attempts and iterations; an unavailable metric is unknown, not zero. A costly step may still be high value when it uniquely prevents or corrects consequential problems, while a cheap successful step may be low value when it adds little. Use unique_contribution to identify overlap with other steps and downstream_evidence to distinguish claimed benefit from confirmed benefit.
 
-Use each step's own output and append, created, diff (only + and - lines; unchanged lines are context), and commit_patch contributions as primary evidence. Give no credit for context_possibly_inherited, commit_patch_confirmation, or unresolved content. Credit detection to the step whose own output or contribution first reported the problem, and correction to the step whose contribution implemented the fix. Never rate both unique for the same outcome. Missing output lowers confidence and coverage; do not infer credit from neighbouring steps alone.
+Use each step's own output and append, created, diff (only + and - lines; unchanged lines are context), and commit_patch contributions as primary evidence. Give no credit for context_possibly_inherited, commit_patch_confirmation, or unresolved content. Credit detection to the step whose own output or contribution first reported the problem, and correction to the step whose contribution implemented the fix. Set credit_role to the part the step played: detection, correction, detection_and_correction (both for the same outcome), production (primary work such as implementation or planning, not finding or fixing a problem), none, or unknown. Rate unique_contribution within that role, so a finder can be unique for detection and its fixer unique for correction. When two or more steps share credit for one outcome, list each other's observation_id in shared_outcome_with so the outcome can be counted once; otherwise leave it empty. Use only observation_ids from this batch. Missing output lowers confidence and coverage; do not infer credit from neighbouring steps alone.
 
-Compare related leaves available in the batch and use lineage to understand nested review or validation work. Distinguish the contribution of a detector and remediation step: credit finding a real problem to the detector, credit implementing the correction to the fixer, and avoid double-crediting the same outcome. Do not invent comparisons to leaves or evidence that are unavailable.
+Compare related leaves available in the batch and use lineage to understand nested review or validation work. Distinguish the contribution of a detector and remediation step: credit finding a real problem to the detector and implementing the correction to the fixer, each in its own role. Do not invent comparisons to leaves or evidence that are unavailable.
 
 For review, validation, assumption review, and simplification steps, look for a distinct finding, decision, correction, complexity reduction, or useful confirmation and trace it to later evidence when possible. When the supplied evidence supports it, quantify findings or resulting corrections in the note. Do not treat an uneventful review as valuable merely because it ran, or as worthless merely because it correctly found no actionable problem.
 
 Consult the read-only snapshotted evidence when the compact package is insufficient, especially to understand commits, diffs, artifacts, validation results, or downstream corrections. Reduce confidence or evidence coverage when the evidence cannot support a firm judgment. When evidence permits, use the bounded note to name the concrete contribution or harm and the most important resource or overlap tradeoff. Do not include a transcript or transcript summary.
 
-You may fill only observation_id, overall_value, change_effect, unique_contribution, downstream_evidence, confidence, evidence_coverage, optional note, and consultation references. Do not include measured fields, paths, transcripts, or prose outside JSON. Record only supplied consultation identifiers.`
+You may fill only observation_id, overall_value, change_effect, unique_contribution, credit_role, shared_outcome_with, downstream_evidence, confidence, evidence_coverage, optional note, and consultation references. Do not include measured fields, paths, transcripts, or prose outside JSON. Record only supplied consultation identifiers.`
 	return instructions + "\n\n" + string(input), nil
 }
 
@@ -2024,12 +2072,14 @@ func valueOutputSchema(pkg ValuePackage) map[string]any {
 func valueJudgmentOutputSchema(observationID string, coverage []string, consultationItems map[string]any) map[string]any {
 	return map[string]any{
 		"type": "object", "additionalProperties": false,
-		"required": []string{"observation_id", "overall_value", "change_effect", "unique_contribution", "downstream_evidence", "confidence", "evidence_coverage", "note", "consultations"},
+		"required": []string{"observation_id", "overall_value", "change_effect", "unique_contribution", "credit_role", "shared_outcome_with", "downstream_evidence", "confidence", "evidence_coverage", "note", "consultations"},
 		"properties": map[string]any{
 			"observation_id":      map[string]any{"type": "string", "enum": []string{observationID}},
 			"overall_value":       map[string]any{"type": "string", "enum": []string{"high", "medium", "low", "none", "negative", "unknown"}},
 			"change_effect":       map[string]any{"type": "string", "enum": []string{"intended", "partial", "no_material_change", "regressive", "not_applicable", "unknown"}},
 			"unique_contribution": map[string]any{"type": "string", "enum": []string{"unique", "complementary", "duplicative", "not_applicable", "unknown"}},
+			"credit_role":         map[string]any{"type": "string", "enum": creditRoles},
+			"shared_outcome_with": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 			"downstream_evidence": map[string]any{"type": "string", "enum": []string{"confirmed", "supporting", "none", "contradicted", "unavailable"}},
 			"confidence":          map[string]any{"type": "string", "enum": []string{"high", "medium", "low"}},
 			"evidence_coverage":   map[string]any{"type": "string", "enum": coverage},

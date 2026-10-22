@@ -79,16 +79,27 @@ Each observation SHALL contain exactly one categorical judgment for each of the 
 
 - overall value: `high`, `medium`, `low`, `none`, `negative`, or `unknown`;
 - change effect: `intended`, `partial`, `no_material_change`, `regressive`, `not_applicable`, or `unknown`;
-- unique contribution: `unique`, `complementary`, `duplicative`, `not_applicable`, or `unknown`;
+- unique contribution: `unique`, `complementary`, `duplicative`, `not_applicable`, or `unknown`, rated within the step's credit role;
+- credit role: `detection` (the step found or reported a problem), `correction` (it implemented a fix for a problem), `detection_and_correction` (both, for the same outcome), `production` (it produced primary work such as implementation or planning rather than finding or fixing a problem), `none` (no creditable contribution), or `unknown`;
 - downstream evidence: `confirmed`, `supporting`, `none`, `contradicted`, or `unavailable`;
 - confidence: `high`, `medium`, or `low`; and
 - evidence coverage: `complete`, `partial`, or `limited`.
+
+The observation SHALL also list in `shared_outcome_with` the `observation_id` of every other observation in the same audit whose credit is for the same outcome, for example a finder and its fixer listing each other, and the list MAY be empty. Validation SHALL drop an identifier that is not an observation of the same audit or that names the observation itself, and SHALL drop duplicate identifiers. A dropped unknown or self identifier SHALL NOT fail the audit; the otherwise valid observation is retained and a reason-only diagnostic that does not reproduce the identifier is recorded in the local report. Because unique contribution is rated within each step's credit role, a finder and its fixer MAY both be `unique`; consumers SHALL use `shared_outcome_with` to count the shared outcome once.
 
 The observation MAY include one bounded short note explaining the most important reason for the judgments. It SHALL NOT contain a transcript or transcript summary.
 
 #### Scenario: Evidence strongly confirms unique value
 - **WHEN** a step makes a distinct useful change that downstream validation confirms
 - **THEN** the observation uses the applicable fixed categories and may briefly state the decisive reason
+
+#### Scenario: Finder and fixer credit one outcome
+- **WHEN** one step first reports a real problem and a later step implements the fix
+- **THEN** the finder records credit role `detection`, the fixer records `correction`, each is rated for unique contribution within its own role, and each lists the other in `shared_outcome_with`
+
+#### Scenario: Shared outcome names an unknown observation
+- **WHEN** a judgment's `shared_outcome_with` names an identifier that is not an observation of the audit, or its own identifier
+- **THEN** validation drops that identifier, retains the otherwise valid observation, and records a reason-only diagnostic without the identifier
 
 #### Scenario: Evidence cannot support a judgment
 - **WHEN** material evidence is unavailable
