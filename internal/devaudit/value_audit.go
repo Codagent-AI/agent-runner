@@ -1078,11 +1078,10 @@ func validateValueBatch(request *Request, pkg ValuePackage, batch *ModelValueBat
 		if err := validateJudgment(&judgment, knownRefs); err != nil {
 			return nil, nil, fmt.Errorf("%s observation %q: %w", pkg.BatchID, judgment.ObservationID, err)
 		}
-		shared, err := validateSharedOutcome(judgment.ObservationID, judgment.SharedOutcomeWith, knownObservations)
-		if err != nil {
-			return nil, nil, fmt.Errorf("%s observation %q: %w", pkg.BatchID, judgment.ObservationID, err)
-		}
+		// Like notes, a bad shared id is dropped rather than failing the audit.
+		shared, sharedDiagnostics := validateSharedOutcome(judgment.ObservationID, judgment.SharedOutcomeWith, knownObservations)
 		judgment.SharedOutcomeWith = shared
+		diagnostics = append(diagnostics, sharedDiagnostics...)
 		if incomplete[judgment.ObservationID] && judgment.EvidenceCoverage == "complete" {
 			return nil, nil, fmt.Errorf("%s observation %q claims complete coverage despite omitted evidence", pkg.BatchID, judgment.ObservationID)
 		}
@@ -1169,17 +1168,20 @@ func validateJudgment(judgment *ModelValueJudgment, knownRefs map[string]struct{
 // count one outcome once when several steps share credit for it.
 var creditRoles = []string{"detection", "correction", "detection_and_correction", "production", "none", "unknown"}
 
-// validateSharedOutcome returns the deduplicated ids, which must name other
-// observations in this audit.
-func validateSharedOutcome(observationID string, shared []string, knownObservations map[string]struct{}) ([]string, error) {
+// validateSharedOutcome returns the deduplicated ids that name other
+// observations in this audit, and a reason-only diagnostic (never the id) for
+// each id it drops.
+func validateSharedOutcome(observationID string, shared []string, knownObservations map[string]struct{}) (ids, diagnostics []string) {
 	result := make([]string, 0, len(shared))
 	seen := make(map[string]struct{}, len(shared))
 	for _, id := range shared {
 		if id == observationID {
-			return nil, fmt.Errorf("shared_outcome_with names the observation itself")
+			diagnostics = append(diagnostics, "shared_outcome_with id dropped: names the observation itself")
+			continue
 		}
 		if _, exists := knownObservations[id]; !exists {
-			return nil, fmt.Errorf("unknown shared_outcome_with observation %q", id)
+			diagnostics = append(diagnostics, "shared_outcome_with id dropped: unknown observation")
+			continue
 		}
 		if _, duplicate := seen[id]; duplicate {
 			continue
@@ -1187,7 +1189,7 @@ func validateSharedOutcome(observationID string, shared []string, knownObservati
 		seen[id] = struct{}{}
 		result = append(result, id)
 	}
-	return result, nil
+	return result, diagnostics
 }
 
 func oneOf(value string, allowed ...string) bool {

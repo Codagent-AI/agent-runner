@@ -85,7 +85,7 @@ Each observation SHALL contain exactly one categorical judgment for each of the 
 - confidence: `high`, `medium`, or `low`; and
 - evidence coverage: `complete`, `partial`, or `limited`.
 
-The observation SHALL also list in `shared_outcome_with` the `observation_id` of every other observation in the same audit whose credit is for the same outcome, for example a finder and its fixer listing each other, and the list MAY be empty. Validation SHALL reject an identifier that is not an observation of the same audit or that names the observation itself, and SHALL drop duplicate identifiers. Because unique contribution is rated within each step's credit role, a finder and its fixer MAY both be `unique`; consumers SHALL use `shared_outcome_with` to count the shared outcome once.
+The observation SHALL also list in `shared_outcome_with` the `observation_id` of every other observation in the same audit whose credit is for the same outcome, for example a finder and its fixer listing each other, and the list MAY be empty. Validation SHALL drop an identifier that is not an observation of the same audit or that names the observation itself, and SHALL drop duplicate identifiers. A dropped unknown or self identifier SHALL NOT fail the audit; the otherwise valid observation is retained and a reason-only diagnostic that does not reproduce the identifier is recorded in the local report. Because unique contribution is rated within each step's credit role, a finder and its fixer MAY both be `unique`; consumers SHALL use `shared_outcome_with` to count the shared outcome once.
 
 The observation MAY include one bounded short note explaining the most important reason for the judgments. It SHALL NOT contain a transcript or transcript summary.
 
@@ -99,7 +99,7 @@ The observation MAY include one bounded short note explaining the most important
 
 #### Scenario: Shared outcome names an unknown observation
 - **WHEN** a judgment's `shared_outcome_with` names an identifier that is not an observation of the audit, or its own identifier
-- **THEN** value validation fails rather than recording the judgment
+- **THEN** validation drops that identifier, retains the otherwise valid observation, and records a reason-only diagnostic without the identifier
 
 #### Scenario: Evidence cannot support a judgment
 - **WHEN** material evidence is unavailable

@@ -673,11 +673,28 @@ func TestValidateValueOutputsCarriesCreditRoleAndSharedOutcomeAcrossBatches(t *t
 	for name, bad := range map[string][]ModelValueBatch{
 		"unknown credit role": outputs(judgment("finder", "finder"), judgment("fixer", "correction")),
 		"empty credit role":   outputs(judgment("finder", ""), judgment("fixer", "correction")),
-		"unknown shared id":   outputs(judgment("finder", "detection", "missing"), judgment("fixer", "correction")),
-		"self shared id":      outputs(judgment("finder", "detection", "finder"), judgment("fixer", "correction")),
 	} {
 		if _, err := ValidateValueOutputs(request, prepared, bad); err == nil {
 			t.Errorf("%s was accepted", name)
+		}
+	}
+	// A bad shared id is dropped with a reason-only diagnostic; the audit continues.
+	for name, tt := range map[string]struct {
+		id, diagnostic string
+	}{
+		"unknown shared id": {"missing-observation", "shared_outcome_with id dropped: unknown observation"},
+		"self shared id":    {"finder", "shared_outcome_with id dropped: names the observation itself"},
+	} {
+		result, err := ValidateValueOutputs(request, prepared, outputs(judgment("finder", "detection", tt.id, "fixer"), judgment("fixer", "correction")))
+		if err != nil {
+			t.Errorf("%s failed the audit: %v", name, err)
+			continue
+		}
+		if len(result.Observations) != 2 || !slices.Equal(result.Observations[0].SharedOutcomeWith, []string{"fixer"}) {
+			t.Errorf("%s observations = %+v", name, result.Observations)
+		}
+		if diff := cmp.Diff([]string{tt.diagnostic}, result.Diagnostics); diff != "" {
+			t.Errorf("%s diagnostics (-want +got):\n%s", name, diff)
 		}
 	}
 }
