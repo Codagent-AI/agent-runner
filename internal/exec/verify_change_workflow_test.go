@@ -241,7 +241,7 @@ func TestBuiltinVerifyChangeLoadsStandalone(t *testing.T) {
 		t.Fatalf("LoadWorkflow(%s): %v", verifyChangeRef, err)
 	}
 	if len(workflow.Sessions) != 3 {
-		t.Fatalf("sessions = %+v, want lead-agent, acceptance-tester, and crosscheck-agent", workflow.Sessions)
+		t.Fatalf("sessions = %+v, want lead-agent, acceptance-tester, and acceptance-reviewer", workflow.Sessions)
 	}
 }
 
@@ -306,7 +306,7 @@ func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator, stopUnchange
 		},
 		WorkflowFile:      verifyChangeRef,
 		SessionDir:        sessionDir,
-		NamedSessionDecls: map[string]string{"lead-agent": "lead", "acceptance-tester": "tester", "crosscheck-agent": "crosscheck"},
+		NamedSessionDecls: map[string]string{"lead-agent": "lead", "acceptance-tester": "tester", "acceptance-reviewer": "crosscheck"},
 	})
 
 	// A group runs the tail with the same rewind handling as a workflow scope,

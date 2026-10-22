@@ -381,14 +381,14 @@ func TestCoreImplementChangeComposesVerifyChangeWithSharedSessions(t *testing.T)
 	implement := readBuiltinWorkflowForTest(t, "builtin:core/implement-change-v1.0.yaml")
 	verify := readBuiltinWorkflowForTest(t, verifyChangeRef)
 
-	wantSessions := []model.SessionDecl{{Name: "lead-agent", Agent: "lead"}, {Name: "acceptance-tester", Agent: "tester"}, {Name: "crosscheck-agent", Agent: "crosscheck"}}
+	wantSessions := []model.SessionDecl{{Name: "lead-agent", Agent: "lead"}, {Name: "acceptance-tester", Agent: "tester"}, {Name: "acceptance-reviewer", Agent: "crosscheck"}}
 	if diff := cmp.Diff(wantSessions, verify.Sessions); diff != "" {
 		t.Errorf("verify-change sessions mismatch (-want +got):\n%s", diff)
 	}
 	// The crosscheck session serves only the opt-in acceptance crosscheck, so
 	// implement-change, which never sets it, leaves it undeclared.
 	if diff := cmp.Diff(verify.Sessions[:2], implement.Sessions); diff != "" {
-		t.Errorf("implement-change and verify-change must declare identical sessions besides crosscheck-agent (-verify +implement):\n%s", diff)
+		t.Errorf("implement-change and verify-change must declare identical sessions besides acceptance-reviewer (-verify +implement):\n%s", diff)
 	}
 	wantHead := []string{
 		"validate-change-name",
@@ -1165,14 +1165,14 @@ func TestCoreVerifyChangeAcceptanceCrosscheckSteps(t *testing.T) {
 		t.Errorf("acceptance-crosscheck-scope = %+v, want the gate's crosscheck-scope action gated on the parameter", scope)
 	}
 	review := loop.Steps[loopIndexes["acceptance-crosscheck"]]
-	if review.Session != "crosscheck-agent" || review.Mode != model.ModeAutonomous ||
+	if review.Session != "acceptance-reviewer" || review.Mode != model.ModeAutonomous ||
 		review.SkipIf != `sh: test ! -f "{{session_dir}}/output/acceptance-crosscheck-required.txt"` {
-		t.Errorf("acceptance-crosscheck = %+v, want an autonomous crosscheck-agent step gated on the scope marker", review)
+		t.Errorf("acceptance-crosscheck = %+v, want an autonomous acceptance-reviewer step gated on the scope marker", review)
 	}
 	verify := loop.Steps[loopIndexes["verify-acceptance-crosscheck"]]
 	if verify.Script != "acceptance-gate.sh" || verify.ScriptInputs["action"] != "crosscheck-verify" ||
-		verify.SkipIf != review.SkipIf || verify.Repair == nil || verify.Repair.Session != "crosscheck-agent" {
-		t.Errorf("verify-acceptance-crosscheck = %+v, want the gate's crosscheck-verify action with a crosscheck-agent repair", verify)
+		verify.SkipIf != review.SkipIf || verify.Repair == nil || verify.Repair.Session != "acceptance-reviewer" {
+		t.Errorf("verify-acceptance-crosscheck = %+v, want the gate's crosscheck-verify action with an acceptance-reviewer repair", verify)
 	}
 	amend := loop.Steps[loopIndexes["acceptance-crosscheck-amend"]]
 	if amend.Session != "acceptance-tester" || amend.Mode != model.ModeAutonomous ||

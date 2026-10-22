@@ -40,9 +40,10 @@ sessions:
     agent: lead
   - name: acceptance-tester
     agent: tester
-  # Only used when acceptance_crosscheck is true. A caller that also declares
-  # it (audited-implement-change) shares one session.
-  - name: crosscheck-agent
+  # Only used when acceptance_crosscheck is true. Its own session, so the
+  # review starts from the tester's write-up rather than from a caller's
+  # crosscheck context.
+  - name: acceptance-reviewer
     agent: crosscheck
 
 steps:
@@ -234,11 +235,11 @@ steps:
         skip_if: 'sh: test {{acceptance_crosscheck}} != true'
 
       - id: acceptance-crosscheck
-        session: crosscheck-agent
+        session: acceptance-reviewer
         mode: autonomous
         skip_if: 'sh: test ! -f "{{session_dir}}/output/acceptance-crosscheck-required.txt"'
         prompt: |
-          You are the independent crosscheck reviewer of the acceptance tester's write-up for {{change_label}} "{{change_name}}", acceptance round index {{acceptance_round}} (zero-based) of at most {{acceptance_rounds}}. The tester is about to end this round, and its write-up has been known to say "all clear" too easily. Review the write-up; do not retest the change.
+          You are the independent crosscheck reviewer of the acceptance tester's write-up for {{change_label}} "{{change_name}}", acceptance round index {{acceptance_round}} (zero-based) of at most {{acceptance_rounds}}. The tester is about to end this round. Review its write-up; do not retest the change.
 
           Read these files in `{{session_dir}}/output/`:
           - `acceptance-findings.md`
@@ -270,7 +271,7 @@ steps:
           rounds: "{{acceptance_rounds}}"
         skip_if: 'sh: test ! -f "{{session_dir}}/output/acceptance-crosscheck-required.txt"'
         repair:
-          session: crosscheck-agent
+          session: acceptance-reviewer
           max: 2
           prompt: |
             `{{session_dir}}/output/acceptance-crosscheck.md` is missing or malformed; the check output says why. Write or correct it: one `## DEFECT <n>: <subject>` or `## OMISSION <n>: <subject>` section per flag, and as its last line exactly one of `CROSSCHECK CLEAN` (no flag sections) or `CROSSCHECK FLAGGED` (at least one flag section), with no other line beginning with `CROSSCHECK`. Change no other file and do not run the product or tests. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, explain why and end your response with the line `REPAIR_BLOCKED`.
