@@ -61,6 +61,7 @@ func TestUnsafeValueNoteSlashHandling(t *testing.T) {
 		"works w/o retries, i.e./e.g. fine",
 		"Node.js/React.js stack mentioned",
 		"ratio 3/4 (about 75%)",
+		"16ms task-compliance script, no output recorded.",
 		"",
 	}
 	blocked := []string{
@@ -79,6 +80,7 @@ func TestUnsafeValueNoteSlashHandling(t *testing.T) {
 		"token=abc",
 		"uses ghp_abc123",
 		"key sk-abc",
+		"key (SK-abc)",
 		"multiple\nlines",
 		strings.Repeat("x", 281),
 	}

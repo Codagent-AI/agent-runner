@@ -1169,9 +1169,8 @@ func unsafeValueNote(note string) string {
 	if utf8.RuneCountInString(note) > 280 || strings.ContainsAny(note, "\r\n") {
 		return "a bounded single line"
 	}
-	lower := strings.ToLower(note)
 	if strings.Contains(note, "://") || strings.ContainsAny(note, "\\") || containsPathToken(note) ||
-		strings.Contains(lower, "ghp_") || strings.Contains(lower, "sk-") || strings.Contains(lower, "token=") {
+		secretMarkerPattern.MatchString(note) {
 		return "unsafe detailed evidence"
 	}
 	return ""
@@ -1185,6 +1184,10 @@ var pathRootDirs = map[string]bool{
 	"workflows": true, "scripts": true, "tmp": true, "var": true, "etc": true,
 	"usr": true, "home": true, "users": true, "private": true, "node_modules": true,
 }
+
+// secretMarkerPattern matches token prefixes that start a word, so that
+// "task-compliance" is not mistaken for an "sk-" key.
+var secretMarkerPattern = regexp.MustCompile(`(?i)(^|[^a-z0-9_])(ghp_|sk-)|token=`)
 
 var fileExtensionPattern = regexp.MustCompile(`^[^.]+\.[A-Za-z][A-Za-z0-9]{1,7}$`)
 
