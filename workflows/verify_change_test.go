@@ -76,6 +76,7 @@ func TestCoreVerifyChangeShape(t *testing.T) {
 		{Name: "acceptance_rounds", Default: "3"},
 		{Name: "skip_implementation_review", Default: "false"},
 		{Name: "stop_unchanged_acceptance", Default: "false"},
+		{Name: "acceptance_crosscheck", Default: "false"},
 	}
 	if diff := cmp.Diff(wantParams, params); diff != "" {
 		t.Errorf("verify-change params mismatch (-want +got):\n%s", diff)
@@ -85,6 +86,7 @@ func TestCoreVerifyChangeShape(t *testing.T) {
 		"validate-change-name",
 		"validate-skip-validator",
 		"validate-stop-unchanged-acceptance",
+		"validate-acceptance-crosscheck",
 		"validate-skip-implementation-review",
 		"review-assumptions",
 		"verify-assumptions-handoff",
@@ -279,6 +281,10 @@ func TestCoreVerifyChangeAcceptanceValidatorRecordsResultWithoutGating(t *testin
 	wantRound := []string{
 		"reset-round-evidence",
 		"acceptance-test",
+		"acceptance-crosscheck-scope",
+		"acceptance-crosscheck",
+		"verify-acceptance-crosscheck",
+		"acceptance-crosscheck-amend",
 		"acceptance-gate",
 		"end-final-round",
 		"clear-retest-reason",
@@ -375,14 +381,15 @@ func TestCoreImplementChangeComposesVerifyChangeWithSharedSessions(t *testing.T)
 	implement := readBuiltinWorkflowForTest(t, "builtin:core/implement-change-v1.0.yaml")
 	verify := readBuiltinWorkflowForTest(t, verifyChangeRef)
 
-	wantSessions := []model.SessionDecl{{Name: "lead-agent", Agent: "lead"}, {Name: "acceptance-tester", Agent: "tester"}}
+	wantSessions := []model.SessionDecl{{Name: "lead-agent", Agent: "lead"}, {Name: "acceptance-tester", Agent: "tester"}, {Name: "crosscheck-agent", Agent: "crosscheck"}}
 	if diff := cmp.Diff(wantSessions, verify.Sessions); diff != "" {
 		t.Errorf("verify-change sessions mismatch (-want +got):\n%s", diff)
 	}
-	if diff := cmp.Diff(verify.Sessions, implement.Sessions); diff != "" {
-		t.Errorf("implement-change and verify-change must declare identical sessions (-verify +implement):\n%s", diff)
+	// The crosscheck session serves only the opt-in acceptance crosscheck, so
+	// implement-change, which never sets it, leaves it undeclared.
+	if diff := cmp.Diff(verify.Sessions[:2], implement.Sessions); diff != "" {
+		t.Errorf("implement-change and verify-change must declare identical sessions besides crosscheck-agent (-verify +implement):\n%s", diff)
 	}
-
 	wantHead := []string{
 		"validate-change-name",
 		"validate-skip-validator",
@@ -605,6 +612,7 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 		"skip_validator":                  "{{skip_validator}}",
 		"skip_implementation_review":      "true",
 		"stop_unchanged_acceptance":       "true",
+		"acceptance_crosscheck":           "true",
 	}
 	if call.Workflow != "verify-change-v1.0.yaml" {
 		t.Fatalf("verify-change workflow = %q", call.Workflow)
@@ -1136,6 +1144,56 @@ func TestCoreVerifyChangeAcceptanceRoundsAreWorkflowSteps(t *testing.T) {
 	}
 }
 
+func TestCoreVerifyChangeAcceptanceCrosscheckSteps(t *testing.T) {
+	workflow := readBuiltinWorkflowForTest(t, verifyChangeRef)
+	indexes := stepIndexes(workflow.Steps)
+	validate := workflow.Steps[indexes["validate-acceptance-crosscheck"]]
+	if validate.Script != "validate-boolean-param.sh" ||
+		validate.ScriptInputs["name"] != "acceptance_crosscheck" ||
+		validate.ScriptInputs["value"] != "{{acceptance_crosscheck}}" {
+		t.Fatalf("validate-acceptance-crosscheck = %+v, want boolean validation", validate)
+	}
+	loop := workflow.Steps[indexes["prepare-acceptance"]]
+	loopIndexes := stepIndexes(loop.Steps)
+
+	// The review sits between the tester and the gate that decides the round,
+	// and only the scope step looks at the parameter.
+	scope := loop.Steps[loopIndexes["acceptance-crosscheck-scope"]]
+	if scope.Script != "acceptance-gate.sh" || scope.ScriptInputs["action"] != "crosscheck-scope" ||
+		scope.ScriptInputs["round"] != "{{acceptance_round}}" || scope.ScriptInputs["rounds"] != "{{acceptance_rounds}}" ||
+		scope.SkipIf != "sh: test {{acceptance_crosscheck}} != true" {
+		t.Errorf("acceptance-crosscheck-scope = %+v, want the gate's crosscheck-scope action gated on the parameter", scope)
+	}
+	review := loop.Steps[loopIndexes["acceptance-crosscheck"]]
+	if review.Session != "crosscheck-agent" || review.Mode != model.ModeAutonomous ||
+		review.SkipIf != `sh: test ! -f "{{session_dir}}/output/acceptance-crosscheck-required.txt"` {
+		t.Errorf("acceptance-crosscheck = %+v, want an autonomous crosscheck-agent step gated on the scope marker", review)
+	}
+	verify := loop.Steps[loopIndexes["verify-acceptance-crosscheck"]]
+	if verify.Script != "acceptance-gate.sh" || verify.ScriptInputs["action"] != "crosscheck-verify" ||
+		verify.SkipIf != review.SkipIf || verify.Repair == nil || verify.Repair.Session != "crosscheck-agent" {
+		t.Errorf("verify-acceptance-crosscheck = %+v, want the gate's crosscheck-verify action with a crosscheck-agent repair", verify)
+	}
+	amend := loop.Steps[loopIndexes["acceptance-crosscheck-amend"]]
+	if amend.Session != "acceptance-tester" || amend.Mode != model.ModeAutonomous ||
+		amend.SkipIf != `sh: test ! -f "{{session_dir}}/output/acceptance-crosscheck-amend.txt"` {
+		t.Errorf("acceptance-crosscheck-amend = %+v, want an autonomous acceptance-tester step gated on the amend marker", amend)
+	}
+	order := []string{"acceptance-test", "acceptance-crosscheck-scope", "acceptance-crosscheck", "verify-acceptance-crosscheck", "acceptance-crosscheck-amend", "acceptance-gate"}
+	for i := 1; i < len(order); i++ {
+		if loopIndexes[order[i-1]] >= loopIndexes[order[i]] {
+			t.Errorf("%s must come before %s in %v", order[i-1], order[i], stepIDs(loop.Steps))
+		}
+	}
+
+	reset := loop.Steps[loopIndexes["reset-round-evidence"]]
+	for _, file := range []string{"acceptance-crosscheck.md", "acceptance-crosscheck-required.txt", "acceptance-crosscheck-amend.txt"} {
+		if !strings.Contains(reset.Command, "{{session_dir}}/output/"+file) {
+			t.Errorf("reset-round-evidence does not clear %s: %q", file, reset.Command)
+		}
+	}
+}
+
 func TestCoreVerifyChangeAcceptanceProgressCheck(t *testing.T) {
 	workflow := readBuiltinWorkflowForTest(t, verifyChangeRef)
 	indexes := stepIndexes(workflow.Steps)
@@ -1445,6 +1503,198 @@ func TestCoreAcceptanceGateScript(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("crosscheck-scope requires the review only when the round would end", func(t *testing.T) {
+		scope := func(t *testing.T, repo, evidence, round, rounds string) string {
+			t.Helper()
+			input := `{"evidence_dir":` + strconv.Quote(evidence) + `,"action":"crosscheck-scope","round":` + strconv.Quote(round) + `,"rounds":` + strconv.Quote(rounds) + `}`
+			out, err := runScriptIn(t, scriptPath, repo, input)
+			if err != nil {
+				t.Fatalf("crosscheck-scope failed: %v\n%s", err, out)
+			}
+			return out
+		}
+		required := func(evidence string) bool {
+			_, err := os.Stat(filepath.Join(evidence, "acceptance-crosscheck-required.txt"))
+			return err == nil
+		}
+
+		repo, evidence := converged(t)
+		scope(t, repo, evidence, "0", "3")
+		if !required(evidence) {
+			t.Error("a READY round was not marked for the crosscheck")
+		}
+
+		mustWriteFile(t, filepath.Join(evidence, "acceptance-round-status.txt"), "NOT_READY\n")
+		scope(t, repo, evidence, "1", "3")
+		if required(evidence) {
+			t.Error("a NOT_READY round before the final round was marked for the crosscheck, or a stale marker was kept")
+		}
+
+		scope(t, repo, evidence, "2", "3")
+		if !required(evidence) {
+			t.Error("the final round was not marked for the crosscheck")
+		}
+
+		removeFile(t, filepath.Join(evidence, "acceptance-round-status.txt"))
+		scope(t, repo, evidence, "0", "1")
+		if !required(evidence) {
+			t.Error("a single round is the final round and was not marked for the crosscheck")
+		}
+
+		input := `{"evidence_dir":` + strconv.Quote(evidence) + `,"action":"crosscheck-scope","round":"x","rounds":"3"}`
+		if out, err := runScriptIn(t, scriptPath, repo, input); err == nil || !strings.Contains(out, "must be numbers") {
+			t.Errorf("non-numeric round: err = %v, output = %q", err, out)
+		}
+	})
+
+	crosscheck := func(t *testing.T, repo, evidence, action, round, rounds string) (string, error) {
+		t.Helper()
+		input := `{"evidence_dir":` + strconv.Quote(evidence) + `,"action":` + strconv.Quote(action) + `,"round":` + strconv.Quote(round) + `,"rounds":` + strconv.Quote(rounds) + `}`
+		return runScriptIn(t, scriptPath, repo, input)
+	}
+	const (
+		defectReview   = "## DEFECT 1: late console error\nexploration-log.md: \"blamed step 3\"\n\nCROSSCHECK FLAGGED\n"
+		omissionReview = "## OMISSION 1: accepted limitation\n\nCROSSCHECK FLAGGED\n"
+		cleanReview    = "Nothing to flag.\n\nCROSSCHECK CLEAN\n"
+	)
+	exists := func(evidence, name string) bool {
+		_, err := os.Stat(filepath.Join(evidence, name))
+		return err == nil
+	}
+
+	t.Run("crosscheck-verify rejects a review that is missing or malformed", func(t *testing.T) {
+		malformed := map[string]string{
+			"missing":                        "",
+			"no verdict line":                "## DEFECT 1: x\n",
+			"two verdict lines":              "CROSSCHECK CLEAN\nCROSSCHECK CLEAN\n",
+			"verdict not last":               "CROSSCHECK CLEAN\ntrailing text\n",
+			"clean with a flag":              "## OMISSION 1: x\nCROSSCHECK CLEAN\n",
+			"flagged without a flag section": "CROSSCHECK FLAGGED\n",
+		}
+		for name, review := range malformed {
+			repo, evidence := converged(t)
+			if review != "" {
+				mustWriteFile(t, filepath.Join(evidence, "acceptance-crosscheck.md"), review)
+			}
+			out, err := crosscheck(t, repo, evidence, "crosscheck-verify", "0", "3")
+			if err == nil || !strings.Contains(out, "acceptance-crosscheck.md") {
+				t.Errorf("%s: err = %v, output = %q, want a failure naming the review", name, err, out)
+			}
+			assertFileContent(t, filepath.Join(evidence, "acceptance-round-status.txt"), "READY "+gitHead(t, repo)+"\n")
+		}
+	})
+
+	t.Run("crosscheck-verify leaves a clean review alone", func(t *testing.T) {
+		repo, evidence := converged(t)
+		mustWriteFile(t, filepath.Join(evidence, "acceptance-crosscheck.md"), cleanReview)
+		if out, err := crosscheck(t, repo, evidence, "crosscheck-verify", "0", "3"); err != nil {
+			t.Fatalf("crosscheck-verify failed: %v\n%s", err, out)
+		}
+		assertFileContent(t, filepath.Join(evidence, "acceptance-round-status.txt"), "READY "+gitHead(t, repo)+"\n")
+		if exists(evidence, "acceptance-crosscheck-amend.txt") {
+			t.Error("a clean review asked the tester to amend")
+		}
+	})
+
+	t.Run("crosscheck-verify makes a flagged defect NOT_READY before the final round", func(t *testing.T) {
+		repo, evidence := converged(t)
+		mustWriteFile(t, filepath.Join(evidence, "acceptance-crosscheck.md"), defectReview)
+		if out, err := crosscheck(t, repo, evidence, "crosscheck-verify", "0", "3"); err != nil {
+			t.Fatalf("crosscheck-verify failed: %v\n%s", err, out)
+		}
+		assertFileContent(t, filepath.Join(evidence, "acceptance-round-status.txt"), "NOT_READY\n")
+		if exists(evidence, "acceptance-crosscheck-amend.txt") {
+			t.Error("a defect the lead will fix asked the tester to amend")
+		}
+	})
+
+	t.Run("crosscheck-verify has the tester amend a final-round defect and an omission", func(t *testing.T) {
+		for name, tt := range map[string]struct{ review, round string }{
+			"defect in the final round": {defectReview, "2"},
+			"omission before the final": {omissionReview, "0"},
+		} {
+			repo, evidence := converged(t)
+			mustWriteFile(t, filepath.Join(evidence, "acceptance-crosscheck.md"), tt.review)
+			if out, err := crosscheck(t, repo, evidence, "crosscheck-verify", tt.round, "3"); err != nil {
+				t.Fatalf("%s: crosscheck-verify failed: %v\n%s", name, err, out)
+			}
+			assertFileContent(t, filepath.Join(evidence, "acceptance-round-status.txt"), "READY "+gitHead(t, repo)+"\n")
+			if !exists(evidence, "acceptance-crosscheck-amend.txt") {
+				t.Errorf("%s: the tester was not asked to amend", name)
+			}
+		}
+	})
+
+	t.Run("crosscheck-verify clears a stale amend request when rerun", func(t *testing.T) {
+		repo, evidence := converged(t)
+		mustWriteFile(t, filepath.Join(evidence, "acceptance-crosscheck.md"), omissionReview)
+		if out, err := crosscheck(t, repo, evidence, "crosscheck-verify", "0", "3"); err != nil {
+			t.Fatalf("crosscheck-verify failed: %v\n%s", err, out)
+		}
+		mustWriteFile(t, filepath.Join(evidence, "acceptance-crosscheck.md"), cleanReview)
+		if out, err := crosscheck(t, repo, evidence, "crosscheck-verify", "0", "3"); err != nil {
+			t.Fatalf("rerun failed: %v\n%s", err, out)
+		}
+		if exists(evidence, "acceptance-crosscheck-amend.txt") {
+			t.Error("the amend request outlived the review that asked for it")
+		}
+	})
+
+	t.Run("check does not converge on a flagged defect or an unreviewed round once the crosscheck is required", func(t *testing.T) {
+		tests := []struct {
+			name   string
+			review string
+			want   string
+		}{
+			{"a defect flag, even with a READY status", defectReview, "crosscheck flagged 1 reproduced defect"},
+			{"a missing review", "", "crosscheck review of the tester's write-up is required but incomplete"},
+			{"a malformed review", "CROSSCHECK FLAGGED\n", "required but incomplete"},
+		}
+		for _, tt := range tests {
+			repo, evidence := converged(t)
+			mustWriteFile(t, filepath.Join(evidence, "acceptance-crosscheck-required.txt"), "required\n")
+			if tt.review != "" {
+				mustWriteFile(t, filepath.Join(evidence, "acceptance-crosscheck.md"), tt.review)
+			}
+			out, err := run(t, repo, evidence, "check")
+			if err == nil || !strings.Contains(out, tt.want) {
+				t.Errorf("%s: err = %v, output = %q, want %q", tt.name, err, out, tt.want)
+			}
+		}
+		for name, review := range map[string]string{"a clean review": cleanReview, "an omission flag": omissionReview} {
+			repo, evidence := converged(t)
+			mustWriteFile(t, filepath.Join(evidence, "acceptance-crosscheck-required.txt"), "required\n")
+			mustWriteFile(t, filepath.Join(evidence, "acceptance-crosscheck.md"), review)
+			if out, err := run(t, repo, evidence, "check"); err != nil {
+				t.Errorf("%s blocked convergence: %v\n%s", name, err, out)
+			}
+		}
+	})
+
+	t.Run("check ignores a review that was never required", func(t *testing.T) {
+		repo, evidence := converged(t)
+		mustWriteFile(t, filepath.Join(evidence, "acceptance-crosscheck.md"), defectReview)
+		if out, err := run(t, repo, evidence, "check"); err != nil {
+			t.Fatalf("gate failed: %v\n%s", err, out)
+		}
+	})
+
+	t.Run("finalize points the failure handoff at the crosscheck review", func(t *testing.T) {
+		repo, evidence := converged(t)
+		mustWriteFile(t, filepath.Join(evidence, "acceptance-crosscheck-required.txt"), "required\n")
+		mustWriteFile(t, filepath.Join(evidence, "acceptance-crosscheck.md"), defectReview)
+		if out, err := run(t, repo, evidence, "finalize"); err != nil {
+			t.Fatalf("finalize failed: %v\n%s", err, out)
+		}
+		assertFileContent(t, filepath.Join(evidence, "acceptance-preparation-status.txt"), "ACCEPTANCE_FAILED\n")
+		handoff := readFile(t, filepath.Join(evidence, "acceptance-handoff.md"))
+		for _, want := range []string{"reproduced defect", filepath.Join(evidence, "acceptance-crosscheck.md")} {
+			if !strings.Contains(handoff, want) {
+				t.Errorf("failure handoff missing %q:\n%s", want, handoff)
+			}
+		}
+	})
 
 	t.Run("finalize records completion and keeps the tester handoff", func(t *testing.T) {
 		repo, evidence := converged(t)

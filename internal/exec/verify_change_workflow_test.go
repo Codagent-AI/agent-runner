@@ -37,6 +37,9 @@ type acceptanceRoundRunner struct {
 	// fixMode is how the lead's fix ends: "" commits a change, "none" changes
 	// nothing, and "retest" changes nothing but asks for another round.
 	fixMode string
+	// review is the crosscheck's acceptance-crosscheck.md for a round, or
+	// nil when acceptance_crosscheck is false.
+	review func(round int) string
 }
 
 func (r *acceptanceRoundRunner) RunShell(cmd string, _ bool, _ string) (ProcessResult, error) {
@@ -81,6 +84,19 @@ func (r *acceptanceRoundRunner) RunScript(path string, stdin []byte, _ bool, _ s
 
 func (r *acceptanceRoundRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, error) {
 	switch {
+	case strings.Contains(options.Prefix, "acceptance-crosscheck-amend"):
+		r.events = append(r.events, "acceptance-crosscheck-amend")
+		handoff, err := os.OpenFile(filepath.Join(r.evidenceDir, "acceptance-handoff.md"), os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			r.t.Fatalf("open handoff: %v", err)
+		}
+		defer handoff.Close()
+		if _, err := handoff.WriteString("amended after the crosscheck\n"); err != nil {
+			r.t.Fatalf("amend handoff: %v", err)
+		}
+	case strings.Contains(options.Prefix, "acceptance-crosscheck"):
+		r.events = append(r.events, "acceptance-crosscheck")
+		r.write("acceptance-crosscheck.md", r.review(r.round))
 	case strings.Contains(options.Prefix, "acceptance-test"):
 		scratchDir := filepath.Join(r.sessionDir, "scratch", "acceptance-test")
 		if info, err := os.Stat(scratchDir); err != nil || !info.IsDir() {
@@ -164,6 +180,14 @@ func (r *acceptanceRoundRunner) write(name, content string) {
 	}
 }
 
+func (r *acceptanceRoundRunner) read(name string) string {
+	body, err := os.ReadFile(filepath.Join(r.evidenceDir, name))
+	if err != nil {
+		r.t.Fatalf("read %s: %v", name, err)
+	}
+	return string(body)
+}
+
 func (r *acceptanceRoundRunner) exists(name string) bool {
 	_, err := os.Stat(filepath.Join(r.evidenceDir, name))
 	return err == nil
@@ -183,6 +207,9 @@ func (r *acceptanceRoundRunner) test() {
 }
 
 func (r *acceptanceRoundRunner) fix() {
+	if r.exists("acceptance-crosscheck.md") && strings.TrimSpace(r.read("acceptance-round-status.txt")) == "NOT_READY" {
+		r.events = append(r.events, "fix-sees-crosscheck")
+	}
 	if r.exists("acceptance-retest-reason.txt") {
 		r.t.Errorf("round %d: the previous retest reason was not cleared before the fix", r.round)
 	}
@@ -213,15 +240,15 @@ func TestBuiltinVerifyChangeLoadsStandalone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadWorkflow(%s): %v", verifyChangeRef, err)
 	}
-	if len(workflow.Sessions) != 2 {
-		t.Fatalf("sessions = %+v, want lead-agent and acceptance-tester", workflow.Sessions)
+	if len(workflow.Sessions) != 3 {
+		t.Fatalf("sessions = %+v, want lead-agent, acceptance-tester, and crosscheck-agent", workflow.Sessions)
 	}
 }
 
 // runVerifyChangeAcceptance executes verify-change from prepare-acceptance to
 // the end with the given acceptance rounds and returns the observed events and
 // the final acceptance status.
-func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator, stopUnchanged, fixMode string, readyInRound func(int) bool, breakStatusOnce, validatorFails bool) (events []string, status, evidenceDir string) {
+func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator, stopUnchanged, fixMode string, readyInRound func(int) bool, breakStatusOnce, validatorFails bool, review func(round int) string) (events []string, status, evidenceDir string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	// Keep the process fake independent of any installed Validator CLI.
@@ -260,7 +287,11 @@ func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator, stopUnchange
 
 	runner := &acceptanceRoundRunner{
 		t: t, repo: repo, evidenceDir: evidenceDir, sessionDir: sessionDir, readyInRound: readyInRound,
-		breakStatusOnce: breakStatusOnce, validatorFails: validatorFails, fixMode: fixMode,
+		breakStatusOnce: breakStatusOnce, validatorFails: validatorFails, fixMode: fixMode, review: review,
+	}
+	crosscheck := "false"
+	if review != nil {
+		crosscheck = "true"
 	}
 	ctx := model.NewRootContext(&model.RootContextOptions{
 		Params: map[string]string{
@@ -271,10 +302,11 @@ func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator, stopUnchange
 			"skip_validator":                  skipValidator,
 			"acceptance_rounds":               rounds,
 			"stop_unchanged_acceptance":       stopUnchanged,
+			"acceptance_crosscheck":           crosscheck,
 		},
 		WorkflowFile:      verifyChangeRef,
 		SessionDir:        sessionDir,
-		NamedSessionDecls: map[string]string{"lead-agent": "lead", "acceptance-tester": "tester"},
+		NamedSessionDecls: map[string]string{"lead-agent": "lead", "acceptance-tester": "tester", "crosscheck-agent": "crosscheck"},
 	})
 
 	// A group runs the tail with the same rewind handling as a workflow scope,
@@ -466,7 +498,7 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			if stopUnchanged == "" {
 				stopUnchanged = "false"
 			}
-			events, status, evidenceDir := runVerifyChangeAcceptance(t, tt.rounds, tt.skipValidator, stopUnchanged, tt.fixMode, tt.readyInRound, tt.breakStatus, tt.failValidator)
+			events, status, evidenceDir := runVerifyChangeAcceptance(t, tt.rounds, tt.skipValidator, stopUnchanged, tt.fixMode, tt.readyInRound, tt.breakStatus, tt.failValidator, nil)
 			if diff := cmp.Diff(tt.wantEvents, events); diff != "" {
 				t.Errorf("events mismatch (-want +got):\n%s", diff)
 			}
@@ -489,6 +521,146 @@ func TestBuiltinVerifyChangeAcceptanceRounds(t *testing.T) {
 			}
 			if gotResult != tt.wantValidatorResult {
 				t.Errorf("acceptance validator result = %q, want %q", gotResult, tt.wantValidatorResult)
+			}
+		})
+	}
+}
+
+func TestBuiltinVerifyChangeAcceptanceCrosscheck(t *testing.T) {
+	const (
+		clean    = "Nothing to flag.\n\nCROSSCHECK CLEAN\n"
+		defect   = "## DEFECT 1: late console error\nexploration-log.md: \"verification blamed step 3\"\n\nCROSSCHECK FLAGGED\n"
+		omission = "## OMISSION 1: accepted limitation\nacceptance-assumptions.md: \"A-2\"\n\nCROSSCHECK FLAGGED\n"
+	)
+	always := func(review string) func(int) string { return func(int) string { return review } }
+	never := func(int) bool { return false }
+
+	scope, verify, gate, finalize := "acceptance-gate.sh", "acceptance-gate.sh", "acceptance-gate.sh", "acceptance-gate.sh"
+	tests := []struct {
+		name          string
+		rounds        string
+		stopUnchanged string
+		fixMode       string
+		readyInRound  func(int) bool
+		review        func(int) string
+		wantEvents    []string
+		wantStatus    string
+		// wantHandoff is text the final acceptance-handoff.md must contain,
+		// and wantTesterHandoff text the tester-written handoff must contain.
+		wantHandoff       string
+		wantTesterHandoff string
+	}{
+		{
+			name:         "a clean review lets the first round converge",
+			rounds:       "3",
+			readyInRound: func(round int) bool { return round == 1 },
+			review:       always(clean),
+			wantEvents: []string{
+				"reset-round-evidence", "acceptance-test", scope, "acceptance-crosscheck", verify, gate,
+				finalize, "verify-acceptance-handoff",
+			},
+			wantStatus: "ACCEPTANCE_COMPLETE",
+		},
+		{
+			name:         "a dismissed defect makes the round NOT_READY for the lead and the retest converges",
+			rounds:       "3",
+			readyInRound: func(round int) bool { return round == 1 || round == 2 },
+			review: func(round int) string {
+				if round == 1 {
+					return defect
+				}
+				return clean
+			},
+			wantEvents: []string{
+				"reset-round-evidence", "acceptance-test", scope, "acceptance-crosscheck", verify, gate,
+				"clear-retest-reason", "acceptance-fix", "fix-sees-crosscheck", "acceptance-push.sh", "check-draft-pr.sh",
+				"reset-round-evidence", "acceptance-test", scope, "acceptance-crosscheck", verify, gate,
+				finalize, "verify-acceptance-handoff",
+			},
+			wantStatus: "ACCEPTANCE_COMPLETE",
+		},
+		{
+			name:         "a handoff omission has the tester amend and the round converges",
+			rounds:       "3",
+			readyInRound: func(round int) bool { return round == 1 },
+			review:       always(omission),
+			wantEvents: []string{
+				"reset-round-evidence", "acceptance-test", scope, "acceptance-crosscheck", verify, "acceptance-crosscheck-amend", gate,
+				finalize, "verify-acceptance-handoff",
+			},
+			wantStatus:  "ACCEPTANCE_COMPLETE",
+			wantHandoff: "amended after the crosscheck",
+		},
+		{
+			name:         "a defect flagged in the final round has the tester amend and still fails the gate",
+			rounds:       "1",
+			readyInRound: func(round int) bool { return round == 1 },
+			review:       always(defect),
+			wantEvents: []string{
+				"reset-round-evidence", "acceptance-test", scope, "acceptance-crosscheck", verify, "acceptance-crosscheck-amend", gate,
+				"end-final-round", finalize, "verify-acceptance-handoff",
+			},
+			wantStatus:        "ACCEPTANCE_FAILED",
+			wantHandoff:       "acceptance-crosscheck.md",
+			wantTesterHandoff: "amended after the crosscheck",
+		},
+		{
+			name:         "a round the tester does not end is not crosschecked until the final round",
+			rounds:       "2",
+			readyInRound: never,
+			review:       always(clean),
+			wantEvents: []string{
+				"reset-round-evidence", "acceptance-test", scope, gate, "clear-retest-reason", "acceptance-fix", "acceptance-push.sh", "check-draft-pr.sh",
+				"reset-round-evidence", "acceptance-test", scope, "acceptance-crosscheck", verify, gate, "end-final-round",
+				finalize, "verify-acceptance-handoff",
+			},
+			wantStatus: "ACCEPTANCE_FAILED",
+		},
+		{
+			// The lead's fix changes nothing, so another tester round could
+			// only repeat the last one and the rounds end with the defect open.
+			name:          "a crosschecked defect the lead leaves unchanged ends the rounds as failed",
+			rounds:        "3",
+			stopUnchanged: "true",
+			fixMode:       "none",
+			readyInRound:  func(round int) bool { return round == 1 },
+			review:        always(defect),
+			wantEvents: []string{
+				"reset-round-evidence", "acceptance-test", scope, "acceptance-crosscheck", verify, gate,
+				"clear-retest-reason", "acceptance-fix", "fix-sees-crosscheck", "check-acceptance-progress",
+				finalize, "verify-acceptance-handoff",
+			},
+			wantStatus:  "ACCEPTANCE_FAILED",
+			wantHandoff: "acceptance-crosscheck.md",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stopUnchanged := tt.stopUnchanged
+			if stopUnchanged == "" {
+				stopUnchanged = "false"
+			}
+			events, status, evidenceDir := runVerifyChangeAcceptance(t, tt.rounds, "true", stopUnchanged, tt.fixMode, tt.readyInRound, false, false, tt.review)
+			if diff := cmp.Diff(tt.wantEvents, events); diff != "" {
+				t.Errorf("events mismatch (-want +got):\n%s", diff)
+			}
+			if status != tt.wantStatus {
+				t.Errorf("status = %q, want %q", status, tt.wantStatus)
+			}
+			for file, want := range map[string]string{
+				"acceptance-handoff.md":        tt.wantHandoff,
+				"acceptance-handoff-tester.md": tt.wantTesterHandoff,
+			} {
+				if want == "" {
+					continue
+				}
+				body, err := os.ReadFile(filepath.Join(evidenceDir, file))
+				if err != nil {
+					t.Fatalf("read %s: %v", file, err)
+				}
+				if !strings.Contains(string(body), want) {
+					t.Errorf("%s = %q, want it to contain %q", file, body, want)
+				}
 			}
 		})
 	}

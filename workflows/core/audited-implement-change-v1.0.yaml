@@ -370,7 +370,8 @@ steps:
   # verify-change's own assumption review and simplification. Its Validator
   # loop is the change's only pre-PR Validator run.
   # stop_unchanged_acceptance ends the acceptance rounds when a fix changes
-  # nothing and asks for no retest.
+  # nothing and asks for no retest. acceptance_crosscheck has the crosscheck
+  # review the acceptance tester's write-up before a round can end.
   - id: verify-change
     workflow: verify-change-v1.0.yaml
     params:
@@ -381,3 +382,4 @@ steps:
       skip_validator: "{{skip_validator}}"
       skip_implementation_review: "true"
       stop_unchanged_acceptance: "true"
+      acceptance_crosscheck: "true"
