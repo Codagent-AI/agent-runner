@@ -7,9 +7,9 @@ TBD - created by archiving change audit-step. Update Purpose after archive.
 
 The initial lightweight reporting destination SHALL be one existing Google spreadsheet and worksheet tab recorded by the development-audit setup operation. Agent Runner SHALL call the Google Sheets API directly and SHALL NOT require a Hermes installation, Hermes process, hosted Agent Runner service, or generalized reporting-sink framework.
 
-Spreadsheet creation, sharing, and interactive formatting are outside the reporting operation. The reporter SHALL validate that the recorded spreadsheet and tab are accessible and have the expected versioned header before writing. The current supported header is `step_value_v3`.
+Spreadsheet creation, sharing, and interactive formatting are outside the reporting operation. The reporter SHALL validate that the recorded spreadsheet and tab are accessible and have the expected versioned header before writing. The current supported header is `step_value_v4`.
 
-When a configured tab's header row exactly matches a prior header (`step_value_v1` or `step_value_v2`), and every cell to the right of it in the header row is empty, the reporter SHALL upgrade the tab in place. It does this by writing only the `step_value_v3` trailing header cells that the prior header lacks into those empty cells, then delivers the report. The upgrade SHALL NOT modify, reorder, or remove existing header cells, existing data rows, or other tabs. Rows written before the upgrade SHALL remain valid and read as empty (unknown) in the added columns. The upgrade and row append SHALL happen under the same destination delivery lock. A failure to write the upgraded header SHALL be a non-blocking reporting failure that retains the local report for retry. Any other header, including a prior-version header with non-empty cells to its right, SHALL be treated as a mismatch.
+When a configured tab's header row exactly matches a prior header (`step_value_v1`, `step_value_v2`, or `step_value_v3`), and every cell to the right of it in the header row is empty, the reporter SHALL upgrade the tab in place. It does this by writing only the `step_value_v4` trailing header cells that the prior header lacks into those empty cells, then delivers the report. The upgrade SHALL NOT modify, reorder, or remove existing header cells, existing data rows, or other tabs. Rows written before the upgrade SHALL remain valid and read as empty (unknown) in the added columns. The upgrade and row append SHALL happen under the same destination delivery lock. A failure to write the upgraded header SHALL be a non-blocking reporting failure that retains the local report for retry. Any other header, including a prior-version header with non-empty cells to its right, SHALL be treated as a mismatch.
 
 #### Scenario: Configured sheet matches the schema
 - **WHEN** the spreadsheet and tab are accessible and their header matches the supported schema
@@ -25,14 +25,18 @@ When a configured tab's header row exactly matches a prior header (`step_value_v
 
 #### Scenario: Prior-version header is upgraded
 - **WHEN** the configured tab's header exactly matches `step_value_v1` and the header cells to its right are empty
-- **THEN** the reporter appends the `step_value_v2` judge column names and the `step_value_v3` cost-basis column name after the existing header, leaves existing rows unchanged, and appends the new observation rows under the `step_value_v3` layout
+- **THEN** the reporter appends the `step_value_v2` judge column names, the `step_value_v3` cost-basis column name, and the `step_value_v4` `credit_role` and `shared_outcome_with` column names after the existing header, leaves existing rows unchanged, and appends the new observation rows under the `step_value_v4` layout
 
 #### Scenario: Version 2 header is upgraded
 - **WHEN** the configured tab's header exactly matches `step_value_v2` and the header cells to its right are empty
-- **THEN** the reporter appends only `cost_basis` after the existing header, leaves existing rows unchanged, and appends the new rows under the `step_value_v3` layout
+- **THEN** the reporter appends `cost_basis`, `credit_role`, and `shared_outcome_with` after the existing header, leaves existing rows unchanged, and appends the new rows under the `step_value_v4` layout
+
+#### Scenario: Version 3 header is upgraded
+- **WHEN** the configured tab's header exactly matches `step_value_v3` and the header cells to its right are empty
+- **THEN** the reporter appends only `credit_role` and `shared_outcome_with` after the existing header, leaves existing rows unchanged, and appends the new rows under the `step_value_v4` layout
 
 #### Scenario: Prior-version header has content to its right
-- **WHEN** the configured tab's header matches `step_value_v1` or `step_value_v2` but a cell to its right in the header row is non-empty
+- **WHEN** the configured tab's header matches `step_value_v1`, `step_value_v2`, or `step_value_v3` but a cell to its right in the header row is non-empty
 - **THEN** Agent Runner writes no observation rows and does not modify the sheet, and reports the schema mismatch
 
 #### Scenario: Header upgrade write fails
@@ -67,7 +71,9 @@ The initial `step_value_v1` worksheet SHALL use this exact ordered header: `sche
 
 The `step_value_v2` worksheet SHALL use the complete `step_value_v1` header, in the same order, followed by these audit-level judge columns in this order: `judge_cli`, `judge_effort`, `audit_judge_attempts`, `audit_judge_total_tokens`, `audit_judge_token_coverage`, `audit_judge_cost_usd`, `audit_judge_cost_coverage`. The judge columns SHALL be the audit's judge CLI, reasoning effort, launched judge attempt count, aggregate total judge tokens with coverage, and aggregate judge USD cost with coverage, taken from the audit-level judge usage summary defined by `audit-judge-usage`. Every row from the same audit SHALL carry identical judge values. Those values describe the whole audit, not the row's step, so consumers SHALL aggregate them once per `audit_run_id` and SHALL NOT sum them across rows. The existing `judge_model` column SHALL continue to carry the resolved judge model.
 
-The current `step_value_v3` worksheet SHALL use the complete `step_value_v2` header, in the same order, followed by `cost_basis`. Rows written by this reporter SHALL carry `step_value_v3` in `schema_version`. `cost_basis` SHALL describe the row's `cost_usd`: `reported` when every contributing cost was CLI- or producer-reported, `estimated` when every one was a Runner estimate, `mixed` when both contributed, and empty when `cost_usd` is empty or the observation predates cost-basis recording. `cost_usd` SHALL remain the numeric USD total, estimates included, so rows stay comparable. Audit-level judge cost is never estimated, and it keeps its existing columns.
+The `step_value_v3` worksheet SHALL use the complete `step_value_v2` header, in the same order, followed by `cost_basis`. `cost_basis` SHALL describe the row's `cost_usd`: `reported` when every contributing cost was CLI- or producer-reported, `estimated` when every one was a Runner estimate, `mixed` when both contributed, and empty when `cost_usd` is empty or the observation predates cost-basis recording. `cost_usd` SHALL remain the numeric USD total, estimates included, so rows stay comparable. Audit-level judge cost is never estimated, and it keeps its existing columns.
+
+The current `step_value_v4` worksheet SHALL use the complete `step_value_v3` header, in the same order, followed by `credit_role` and `shared_outcome_with`. Rows written by this reporter SHALL carry `step_value_v4` in `schema_version`. `credit_role` SHALL be the judge's categorical statement of the part the step played in its outcome, as defined by `workflow-value-observation`. `shared_outcome_with` SHALL list the `observation_id` values of the other observations in the same audit that share credit for the same outcome, sorted and joined with commas, and SHALL be empty when the step shares credit with no other. A consumer that ranks steps by value SHALL count a shared outcome once, using these two columns. Rows written before the upgrade read as empty in both columns.
 
 Judge totals whose coverage is `none` SHALL be written empty, never `0`. A pending report assembled without an audit-level judge usage summary, as with audits completed before this capability existed, SHALL still deliver, with every audit-level judge column except any known `judge_cli` and `judge_effort` left empty.
 
@@ -113,7 +119,7 @@ Apart from optional note text that passes the checks above, the reporter MUST NO
 - **THEN** `audit_judge_cost_usd` is empty and `audit_judge_cost_coverage` is `none` on every row from that audit
 
 #### Scenario: Pending report predates judge usage
-- **WHEN** a pending report assembled before judge usage recording is delivered to a `step_value_v3` tab
+- **WHEN** a pending report assembled before judge usage recording is delivered to a `step_value_v4` tab
 - **THEN** its rows are appended with the audit-level judge usage columns empty rather than zero
 
 #### Scenario: Row cost basis
@@ -125,8 +131,16 @@ Apart from optional note text that passes the checks above, the reporter MUST NO
 - **THEN** both `cost_usd` and `cost_basis` are written empty, never `0`
 
 #### Scenario: Pending report predates cost basis
-- **WHEN** a pending report assembled before cost-basis recording is delivered to a `step_value_v3` tab
+- **WHEN** a pending report assembled before cost-basis recording is delivered to a `step_value_v4` tab
 - **THEN** its rows are appended with `cost_basis` empty
+
+#### Scenario: Finder and fixer share an outcome
+- **WHEN** an audit's judge credits one step with `detection` and another with `correction` for the same outcome and each lists the other in `shared_outcome_with`
+- **THEN** each row carries its own `credit_role` and the other's `observation_id` in `shared_outcome_with`
+
+#### Scenario: Pending report predates credit role
+- **WHEN** a pending report assembled before credit-role recording is delivered to a `step_value_v4` tab
+- **THEN** its rows are appended with `credit_role` and `shared_outcome_with` empty
 
 ### Requirement: Reporting is append-only and retry-safe
 

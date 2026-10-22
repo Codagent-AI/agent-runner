@@ -65,7 +65,8 @@ def verify_results(source, audit_dir, link):
     require(judgments[0].get("observation_id") == observation["observation_id"],
             "model result and validated observation disagree")
     expected = {"overall_value": "medium", "change_effect": "intended",
-                "unique_contribution": "unique", "downstream_evidence": "supporting",
+                "unique_contribution": "unique", "credit_role": "production",
+                "shared_outcome_with": [], "downstream_evidence": "supporting",
                 "confidence": "high", "evidence_coverage": "partial"}
     for key, value in expected.items():
         require(observation.get(key) == value and judgments[0].get(key) == value,

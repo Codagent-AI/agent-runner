@@ -89,7 +89,7 @@ func TestJudgeUsageSheetHeaderUpgradeAndProjection(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"values": [][]string{header}})
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "B:B"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"values": [][]string{{"observation_id"}}})
-		case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "AF1:AM1"):
+		case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "AF1:AO1"):
 			puts++
 			if failPut {
 				failPut = false
@@ -100,12 +100,12 @@ func TestJudgeUsageSheetHeaderUpgradeAndProjection(t *testing.T) {
 				Values [][]string `json:"values"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			if !equalStrings(body.Values[0], stepValueHeaderV3[len(stepValueHeader):]) {
+			if !equalStrings(body.Values[0], stepValueHeaderV4[len(stepValueHeader):]) {
 				t.Errorf("upgrade cells: %v", body.Values)
 			}
 			header = append(header, body.Values[0]...)
 			_, _ = w.Write([]byte(`{}`))
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "A:AM:append"):
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "A:AO:append"):
 			appends++
 			var body struct {
 				Values [][]string `json:"values"`
@@ -129,7 +129,7 @@ func TestJudgeUsageSheetHeaderUpgradeAndProjection(t *testing.T) {
 	if err := reporter.Deliver(context.Background(), &report); err != nil {
 		t.Fatal(err)
 	}
-	if puts != 1 || appends != 1 || len(row) != 39 || row[0] != sheetRowSchemaVersion || row[31] != "claude" || row[34] != "1200" || row[36] != "4.25" || row[38] != "estimated" {
+	if puts != 1 || appends != 1 || len(row) != 41 || row[0] != sheetRowSchemaVersion || row[31] != "claude" || row[34] != "1200" || row[36] != "4.25" || row[38] != "estimated" {
 		t.Fatalf("puts=%d appends=%d row=%v", puts, appends, row)
 	}
 	// A trailing populated cell makes a v1 prefix unsafe to upgrade.

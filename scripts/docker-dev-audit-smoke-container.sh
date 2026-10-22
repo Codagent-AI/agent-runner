@@ -60,6 +60,8 @@ print(json.dumps({
         "overall_value": "medium",
         "change_effect": "intended",
         "unique_contribution": "unique",
+        "credit_role": "production",
+        "shared_outcome_with": [],
         "downstream_evidence": "supporting",
         "confidence": "high",
         "evidence_coverage": "partial"

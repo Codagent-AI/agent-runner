@@ -91,7 +91,7 @@ func TestE2E001TaggedCLIAutomaticAuditCompletesAndRetriesWithoutDuplicate(t *tes
 	if got := fixture.server.rowCount(); got != 1 {
 		t.Fatalf("sheet row count = %d, want 1", got)
 	}
-	if fixture.server.headerPuts != 1 || len(fixture.server.rows[0]) != 39 || fixture.server.rows[0][0] != sheetRowSchemaVersion || fixture.server.rows[0][36] != "" {
+	if fixture.server.headerPuts != 1 || len(fixture.server.rows[0]) != 41 || fixture.server.rows[0][0] != sheetRowSchemaVersion || fixture.server.rows[0][36] != "" {
 		t.Fatalf("Codex sheet projection = %+v", fixture.server.rows)
 	}
 	calls := fixture.modelCallCount()
@@ -196,7 +196,7 @@ func TestTaggedClaudeAuditCompletesAllStages(t *testing.T) {
 	if usage := report.JudgeUsage; usage == nil || usage.AttemptCount != 2 || usage.TotalTokens == nil || usage.TokenCoverage != model.CoverageComplete || usage.CostUSD == nil || *usage.CostUSD != 0.5 || usage.CostCoverage != model.CoverageComplete {
 		t.Fatalf("Claude judge usage = %+v", usage)
 	}
-	if fixture.server.headerPuts != 1 || len(fixture.server.rows[0]) != 39 || fixture.server.rows[0][36] != "0.5" {
+	if fixture.server.headerPuts != 1 || len(fixture.server.rows[0]) != 41 || fixture.server.rows[0][36] != "0.5" {
 		t.Fatalf("Claude sheet projection = %+v", fixture.server.rows)
 	}
 	if got := fixture.server.rowCount(); got != 1 {
@@ -563,6 +563,8 @@ if prompt.startswith("You are judging workflow-step value"):
             "overall_value": "medium",
             "change_effect": "intended",
             "unique_contribution": "unique",
+            "credit_role": "production",
+            "shared_outcome_with": [],
             "downstream_evidence": "supporting",
             "confidence": "high",
             "evidence_coverage": "partial"
@@ -642,10 +644,10 @@ func (s *auditSheetsServer) serveHTTP(writer http.ResponseWriter, request *http.
 	case request.Method == http.MethodGet && strings.Contains(request.URL.Path, "1:1"):
 		header := stepValueHeader
 		if s.upgraded {
-			header = stepValueHeaderV3
+			header = stepValueHeaderV4
 		}
 		_ = json.NewEncoder(writer).Encode(map[string]any{"values": [][]string{header}})
-	case request.Method == http.MethodPut && strings.Contains(request.URL.Path, "AF1:AM1"):
+	case request.Method == http.MethodPut && strings.Contains(request.URL.Path, "AF1:AO1"):
 		s.upgraded = true
 		s.headerPuts++
 		_, _ = writer.Write([]byte(`{}`))
@@ -753,13 +755,16 @@ func TestE2E001CLIReplayContentGroundedPackages(t *testing.T) {
 		t.Fatal(report.DeliveryState)
 	}
 	for _, row := range report.Values.Observations {
-		if row.RubricVersion != "value-rubric-v3" {
+		if row.RubricVersion != "value-rubric-v4" {
 			t.Fatal(row.RubricVersion)
+		}
+		if row.CreditRole != "production" || row.SharedOutcomeWith == nil || len(row.SharedOutcomeWith) != 0 {
+			t.Fatalf("credit role %q shared %v", row.CreditRole, row.SharedOutcomeWith)
 		}
 	}
 	fixture.server.mu.Lock()
 	for _, row := range fixture.server.rows {
-		if row[29] != "value-rubric-v3" {
+		if row[29] != "value-rubric-v4" {
 			t.Errorf("delivered rubric = %q", row[29])
 		}
 	}

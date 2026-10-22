@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -367,6 +368,25 @@ func TestValueOutputSchemaDisallowsCompleteCoverageForOmittedEvidence(t *testing
 	}
 }
 
+func TestValueOutputSchemaRequiresCreditRoleAndSharedOutcome(t *testing.T) {
+	pkg := ValuePackage{BatchID: "value-credit", Leaves: []LeafEvidence{{Skeleton: ObservationSkeleton{ObservationID: "finder"}}}}
+	observations := valueOutputSchema(pkg)["properties"].(map[string]any)["observations"].(map[string]any)
+	judgment := observations["properties"].(map[string]any)["finder"].(map[string]any)
+	required := judgment["required"].([]string)
+	properties := judgment["properties"].(map[string]any)
+	for _, field := range []string{"credit_role", "shared_outcome_with"} {
+		if !slices.Contains(required, field) {
+			t.Errorf("%s is not required", field)
+		}
+	}
+	if diff := cmp.Diff(creditRoles, properties["credit_role"].(map[string]any)["enum"]); diff != "" {
+		t.Errorf("credit_role enum mismatch (-want +got):\n%s", diff)
+	}
+	if shared := properties["shared_outcome_with"].(map[string]any); shared["type"] != "array" {
+		t.Errorf("shared_outcome_with schema = %v", shared)
+	}
+}
+
 func coverageEnumsForObservation(t *testing.T, schema map[string]any, observationID string) []string {
 	t.Helper()
 	properties := schema["properties"].(map[string]any)
@@ -587,7 +607,7 @@ func TestValidateValueStageAcceptsOnlyCompleteFixedRubricOutput(t *testing.T) {
 	}
 	modelOutput := map[string]any{"batch_id": packages[0].BatchID, "observations": []map[string]any{{
 		"observation_id": packages[0].Leaves[0].Skeleton.ObservationID,
-		"overall_value":  "medium", "change_effect": "intended", "unique_contribution": "unique",
+		"overall_value":  "medium", "change_effect": "intended", "unique_contribution": "unique", "credit_role": "production", "shared_outcome_with": []string{},
 		"downstream_evidence": "supporting", "confidence": "medium", "evidence_coverage": "partial",
 	}}}
 	modelData, err := json.Marshal(modelOutput)
@@ -608,6 +628,60 @@ func TestValidateValueStageAcceptsOnlyCompleteFixedRubricOutput(t *testing.T) {
 	}
 }
 
+func TestValidateValueOutputsCarriesCreditRoleAndSharedOutcomeAcrossBatches(t *testing.T) {
+	temp := t.TempDir()
+	if err := os.Mkdir(filepath.Join(temp, "model-output"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	request := Request{AuditRunID: "audit", AuditSessionDir: temp, SnapshotPath: temp, ExecutionSessionID: "session", Auditor: AgentProvenance{Model: "fake"}}
+	prepared := PreparedValueAudit{Packages: []ValuePackage{
+		{BatchID: "value-001", Leaves: []LeafEvidence{{Skeleton: ObservationSkeleton{ObservationID: "finder"}}}},
+		{BatchID: "value-002", Leaves: []LeafEvidence{{Skeleton: ObservationSkeleton{ObservationID: "fixer"}}}},
+	}}
+	before, err := fingerprintTree(temp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared.Index.Fingerprints.SnapshotBefore = before
+	prepared.Index.Fingerprints.OutputBefore = before
+	judgment := func(id, role string, shared ...string) ModelValueJudgment {
+		return ModelValueJudgment{ObservationID: id, OverallValue: "high", ChangeEffect: "intended", UniqueContribution: "unique", CreditRole: role, SharedOutcomeWith: shared, DownstreamEvidence: "confirmed", Confidence: "high", EvidenceCoverage: "partial"}
+	}
+	outputs := func(finder, fixer ModelValueJudgment) []ModelValueBatch {
+		return []ModelValueBatch{
+			{BatchID: "value-001", Observations: []ModelValueJudgment{finder}},
+			{BatchID: "value-002", Observations: []ModelValueJudgment{fixer}},
+		}
+	}
+	result, err := ValidateValueOutputs(request, prepared, outputs(judgment("finder", "detection", "fixer", "fixer"), judgment("fixer", "correction", "finder")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]ValueObservation{}
+	for _, observation := range result.Observations {
+		got[observation.ObservationID] = observation
+	}
+	if got["finder"].CreditRole != "detection" || got["fixer"].CreditRole != "correction" {
+		t.Errorf("credit roles = %q, %q", got["finder"].CreditRole, got["fixer"].CreditRole)
+	}
+	if diff := cmp.Diff([]string{"fixer"}, got["finder"].SharedOutcomeWith); diff != "" {
+		t.Errorf("finder shared outcome (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{"finder"}, got["fixer"].SharedOutcomeWith); diff != "" {
+		t.Errorf("fixer shared outcome (-want +got):\n%s", diff)
+	}
+	for name, bad := range map[string][]ModelValueBatch{
+		"unknown credit role": outputs(judgment("finder", "finder"), judgment("fixer", "correction")),
+		"empty credit role":   outputs(judgment("finder", ""), judgment("fixer", "correction")),
+		"unknown shared id":   outputs(judgment("finder", "detection", "missing"), judgment("fixer", "correction")),
+		"self shared id":      outputs(judgment("finder", "detection", "finder"), judgment("fixer", "correction")),
+	} {
+		if _, err := ValidateValueOutputs(request, prepared, bad); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}
+
 func TestValidateValueStageOmitsUnsafeNotesAndRejectsMissingOutput(t *testing.T) {
 	temp := t.TempDir()
 	if err := os.Mkdir(filepath.Join(temp, "model-output"), 0o700); err != nil {
@@ -621,7 +695,7 @@ func TestValidateValueStageOmitsUnsafeNotesAndRejectsMissingOutput(t *testing.T)
 	}
 	prepared.Index.Fingerprints.SnapshotBefore = before
 	prepared.Index.Fingerprints.OutputBefore = before
-	output := ModelValueBatch{BatchID: "value-001", Observations: []ModelValueJudgment{{ObservationID: "observation", OverallValue: "medium", ChangeEffect: "intended", UniqueContribution: "unique", DownstreamEvidence: "supporting", Confidence: "medium", EvidenceCoverage: "partial", Note: "https://example.test/evidence"}}}
+	output := ModelValueBatch{BatchID: "value-001", Observations: []ModelValueJudgment{{ObservationID: "observation", OverallValue: "medium", ChangeEffect: "intended", UniqueContribution: "unique", CreditRole: "production", DownstreamEvidence: "supporting", Confidence: "medium", EvidenceCoverage: "partial", Note: "https://example.test/evidence"}}}
 	result, err := ValidateValueOutputs(request, prepared, []ModelValueBatch{output})
 	if err != nil {
 		t.Fatalf("unsafe optional note rejected the observation: %v", err)
@@ -707,7 +781,7 @@ func TestValidateValueOutputsAcceptsLeafEvidenceConsultation(t *testing.T) {
 	}
 	request := Request{AuditSessionDir: temp, SnapshotPath: temp, Auditor: AgentProvenance{Model: "fake"}}
 	output := ModelValueBatch{BatchID: "value-001", Observations: []ModelValueJudgment{{
-		ObservationID: "observation", OverallValue: "medium", ChangeEffect: "intended", UniqueContribution: "unique",
+		ObservationID: "observation", OverallValue: "medium", ChangeEffect: "intended", UniqueContribution: "unique", CreditRole: "production",
 		DownstreamEvidence: "supporting", Confidence: "medium", EvidenceCoverage: "partial", Consultations: []string{reference.ID},
 	}}}
 	result, err := ValidateValueOutputs(request, prepared, []ModelValueBatch{output})
@@ -790,7 +864,7 @@ func TestE2E001AutomaticAuditCompletesLocallyWhenSheetsIsUnavailable(t *testing.
 	if err := json.Unmarshal(packageData, &packages); err != nil {
 		t.Fatal(err)
 	}
-	value := ModelValueBatch{BatchID: packages[0].BatchID, Observations: []ModelValueJudgment{{ObservationID: packages[0].Leaves[0].Skeleton.ObservationID, OverallValue: "medium", ChangeEffect: "intended", UniqueContribution: "unique", DownstreamEvidence: "supporting", Confidence: "medium", EvidenceCoverage: "partial"}}}
+	value := ModelValueBatch{BatchID: packages[0].BatchID, Observations: []ModelValueJudgment{{ObservationID: packages[0].Leaves[0].Skeleton.ObservationID, OverallValue: "medium", ChangeEffect: "intended", UniqueContribution: "unique", CreditRole: "production", DownstreamEvidence: "supporting", Confidence: "medium", EvidenceCoverage: "partial"}}}
 	if err := stateio.WriteJSONAtomic(filepath.Join(request.AuditSessionDir, "model-output", packages[0].BatchID+".json"), value); err != nil {
 		t.Fatal(err)
 	}

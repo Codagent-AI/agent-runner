@@ -200,10 +200,11 @@ shows the reason, or labels an estimate as `API-equivalent estimate`. The `~`
 marker and partial-coverage indicator are independent.
 
 Development-audit observations preserve cost basis. Delivered Sheets rows use
-`step_value_v3`, which appends `cost_basis` after the existing judge columns.
-Unknown costs and bases have empty cells. Existing v1 and v2 headers are upgraded
-only when the required trailing cells are empty; older pending reports retain an
-empty basis. Judge costs retain their existing reported-cost semantics.
+`step_value_v4`, which appends `cost_basis`, `credit_role`, and
+`shared_outcome_with` after the existing judge columns. Unknown costs and bases
+have empty cells. Existing v1, v2, and v3 headers are upgraded only when the
+required trailing cells are empty; older pending reports retain an empty basis.
+Judge costs retain their existing reported-cost semantics.
 
 To update rates, edit `internal/pricing/prices.json`, bump its `version`, update
 each changed entry's `effective_date` and published `source`, and run
