@@ -97,7 +97,7 @@ When durable metrics correlation is enabled, the command SHALL additionally incl
 ### Requirement: Built-in workflows run without task-compliance
 
 Every built-in workflow that reaches `core/implement-task` or `core/run-validator` with a task file SHALL disable task-compliance. This SHALL hold across all shipped versions of each workflow. The callers are:
-- `core/implement-change`, which the v2.0 `spec-driven` and `openspec` `change` and `implement-change` workflows and `core/plan-and-implement-change` reach;
+- `core/implement-change-v1.0`, which the v2.0 `spec-driven` and `openspec` `change` workflows reach;
 - `core/complete-simple-change`, which the v2.0 `spec-driven` and `openspec` `simple-change` workflows reach;
 - `spec-driven/implement-change` v1.0 and `openspec/implement-change` v1.0, which the v1.0 `change` workflows reach and which remain loadable as pinned children and recorded resume targets;
 - `spec-driven/simple-change` v1.0 and `openspec/simple-change` v1.0, which call `core/run-validator` directly.
@@ -105,7 +105,7 @@ Every built-in workflow that reaches `core/implement-task` or `core/run-validato
 No built-in workflow SHALL rely on the `core/implement-task` default. Prompts in these workflows SHALL NOT state that task-compliance validation ran. Because unresolved final validator failures are non-blocking, the `complete-task-index` prompt SHALL describe validation without stating its outcome, and SHALL NOT claim that validation passed.
 
 #### Scenario: core implement-change disables task-compliance per task
-- **WHEN** `core/implement-change` runs its per-task loop with `skip_validator: "false"`
+- **WHEN** `core/implement-change-v1.0` runs its per-task loop with `skip_validator: "false"`
 - **THEN** each per-task validator command omits `--enable-review task-compliance` and `--context-file`
 
 #### Scenario: v1.0 implement-change workflows disable task-compliance
@@ -125,10 +125,10 @@ No built-in workflow SHALL rely on the `core/implement-task` default. Prompts in
 - **THEN** every step that invokes `core/implement-task` passes `task_compliance: "false"`
 
 #### Scenario: Task index prompt does not claim task-compliance
-- **WHEN** `core/implement-change`'s `complete-task-index` step runs
+- **WHEN** `core/implement-change-v1.0`'s `complete-task-index` step runs
 - **THEN** its prompt does not state that task-compliance validation ran for the completed tasks
 
 #### Scenario: Task index prompt does not claim validation passed
-- **WHEN** `core/implement-change` reaches `complete-task-index` after a task's final validator verification failed with a warning
+- **WHEN** `core/implement-change-v1.0` reaches `complete-task-index` after a task's final validator verification failed with a warning
 - **THEN** the dispatched prompt does not state that the tasks passed validation
 

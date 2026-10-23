@@ -38,7 +38,7 @@ Other built-in workflows present at migration time SHALL start at `v1.0`.
 
 #### Scenario: Paired v2 workflows migrate together
 - **WHEN** built-in migration is complete
-- **THEN** the `openspec` namespace's `change`, `plan-change`, and `implement-change` workflows each have embedded `v1.0` and `v2.0` files derived from their former base and `2` files
+- **THEN** the `openspec` namespace's `change` and `plan-change` workflows each have embedded `v1.0` and `v2.0` files derived from their former base and `2` files, and its `implement-change` workflow keeps only `v1.0`
 
 #### Scenario: Same-named spec-driven workflows remain first generation
 - **WHEN** built-in migration is complete
@@ -105,22 +105,36 @@ The builtin set SHALL include a `core` namespace containing general-purpose work
 
 ### Requirement: Implement-change Validator skipping
 
-The `core:implement-change` workflow SHALL accept `skip_validator` only as `true` or `false`. The value SHALL control every Agent Validator invocation owned by that workflow and the `core:verify-change` workflow it composes, including task-level validation, final validation, and validation after acceptance remediation. Skipping validation SHALL NOT skip draft pull-request creation, acceptance preparation, evidence generation, or the final acceptance handoff.
+The `core:implement-change` workflow, in both its audited v2.0 and its task-based v1.0 versions, SHALL accept `skip_validator` only as `true` or `false`. The value SHALL control every Agent Validator invocation owned by that workflow and the `core:verify-change` workflow it composes, including task-level validation (v1.0 only), final validation, and validation after acceptance remediation. Skipping validation SHALL NOT skip draft pull-request creation, acceptance preparation, evidence generation, or the final acceptance handoff.
 
 #### Scenario: Validation enabled
 - **WHEN** `core:implement-change` runs with `skip_validator=false`
-- **THEN** task-level and final Agent Validator steps run
+- **THEN** final Agent Validator steps run, and task-level steps run in v1.0
 - **AND** each acceptance round that remediates findings runs the `core:run-validator` workflow before pushing
 
 #### Scenario: Validation skipped
 - **WHEN** `core:implement-change` runs or resumes with `skip_validator=true`
-- **THEN** task-level, final, and acceptance-round Agent Validator steps record their normal skipped outcomes
+- **THEN** task-level (v1.0), final, and acceptance-round Agent Validator steps record their normal skipped outcomes
 - **AND** acceptance remediation does not invoke Agent Validator
 - **AND** the workflow continues through draft pull-request creation, acceptance preparation, evidence generation, and the final acceptance handoff
 
 #### Scenario: Invalid skip value rejected
 - **WHEN** `core:implement-change` receives a `skip_validator` value other than `true` or `false`
-- **THEN** deterministic parameter validation fails before implementation tasks begin
+- **THEN** deterministic parameter validation fails before implementation begins
+
+### Requirement: Change v3 workflows implement through the audited workflow
+
+The hidden `core:implement-change` workflow SHALL be backed by `core/implement-change-v2.0.yaml`, the audited implementation workflow: one `implementor` session implements against a merged verification checklist, the `crosscheck` audits the result, and `core:verify-change` opens the draft pull request and prepares acceptance. It SHALL commit the approved definition itself through `core:commit-definition`, skipped for spec-driven changes, and SHALL NOT need a task plan. `core/implement-change-v1.0.yaml` SHALL remain embedded as the deprecated task-based implementation, referenced by file path from the v1.0 and v2.0 change workflows.
+
+`openspec/change-v3.0.yaml` and `spec-driven/change-v3.0.yaml` SHALL be the selected `openspec:change` and `spec-driven:change`. Each SHALL run its validate, create, define, implement, accept, and finalize steps (plus archive for `openspec`) without a `plan` step, and its `implement` step SHALL invoke `../core/implement-change-v2.0.yaml` with `change_name`, `change_dir`, `change_label`, `change_kind`, `artifact_validation_instruction`, and `skip_validator`. No orchestrated implementation workflow SHALL be embedded.
+
+#### Scenario: Latest change workflows are v3
+- **WHEN** a user resolves `openspec:change` or `spec-driven:change`
+- **THEN** the selected definition is the namespace's `change-v3.0.yaml`, and its earlier versions stay readable by exact reference
+
+#### Scenario: Core implement-change resolves to the audited workflow
+- **WHEN** a user resolves `core:implement-change`
+- **THEN** the selected definition is `core/implement-change-v2.0.yaml`, while `core/implement-change-v1.0.yaml` remains readable by exact reference and path
 
 ### Requirement: Verify-change workflow
 
@@ -296,36 +310,6 @@ a conditional call to run when its workflow condition is not met.
 - **THEN** `run-reacceptance-testing` completes without invoking a child even though the tool was
   provisioned
 
-### Requirement: Plan-and-implement-change workflow
-
-The `core` namespace SHALL include a hidden logical workflow `plan-and-implement-change`, backed by `core/plan-and-implement-change-v1.0.yaml`. It SHALL plan and implement an existing approved change in one run. It SHALL declare the parameters `change_name`, `change_dir`, `change_label`, `change_kind`, and `artifact_validation_instruction` as required, and `skip_validator` as optional with default `false`. It SHALL have exactly two top-level steps, in this order:
-- `plan`, which invokes `plan-change-v1.0.yaml` with `change_name`, `change_dir`, `change_label`, `change_kind`, and `skip_validator`;
-- `implement`, which invokes `implement-change-v1.0.yaml` with all six parameters.
-
-The `implement` step SHALL run only after `plan` completes successfully. The workflow SHALL NOT create, define, accept, archive, or finalize the change, and SHALL NOT declare named sessions of its own; the planning and implementation sessions remain those of the composed workflows. Because the workflow is a single run, it SHALL produce one run identity, one resumable state, and one `run-metrics.json` covering both steps, with sub-workflow attempts recorded under the `plan` and `implement` step prefixes.
-
-#### Scenario: Plan then implement from definition artifacts
-- **WHEN** a user runs `agent-runner run core:plan-and-implement-change` with the required parameters for a change directory that holds a proposal, design, specs, and test plan but no tasks
-- **THEN** the `plan` step writes, reviews, validates, and commits `tasks.md` and `tasks/*.md`
-- **AND** the `implement` step then implements those tasks and runs `core/verify-change` through the acceptance handoff
-
-#### Scenario: Plan failure stops before implementation
-- **WHEN** the `plan` step fails, for example because the definition artifacts fail planning validation after repair
-- **THEN** the `implement` step does not start and the run reports the failure from the `plan` step
-
-#### Scenario: One metrics artifact covers both steps
-- **WHEN** the run completes
-- **THEN** its single `run-metrics.json` names `plan-and-implement-change` as the workflow and records planning attempts under `plan/` and implementation attempts under `implement/`
-
-#### Scenario: Resume continues inside the composed workflow
-- **WHEN** a run of `core:plan-and-implement-change` is interrupted during `implement` and resumed with `agent-runner --resume <run-id>`
-- **THEN** the run continues from its recorded nested position without repeating the completed `plan` step
-
-#### Scenario: Workflow is hidden but runnable
-- **WHEN** a user lists workflows
-- **THEN** `core:plan-and-implement-change` is not listed
-- **AND** `agent-runner run core:plan-and-implement-change` and `agent-runner debug --show-workflow core:plan-and-implement-change` both resolve it
-
 ### Requirement: Plan-change Validator skipping
 
 The `core:plan-change` workflow SHALL accept an optional `skip_validator` parameter, defaulting to `false` and accepted only as `true` or `false`. It SHALL validate the value before any planning agent runs. When it is `true`, committing the plan SHALL NOT invoke Agent Validator; in particular, it SHALL NOT run `agent-validator skip` to advance the Validator baseline. When it is `false` or omitted, plan-change SHALL behave as before this requirement. `commit-change-plan.sh` SHALL treat an absent `skip_validator` input as `false`, so its other caller, `core:commit-change-plan` (used by `openspec:simple-change`), keeps running `agent-validator skip` unchanged. Skipping validation SHALL NOT skip definition checking, task writing, task review, plan validation, or the plan commit. When the repository-root `openspec` path is a symbolic link and the change directory is under `openspec/`, `commit-change-plan.sh` SHALL NOT stage or commit anything. It SHALL report that the plan lives outside the repository and must be committed there by hand, apply the same `skip_validator` rule to the Validator baseline as on a normal commit, and exit successfully. Every workflow that commits a plan through `commit-change-plan.sh` gets this behavior with no new parameter. When `openspec` is not a symbolic link, committing the plan SHALL behave as before.
@@ -349,11 +333,6 @@ The `core:plan-change` workflow SHALL accept an optional `skip_validator` parame
 #### Scenario: Invalid planning skip value rejected
 - **WHEN** `core:plan-change` receives a `skip_validator` value other than `true` or `false`
 - **THEN** deterministic parameter validation fails before any planning agent runs
-
-#### Scenario: Composed workflow skips every Validator path
-- **WHEN** `core:plan-and-implement-change` runs with `skip_validator=true`
-- **THEN** neither its `plan` step nor its `implement` step invokes Agent Validator
-- **AND** the run still completes through draft pull-request creation and the acceptance handoff
 
 #### Scenario: Symlinked OpenSpec directory skips the plan commit
 - **WHEN** `commit-change-plan.sh` runs without a `skip_validator` input, the repository-root `openspec` is a symbolic link to a directory in another repository, and the change directory is under `openspec/`

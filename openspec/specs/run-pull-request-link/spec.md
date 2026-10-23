@@ -117,14 +117,14 @@ Width measurement for chrome layout SHALL count only the visible label, not the 
 
 The built-in workflows that open or update a pull request SHALL record its URL through the reserved `pr_url` capture, so runs of every shipped change lineage show the link.
 
-`core/verify-change-v1.0.yaml`, which `core/implement-change-v1.0.yaml` composes, SHALL record the URL from its existing draft-PR verification step, which already retrieves it. Adding recording to that step SHALL NOT weaken its existing validation: it SHALL continue to fail the run unless exactly one open, draft pull request exists for the current branch whose head matches local `HEAD`. Recording occurs only once those checks have passed.
+`core/verify-change-v1.0.yaml`, which `core/implement-change-v1.0.yaml` and `core/implement-change-v2.0.yaml` compose, SHALL record the URL from its existing draft-PR verification step, which already retrieves it. Adding recording to that step SHALL NOT weaken its existing validation: it SHALL continue to fail the run unless exactly one open, draft pull request exists for the current branch whose head matches local `HEAD`. Recording occurs only once those checks have passed.
 
 `core/finalize-pr-v1.0.yaml` SHALL record the URL after its push step, since that workflow can open the pull request when run standalone. That step SHALL be best-effort: when `gh` is unavailable, unauthenticated, or finds no open pull request for the current branch, it SHALL record nothing and SHALL NOT fail the run.
 
 A workflow that opens no pull request SHALL record nothing and SHALL display no segment.
 
 #### Scenario: OpenSpec change workflow shows the link
-- **WHEN** a run of `openspec/change-v2.0.yaml` reaches the end of its implement phase, having opened a draft pull request
+- **WHEN** a run of `openspec/change-v2.0.yaml` or `openspec/change-v3.0.yaml` reaches the end of its implement phase, having opened a draft pull request
 - **THEN** the run view breadcrumb shows the pull-request segment linking to that pull request
 
 #### Scenario: Standalone finalize records the URL

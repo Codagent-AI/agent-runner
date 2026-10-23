@@ -416,12 +416,12 @@ func TestCoreImplementChangeComposesVerifyChangeWithSharedSessions(t *testing.T)
 	}
 }
 
-const auditedImplementChangeRef = "builtin:core/audited-implement-change-v1.0.yaml"
+const implementChangeV2Ref = "builtin:core/implement-change-v2.0.yaml"
 
-func TestCoreAuditedImplementChangeShape(t *testing.T) {
-	workflow := readBuiltinWorkflowForTest(t, auditedImplementChangeRef)
+func TestCoreImplementChangeV2Shape(t *testing.T) {
+	workflow := readBuiltinWorkflowForTest(t, implementChangeV2Ref)
 	if !workflow.Hidden {
-		t.Error("audited-implement-change must be hidden")
+		t.Error("implement-change v2.0 must be hidden")
 	}
 	wantSessions := []model.SessionDecl{
 		{Name: "implementor-agent", Agent: "implementor"},
@@ -470,7 +470,7 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 		t.Fatalf("steps mismatch (-want +got):\n%s", diff)
 	}
 	indexes := stepIndexes(workflow.Steps)
-	requireSkipValidatorValidation(t, auditedImplementChangeRef, workflow.Steps, indexes)
+	requireSkipValidatorValidation(t, implementChangeV2Ref, workflow.Steps, indexes)
 	if got := workflow.Steps[indexes["check-definition"]].Workflow; got != "check-definition-v1.0.yaml" {
 		t.Errorf("check-definition workflow = %q, want shared check-definition-v1.0.yaml", got)
 	}
