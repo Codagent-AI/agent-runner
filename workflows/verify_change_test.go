@@ -434,14 +434,9 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 		"check-definition",
 		"commit-definition",
 		"record-definition-head",
-		"lead-checklist",
-		"check-lead-checklist-not-blocked",
 		"implementor-checklist",
 		"check-implementor-checklist-not-blocked",
 		"check-implementor-checklist",
-		"merge-checklists",
-		"check-merge-not-blocked",
-		"check-merged-ids",
 		"verify-checklist",
 		"record-implementation-start",
 		"implement",
@@ -475,7 +470,6 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 		capture string
 	}{
 		"implementor-checklist": {session: "implementor-agent"},
-		"merge-checklists":      {session: "crosscheck-agent"},
 		"implement":             {session: "implementor-agent"},
 		"audit":                 {session: "crosscheck-agent", capture: "audit_findings"},
 		"resolve-findings":      {session: "implementor-agent"},
@@ -493,14 +487,6 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 			t.Errorf("%s does not enable call_agent", id)
 		}
 	}
-	// The lead writes its checklist in its own session and hands it to the
-	// merge as a capture.
-	leadChecklist := &workflow.Steps[indexes["lead-checklist"]]
-	assertAgentStep(t, leadChecklist, "", "lead-agent", model.ModeAutonomous)
-	if leadChecklist.Capture != "lead_checklist" {
-		t.Errorf("lead-checklist capture = %q, want lead_checklist", leadChecklist.Capture)
-	}
-
 	// The checklist must be complete before the audit and again after its fixes.
 	// Each check reruns its repair step, which runs only once the check has
 	// written its problem list.
@@ -510,13 +496,13 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 		"recheck-evidence": "complete-evidence-after-review",
 	} {
 		step := workflow.Steps[indexes[id]]
-		// Both compare the checklist with the committed merge; after the audit,
+		// Both compare the checklist with the committed checklist; after the audit,
 		// rows its findings name may change.
 		wantInputs := map[string]string{
 			"checklist_file": "{{change_dir}}/checklist.md",
 			"evidence_dir":   "{{session_dir}}/output/evidence",
 			"problems_file":  problemsFile,
-			"plan_file":      "{{session_dir}}/output/merged-checklist.md",
+			"plan_file":      "{{session_dir}}/output/planned-checklist.md",
 		}
 		if id == "recheck-evidence" {
 			wantInputs["findings"] = "{{audit_findings}}"
@@ -544,33 +530,16 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 
 	// The checklist commit must precede the implementation start so it cannot
 	// satisfy verify-implementation-commits.
-	if indexes["merge-checklists"] > indexes["verify-checklist"] || indexes["verify-checklist"] > indexes["record-implementation-start"] {
+	if indexes["check-implementor-checklist"] > indexes["verify-checklist"] || indexes["verify-checklist"] > indexes["record-implementation-start"] {
 		t.Error("record-implementation-start must follow the committed checklist")
 	}
-	if repair := workflow.Steps[indexes["verify-checklist"]].Repair; repair == nil || repair.Session != "crosscheck-agent" {
-		t.Errorf("verify-checklist repair = %+v, want the crosscheck session that merged it", repair)
+	if repair := workflow.Steps[indexes["verify-checklist"]].Repair; repair == nil || repair.Session != "implementor-agent" {
+		t.Errorf("verify-checklist repair = %+v, want the implementor session that wrote it", repair)
 	}
-	if !strings.Contains(workflow.Steps[indexes["verify-checklist"]].Command, `cp "$list" "{{session_dir}}/output/merged-checklist.md"`) {
-		t.Error("verify-checklist must keep the committed merge as the plan the evidence checks compare with")
+	if !strings.Contains(workflow.Steps[indexes["verify-checklist"]].Command, `cp "$list" "{{session_dir}}/output/planned-checklist.md"`) {
+		t.Error("verify-checklist must keep the committed checklist as the plan the evidence checks compare with")
 	}
-	// The merge must keep every ID from both checklists; the implementor's is
-	// copied before the merge rewrites it.
-	mergedIDs := workflow.Steps[indexes["check-merged-ids"]]
-	wantMergeInputs := map[string]string{
-		"lead_checklist":             "{{lead_checklist}}",
-		"implementor_checklist_file": "{{session_dir}}/output/implementor-checklist.md",
-		"checklist_file":             "{{change_dir}}/checklist.md",
-	}
-	if mergedIDs.Script != "check-checklist-merge.sh" || !cmp.Equal(wantMergeInputs, mergedIDs.ScriptInputs) {
-		t.Errorf("check-merged-ids = %+v, want the checklist merge check", mergedIDs)
-	}
-	if mergedIDs.Repair == nil || mergedIDs.Repair.Session != "crosscheck-agent" || mergedIDs.Repair.Max == nil || *mergedIDs.Repair.Max != 2 {
-		t.Errorf("check-merged-ids repair = %+v, want two crosscheck repairs", mergedIDs.Repair)
-	}
-	if indexes["check-merged-ids"] < indexes["check-merge-not-blocked"] || indexes["check-merged-ids"] > indexes["verify-checklist"] {
-		t.Error("check-merged-ids must run after the merge and before verify-checklist commits are checked")
-	}
-	for _, id := range []string{"check-lead-checklist-not-blocked", "check-implementor-checklist-not-blocked", "check-merge-not-blocked", "check-implementation-not-blocked", "check-findings-not-blocked", "check-evidence-not-blocked", "check-recheck-evidence-not-blocked"} {
+	for _, id := range []string{"check-implementor-checklist-not-blocked", "check-implementation-not-blocked", "check-findings-not-blocked", "check-evidence-not-blocked", "check-recheck-evidence-not-blocked"} {
 		step := workflow.Steps[indexes[id]]
 		if step.Repair != nil || step.ContinueOnFailure || step.Script != "check-not-blocked.sh" ||
 			step.ScriptInputs["blocked_file"] != "{{session_dir}}/output/implementation-blocked.md" {
@@ -579,8 +548,8 @@ func TestCoreAuditedImplementChangeShape(t *testing.T) {
 	}
 	listOnly := workflow.Steps[indexes["check-implementor-checklist"]]
 	if listOnly.Repair != nil || !strings.Contains(listOnly.Command, "{{definition_head}}") || !strings.Contains(listOnly.Command, "pre-list-status.txt") ||
-		!strings.Contains(listOnly.Command, `cp "{{change_dir}}/checklist.md" "{{session_dir}}/output/implementor-checklist.md"`) {
-		t.Errorf("check-implementor-checklist = %+v, want an unrepaired check that the checklist step changed only the checklist", listOnly)
+		!strings.Contains(listOnly.Command, "git commit") {
+		t.Errorf("check-implementor-checklist = %+v, want an unrepaired check that the checklist step changed only the checklist, then commits it", listOnly)
 	}
 
 	leadDecisions := workflow.Steps[indexes["check-lead-decisions"]]
@@ -880,7 +849,7 @@ func TestCoreCheckEvidenceScript(t *testing.T) {
 			}
 			input := `{"checklist_file":` + strconv.Quote(checklist) + `,"evidence_dir":` + strconv.Quote(evidenceDir+"/")
 			if tt.plan != "" {
-				plan := filepath.Join(dir, "output", "merged-checklist.md")
+				plan := filepath.Join(dir, "output", "planned-checklist.md")
 				mustWriteFile(t, plan, tt.plan)
 				input += `,"plan_file":` + strconv.Quote(plan)
 			}
