@@ -167,7 +167,7 @@ func TestOpenSpecAndSpecDrivenChangeGenerationsAreEmbedded(t *testing.T) {
 		t.Fatalf("List: %v", err)
 	}
 
-	for _, logicalName := range []string{"change", "plan-change", "implement-change", "simple-change"} {
+	for _, logicalName := range []string{"change", "plan-change", "simple-change"} {
 		for _, namespace := range []string{"openspec", "spec-driven"} {
 			for _, version := range []string{"v1.0", "v2.0"} {
 				want := "builtin:" + namespace + "/" + logicalName + "-" + version + ".yaml"
@@ -179,7 +179,16 @@ func TestOpenSpecAndSpecDrivenChangeGenerationsAreEmbedded(t *testing.T) {
 	}
 
 	for _, namespace := range []string{"openspec", "spec-driven"} {
-		want := "builtin:" + namespace + "/change-v3.0.yaml"
+		// The implement-change wrappers stop at v1.0, which the v1.0 change
+		// workflows call.
+		want := "builtin:" + namespace + "/implement-change-v1.0.yaml"
+		if !slices.Contains(refs, want) {
+			t.Errorf("List() missing %q", want)
+		}
+		if removed := "builtin:" + namespace + "/implement-change-v2.0.yaml"; slices.Contains(refs, removed) {
+			t.Errorf("List() still contains removed %q", removed)
+		}
+		want = "builtin:" + namespace + "/change-v3.0.yaml"
 		if !slices.Contains(refs, want) {
 			t.Errorf("List() missing %q", want)
 		}
@@ -361,16 +370,6 @@ func TestV2NamespaceAdaptersConfigureSharedCorePhases(t *testing.T) {
 			wantWorkflow:   "../core/plan-change-v1.0.yaml",
 			wantChangeDir:  "{{change_dir}}",
 			wantChangeKind: "spec-driven",
-		},
-		{
-			ref:           "builtin:openspec/implement-change-v2.0.yaml",
-			wantWorkflow:  "../core/implement-change-v1.0.yaml",
-			wantChangeDir: "openspec/changes/{{change_name}}",
-		},
-		{
-			ref:           "builtin:spec-driven/implement-change-v2.0.yaml",
-			wantWorkflow:  "../core/implement-change-v1.0.yaml",
-			wantChangeDir: "{{change_dir}}",
 		},
 	}
 	for _, tt := range tests {
@@ -657,87 +656,6 @@ func TestCoreImplementChangeSkipValidatorControlsAllValidatorRuns(t *testing.T) 
 	verifyChange := steps[indexes["verify-change"]]
 	if verifyChange.Workflow != "verify-change-v1.0.yaml" || verifyChange.Params["skip_validator"] != "{{skip_validator}}" {
 		t.Fatalf("verify-change step = %+v, want the verify-change workflow with skip_validator forwarded", verifyChange)
-	}
-}
-
-func TestCorePlanAndImplementChangeComposesPlanThenImplement(t *testing.T) {
-	ref, err := Resolve("core:plan-and-implement-change")
-	if err != nil {
-		t.Fatalf("Resolve(core:plan-and-implement-change): %v", err)
-	}
-	if ref != "builtin:core/plan-and-implement-change-v1.0.yaml" {
-		t.Fatalf("resolved ref = %q, want core plan-and-implement-change v1.0", ref)
-	}
-	workflow := readBuiltinWorkflowForTest(t, ref)
-	if workflow.Name != "plan-and-implement-change" || !workflow.Hidden {
-		t.Fatalf("workflow name=%q hidden=%v, want hidden plan-and-implement-change", workflow.Name, workflow.Hidden)
-	}
-	if len(workflow.Sessions) != 0 {
-		t.Fatalf("plan-and-implement-change declares sessions %+v, want none of its own", workflow.Sessions)
-	}
-
-	type param struct {
-		Name     string
-		Required bool
-		Default  string
-	}
-	var params []param
-	for i := range workflow.Params {
-		p := &workflow.Params[i]
-		params = append(params, param{Name: p.Name, Required: p.IsRequired(), Default: p.Default})
-	}
-	wantParams := []param{
-		{Name: "change_name", Required: true},
-		{Name: "change_dir", Required: true},
-		{Name: "change_label", Required: true},
-		{Name: "change_kind", Required: true},
-		{Name: "artifact_validation_instruction", Required: true},
-		{Name: "skip_validator", Default: "false"},
-	}
-	if diff := cmp.Diff(wantParams, params); diff != "" {
-		t.Errorf("plan-and-implement-change params mismatch (-want +got):\n%s", diff)
-	}
-
-	type step struct {
-		ID       string
-		Workflow string
-		Params   map[string]string
-	}
-	var steps []step
-	for i := range workflow.Steps {
-		s := &workflow.Steps[i]
-		if s.SkipIf != "" || s.ContinueOnFailure || s.Loop != nil || len(s.Steps) != 0 {
-			t.Errorf("step %q must run unconditionally and stop the run on failure: %+v", s.ID, s)
-		}
-		steps = append(steps, step{ID: s.ID, Workflow: s.Workflow, Params: s.Params})
-	}
-	wantSteps := []step{
-		{
-			ID:       "plan",
-			Workflow: "plan-change-v1.0.yaml",
-			Params: map[string]string{
-				"change_name":    "{{change_name}}",
-				"change_dir":     "{{change_dir}}",
-				"change_label":   "{{change_label}}",
-				"change_kind":    "{{change_kind}}",
-				"skip_validator": "{{skip_validator}}",
-			},
-		},
-		{
-			ID:       "implement",
-			Workflow: "implement-change-v1.0.yaml",
-			Params: map[string]string{
-				"change_name":                     "{{change_name}}",
-				"change_dir":                      "{{change_dir}}",
-				"change_label":                    "{{change_label}}",
-				"change_kind":                     "{{change_kind}}",
-				"artifact_validation_instruction": "{{artifact_validation_instruction}}",
-				"skip_validator":                  "{{skip_validator}}",
-			},
-		},
-	}
-	if diff := cmp.Diff(wantSteps, steps); diff != "" {
-		t.Errorf("plan-and-implement-change steps mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -1074,9 +992,7 @@ func TestV2ImplementChangeCallersProvideChangeKind(t *testing.T) {
 		want string
 	}{
 		{ref: "builtin:openspec/change-v2.0.yaml", want: "openspec"},
-		{ref: "builtin:openspec/implement-change-v2.0.yaml", want: "openspec"},
 		{ref: "builtin:spec-driven/change-v2.0.yaml", want: "spec-driven"},
-		{ref: "builtin:spec-driven/implement-change-v2.0.yaml", want: "spec-driven"},
 		{ref: "builtin:openspec/change-v3.0.yaml", want: "openspec"},
 		{ref: "builtin:spec-driven/change-v3.0.yaml", want: "spec-driven"},
 	}

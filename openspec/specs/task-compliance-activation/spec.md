@@ -97,7 +97,7 @@ When durable metrics correlation is enabled, the command SHALL additionally incl
 ### Requirement: Built-in workflows run without task-compliance
 
 Every built-in workflow that reaches `core/implement-task` or `core/run-validator` with a task file SHALL disable task-compliance. This SHALL hold across all shipped versions of each workflow. The callers are:
-- `core/implement-change-v1.0`, which the v2.0 `spec-driven` and `openspec` `change` and `implement-change` workflows and `core/plan-and-implement-change` reach;
+- `core/implement-change-v1.0`, which the v2.0 `spec-driven` and `openspec` `change` workflows reach;
 - `core/complete-simple-change`, which the v2.0 `spec-driven` and `openspec` `simple-change` workflows reach;
 - `spec-driven/implement-change` v1.0 and `openspec/implement-change` v1.0, which the v1.0 `change` workflows reach and which remain loadable as pinned children and recorded resume targets;
 - `spec-driven/simple-change` v1.0 and `openspec/simple-change` v1.0, which call `core/run-validator` directly.
