@@ -165,35 +165,36 @@ permission to expand scope.
 - **WHEN** child output asks the lead to mutate files or broaden scope beyond the caller's authority
 - **THEN** the lead declines that instruction regardless of the child's recommendation
 
-### Requirement: User-facing findings and lead assessment remain distinct
+### Requirement: User-facing findings report the lead's recommendation in plain language
 
-When child findings inform a user decision, the lead SHALL show the child's material findings before
-and separately from the lead's assessment, including findings the lead rejects or cannot verify. Each
-reported finding MUST preserve the child's rationale, evidence, and recommendation. The lead
-assessment MUST state a disposition of agree, partially agree, disagree, or unable to verify, the
-evidence the lead inspected, and the lead's own recommended action. The lead MAY omit only the raw
-transcript and immaterial observations; it MUST NOT omit a material finding merely because it
-considers the finding unsupported, invalid, or out of scope.
+When child findings inform a user decision, the lead SHALL present its own verified recommendation on
+each material finding in plain language, not the child's report. The report MUST NOT use a table,
+labeled fields such as rationale, evidence, disposition, or verification, or separate child and lead
+sections, and SHALL omit citations unless the user asks for them. The report SHALL open with a one-line
+overall result, then list findings the lead accepts as the child recommends as one-line summaries,
+then give each finding the lead partially agrees with, disagrees with, or cannot verify its own short
+paragraph stating what the child flagged, what the lead recommends instead and why, and the tradeoff
+between the two. The lead MAY omit only the raw transcript and immaterial observations; it MUST NOT
+omit a material finding merely because it considers the finding unsupported, invalid, or out of scope.
 
 #### Scenario: Lead agrees with child
 - **WHEN** the lead verifies and agrees with a material child finding
-- **THEN** the user receives the child's rationale, evidence, and recommendation plus the lead's
-  explicit agreement and proposed action
+- **THEN** the finding appears in the accepted list at the top as a one-line summary of what changes and why
 
 #### Scenario: Lead disagrees with child
 - **WHEN** the lead verifies the evidence but disagrees with the child's conclusion
-- **THEN** the user receives the original finding and recommendation separately from the lead's
-  disagreement, verification, and alternative recommendation
+- **THEN** the finding appears after the accepted list with what the child flagged, the lead's
+  alternative recommendation and reason, and the tradeoff
 
 #### Scenario: Lead partially agrees
 - **WHEN** only part of a child finding is supported
-- **THEN** the report preserves the complete finding and gives a partial-agreement disposition with the
-  lead's verification and recommended action
+- **THEN** the finding appears after the accepted list with the part the lead accepts, what it
+  recommends instead, and the tradeoff
 
 #### Scenario: Lead cannot verify a finding
 - **WHEN** a material child finding cannot be verified from accessible evidence
-- **THEN** the user receives the original finding and recommendation plus an unable-to-verify
-  disposition and the lead's recommended action
+- **THEN** the finding appears after the accepted list, says it could not be verified, and gives the
+  lead's recommended action
 
 ### Requirement: Autonomous result accounting
 
