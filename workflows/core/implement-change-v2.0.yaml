@@ -1,4 +1,4 @@
-name: audited-implement-change
+name: implement-change
 description: "Implement a defined change in one implementor session against a merged checklist of how each spec behavior is verified, have the crosscheck audit the result, then validate and prepare a draft pull request for human acceptance."
 hidden: true
 

@@ -25,7 +25,7 @@ func TestHandleDebugShowWorkflow(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("handleDebug() = %d, stderr: %s", code, stderr.String())
 		}
-		want, err := builtinworkflows.ReadFile("builtin:openspec/change-v2.0.yaml")
+		want, err := builtinworkflows.ReadFile("builtin:openspec/change-v3.0.yaml")
 		if err != nil {
 			t.Fatalf("read builtin: %v", err)
 		}

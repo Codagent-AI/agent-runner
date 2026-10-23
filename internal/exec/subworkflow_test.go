@@ -757,7 +757,7 @@ func TestBuiltinImplementTaskSessionReportSkipIf(t *testing.T) {
 
 // Regression: a sub-workflow that runs no session of its own (here every agent
 // step is skipped) must not hide the enclosing workflow's session from a
-// grandchild's `session: inherit` step. Mirrors audited-implement-change ->
+// grandchild's `session: inherit` step. Mirrors implement-change v2.0 ->
 // verify-change (skip_implementation_review) -> run-validator fix-violations.
 func TestExecuteSubWorkflowStep_InheritSkipsSessionlessIntermediateWorkflow(t *testing.T) {
 	dir := t.TempDir()

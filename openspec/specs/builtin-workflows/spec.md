@@ -105,22 +105,36 @@ The builtin set SHALL include a `core` namespace containing general-purpose work
 
 ### Requirement: Implement-change Validator skipping
 
-The `core:implement-change` workflow SHALL accept `skip_validator` only as `true` or `false`. The value SHALL control every Agent Validator invocation owned by that workflow and the `core:verify-change` workflow it composes, including task-level validation, final validation, and validation after acceptance remediation. Skipping validation SHALL NOT skip draft pull-request creation, acceptance preparation, evidence generation, or the final acceptance handoff.
+The `core:implement-change` workflow, in both its audited v2.0 and its task-based v1.0 versions, SHALL accept `skip_validator` only as `true` or `false`. The value SHALL control every Agent Validator invocation owned by that workflow and the `core:verify-change` workflow it composes, including task-level validation (v1.0 only), final validation, and validation after acceptance remediation. Skipping validation SHALL NOT skip draft pull-request creation, acceptance preparation, evidence generation, or the final acceptance handoff.
 
 #### Scenario: Validation enabled
 - **WHEN** `core:implement-change` runs with `skip_validator=false`
-- **THEN** task-level and final Agent Validator steps run
+- **THEN** final Agent Validator steps run, and task-level steps run in v1.0
 - **AND** each acceptance round that remediates findings runs the `core:run-validator` workflow before pushing
 
 #### Scenario: Validation skipped
 - **WHEN** `core:implement-change` runs or resumes with `skip_validator=true`
-- **THEN** task-level, final, and acceptance-round Agent Validator steps record their normal skipped outcomes
+- **THEN** task-level (v1.0), final, and acceptance-round Agent Validator steps record their normal skipped outcomes
 - **AND** acceptance remediation does not invoke Agent Validator
 - **AND** the workflow continues through draft pull-request creation, acceptance preparation, evidence generation, and the final acceptance handoff
 
 #### Scenario: Invalid skip value rejected
 - **WHEN** `core:implement-change` receives a `skip_validator` value other than `true` or `false`
-- **THEN** deterministic parameter validation fails before implementation tasks begin
+- **THEN** deterministic parameter validation fails before implementation begins
+
+### Requirement: Change v3 workflows implement through the audited workflow
+
+The hidden `core:implement-change` workflow SHALL be backed by `core/implement-change-v2.0.yaml`, the audited implementation workflow: one `implementor` session implements against a merged verification checklist, the `crosscheck` audits the result, and `core:verify-change` opens the draft pull request and prepares acceptance. It SHALL commit the approved definition itself through `core:commit-definition`, skipped for spec-driven changes, and SHALL NOT need a task plan. `core/implement-change-v1.0.yaml` SHALL remain embedded as the deprecated task-based implementation, referenced by file path from `core:plan-and-implement-change` and the v1.0 and v2.0 change workflows.
+
+`openspec/change-v3.0.yaml` and `spec-driven/change-v3.0.yaml` SHALL be the selected `openspec:change` and `spec-driven:change`. Each SHALL run its validate, create, define, implement, accept, and finalize steps (plus archive for `openspec`) without a `plan` step, and its `implement` step SHALL invoke `../core/implement-change-v2.0.yaml` with `change_name`, `change_dir`, `change_label`, `change_kind`, `artifact_validation_instruction`, and `skip_validator`. No orchestrated implementation workflow SHALL be embedded.
+
+#### Scenario: Latest change workflows are v3
+- **WHEN** a user resolves `openspec:change` or `spec-driven:change`
+- **THEN** the selected definition is the namespace's `change-v3.0.yaml`, and its earlier versions stay readable by exact reference
+
+#### Scenario: Core implement-change resolves to the audited workflow
+- **WHEN** a user resolves `core:implement-change`
+- **THEN** the selected definition is `core/implement-change-v2.0.yaml`, while `core/implement-change-v1.0.yaml` remains readable by exact reference and path
 
 ### Requirement: Verify-change workflow
 

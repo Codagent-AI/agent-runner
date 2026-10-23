@@ -13,7 +13,7 @@ workflow.
 
 Launch built-ins with logical names such as `openspec:change`; Agent Runner
 selects the latest embedded version. Exact embedded references such as
-`builtin:openspec/change-v2.0.yaml` are available through read-only debug
+`builtin:openspec/change-v3.0.yaml` are available through read-only debug
 inspection, not fresh execution.
 
 ## Namespaces
@@ -30,17 +30,16 @@ inspection, not fresh execution.
 | Workflow | Purpose |
 | --- | --- |
 | `core:accept-change` | Run the shared human acceptance, refinement, and re-testing phases for a structured change. |
-| `core:audited-implement-change` | Implement an existing approved change in one `implementor` session. The `lead` and the implementor each write a checklist of how every behavior in the definition, including its error, failure, and cleanup cases, will be verified; the `crosscheck` merges them into `<change_dir>/checklist.md`, keeping every behavior and the stricter check, and adds any behavior both missed; a script checks that every lead and implementor ID survives the merge, and a dropped one goes back to the crosscheck. The implementor implements against it, saves each check's output under the run's `output/evidence/`, and marks each row `verified`, `failed`, or `not verified`; a script checks that the checklist is complete before the crosscheck's audit, an inspection of the code and evidence that runs nothing, and again after the implementor resolves the findings, and an incomplete checklist goes back to the implementor, who can ask the lead. The prompts defer the checklist to the `codagent:verify-behavior` skill and the implementation and testing guidance to the `codagent:implement-change` skill (both in Agent Skills). The skills' three test tiers apply: affected unit tests while working; a broader run of the agent's choosing, which this workflow asks for once after the build and once after the audit's fixes; and nothing beyond that, which is left to CI. Uncertainty goes to the `lead` through `call_agent` as it arises, and the lead records its rulings in `acceptance-assumptions.md`. Ends with `core:verify-change`, `skip_implementation_review=true`, and `stop_unchanged_acceptance=true`. |
 | `core:check-planning-artifacts` | Verify required files and optional specifications in a planning-artifact directory. |
 | `core:commit-change-plan` | Commit one structured change plan and advance its Validator baseline. |
-| `core:commit-definition` | Commit an approved definition for a workflow without a planning step (skipped for spec-driven changes), then require a clean worktree before implementation. Used by `core:orchestrated-implement-change` and `core:audited-implement-change`. |
+| `core:commit-definition` | Commit an approved definition for a workflow without a planning step (skipped for spec-driven changes), then require a clean worktree before implementation. Used by `core:implement-change`. |
 | `core:complete-simple-change` | Implement, flow-test, and interactively review a shared small-change plan. |
 | `core:debug` | Debug a failed Agent Runner run and optionally file an issue. |
 | `core:define-change` | Run the shared proposal, specification, design, test-plan, and approach-review phases. |
 | `core:finalize-pr` | Push PR, wait for CI, fix failures, and repeat until green, with a maximum of three fix cycles. |
-| `core:implement-change` | Run the shared task implementation, validation, draft-PR, and acceptance-preparation phases. |
+| `core:implement-change` | Implement an existing approved change in one `implementor` session. The `lead` and the implementor each write a checklist of how every behavior in the definition, including its error, failure, and cleanup cases, will be verified; the `crosscheck` merges them into `<change_dir>/checklist.md`, keeping every behavior and the stricter check, and adds any behavior both missed; a script checks that every lead and implementor ID survives the merge, and a dropped one goes back to the crosscheck. The implementor implements against it, saves each check's output under the run's `output/evidence/`, and marks each row `verified`, `failed`, or `not verified`; a script checks that the checklist is complete before the crosscheck's audit, an inspection of the code and evidence that runs nothing, and again after the implementor resolves the findings, and an incomplete checklist goes back to the implementor, who can ask the lead. The prompts defer the checklist to the `codagent:verify-behavior` skill and the implementation and testing guidance to the `codagent:implement-change` skill (both in Agent Skills). The skills' three test tiers apply: affected unit tests while working; a broader run of the agent's choosing, which this workflow asks for once after the build and once after the audit's fixes; and nothing beyond that, which is left to CI. Uncertainty goes to the `lead` through `call_agent` as it arises, and the lead records its rulings in `acceptance-assumptions.md`. Ends with `core:verify-change`, `skip_implementation_review=true`, and `stop_unchanged_acceptance=true`. The task-based predecessor, `core/implement-change-v1.0.yaml`, is deprecated; it stays embedded for `core:plan-and-implement-change` and the v1.0 and v2.0 change workflows, which reference it by file path. |
 | `core:implement-task` | Implement a single task with an agent step followed by a validator retry loop. Its optional `task_compliance` parameter defaults to `true` for direct callers; built-in change workflows explicitly set it to `false`. The task must leave a commit in the run repository, or, when its work was delivered as pushed commits in another local repository, pass through an external delivery record that the gate verifies against that repository's git objects. Pushed state is judged from that clone's local remote-tracking refs without contacting the remote. |
-| `core:plan-and-implement-change` | Plan and implement an existing approved change in one run: run `core:plan-change`, then `core:implement-change`, sharing one run id, resume target, and `run-metrics.json`. It does not create, define, accept, archive, or finalize the change, and needs the `lead`, `crosscheck`, `implementor`, and `tester` agents. Setting `skip_validator` to `true` skips every workflow-owned Agent Validator call. |
+| `core:plan-and-implement-change` | Plan and implement an existing approved change in one run: run `core:plan-change`, then the task-based `core/implement-change-v1.0.yaml`, sharing one run id, resume target, and `run-metrics.json`. It does not create, define, accept, archive, or finalize the change, and needs the `lead`, `crosscheck`, `implementor`, and `tester` agents. Setting `skip_validator` to `true` skips every workflow-owned Agent Validator call. |
 | `core:plan-change` | Run the shared definition validation, task planning, and task-review phases. Its optional `skip_validator` parameter (default `false`) commits the plan without advancing the Agent Validator baseline. |
 | `core:review-proposal` | Run adversarial proposal review, lead response, and up to three discussion rounds. |
 | `core:review-tasks` | Independently review and autonomously correct a structured task plan. |
@@ -56,15 +55,17 @@ Some `core:*` workflows are hidden from normal browsing because they are intende
 | Workflow | Purpose |
 | --- | --- |
 | `openspec:archive-change` | Move an approved change into the archive, verify the commit, and advance the Validator baseline. |
-| `openspec:change` | Define, plan, implement, validate, prepare evidence, support human acceptance, and finalize a feature change. |
+| `openspec:change` | Define, implement against an audited checklist, validate, prepare evidence, support human acceptance, archive, and finalize a feature change. |
 | `openspec:implement-change` | Implement reviewed task files, validate the result, open a draft PR, and prepare exploratory acceptance evidence. |
 | `openspec:plan-change` | Validate an approved proposal, specs, design, and test plan, then create and review implementation tasks. |
 | `openspec:scaffold` | Bootstrap a brand new OpenSpec project, configure validation, and optionally publish it to GitHub. |
 | `openspec:simple-change` | Plan, independently crosscheck, implement, validate, flow-test, review, and archive a small branch-local change without creating a PR. |
 
 The `openspec:change` workflow is a full development flow: it collaboratively defines the proposal,
-specifications, design, and test plan; autonomously plans and implements reviewed tasks; validates and
-prepares acceptance evidence; supports human review; and continues through PR finalization.
+specifications, design, and test plan; autonomously implements the change through `core:implement-change`
+(a checklist-driven implementation with a crosscheck audit, with no task breakdown); validates and
+prepares acceptance evidence; supports human review; and continues through PR finalization. Its v1.0 and
+v2.0 task-based versions remain available by exact reference.
 `openspec:simple-change` keeps one lightweight plan and one implementation unit for smaller changes.
 It adds a separate independent plan-crosscheck step and a lightweight Tester flow-check step before
 human review. The user—not a status-file protocol—decides when testing and refinements are complete. The
@@ -84,7 +85,7 @@ symlink in YOLO mode.
 
 | Workflow | Purpose |
 | --- | --- |
-| `spec-driven:change` | Define, plan, implement, prepare acceptance evidence, support human acceptance, and finalize a feature change without OpenSpec. |
+| `spec-driven:change` | Define, implement against an audited checklist, prepare acceptance evidence, support human acceptance, and finalize a feature change without OpenSpec. |
 | `spec-driven:implement-change` | Implement reviewed task files, validate the result, open a draft PR, and prepare exploratory acceptance evidence. |
 | `spec-driven:plan-change` | Validate an approved proposal, specs, design, and test plan, then create and review implementation tasks without OpenSpec. |
 | `spec-driven:scaffold` | Bootstrap a brand new project, configure validation, and optionally publish it to GitHub. |

@@ -1,5 +1,5 @@
-name: orchestrate-change
-description: "Use for a substantial OpenSpec change when you want to define the proposal, specifications, design, and test plan, then skip the task breakdown and have a lead orchestrator implement directly from the definition by delegating all code changes to sub-agents. Continues through evidence-based acceptance, human review, archival, and pull-request finalization."
+name: change
+description: "Use for a substantial or higher-risk change in an OpenSpec project when you need the full proposal, specification, design, test plan, and acceptance lifecycle. It manages repository-local OpenSpec artifacts while guiding implementation against an audited behavior checklist, evidence-based acceptance, human review, archival, and pull-request finalization."
 
 params:
   - name: change_name
@@ -9,7 +9,7 @@ steps:
   - id: validate-feature-branch
     workflow: ../core/validate-feature-branch-v1.0.yaml
     params:
-      workflow_name: "openspec:orchestrate-change"
+      workflow_name: "openspec:change"
 
   - id: create
     script: create-change.sh
@@ -22,10 +22,10 @@ steps:
       change_name: "{{change_name}}"
       change_dir: "openspec/changes/{{change_name}}"
       change_label: "OpenSpec change"
-      artifact_location_instruction: "Keep every OpenSpec definition artifact under the repository-local `openspec/changes/{{change_name}}/` directory."
+      artifact_location_instruction: "Keep every OpenSpec definition and planning artifact under the repository-local `openspec/changes/{{change_name}}/` directory."
 
   - id: implement
-    workflow: ../core/orchestrated-implement-change-v1.0.yaml
+    workflow: ../core/implement-change-v2.0.yaml
     params:
       change_name: "{{change_name}}"
       change_dir: "openspec/changes/{{change_name}}"

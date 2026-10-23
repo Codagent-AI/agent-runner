@@ -103,12 +103,27 @@ func TestResolveSelectsLatestVersionWhileExactReadsRemainAvailable(t *testing.T)
 	if err != nil {
 		t.Fatalf("Resolve(openspec:change): %v", err)
 	}
-	if ref != "builtin:openspec/change-v2.0.yaml" {
-		t.Fatalf("resolved ref = %q, want latest v2.0", ref)
+	if ref != "builtin:openspec/change-v3.0.yaml" {
+		t.Fatalf("resolved ref = %q, want latest v3.0", ref)
 	}
 
-	if _, err := ReadFile("builtin:openspec/change-v1.0.yaml"); err != nil {
-		t.Fatalf("ReadFile exact older version: %v", err)
+	for _, older := range []string{"builtin:openspec/change-v1.0.yaml", "builtin:openspec/change-v2.0.yaml"} {
+		if _, err := ReadFile(older); err != nil {
+			t.Fatalf("ReadFile exact older version %s: %v", older, err)
+		}
+	}
+
+	// The audited workflow is the latest core implement-change; the task-based
+	// v1.0 stays loadable for the workflows that reference it by path.
+	coreRef, err := Resolve("core:implement-change")
+	if err != nil {
+		t.Fatalf("Resolve(core:implement-change): %v", err)
+	}
+	if coreRef != "builtin:core/implement-change-v2.0.yaml" {
+		t.Fatalf("Resolve(core:implement-change) = %q, want v2.0", coreRef)
+	}
+	if _, err := ReadFile("builtin:core/implement-change-v1.0.yaml"); err != nil {
+		t.Fatalf("ReadFile core implement-change v1.0: %v", err)
 	}
 	latest, err := ReadFile(ref)
 	if err != nil {
@@ -128,9 +143,20 @@ func TestResolveSelectsLatestVersionWhileExactReadsRemainAvailable(t *testing.T)
 	for _, want := range []string{
 		"builtin:openspec/change-v1.0.yaml",
 		"builtin:openspec/change-v2.0.yaml",
+		"builtin:openspec/change-v3.0.yaml",
 	} {
 		if !slices.Contains(refs, want) {
 			t.Fatalf("List() missing %q from %v", want, refs)
+		}
+	}
+	for _, removed := range []string{
+		"builtin:core/audited-implement-change-v1.0.yaml",
+		"builtin:core/orchestrated-implement-change-v1.0.yaml",
+		"builtin:openspec/orchestrate-change-v1.0.yaml",
+		"builtin:openspec/orchestrated-implement-change-v1.0.yaml",
+	} {
+		if slices.Contains(refs, removed) {
+			t.Fatalf("List() still contains removed workflow %q", removed)
 		}
 	}
 }
@@ -152,12 +178,19 @@ func TestOpenSpecAndSpecDrivenChangeGenerationsAreEmbedded(t *testing.T) {
 		}
 	}
 
+	for _, namespace := range []string{"openspec", "spec-driven"} {
+		want := "builtin:" + namespace + "/change-v3.0.yaml"
+		if !slices.Contains(refs, want) {
+			t.Errorf("List() missing %q", want)
+		}
+	}
+
 	ref, err := Resolve("spec-driven:change")
 	if err != nil {
 		t.Fatalf("Resolve(spec-driven:change): %v", err)
 	}
-	if ref != "builtin:spec-driven/change-v2.0.yaml" {
-		t.Fatalf("Resolve(spec-driven:change) = %q, want spec-driven v2.0", ref)
+	if ref != "builtin:spec-driven/change-v3.0.yaml" {
+		t.Fatalf("Resolve(spec-driven:change) = %q, want spec-driven v3.0", ref)
 	}
 
 	ref, err = Resolve("spec-driven:simple-change")
@@ -196,6 +229,8 @@ func TestV2ChangeWorkflowsShareCoreLifecyclePhases(t *testing.T) {
 	}{
 		{ref: "builtin:openspec/change-v2.0.yaml", wantArchive: true},
 		{ref: "builtin:spec-driven/change-v2.0.yaml", wantArchive: false},
+		{ref: "builtin:openspec/change-v3.0.yaml", wantArchive: true},
+		{ref: "builtin:spec-driven/change-v3.0.yaml", wantArchive: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.ref, func(t *testing.T) {
@@ -242,6 +277,67 @@ func TestV2ChangeWorkflowsShareCoreLifecyclePhases(t *testing.T) {
 			}
 			if hasArchive != tt.wantArchive {
 				t.Fatalf("%s archive presence = %t, want %t", tt.ref, hasArchive, tt.wantArchive)
+			}
+		})
+	}
+}
+
+func TestV3ChangeWorkflowsImplementWithoutPlanning(t *testing.T) {
+	for _, tt := range []struct {
+		ref        string
+		changeDir  string
+		changeKind string
+		wantSteps  []string
+	}{
+		{
+			ref:        "builtin:openspec/change-v3.0.yaml",
+			changeDir:  "openspec/changes/{{change_name}}",
+			changeKind: "openspec",
+			wantSteps:  []string{"validate-feature-branch", "create", "define", "implement", "accept", "archive", "finalize"},
+		},
+		{
+			ref:        "builtin:spec-driven/change-v3.0.yaml",
+			changeDir:  "{{change_dir}}",
+			changeKind: "spec-driven",
+			wantSteps:  []string{"validate-feature-branch", "create", "define", "implement", "accept", "finalize"},
+		},
+	} {
+		t.Run(tt.ref, func(t *testing.T) {
+			body, err := ReadFile(tt.ref)
+			if err != nil {
+				t.Fatalf("ReadFile(%s): %v", tt.ref, err)
+			}
+			var workflow struct {
+				Steps []struct {
+					ID       string            `yaml:"id"`
+					Workflow string            `yaml:"workflow"`
+					Params   map[string]string `yaml:"params"`
+				} `yaml:"steps"`
+			}
+			if err := yaml.Unmarshal(body, &workflow); err != nil {
+				t.Fatalf("unmarshal %s: %v", tt.ref, err)
+			}
+			var gotSteps []string
+			for _, step := range workflow.Steps {
+				gotSteps = append(gotSteps, step.ID)
+				if step.ID != "implement" {
+					continue
+				}
+				if step.Workflow != "../core/implement-change-v2.0.yaml" {
+					t.Errorf("%s implement workflow = %q, want ../core/implement-change-v2.0.yaml", tt.ref, step.Workflow)
+				}
+				if step.Params["change_dir"] != tt.changeDir || step.Params["change_kind"] != tt.changeKind {
+					t.Errorf("%s implement change_dir/change_kind = %q/%q, want %q/%q",
+						tt.ref, step.Params["change_dir"], step.Params["change_kind"], tt.changeDir, tt.changeKind)
+				}
+				for _, name := range []string{"change_name", "change_label", "artifact_validation_instruction", "skip_validator"} {
+					if step.Params[name] == "" {
+						t.Errorf("%s implement step does not pass %s", tt.ref, name)
+					}
+				}
+			}
+			if diff := cmp.Diff(tt.wantSteps, gotSteps); diff != "" {
+				t.Errorf("%s steps mismatch (-want +got):\n%s", tt.ref, diff)
 			}
 		})
 	}
@@ -363,7 +459,7 @@ func TestCoreDefinitionCheckCallersUseSharedWorkflow(t *testing.T) {
 		before string
 	}{
 		{ref: "builtin:core/plan-change-v1.0.yaml", before: "tasks"},
-		{ref: "builtin:core/orchestrated-implement-change-v1.0.yaml", before: "commit-definition"},
+		{ref: "builtin:core/implement-change-v2.0.yaml", before: "commit-definition"},
 	} {
 		t.Run(tt.ref, func(t *testing.T) {
 			workflow, body := readDefinitionCheckWorkflow(t, tt.ref)
@@ -981,6 +1077,8 @@ func TestV2ImplementChangeCallersProvideChangeKind(t *testing.T) {
 		{ref: "builtin:openspec/implement-change-v2.0.yaml", want: "openspec"},
 		{ref: "builtin:spec-driven/change-v2.0.yaml", want: "spec-driven"},
 		{ref: "builtin:spec-driven/implement-change-v2.0.yaml", want: "spec-driven"},
+		{ref: "builtin:openspec/change-v3.0.yaml", want: "openspec"},
+		{ref: "builtin:spec-driven/change-v3.0.yaml", want: "spec-driven"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.ref, func(t *testing.T) {
@@ -998,7 +1096,8 @@ func TestV2ImplementChangeCallersProvideChangeKind(t *testing.T) {
 				t.Fatalf("unmarshal %s: %v", tt.ref, err)
 			}
 			for _, step := range workflow.Steps {
-				if step.Workflow != "../core/implement-change-v1.0.yaml" {
+				if step.Workflow != "../core/implement-change-v1.0.yaml" &&
+					step.Workflow != "../core/implement-change-v2.0.yaml" {
 					continue
 				}
 				if got := step.Params["change_kind"]; got != tt.want {
