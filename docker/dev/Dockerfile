@@ -49,7 +49,7 @@ ENV PATH="/usr/local/go/bin:/workspace/bin:${PATH}"
 # and everything after them, while the layers above stay cached.
 ARG FACTORY_CLI_REFRESH
 RUN npm install -g \
-    @openai/codex \
+    @openai/codex@0.163.0 \
     @anthropic-ai/claude-code \
     @codagent-ai/agent-plugin \
     @fission-ai/openspec@1.6.0 \
