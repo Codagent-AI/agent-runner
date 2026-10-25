@@ -15,6 +15,8 @@ import (
 
 const completionPluginName = "agent-runner"
 
+var codexSharedStateFiles = []string{"session_index.jsonl"}
+
 var codexSharedStateDirectories = []string{
 	"archived_sessions",
 	"memories",
@@ -77,37 +79,36 @@ Run this exact command now, then finish the response:
 }
 
 func prepareCodexCompletionHome(command CompletionCommand, runID string) (string, error) {
-	return prepareCodexRunnerHome(&command, nil, ContextInteractive, runID)
+	home, _, err := prepareCodexRunnerHome(&command, nil, ContextInteractive, runID)
+	return home, err
 }
 
-func prepareCodexRunnerHome(completion *CompletionCommand, integration *RunnerIntegration, context InvocationContext, runID string) (string, error) {
+// prepareCodexRunnerHome returns the private config home and, when no user
+// setting selects SQLite storage, the source home to use for thread state.
+func prepareCodexRunnerHome(completion *CompletionCommand, integration *RunnerIntegration, context InvocationContext, runID string) (privateHomePath, sqliteHomeOverride string, err error) {
 	if completion != nil && !completion.Valid() {
-		return "", fmt.Errorf("invalid completion command")
+		return "", "", fmt.Errorf("invalid completion command")
 	}
 	if integration != nil && !integration.Valid() {
-		return "", fmt.Errorf("invalid Runner agent-call integration descriptor")
+		return "", "", fmt.Errorf("invalid Runner agent-call integration descriptor")
 	}
 	if completion == nil && integration == nil {
-		return "", fmt.Errorf("missing Runner integration")
+		return "", "", fmt.Errorf("missing Runner integration")
 	}
 	if runID == "" {
-		return "", fmt.Errorf("missing run identity")
+		return "", "", fmt.Errorf("missing run identity")
 	}
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
-		return "", fmt.Errorf("locate user cache: %w", err)
+		return "", "", fmt.Errorf("locate user cache: %w", err)
 	}
-	sourceHome := os.Getenv("CODEX_HOME")
-	if sourceHome == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("locate Codex home: %w", err)
-		}
-		sourceHome = filepath.Join(home, ".codex")
+	sourceHome, config, err := loadCodexSourceConfig()
+	if err != nil {
+		return "", "", err
 	}
-	config, err := os.ReadFile(filepath.Join(sourceHome, "config.toml")) // #nosec G703,G304 -- CODEX_HOME is the user's documented Codex root and the joined name is fixed
-	if err != nil && !os.IsNotExist(err) {
-		return "", fmt.Errorf("read Codex config: %w", err)
+	sqliteHome, err := codexSQLiteHomeOverride(sourceHome, config)
+	if err != nil {
+		return "", "", err
 	}
 	completionCommand := ""
 	if completion != nil {
@@ -116,47 +117,37 @@ func prepareCodexRunnerHome(completion *CompletionCommand, integration *RunnerIn
 	if integration != nil {
 		conflict, err := codexConfigHasAgentCallConflict(config)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		if conflict {
-			return "", fmt.Errorf("codex config already defines %s; cannot safely install the Runner-owned server", agentCallMCPServerName)
+			return "", "", fmt.Errorf("codex config already defines %s; cannot safely install the Runner-owned server", agentCallMCPServerName)
 		}
 		config = appendCodexAgentCallConfig(config, *integration.AgentCall, context.IsAutonomous() || context == ContextExternalUser)
 	}
-	digest := sha256.Sum256([]byte("codex-v6\x00" + runID + "\x00" + sourceHome + "\x00" + string(config) + "\x00" + completionCommand + "\x00" + string(context)))
+	digest := sha256.Sum256([]byte("codex-v7\x00" + runID + "\x00" + sourceHome + "\x00" + string(config) + "\x00" + completionCommand + "\x00" + string(context)))
 	hash := hex.EncodeToString(digest[:6])
 
 	privateHome := filepath.Join(cacheDir, "agent-runner", "codex-homes", hash)
 	if err := os.MkdirAll(privateHome, 0o700); err != nil { // #nosec G703 -- path is the local cache root plus fixed components and a hex digest
-		return "", fmt.Errorf("create private Codex home: %w", err)
+		return "", "", fmt.Errorf("create private Codex home: %w", err)
 	}
-	if err := ensureCodexSharedStateDirectories(sourceHome); err != nil {
-		return "", err
+	if err := ensureCodexSharedState(sourceHome); err != nil {
+		return "", "", err
 	}
 	if err := linkCodexHomeEntries(sourceHome, privateHome); err != nil {
-		return "", err
+		return "", "", err
 	}
 	config = inheritCodexHookTrust(config, sourceHome, privateHome)
-	privateConfigPath := filepath.Join(privateHome, "config.toml")
-	configFile, err := os.OpenFile(privateConfigPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G703,G304 -- privateHome is confined to the cache digest directory and the filename is fixed
-	if err == nil {
-		if _, err := configFile.Write(config); err != nil {
-			_ = configFile.Close()
-			return "", fmt.Errorf("write private Codex config: %w", err)
-		}
-		if err := configFile.Close(); err != nil {
-			return "", fmt.Errorf("close private Codex config: %w", err)
-		}
-	} else if !os.IsExist(err) {
-		return "", fmt.Errorf("create private Codex config: %w", err)
+	if err := writeCodexPrivateConfig(privateHome, config); err != nil {
+		return "", "", err
 	}
 
 	privateSkills := filepath.Join(privateHome, "skills")
 	if err := linkCodexSkillEntries(filepath.Join(sourceHome, "skills"), privateSkills); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if completion == nil {
-		return privateHome, nil
+		return privateHome, sqliteHome, nil
 	}
 	next := `---
 name: agent-runner-next
@@ -169,12 +160,64 @@ Run this exact command now, then finish the response:
 `
 	nextSkillDir := filepath.Join(privateSkills, "agent-runner-next")
 	if err := os.MkdirAll(nextSkillDir, 0o700); err != nil { // #nosec G703 -- fixed skill path beneath the cache digest directory
-		return "", fmt.Errorf("create Codex completion skill: %w", err)
+		return "", "", fmt.Errorf("create Codex completion skill: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(nextSkillDir, "SKILL.md"), []byte(next), 0o600); err != nil { // #nosec G703 -- fixed filename beneath the cache digest directory
-		return "", fmt.Errorf("write Codex completion skill: %w", err)
+		return "", "", fmt.Errorf("write Codex completion skill: %w", err)
 	}
-	return privateHome, nil
+	return privateHome, sqliteHome, nil
+}
+
+func writeCodexPrivateConfig(privateHome string, config []byte) error {
+	privateConfigPath := filepath.Join(privateHome, "config.toml")
+	configFile, err := os.OpenFile(privateConfigPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G703,G304 -- privateHome is confined to the cache digest directory and the filename is fixed
+	if err == nil {
+		if _, err := configFile.Write(config); err != nil {
+			_ = configFile.Close()
+			return fmt.Errorf("write private Codex config: %w", err)
+		}
+		if err := configFile.Close(); err != nil {
+			return fmt.Errorf("close private Codex config: %w", err)
+		}
+	} else if !os.IsExist(err) {
+		return fmt.Errorf("create private Codex config: %w", err)
+	}
+
+	return nil
+}
+
+func loadCodexSourceConfig() (home string, data []byte, err error) {
+	sourceHome := os.Getenv("CODEX_HOME")
+	if sourceHome == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", nil, fmt.Errorf("locate Codex home: %w", err)
+		}
+		sourceHome = filepath.Join(home, ".codex")
+	}
+	config, err := os.ReadFile(filepath.Join(sourceHome, "config.toml")) // #nosec G703,G304 -- CODEX_HOME is the user's documented Codex root and the joined name is fixed
+	if err != nil && !os.IsNotExist(err) {
+		return "", nil, fmt.Errorf("read Codex config: %w", err)
+	}
+	return sourceHome, config, nil
+}
+
+// codexSQLiteHomeOverride defaults SQLite storage to the source home, while
+// leaving explicit user settings to Codex's config/environment precedence.
+func codexSQLiteHomeOverride(sourceHome string, config []byte) (string, error) {
+	if os.Getenv("CODEX_SQLITE_HOME") != "" {
+		return "", nil
+	}
+	var decoded struct {
+		SQLiteHome string `toml:"sqlite_home"`
+	}
+	if err := toml.Unmarshal(config, &decoded); err != nil {
+		return "", fmt.Errorf("parse Codex config before sharing thread state: %w", err)
+	}
+	if decoded.SQLiteHome != "" {
+		return "", nil
+	}
+	return sourceHome, nil
 }
 
 func codexConfigHasAgentCallConflict(config []byte) (bool, error) {
@@ -265,10 +308,19 @@ func inheritCodexHookTrust(config []byte, sourceHome, privateHome string) []byte
 	return []byte(result.String())
 }
 
-func ensureCodexSharedStateDirectories(sourceHome string) error {
+func ensureCodexSharedState(sourceHome string) error {
 	for _, name := range codexSharedStateDirectories {
 		if err := os.MkdirAll(filepath.Join(sourceHome, name), 0o700); err != nil { // #nosec G703 -- CODEX_HOME is the selected root and name comes from the fixed shared-state allowlist
 			return fmt.Errorf("create shared Codex state directory %s: %w", name, err)
+		}
+	}
+	for _, name := range codexSharedStateFiles {
+		file, err := os.OpenFile(filepath.Join(sourceHome, name), os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G703,G304 -- CODEX_HOME is the selected root and name comes from the fixed shared-state allowlist
+		if err != nil {
+			return fmt.Errorf("create shared Codex state file %s: %w", name, err)
+		}
+		if err := file.Close(); err != nil {
+			return fmt.Errorf("close shared Codex state file %s: %w", name, err)
 		}
 	}
 	return nil

@@ -47,9 +47,10 @@ func (m *mockAuditLogger) Emit(e audit.Event) { m.events = append(m.events, e) }
 // --- Test helpers ---
 
 type mockRunner struct {
-	calls   [][]string
-	results []ProcessResult
-	idx     int
+	agentOptions []AgentProcessOptions
+	calls        [][]string
+	results      []ProcessResult
+	idx          int
 }
 
 func (m *mockRunner) RunShell(cmd string, capture bool, _ string) (ProcessResult, error) {
@@ -64,6 +65,7 @@ func (m *mockRunner) RunShell(cmd string, capture bool, _ string) (ProcessResult
 
 func (m *mockRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, error) {
 	m.calls = append(m.calls, options.Args)
+	m.agentOptions = append(m.agentOptions, *options)
 	if m.idx >= len(m.results) {
 		return ProcessResult{ExitCode: 0}, nil
 	}
