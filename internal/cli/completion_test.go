@@ -136,10 +136,10 @@ func TestAdaptersEmitCompletionIntegrations(t *testing.T) {
 		if err != nil {
 			t.Fatalf("build Codex spawn env: %v", err)
 		}
-		if len(env) != 1 || !strings.HasPrefix(env[0], "CODEX_HOME=") || env[0] == "CODEX_HOME="+realCodexHome {
+		privateHome := envEntry(t, env, "CODEX_HOME=")
+		if privateHome == "" || privateHome == realCodexHome {
 			t.Fatalf("Codex spawn env = %v, want a private CODEX_HOME distinct from %s", env, realCodexHome)
 		}
-		privateHome := strings.TrimPrefix(env[0], "CODEX_HOME=")
 		assertCodexNextSkill(t, privateHome, "'/Applications/Agent Runner/bin/agent-runner' step complete")
 		for _, broad := range []string{"approval_policy=\"never\"", "danger-full-access", "--full-auto"} {
 			if strings.Contains(strings.Join(args, " "), broad) {
