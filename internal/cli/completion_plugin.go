@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+	"github.com/pelletier/go-toml/v2/unstable"
 )
 
 const completionPluginName = "agent-runner"
@@ -98,6 +99,10 @@ func prepareCodexRunnerHome(completion *CompletionCommand, integration *RunnerIn
 		return "", "", fmt.Errorf("locate user cache: %w", err)
 	}
 	sourceHome, config, err := loadCodexSourceConfig()
+	if err != nil {
+		return "", "", err
+	}
+	config, err = normalizeCodexSQLiteHome(config, sourceHome)
 	if err != nil {
 		return "", "", err
 	}
@@ -192,6 +197,44 @@ func loadCodexSourceConfig() (home string, data []byte, err error) {
 		return "", nil, fmt.Errorf("read Codex config: %w", err)
 	}
 	return sourceHome, config, nil
+}
+
+// normalizeCodexSQLiteHome preserves the source config's path base when the
+// config is copied to a private home. Replace only the root value token so
+// comments, unrelated tables, and user formatting survive unchanged.
+func normalizeCodexSQLiteHome(config []byte, sourceHome string) ([]byte, error) {
+	var parser unstable.Parser
+	parser.Reset(config)
+	for parser.NextExpression() {
+		expression := parser.Expression()
+		if expression.Kind == unstable.Table || expression.Kind == unstable.ArrayTable {
+			break
+		}
+		if expression.Kind != unstable.KeyValue {
+			continue
+		}
+		key := expression.Key()
+		if !key.Next() || !key.IsLast() || string(key.Node().Data) != "sqlite_home" {
+			continue
+		}
+		value := expression.Value()
+		path := string(value.Data)
+		// Codex expands ~ against HOME, which stays the same for both homes.
+		if value.Kind != unstable.String || path == "" || filepath.IsAbs(path) || path == "~" || strings.HasPrefix(path, "~/") {
+			return config, nil
+		}
+		absolute, err := filepath.Abs(filepath.Join(sourceHome, path))
+		if err != nil {
+			return nil, fmt.Errorf("resolve Codex sqlite_home: %w", err)
+		}
+		replacement, _ := json.Marshal(absolute)
+		start, end := int(value.Raw.Offset), int(value.Raw.Offset+value.Raw.Length)
+		result := append([]byte(nil), config[:start]...)
+		result = append(result, replacement...)
+		return append(result, config[end:]...), nil
+	}
+	// Leave config validation to Codex, as in codexSQLiteHomeOverride.
+	return config, nil
 }
 
 // codexSQLiteHomeOverride defaults SQLite storage to the source home, while
