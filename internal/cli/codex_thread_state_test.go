@@ -3,9 +3,11 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/pelletier/go-toml/v2"
 )
 
 func TestCodexSpawnEnvSharesThreadState(t *testing.T) {
@@ -151,6 +153,80 @@ func TestCodexSpawnEnvDefersSQLiteConfigValidation(t *testing.T) {
 				if diff := cmp.Diff(tc.config, string(config)); diff != "" {
 					t.Errorf("config must pass through unchanged (-want +got):\n%s", diff)
 				}
+			}
+		})
+	}
+}
+
+func TestCodexSpawnEnvResolvesRelativeSQLiteHome(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		setting    string
+		relative   string
+		completion bool
+		sqliteEnv  string
+		unchanged  bool
+	}{
+		{name: "fresh nested directory", setting: `sqlite_home = "missing/state"`, relative: "missing/state"},
+		{name: "parent directory", setting: `sqlite_home = '../shared-state'`, relative: "../shared-state"},
+		{name: "tilde uses unchanged HOME", setting: `sqlite_home = "~/state"`, relative: "~/state", unchanged: true},
+		{name: "quoted key", setting: `"sqlite_home" = "state"`, relative: "state"},
+		{name: "multiline value", setting: "sqlite_home = '''\nstate'''", relative: "state"},
+		{name: "completion with environment override", setting: `sqlite_home = "state"`, relative: "state", completion: true, sqliteEnv: "/user-selected/sqlite"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adapter, input := agentCallTestInput(t, "codex", ContextAutonomousHeadless)
+			sourceHome := os.Getenv("CODEX_HOME")
+			t.Setenv("CODEX_SQLITE_HOME", tc.sqliteEnv)
+			sourceConfig := "# preserve the user's formatting\n" + tc.setting + " # keep this comment\n\n[unrelated]\nsqlite_home = 'leave me alone'\n"
+			if err := os.WriteFile(filepath.Join(sourceHome, "config.toml"), []byte(sourceConfig), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.completion {
+				input.Context = ContextInteractive
+				input.CompletionCommand = &CompletionCommand{Executable: input.RunnerIntegration.AgentCall.Executable, Args: []string{"step", "complete"}}
+				input.RunnerIntegration = nil
+			}
+			env, err := SpawnEnvForInvocation(adapter, input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			privateHome := envEntry(t, env, "CODEX_HOME=")
+			data, err := os.ReadFile(filepath.Join(privateHome, "config.toml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var config struct {
+				SQLiteHome string `toml:"sqlite_home"`
+				Unrelated  struct {
+					SQLiteHome string `toml:"sqlite_home"`
+				}
+			}
+			if err := toml.Unmarshal(data, &config); err != nil {
+				t.Fatal(err)
+			}
+			expected := filepath.Join(sourceHome, tc.relative)
+			if tc.unchanged {
+				expected = tc.relative
+			}
+			if diff := cmp.Diff(expected, config.SQLiteHome); diff != "" {
+				t.Errorf("resolved SQLite home (-want +got):\n%s", diff)
+			}
+			if config.Unrelated.SQLiteHome != "leave me alone" {
+				t.Errorf("unrelated table modified: %+v", config.Unrelated)
+			}
+			if !strings.Contains(string(data), "# keep this comment") {
+				t.Error("lost config comment")
+			}
+			if got := envEntry(t, env, "CODEX_SQLITE_HOME="); got != "" {
+				t.Errorf("configured SQLite home should take precedence, got override %q", got)
+			}
+			source, err := os.ReadFile(filepath.Join(sourceHome, "config.toml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(sourceConfig, string(source)); diff != "" {
+				t.Errorf("source config changed (-want +got):\n%s", diff)
 			}
 		})
 	}
