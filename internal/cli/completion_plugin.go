@@ -78,11 +78,6 @@ Run this exact command now, then finish the response:
 	return nil
 }
 
-func prepareCodexCompletionHome(command CompletionCommand, runID string) (string, error) {
-	home, _, err := prepareCodexRunnerHome(&command, nil, ContextInteractive, runID)
-	return home, err
-}
-
 // prepareCodexRunnerHome returns the private config home and, when no user
 // setting selects SQLite storage, the source home to use for thread state.
 func prepareCodexRunnerHome(completion *CompletionCommand, integration *RunnerIntegration, context InvocationContext, runID string) (privateHomePath, sqliteHomeOverride string, err error) {
@@ -106,10 +101,7 @@ func prepareCodexRunnerHome(completion *CompletionCommand, integration *RunnerIn
 	if err != nil {
 		return "", "", err
 	}
-	sqliteHome, err := codexSQLiteHomeOverride(sourceHome, config)
-	if err != nil {
-		return "", "", err
-	}
+	sqliteHome := codexSQLiteHomeOverride(sourceHome, config)
 	completionCommand := ""
 	if completion != nil {
 		completionCommand = completion.ShellCommand()
@@ -204,20 +196,20 @@ func loadCodexSourceConfig() (home string, data []byte, err error) {
 
 // codexSQLiteHomeOverride defaults SQLite storage to the source home, while
 // leaving explicit user settings to Codex's config/environment precedence.
-func codexSQLiteHomeOverride(sourceHome string, config []byte) (string, error) {
+func codexSQLiteHomeOverride(sourceHome string, config []byte) string {
 	if os.Getenv("CODEX_SQLITE_HOME") != "" {
-		return "", nil
+		return ""
 	}
 	var decoded struct {
 		SQLiteHome string `toml:"sqlite_home"`
 	}
-	if err := toml.Unmarshal(config, &decoded); err != nil {
-		return "", fmt.Errorf("parse Codex config before sharing thread state: %w", err)
+	if err := toml.Unmarshal(config, &decoded); err == nil && decoded.SQLiteHome != "" {
+		return ""
 	}
-	if decoded.SQLiteHome != "" {
-		return "", nil
-	}
-	return sourceHome, nil
+	// Codex owns config validation and its sqlite_home setting takes precedence
+	// over the environment. Even if our decoder cannot read the config, this
+	// default keeps thread state shared without overriding Codex's config.
+	return sourceHome
 }
 
 func codexConfigHasAgentCallConflict(config []byte) (bool, error) {

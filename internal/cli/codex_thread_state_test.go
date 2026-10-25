@@ -101,3 +101,57 @@ func TestCodexSpawnEnvSharesThreadState(t *testing.T) {
 		})
 	}
 }
+
+// SQLite detection must not become an extra config validation gate. Codex
+// validates its own config, whose sqlite_home takes precedence over our default.
+func TestCodexSpawnEnvDefersSQLiteConfigValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		config    string
+		agentCall bool
+	}{
+		{name: "completion with default state"},
+		{name: "completion with unexpected sqlite type", config: "sqlite_home = 42\n"},
+		{name: "completion with undecodable TOML", config: "future_syntax = [\n"},
+		{name: "agent call with unexpected sqlite type", config: "sqlite_home = 42\n", agentCall: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sourceHome := t.TempDir()
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("XDG_CACHE_HOME", t.TempDir())
+			t.Setenv("CODEX_HOME", sourceHome)
+			t.Setenv("CODEX_SQLITE_HOME", "")
+			if err := os.WriteFile(filepath.Join(sourceHome, "config.toml"), []byte(tc.config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			input := &BuildArgsInput{
+				Context: ContextInteractive, RunID: "config-validation-test",
+				CompletionCommand: &CompletionCommand{Executable: "/opt/codagent/bin/agent-runner", Args: []string{"step", "complete"}},
+			}
+			if tc.agentCall {
+				executable := filepath.Join(t.TempDir(), "agent-runner")
+				if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				input.RunnerIntegration = &RunnerIntegration{AgentCall: &MCPServerCommand{Executable: executable, Args: []string{"internal", "call-agent-mcp"}}}
+			}
+			env, err := (&CodexAdapter{}).SpawnEnv(input)
+			if err != nil {
+				t.Fatalf("SQLite detection must defer config validation to Codex: %v", err)
+			}
+			if diff := cmp.Diff(sourceHome, envEntry(t, env, "CODEX_SQLITE_HOME=")); diff != "" {
+				t.Errorf("SQLite fallback (-want +got):\n%s", diff)
+			}
+			privateHome := envEntry(t, env, "CODEX_HOME=")
+			config, err := os.ReadFile(filepath.Join(privateHome, "config.toml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !tc.agentCall {
+				if diff := cmp.Diff(tc.config, string(config)); diff != "" {
+					t.Errorf("config must pass through unchanged (-want +got):\n%s", diff)
+				}
+			}
+		})
+	}
+}
