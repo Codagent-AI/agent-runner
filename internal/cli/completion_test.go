@@ -261,10 +261,7 @@ func TestCodexCompletionHomePreservesRuntimeTrustState(t *testing.T) {
 		Args:       []string{"step", "complete"},
 	}
 
-	privateHome, err := prepareCodexCompletionHome(command, "run-a")
-	if err != nil {
-		t.Fatalf("prepare Codex completion home: %v", err)
-	}
+	privateHome := codexCompletionHomeForRun(t, &CodexAdapter{}, &command, "run-a")
 	privateConfig := filepath.Join(privateHome, "config.toml")
 	f, err := os.OpenFile(privateConfig, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
@@ -278,10 +275,7 @@ func TestCodexCompletionHomePreservesRuntimeTrustState(t *testing.T) {
 		t.Fatalf("close private Codex config: %v", err)
 	}
 
-	secondHome, err := prepareCodexCompletionHome(command, "run-a")
-	if err != nil {
-		t.Fatalf("prepare Codex completion home again: %v", err)
-	}
+	secondHome := codexCompletionHomeForRun(t, &CodexAdapter{}, &command, "run-a")
 	if secondHome != privateHome {
 		t.Fatalf("second private Codex home = %q, want %q", secondHome, privateHome)
 	}
@@ -313,10 +307,7 @@ func TestCodexCompletionHomePreservesTrustedUserHooks(t *testing.T) {
 		Args:       []string{"step", "complete"},
 	}
 
-	privateHome, err := prepareCodexCompletionHome(command, "run-a")
-	if err != nil {
-		t.Fatalf("prepare Codex completion home: %v", err)
-	}
+	privateHome := codexCompletionHomeForRun(t, &CodexAdapter{}, &command, "run-a")
 	privateConfig, err := os.ReadFile(filepath.Join(privateHome, "config.toml"))
 	if err != nil {
 		t.Fatalf("read private Codex config: %v", err)
@@ -341,10 +332,7 @@ func TestCodexCompletionHomeSharesSessionsCreatedAfterPreparation(t *testing.T) 
 		Args:       []string{"step", "complete"},
 	}
 
-	privateHome, err := prepareCodexCompletionHome(command, "run-a")
-	if err != nil {
-		t.Fatalf("prepare Codex completion home: %v", err)
-	}
+	privateHome := codexCompletionHomeForRun(t, &CodexAdapter{}, &command, "run-a")
 	sessionPath := filepath.Join(privateHome, "sessions", "new-session.jsonl")
 	if err := os.WriteFile(sessionPath, []byte("session state"), 0o600); err != nil {
 		t.Fatalf("write session through private Codex home: %v", err)
