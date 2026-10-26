@@ -138,7 +138,7 @@ steps:
       def cells(line):
           return re.sub(r"^\||\|$", "", line.strip().replace("\\|", "\x01")).split("|")
 
-      width, bad = None, []
+      width, bad, found = None, [], False
       for line in open(os.environ["LIST"], encoding="utf-8", errors="replace").read().splitlines():
           if not line.lstrip().startswith("|"):
               if width:
@@ -148,17 +148,20 @@ steps:
           if width is None:
               names = [c.strip().lower() for c in cells(line)]
               width = len(names) if any(re.match(r"id(?![a-z0-9_-])", n) for n in names) else 0
+              found = found or width > 0
           elif width and not re.fullmatch(r"[\s:|-]*", line) and len(cells(line)) != width:
               bad.append(cells(line)[0].strip() or "a row")
+      if not found:
+          print("checklist has no table with an ID column", file=sys.stderr)
       for row in bad:
           print(f"checklist row {row} does not have {width} cells; escape any | inside a cell as \\|", file=sys.stderr)
-      sys.exit(1 if bad else 0)
+      sys.exit(1 if bad or not found else 0)
       PY
       cp "$list" "{{session_dir}}/output/planned-checklist.md"
     repair:
       session: implementor-agent
       prompt: |
-        The checklist `{{change_dir}}/checklist.md` for {{change_label}} "{{change_name}}" is missing, empty, uncommitted, or has a row with the wrong number of cells; the check output names each problem. Complete it as the implementor-checklist step asked, then commit only that file following the project's commit message conventions with the `[{{step_id}}]` prefix. Change no other file. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
+        The checklist `{{change_dir}}/checklist.md` for {{change_label}} "{{change_name}}" is missing, empty, uncommitted, has no table with an ID column, or has a row with the wrong number of cells; the check output names each problem. Complete it as the implementor-checklist step asked, then commit only that file following the project's commit message conventions with the `[{{step_id}}]` prefix. Change no other file. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
 
   # Recorded after the checklist commit so it cannot satisfy the implementation check.
   - id: record-implementation-start
