@@ -22,6 +22,7 @@ type validationRunner struct {
 	failures int
 	runs     int
 	events   []string
+	agents   []AgentProcessOptions
 }
 
 func (r *validationRunner) RunShell(cmd string, _ bool, _ string) (ProcessResult, error) {
@@ -49,6 +50,9 @@ func (r *validationRunner) RunScript(path string, stdin []byte, _ bool, _ string
 
 func (r *validationRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, error) {
 	r.events = append(r.events, "agent:"+options.Prefix)
+	recorded := *options
+	recorded.Args = append([]string(nil), options.Args...)
+	r.agents = append(r.agents, recorded)
 	return ProcessResult{Started: true, ExitCode: 0, Stdout: claudeUsageOutput("done", 0)}, nil
 }
 
@@ -57,10 +61,16 @@ type validationRun struct {
 	err     error
 	events  []string
 	result  string
+	agents  []AgentProcessOptions
 }
 
 // runValidationWorkflow dispatches a validation built-in against a repository
 // with or without validator config and returns what ran.
+const (
+	existingImplementorSession = "11111111-1111-4111-8111-111111111111"
+	existingLeadSession        = "22222222-2222-4222-8222-222222222222"
+)
+
 func runValidationWorkflow(t *testing.T, name string, withConfig bool, failures int, params map[string]string) validationRun {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
@@ -93,11 +103,12 @@ func runValidationWorkflow(t *testing.T, name string, withConfig bool, failures 
 		WorkflowFile:      ref,
 		SessionDir:        t.TempDir(),
 		NamedSessionDecls: map[string]string{"implementor-agent": "implementor", "lead-agent": "lead"},
+		NamedSessions:     map[string]string{"implementor-agent": existingImplementorSession, "lead-agent": existingLeadSession},
 	})
 	group := model.Step{ID: "validation", Steps: workflow.Steps}
 	outcome, err := DispatchStep(&group, ctx, runner, &mockGlob{}, &mockLogger{})
 	body, _ := os.ReadFile(resultFile)
-	return validationRun{outcome: outcome, err: err, events: runner.events, result: string(body)}
+	return validationRun{outcome: outcome, err: err, events: runner.events, result: string(body), agents: runner.agents}
 }
 
 func TestValidationNoneRunsNothingAndRecordsSkipped(t *testing.T) {
@@ -138,9 +149,9 @@ func TestValidationAutoWithConfigRunsValidator(t *testing.T) {
 }
 
 func TestValidationAgentValidatorRepairsInNamedSession(t *testing.T) {
-	for _, tc := range []struct{ session, step string }{
-		{"implementor-agent", "fix-violations-implementor"},
-		{"lead-agent", "fix-violations-lead"},
+	for _, tc := range []struct{ session, step, id string }{
+		{"implementor-agent", "fix-violations-implementor", existingImplementorSession},
+		{"lead-agent", "fix-violations-lead", existingLeadSession},
 	} {
 		t.Run(tc.session, func(t *testing.T) {
 			got := runValidationWorkflow(t, "validation-agent-validator", true, 1, map[string]string{"repair_session": tc.session})
@@ -155,6 +166,13 @@ func TestValidationAgentValidatorRepairsInNamedSession(t *testing.T) {
 			}
 			if len(agents) != 1 || !strings.Contains(agents[0], tc.step) {
 				t.Errorf("agents = %v, want one repair by %s", agents, tc.step)
+			}
+			if len(got.agents) != 1 {
+				t.Fatalf("agent invocations = %d, want 1", len(got.agents))
+			}
+			args := strings.Join(got.agents[0].Args, " ")
+			if !strings.Contains(args, "--resume "+tc.id) || strings.Contains(args, "--session-id") {
+				t.Errorf("repair args %q do not resume session %s", args, tc.id)
 			}
 		})
 	}
