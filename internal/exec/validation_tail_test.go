@@ -154,9 +154,9 @@ func TestVerifyChangeValidationTail(t *testing.T) {
 	const ref = "builtin:core/verify-change-v2.0.yaml"
 	commitFix := "  - id: fix\n    command: |\n      printf 'fixed\\n' > file.txt\n      git commit -q -am 'validation fix'\n"
 	for _, tc := range []struct {
-		name, steps string
+		name, steps  string
 		wantWarnings int
-		wantHandoff []string
+		wantHandoff  []string
 	}{
 		{"custom success without result file", "  - id: ok\n    command: \"true\"\n", 0, []string{"recorded no result", "No commits were made"}},
 		{"custom outright failure warns and continues", "  - id: boom\n    command: \"exit 3\"\n", 1, []string{"recorded no result"}},
