@@ -64,6 +64,7 @@ steps:
 
   - id: run-validator
     workflow: ../core/run-validator-v1.0.yaml
+    skip_if: 'sh: test ! -f .validator/config.yml'
     continue_on_failure: true
 
   - id: archive
@@ -71,7 +72,7 @@ steps:
       openspec archive "{{change_name}}" --yes
       git add openspec
       git commit -m "[{{step_id}}] chore: archive openspec documents for {{change_name}}"
-      agent-validator skip
+      if [ -f .validator/config.yml ]; then agent-validator skip; fi
 
   - id: finalize
     workflow: ../core/finalize-pr-v1.0.yaml

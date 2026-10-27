@@ -882,7 +882,7 @@ func TestCoreVerifyChangeSkipValidatorControlsAllValidatorRuns(t *testing.T) {
 	}
 
 	finalValidator := steps[indexes["run-validator"]]
-	if finalValidator.Workflow != "run-validator-v1.0.yaml" || finalValidator.SkipIf != "sh: test {{skip_validator}} = true" {
+	if finalValidator.Workflow != "run-validator-v1.0.yaml" || finalValidator.SkipIf != "sh: test {{skip_validator}} = true || test ! -f .validator/config.yml" {
 		t.Fatalf("run-validator = %+v, want the run-validator workflow behind the skip_validator gate", finalValidator)
 	}
 

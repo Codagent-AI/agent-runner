@@ -296,6 +296,8 @@ func newTaskDeliveryFixture(t *testing.T) *taskDeliveryFixture {
 			t.Fatal(err)
 		}
 	}
+	writeValidatorConfig(t, f.run)
+	t.Chdir(f.run)
 	gitIn(t, f.run, "add", ".")
 	gitIn(t, f.run, "commit", "-q", "-m", "initial")
 

@@ -10,7 +10,7 @@ fi
 
 status=$(sed -n '1p' "$result_file")
 case "$status" in
-  PASS) exit 0 ;;
+  PASS|SKIPPED) exit 0 ;;
   FAIL) ;;
   *) printf 'invalid validator result: %s\n' "$status" >&2; exit 1 ;;
 esac

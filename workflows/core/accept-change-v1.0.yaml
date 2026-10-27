@@ -67,6 +67,7 @@ steps:
 
   - id: run-validator
     workflow: ../core/run-validator-v1.0.yaml
+    skip_if: 'sh: test ! -f .validator/config.yml'
 
   - id: run-reacceptance-testing
     session: lead-agent

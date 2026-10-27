@@ -122,13 +122,13 @@ steps:
       result_file: "{{session_dir}}/output/verify-change-validator-result.txt"
     # skip_if parameters are shell-quoted by InterpolateShellSafeTyped. The
     # validation step above additionally constrains this value to true|false.
-    skip_if: 'sh: test {{skip_validator}} = true'
+    skip_if: 'sh: test {{skip_validator}} = true || test ! -f .validator/config.yml'
 
   - id: verify-validator-result
     script: validator-pr-gate.sh
     script_inputs:
       result_file: "{{session_dir}}/output/verify-change-validator-result.txt"
-    skip_if: 'sh: test {{skip_validator}} = true'
+    skip_if: 'sh: test {{skip_validator}} = true || test ! -f .validator/config.yml'
 
   - id: verify-clean-for-pr
     command: |
@@ -275,7 +275,7 @@ steps:
         params:
           result_file: "{{session_dir}}/output/acceptance-validator-result.txt"
         # The validation step before the loop constrains skip_validator to true|false.
-        skip_if: 'sh: test {{skip_validator}} = true'
+        skip_if: 'sh: test {{skip_validator}} = true || test ! -f .validator/config.yml'
 
       - id: acceptance-push
         script: acceptance-push.sh

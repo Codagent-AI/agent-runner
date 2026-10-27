@@ -75,7 +75,7 @@ steps:
       task_compliance: "{{task_compliance}}"
     # skip_if parameters are shell-quoted by InterpolateShellSafeTyped. The
     # validation step above additionally constrains this value to true|false.
-    skip_if: 'sh: test {{skip_validator}} = true'
+    skip_if: 'sh: test {{skip_validator}} = true || test ! -f .validator/config.yml'
 
   - id: check-clean
     command: test -z "$(git status --porcelain)"

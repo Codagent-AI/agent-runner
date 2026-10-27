@@ -50,6 +50,7 @@ steps:
 
   - id: run-validator
     workflow: ../core/run-validator-v1.0.yaml
+    skip_if: 'sh: test ! -f .validator/config.yml'
     continue_on_failure: true
 
   - id: archive
