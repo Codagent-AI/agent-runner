@@ -343,6 +343,7 @@ func TestValidatorWorkflowShape(t *testing.T) {
 		"run-validator",
 		"review-validator-status",
 		"summary-ui",
+		"skip-guidance",
 	}
 	gotIDs := stepIDs(wf.Steps)
 	if diff := cmp.Diff(wantIDs, gotIDs); diff != "" {
