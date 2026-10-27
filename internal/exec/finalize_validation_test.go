@@ -83,17 +83,7 @@ func runCIFixLoop(t *testing.T, reports []string, validationExit string) (StepOu
 	if loop == nil {
 		t.Fatal("finalize-pr-v2.0 has no ci-fix-loop")
 	}
-	repo := t.TempDir()
-	gitIn(t, repo, "init", "-q", "-b", "feature")
-	gitIn(t, repo, "config", "user.email", "t@example.com")
-	gitIn(t, repo, "config", "user.name", "T")
-	gitIn(t, repo, "config", "commit.gpgsign", "false")
-	if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("initial\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	gitIn(t, repo, "add", "file.txt")
-	gitIn(t, repo, "commit", "-q", "-m", "initial")
-	t.Chdir(repo)
+	repo := newFeatureRepo(t)
 
 	validation := writeCustomValidation(t, "  - id: mark\n    command: |\n      : VALIDATION-MARK\n      printf 'FAIL\\ncheck: x\\n' > \"{{result_file}}\"\n      exit "+validationExit+"\n")
 	ctx := model.NewRootContext(&model.RootContextOptions{

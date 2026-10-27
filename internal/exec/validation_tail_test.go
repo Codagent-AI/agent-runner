@@ -50,6 +50,22 @@ func (r *tailRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, erro
 	return ProcessResult{Started: true, Stdout: claudeUsageOutput("no behavior change", 0)}, nil
 }
 
+// newFeatureRepo creates a repository on branch feature with one commit and
+// makes it the working directory, as the shell skip conditions run there.
+func newFeatureRepo(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	gitIn(t, repo, "checkout", "-q", "-b", "feature")
+	if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("initial\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, repo, "add", "file.txt")
+	gitIn(t, repo, "commit", "-q", "-m", "initial")
+	t.Chdir(repo)
+	return repo
+}
+
 func writeCustomValidation(t *testing.T, steps string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "custom-validation-v1.0.yaml")
@@ -87,17 +103,7 @@ func runValidationTail(t *testing.T, ref, startID, validation string) tailRun {
 	if start < 0 {
 		t.Fatalf("%s has no step %s", ref, startID)
 	}
-	repo := t.TempDir()
-	gitIn(t, repo, "init", "-q", "-b", "feature")
-	gitIn(t, repo, "config", "user.email", "t@example.com")
-	gitIn(t, repo, "config", "user.name", "T")
-	gitIn(t, repo, "config", "commit.gpgsign", "false")
-	if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("initial\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	gitIn(t, repo, "add", "file.txt")
-	gitIn(t, repo, "commit", "-q", "-m", "initial")
-	t.Chdir(repo)
+	repo := newFeatureRepo(t)
 
 	sessionDir := t.TempDir()
 	if activePID, err := runlock.Acquire(sessionDir); err != nil || activePID != 0 {
@@ -108,13 +114,12 @@ func runValidationTail(t *testing.T, ref, startID, validation string) tailRun {
 	if err := os.MkdirAll(evidence, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	head, _ := osexec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
 	write := func(name, body string) {
 		if err := os.WriteFile(filepath.Join(evidence, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	write("acceptance-tested-revision.txt", strings.TrimSpace(string(head))+"\n")
+	write("acceptance-tested-revision.txt", gitOut(t, repo, "rev-parse", "HEAD")+"\n")
 	write("acceptance-handoff.md", "# Handoff\n\nready\n")
 	write("acceptance-preparation-status.txt", "ACCEPTANCE_COMPLETE\n")
 
