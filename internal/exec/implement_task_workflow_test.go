@@ -611,3 +611,40 @@ func TestTaskComplianceExecutorIntegration(t *testing.T) {
 		})
 	}
 }
+
+// INT-007: the preserved implement-task v1.0 runs no Agent Validator command
+// when the project has no validator configuration, whatever skip_validator and
+// task_compliance say.
+func TestPreservedImplementTaskRunsNoValidatorWithoutConfig(t *testing.T) {
+	for _, skip := range []string{"false", "true"} {
+		t.Run("skip_validator="+skip, func(t *testing.T) {
+			f := newTaskDeliveryFixture(t)
+			gitIn(t, f.run, "rm", "-rq", ".validator")
+			gitIn(t, f.run, "commit", "-q", "-m", "remove validator config")
+			runner := f.runner(t)
+			runner.deliver, runner.writeRecord = true, true
+
+			if outcome := f.runImplementTask(t, runner, "01-task.md", skip); outcome != OutcomeSuccess {
+				t.Fatalf("outcome = %q, want success; events %v", outcome, runner.events)
+			}
+			for _, event := range []string{"run-validator.sh", "check-task-compliance.sh", "fix-violations"} {
+				if n := countEvents(runner.events, event); n != 0 {
+					t.Errorf("%s ran %d times without validator config; events %v", event, n, runner.events)
+				}
+			}
+		})
+	}
+}
+
+// With config the preserved workflow still runs the validator when asked.
+func TestPreservedImplementTaskRunsValidatorWithConfig(t *testing.T) {
+	f := newTaskDeliveryFixture(t)
+	runner := f.runner(t)
+	runner.deliver, runner.writeRecord = true, true
+	if outcome := f.runImplementTask(t, runner, "01-task.md", "false"); outcome != OutcomeSuccess {
+		t.Fatalf("outcome = %q, want success; events %v", outcome, runner.events)
+	}
+	if countEvents(runner.events, "run-validator.sh") == 0 {
+		t.Errorf("run-validator.sh never ran with config present; events %v", runner.events)
+	}
+}
