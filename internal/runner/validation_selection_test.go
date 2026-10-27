@@ -125,4 +125,48 @@ func TestResumeKeepsRecordedWarnings(t *testing.T) {
 	if diff := cmp.Diff(state.Warnings, got.Warnings); diff != "" {
 		t.Errorf("warnings after resume (-want +got):\n%s", diff)
 	}
+	audit := readRunEnd(t, dir)
+	if !strings.Contains(audit, `"completed_with_warnings":true`) || !strings.Contains(audit, `"warning_count":1`) {
+		t.Errorf("run_end after resume does not count the earlier warning: %s", audit)
+	}
+}
+
+func readRunEnd(t *testing.T, dir string) string {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join(dir, "audit.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+		if strings.Contains(line, "Z run_end {") {
+			return line
+		}
+	}
+	t.Fatalf("no run_end in audit.log:\n%s", body)
+	return ""
+}
+
+func TestResumeWithoutRecordedWarningsReportsNone(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	workflowPath := filepath.Join(dir, "plain-v1.0.yaml")
+	source := "name: plain\nsteps:\n  - id: only\n    command: \"true\"\n"
+	if err := os.WriteFile(workflowPath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := model.RunState{
+		WorkflowFile: workflowPath, WorkflowName: "plain", WorkflowHash: stateio.ComputeWorkflowHash(source),
+		CurrentStep: model.CurrentStep{StepID: "only"},
+	}
+	if err := stateio.WriteState(&state, dir); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := ResumeWorkflow(filepath.Join(dir, "state.json"), &Options{
+		ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	}); err != nil || result != ResultSuccess {
+		t.Fatalf("resume = (%q, %v)", result, err)
+	}
+	if audit := readRunEnd(t, dir); strings.Contains(audit, `"completed_with_warnings":true`) || !strings.Contains(audit, `"warning_count":0`) {
+		t.Errorf("run_end reports warnings for a clean run: %s", audit)
+	}
 }
