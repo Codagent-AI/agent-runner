@@ -62,9 +62,9 @@ sudo mv agent-runner /usr/local/bin/
 npm install -g agent-validator @codagent-ai/agent-plugin
 ```
 
-## Set Up Agent Validator
+## Optional: Set Up Agent Validator
 
-Agent Validator is used by Agent Runner's built-in validation loops. Set it up before relying on Agent Runner for implementation work.
+Agent Validator is optional. Agent Runner's built-in workflows run it only when your project has a `.validator/config.yml`; without one, they skip validation and rely on the project's own linters, test suite, and CI. If you skip it, make sure your project's `AGENTS.md` explains how to verify the project: linters, the test suite, and any project-specific checks. To choose the validation a run uses, pass `validation_workflow` (`auto`, `agent-validator`, `none`, a `builtin:` reference, or an absolute path to a workflow file).
 
 If you installed Agent Runner with Homebrew, the `agent-validator` CLI is already installed. If you used the Linux tarball path above, install it separately with the helper CLIs.
 
@@ -146,10 +146,10 @@ agent-runner run spec-driven:simple-change my-change
 
 Use a short kebab-case change name, such as `add-user-search` or `fix-login-copy`.
 The workflow will ask what change you want to make, create and independently crosscheck a focused
-plan under an artifact directory outside the project repository selected during planning, run an autonomous implementor and Agent Validator, perform a
+plan under an artifact directory outside the project repository selected during planning, run an autonomous implementor, validate the result (with Agent Validator when your project has set it up), perform a
 lightweight Tester flow check, and guide you through final review.
 
-Keep the first task small: fix a typo, add a log line, rename a variable, or make another scoped change. The workflow expects a feature branch and a clean, validated state; if `agent-validator detect` reports unvalidated changes, validate or commit those changes before starting.
+Keep the first task small: fix a typo, add a log line, rename a variable, or make another scoped change. The workflow expects a feature branch. If your project uses Agent Validator and `agent-validator detect` reports unvalidated changes, validate or commit those changes before starting.
 
 If you set up OpenSpec, use its branch-local small-change flow:
 

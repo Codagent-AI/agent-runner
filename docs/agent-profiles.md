@@ -18,7 +18,7 @@ Agent Runner workflows use four canonical roles: Lead, Crosscheck, Implementor, 
 | `implementor` | Autonomous | Performs code changes and focused implementation validation. |
 | `tester` | Autonomous | Exercises completed work against acceptance expectations and reports evidence. |
 
-Crosscheck is not a code-review system. It supplies an independent perspective while work is being defined and planned. Agent Validator owns implementation-code checks and reviews; Tester owns acceptance-flow verification after implementation.
+Crosscheck is not a code-review system. It supplies an independent perspective while work is being defined and planned. Implementation code is verified by the project's own checks and its validation, which uses Agent Validator when the project has set it up; Tester owns acceptance-flow verification after implementation.
 
 Agent Runner also provides `interactive_base`, `autonomous_base`, and `summarizer` as built-in support profiles. Native setup does not create or replace those entries.
 
