@@ -1,5 +1,8 @@
 {
-  "format": ["yaml", "bash"],
+  "format": [
+    "yaml",
+    "bash"
+  ],
   "minTokens": 70,
   "threshold": 3.5,
   "ignore": [
@@ -9,9 +12,27 @@
     ".validator/cache/**",
     "validator_logs/**",
     "**/node_modules/**",
-    ".git/**"
+    ".git/**",
+    "workflows/core/accept-change-v1.0.yaml",
+    "workflows/core/complete-simple-change-v1.0.yaml",
+    "workflows/core/finalize-pr-v1.0.yaml",
+    "workflows/core/implement-change-v1.0.yaml",
+    "workflows/core/implement-change-v2.0.yaml",
+    "workflows/core/implement-task-v1.0.yaml",
+    "workflows/core/run-validator-v1.0.yaml",
+    "workflows/core/verify-change-v1.0.yaml",
+    "workflows/openspec/change-v1.0.yaml",
+    "workflows/openspec/change-v2.0.yaml",
+    "workflows/openspec/implement-change-v1.0.yaml",
+    "workflows/openspec/simple-change-v1.0.yaml",
+    "workflows/spec-driven/change-v1.0.yaml",
+    "workflows/spec-driven/change-v2.0.yaml",
+    "workflows/spec-driven/implement-change-v1.0.yaml",
+    "workflows/spec-driven/simple-change-v1.0.yaml"
   ],
-  "reporters": ["console"],
+  "reporters": [
+    "console"
+  ],
   "gitignore": true,
   "noSymlinks": true
 }

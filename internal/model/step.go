@@ -721,19 +721,6 @@ func (p *Param) Bind(value string) string {
 	return value
 }
 
-// BindAliases replaces every aliased value in params with its target.
-func (w *Workflow) BindAliases(params map[string]string) {
-	for i := range w.Params {
-		p := &w.Params[i]
-		if len(p.Aliases) == 0 {
-			continue
-		}
-		if v, ok := params[p.Name]; ok {
-			params[p.Name] = p.Bind(v)
-		}
-	}
-}
-
 // IsRequired returns whether this param is required (defaults to true).
 func (p *Param) IsRequired() bool {
 	if p.Required == nil {
@@ -757,6 +744,19 @@ type Workflow struct {
 	Sessions    []SessionDecl `yaml:"sessions,omitempty" json:"sessions,omitempty"`
 	Steps       []Step        `yaml:"steps" json:"steps"`
 	Engine      *EngineConfig `yaml:"engine,omitempty" json:"engine,omitempty"`
+}
+
+// BindAliases replaces every aliased value in params with its target.
+func (w *Workflow) BindAliases(params map[string]string) {
+	for i := range w.Params {
+		p := &w.Params[i]
+		if len(p.Aliases) == 0 {
+			continue
+		}
+		if v, ok := params[p.Name]; ok {
+			params[p.Name] = p.Bind(v)
+		}
+	}
 }
 
 // ApplyDefaults sets default values for Workflow fields.

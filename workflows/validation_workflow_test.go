@@ -100,17 +100,16 @@ type workflowDoc struct {
 	Params []paramDecl `yaml:"params"`
 }
 
-func readWorkflowDoc(t *testing.T, path string) (workflowDoc, string) {
+func readWorkflowDoc(t *testing.T, path string) (doc workflowDoc, body string) {
 	t.Helper()
-	body, err := fs.ReadFile(FS, path)
+	raw, err := fs.ReadFile(FS, path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
-	var doc workflowDoc
-	if err := yaml.Unmarshal(body, &doc); err != nil {
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
 		t.Fatalf("parse %s: %v", path, err)
 	}
-	return doc, string(body)
+	return doc, string(raw)
 }
 
 // The selection param is declared identically wherever a top-level workflow

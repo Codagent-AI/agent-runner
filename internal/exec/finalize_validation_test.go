@@ -66,7 +66,7 @@ func (r *finalizeRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, 
 
 // runCIFixLoop dispatches finalize-pr's ci-fix-loop with the given CI reports
 // and a custom validation workflow that records itself and ends as validationExit.
-func runCIFixLoop(t *testing.T, reports []string, validationExit string) (StepOutcome, []string) {
+func runCIFixLoop(t *testing.T, reports []string, validationExit string) (outcome StepOutcome, events []string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	const ref = "builtin:core/finalize-pr-v2.0.yaml"
@@ -93,7 +93,7 @@ func runCIFixLoop(t *testing.T, reports []string, validationExit string) (StepOu
 		NamedSessionDecls: map[string]string{"lead-agent": "lead"},
 	})
 	runner := &finalizeRunner{t: t, repo: repo, reports: reports}
-	outcome, err := DispatchStep(loop, ctx, runner, &mockGlob{}, &mockLogger{})
+	outcome, err = DispatchStep(loop, ctx, runner, &mockGlob{}, &mockLogger{})
 	if err != nil {
 		t.Fatalf("ci-fix-loop: %v (events %v)", err, runner.events)
 	}
