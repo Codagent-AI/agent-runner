@@ -1,0 +1,74 @@
+name: complete-simple-change
+description: "Implement, flow-test, and interactively review a small structured change, validating after flow testing and again after review settles."
+hidden: true
+
+params:
+  - name: change_name
+    required: true
+  - name: change_dir
+    required: true
+  - name: change_label
+    required: true
+  - name: validation_workflow
+    required: false
+    default: auto
+    aliases:
+      auto: builtin:core/validation-auto-v1.0.yaml
+      agent-validator: builtin:core/validation-agent-validator-v1.0.yaml
+      none: builtin:core/validation-none-v1.0.yaml
+
+sessions:
+  - name: implementor-agent
+    agent: implementor
+  - name: lead-agent
+    agent: lead
+  - name: flow-tester
+    agent: tester
+
+steps:
+  - id: implement
+    workflow: implement-task-v2.0.yaml
+    params:
+      task_file: "{{change_dir}}/tasks.md"
+      run_session_report: "true"
+
+  - id: test
+    session: flow-tester
+    mode: autonomous
+    prompt: |
+      Use codagent:test-flows to perform lightweight branch-local flow testing for implemented {{change_label}} "{{change_name}}".
+
+      Create the scratch folder with `mkdir -p "{{session_dir}}/scratch/test-flows"`. Pass this named input to codagent:test-flows: `scratch_dir`: `{{session_dir}}/scratch/test-flows`.
+      All temporary files, clones, build outputs, and servers' working directories must go under `scratch_dir`. Never use `/tmp`, `/private/tmp`, or `$TMPDIR` for them.
+
+      Read the approved artifacts under `{{change_dir}}/` and relevant implementation evidence under `{{session_dir}}/output/`. Exercise representative public flows proportionally to this small change. Write a concise evidence report to `{{session_dir}}/output/test-flows.md` and place any UI screenshots beneath that output directory. Preserve material findings, evidence, ambiguities, and limitations accurately. Do not modify tracked files or fix findings.
+
+  # The implementor wrote the change, so it repairs findings in its own session.
+  - id: validate-after-testing
+    workflow: "{{validation_workflow}}"
+    params:
+      repair_session: implementor-agent
+      result_file: "{{session_dir}}/output/validation-after-flow-testing.txt"
+    warn_on_failure: true
+
+  - id: review
+    session: lead-agent
+    mode: interactive
+    tools: [call_agent]
+    prompt: |
+      Help the user review implemented {{change_label}} "{{change_name}}".
+
+      Read `{{session_dir}}/output/test-flows.md`. Show the tester's material findings, evidence, and limitations before your own assessment. Also inspect the implementation session report under `{{session_dir}}/output/` and discuss any consequential unresolved assumption with the user.
+
+      Help the user review and request fixes or minor enhancements without material scope expansion. Confirm consequential behavioral or design changes before editing. When fixing a defect, add unit coverage where applicable and a practical integration or end-to-end regression test when it meaningfully protects the affected public flow. Update active specifications only when a decision changes or clarifies normative observable behavior.
+
+      After tracked changes, run the project's relevant targeted checks as its AGENTS.md describes (never Agent Validator), and commit related changes that belong to the current project repository following project conventions with the `[{{step_id}}]` prefix. Leave artifacts outside the repository uncommitted. If a changed public flow warrants another hands-on check, recommend targeted verification. When the user agrees, create the scratch folder with `mkdir -p "{{session_dir}}/scratch/test-flows"`, then resume `flow-tester` with the prior finding, affected flow, and direct dependencies; require codagent:test-flows in targeted scope rather than a new broad pass, and pass `scratch_dir`: `{{session_dir}}/scratch/test-flows` as a named input. All temporary files, clones, build outputs, and servers' working directories must go under `scratch_dir`. Never use `/tmp`, `/private/tmp`, or `$TMPDIR` for them. Present the tester's exact result. Address approved actionable findings and repeat targeted verification when warranted until the user says review is complete. Do not create status files or hide an unresolved result behind a success claim.
+
+      Continue to the next step only when the user says testing and review are complete.
+
+  - id: validate-after-review
+    workflow: "{{validation_workflow}}"
+    params:
+      repair_session: lead-agent
+      result_file: "{{session_dir}}/output/validation-after-review.txt"
+    warn_on_failure: true

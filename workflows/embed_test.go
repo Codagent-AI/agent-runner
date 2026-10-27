@@ -119,8 +119,11 @@ func TestResolveSelectsLatestVersionWhileExactReadsRemainAvailable(t *testing.T)
 	if err != nil {
 		t.Fatalf("Resolve(core:implement-change): %v", err)
 	}
-	if coreRef != "builtin:core/implement-change-v2.0.yaml" {
-		t.Fatalf("Resolve(core:implement-change) = %q, want v2.0", coreRef)
+	if coreRef != "builtin:core/implement-change-v3.0.yaml" {
+		t.Fatalf("Resolve(core:implement-change) = %q, want v3.0", coreRef)
+	}
+	if _, err := ReadFile("builtin:core/implement-change-v2.0.yaml"); err != nil {
+		t.Fatalf("ReadFile core implement-change v2.0: %v", err)
 	}
 	if _, err := ReadFile("builtin:core/implement-change-v1.0.yaml"); err != nil {
 		t.Fatalf("ReadFile core implement-change v1.0: %v", err)
@@ -274,7 +277,11 @@ func TestV2ChangeWorkflowsShareCoreLifecyclePhases(t *testing.T) {
 						t.Errorf("%s branch guard workflow = %q", tt.ref, step.Workflow)
 					}
 				case "accept":
-					if step.Workflow != "../core/accept-change-v1.0.yaml" {
+					wantAccept := "../core/accept-change-v1.0.yaml"
+					if strings.HasSuffix(tt.ref, "change-v3.0.yaml") {
+						wantAccept = "../core/accept-change-v2.0.yaml"
+					}
+					if step.Workflow != wantAccept {
 						t.Errorf("%s accept workflow = %q", tt.ref, step.Workflow)
 					}
 					if step.Params["change_dir"] == "" {
@@ -332,14 +339,14 @@ func TestV3ChangeWorkflowsImplementWithoutPlanning(t *testing.T) {
 				if step.ID != "implement" {
 					continue
 				}
-				if step.Workflow != "../core/implement-change-v2.0.yaml" {
-					t.Errorf("%s implement workflow = %q, want ../core/implement-change-v2.0.yaml", tt.ref, step.Workflow)
+				if step.Workflow != "../core/implement-change-v3.0.yaml" {
+					t.Errorf("%s implement workflow = %q, want ../core/implement-change-v3.0.yaml", tt.ref, step.Workflow)
 				}
 				if step.Params["change_dir"] != tt.changeDir || step.Params["change_kind"] != tt.changeKind {
 					t.Errorf("%s implement change_dir/change_kind = %q/%q, want %q/%q",
 						tt.ref, step.Params["change_dir"], step.Params["change_kind"], tt.changeDir, tt.changeKind)
 				}
-				for _, name := range []string{"change_name", "change_label", "artifact_validation_instruction", "skip_validator"} {
+				for _, name := range []string{"change_name", "change_label", "artifact_validation_instruction", "validation_workflow"} {
 					if step.Params[name] == "" {
 						t.Errorf("%s implement step does not pass %s", tt.ref, name)
 					}
@@ -1015,7 +1022,8 @@ func TestV2ImplementChangeCallersProvideChangeKind(t *testing.T) {
 			}
 			for _, step := range workflow.Steps {
 				if step.Workflow != "../core/implement-change-v1.0.yaml" &&
-					step.Workflow != "../core/implement-change-v2.0.yaml" {
+					step.Workflow != "../core/implement-change-v2.0.yaml" &&
+					step.Workflow != "../core/implement-change-v3.0.yaml" {
 					continue
 				}
 				if got := step.Params["change_kind"]; got != tt.want {
@@ -1271,7 +1279,7 @@ func TestV2SimpleChangeWorkflowsShareCorePhases(t *testing.T) {
 					t.Errorf("commit workflow = %q", got)
 				}
 			}
-			if got := steps["complete"].workflow; got != "../core/complete-simple-change-v1.0.yaml" {
+			if got := steps["complete"].workflow; got != "../core/complete-simple-change-v2.0.yaml" {
 				t.Errorf("complete workflow = %q", got)
 			}
 			if got := steps["complete"].params["change_dir"]; got != tt.wantChangeDir {

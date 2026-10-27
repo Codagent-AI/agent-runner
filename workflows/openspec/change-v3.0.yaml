@@ -4,6 +4,13 @@ description: "Use for a substantial or higher-risk change in an OpenSpec project
 params:
   - name: change_name
     required: true
+  - name: validation_workflow
+    required: false
+    default: auto
+    aliases:
+      auto: builtin:core/validation-auto-v1.0.yaml
+      agent-validator: builtin:core/validation-agent-validator-v1.0.yaml
+      none: builtin:core/validation-none-v1.0.yaml
 
 steps:
   - id: validate-feature-branch
@@ -15,6 +22,7 @@ steps:
     script: create-change.sh
     script_inputs:
       change_name: "{{change_name}}"
+      validation_workflow: "{{validation_workflow}}"
 
   - id: define
     workflow: ../core/define-change-v1.0.yaml
@@ -25,27 +33,31 @@ steps:
       artifact_location_instruction: "Keep every OpenSpec definition and planning artifact under the repository-local `openspec/changes/{{change_name}}/` directory."
 
   - id: implement
-    workflow: ../core/implement-change-v2.0.yaml
+    workflow: ../core/implement-change-v3.0.yaml
     params:
       change_name: "{{change_name}}"
       change_dir: "openspec/changes/{{change_name}}"
       change_label: "OpenSpec change"
       change_kind: "openspec"
       artifact_validation_instruction: 'When an approved artifact changed, run `openspec validate --type change "{{change_name}}"`.'
-      skip_validator: "false"
+      validation_workflow: "{{validation_workflow}}"
 
   - id: accept
-    workflow: ../core/accept-change-v1.0.yaml
+    workflow: ../core/accept-change-v2.0.yaml
     params:
       change_name: "{{change_name}}"
       change_dir: "openspec/changes/{{change_name}}"
       change_label: "OpenSpec change"
       artifact_validation_instruction: 'If a specification changed, run `openspec validate --type change "{{change_name}}"`.'
+      validation_workflow: "{{validation_workflow}}"
 
   - id: archive
     workflow: archive-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
+      validation_workflow: "{{validation_workflow}}"
 
   - id: finalize
-    workflow: ../core/finalize-pr-v1.0.yaml
+    workflow: ../core/finalize-pr-v2.0.yaml
+    params:
+      validation_workflow: "{{validation_workflow}}"

@@ -1,0 +1,213 @@
+name: accept-change
+description: "Resolve undecided assumptions, support human review and testing, apply requested follow-up changes, then run the selected validation workflow and retest behavior it changed."
+hidden: true
+
+params:
+  - name: change_name
+    required: true
+  - name: change_dir
+    required: true
+  - name: change_label
+    required: true
+  - name: artifact_validation_instruction
+    required: true
+  - name: validation_workflow
+    required: false
+    default: auto
+    aliases:
+      auto: builtin:core/validation-auto-v1.0.yaml
+      agent-validator: builtin:core/validation-agent-validator-v1.0.yaml
+      none: builtin:core/validation-none-v1.0.yaml
+
+sessions:
+  - name: lead-agent
+    agent: lead
+  - name: acceptance-tester
+    agent: tester
+
+steps:
+  - id: resolve-assumptions
+    session: lead-agent
+    mode: interactive
+    prompt: |
+      Resolve undecided assumptions and context gaps for {{change_label}} "{{change_name}}" with the user.
+
+      Read `{{session_dir}}/output/acceptance-assumptions.md`, the acceptance-testing outcome and unresolved-assumptions section of `{{session_dir}}/output/acceptance-handoff.md`, and relevant files under `{{change_dir}}/`. Briefly tell the user whether acceptance testing was ready or ended with remaining impediments.
+
+      For each unresolved item, ask the user how they want to resolve it and explain the options and likely impact. Then implement the resulting code, configuration, documentation, or other changes.
+
+      Decide whether the resolution belongs in the specifications. Update the applicable active specifications under `{{change_dir}}/specs/` when it changes or clarifies observable behavior, requirements, scope, or design that should be normative. Do not edit the proposal, design, or tasks, and omit minor technical details from specifications.
+
+      Run relevant targeted checks. {{artifact_validation_instruction}} Commit resulting changes that belong to the current project repository using the project's conventions and the `[{{step_id}}]` prefix, then push while keeping the pull request in draft. Leave artifacts outside the repository uncommitted. Do not create an empty commit.
+
+      Continue to next step when the unresolved items and their resulting work are complete and the user says to move on.
+
+  - id: review-and-refine
+    session: lead-agent
+    mode: interactive
+    prompt: |
+      Help the user review, test, and request additional changes for implemented {{change_label}} "{{change_name}}". The pull request must remain a draft.
+
+      This step exists so the user can review and test the change themselves. Your own review, a review skill, or another agent pass is not a substitute for it and never satisfies this step.
+
+      Start by reading `{{session_dir}}/output/acceptance-handoff.md` and its evidence. Present a concise implementation summary, validation results, what the exploratory pass exercised and deliberately did not, any `HT-*` items reserved for the user, limitations, and relevant screenshots with text equivalents. Present that package before doing any other work in this step, then stop and give the user room to review and test. Never request step completion in the same response that presents it.
+
+      Implement user-requested fixes and minor enhancements. Confirm changes to behavior, scope, or design before editing. Do not implement requests that materially expand the change's scope or require substantial redesign.
+
+      When fixing a defect found during acceptance review or testing, add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
+
+      Decide whether a requested change belongs in the specifications. Update the applicable active specifications under `{{change_dir}}/specs/` when it changes or clarifies observable behavior, requirements, scope, or design that should be normative. Do not edit the proposal, design, or tasks, and omit minor technical details from specifications.
+
+      Run the project's relevant targeted checks, as its AGENTS.md describes; never run Agent Validator here. {{artifact_validation_instruction}} Commit completed refinements that belong to the current project repository using the project's conventions and the `[{{step_id}}]` prefix, then push while keeping the pull request in draft. Leave artifacts outside the repository uncommitted. Do not create an empty commit.
+
+      Continue to next step only after the user has reviewed or tested the change and says the requested refinements are complete and the change is ready to move on. Your own judgement that nothing needs fixing, silence, or a bare acknowledgement is not that confirmation. Ask when you are unsure whether the user is finished.
+
+  - id: recommend-reacceptance-testing
+    session: lead-agent
+    mode: interactive
+    prompt: |
+      Recommend re-acceptance testing if changes were made during assumption review or testing and refinement.
+
+      If nothing changed, state that no re-acceptance testing is needed. Otherwise, briefly show the user everything that changed since the last tested revision (`{{session_dir}}/output/acceptance-tested-revision.txt`), including the validation commits listed in the `## Validation` section of `{{session_dir}}/output/acceptance-handoff.md`, describe the exploration you would run on those changes, and ask whether they want it run.
+
+      Continue to next step when the user accepts or declines the recommendation.
+
+  - id: run-reacceptance-testing
+    session: lead-agent
+    mode: autonomous
+    tools: [call_agent]
+    prompt: |
+      Follow the user's decision about re-acceptance testing. If no testing was recommended or the user declined it, continue to next step without running anything.
+
+      Before testing, inspect every commit made since the last tested revision (`{{session_dir}}/output/acceptance-tested-revision.txt`), including the validation commits listed in the `## Validation` section of `{{session_dir}}/output/acceptance-handoff.md`. They are part of the diff the tester must explore.
+
+      If the user agreed, run `mkdir -p "{{session_dir}}/scratch/acceptance-test"` before using codagent:call-agent with `session: acceptance-tester`. This resumes the tester that ran the earlier pass when available; first use creates it when this workflow runs standalone. Supply task-specific child instructions requiring codagent:prepare-acceptance with:
+      - approved artifacts: `{{change_dir}}/`;
+      - testing envelope and any `HT-*` obligations: `{{change_dir}}/test-plan.md`;
+      - implementation evidence: `{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`;
+      - evidence directory: `{{session_dir}}/output/`;
+      - scratch_dir: `{{session_dir}}/scratch/acceptance-test`;
+      - assumptions ledger: `{{session_dir}}/output/acceptance-assumptions.md`;
+      - prior tested revision: `{{session_dir}}/output/acceptance-tested-revision.txt`, which the tester diffs against to size the exploration from what that diff moved. If that file is missing or names an unresolvable SHA, require the tester to report an impediment and explore the change as a whole, applying the skill's coverage floor as a first pass does.
+
+      Tell the tester: All temporary files, clones, build outputs, and servers' working directories must go under `scratch_dir`. Never use `/tmp`, `/private/tmp`, or `$TMPDIR` for them.
+
+      Follow codagent:call-agent's verification and autonomous result-accounting rules rather than performing the acceptance testing yourself. If the pass succeeds, summarize the result and continue to next step.
+
+      Triage each finding. A finding where the tester reproduced behavior that contradicts the approved specs, or that an ordinary user would clearly consider broken, may not be dismissed as "not a defect": fix it, or record it in `{{session_dir}}/output/acceptance-assumptions.md` as a decision needed from the user, with your reasoning.
+
+      Fix each actionable defect without expanding the approved scope. Add unit regression coverage where applicable. Also assess and recommend an integration or end-to-end regression test for the affected user or client flow, and add it when it provides meaningful, practical coverage.
+
+      Run relevant targeted automated checks. {{artifact_validation_instruction}} Verify the fix with the project's relevant checks as its AGENTS.md describes, never with Agent Validator. Commit changes that belong to the current project repository using the project's conventions and the `[{{step_id}}]` prefix, leave artifacts outside the repository uncommitted, and push while keeping the pull request in draft. Then resume `acceptance-tester` to reproduce the prior finding and verify the fix, then read the diff since its last pass and explore what that diff moved. It must not re-run its previous pass or derive scope from what it tested before, and it must treat its prior exploration log as history rather than as coverage.
+
+      Use at most three tester calls. Before continuing to next step, overwrite `{{session_dir}}/output/reacceptance-status.txt` with exactly one line:
+      - `REACCEPTANCE_COMPLETE` when testing was not requested or the pass succeeded;
+      - `REACCEPTANCE_FAILED` when three calls do not converge or a finding still requires human judgment.
+
+      For a failed result, preserve and report the remaining findings without claiming that re-acceptance passed.
+
+  - id: reacceptance-gate
+    loop:
+      max: 3
+    steps:
+      - id: verify-status-before-recovery
+        script: reacceptance-status-gate.sh
+        script_inputs:
+          status_file: "{{session_dir}}/output/reacceptance-status.txt"
+        continue_on_failure: true
+
+      - id: recover-reacceptance-testing
+        session: lead-agent
+        mode: interactive
+        tools: [call_agent]
+        skip_if: previous_success
+        prompt: |
+          Re-acceptance testing did not converge. Read `{{session_dir}}/output/reacceptance-status.txt`, `{{session_dir}}/output/acceptance-handoff.md`, `{{session_dir}}/output/exploration-log.md` when it exists, `{{session_dir}}/output/acceptance-assumptions.md`, and `{{change_dir}}/test-plan.md`. Present the exact remaining defect, impediment, or human decision to the user and help them resolve it without discarding prior evidence or claiming that testing passed.
+
+          Do not blindly retry an unchanged impediment. Keep this interactive step open while the user resolves an external condition. If the user wants to defer recovery, tell them to stop Agent Runner so a later workflow resume returns to this step; do not acknowledge step completion while the status remains failed.
+
+          Once the blocker is resolved, run `mkdir -p "{{session_dir}}/scratch/acceptance-test"` before using codagent:call-agent with `session: acceptance-tester` and require the child to use codagent:prepare-acceptance. If no prior tested revision is recorded, have it explore the change as a whole, applying the skill's coverage floor as a first pass does; otherwise it diffs against that revision and sizes the exploration from what the diff moved. Supply:
+          - approved artifacts: `{{change_dir}}/`;
+          - testing envelope and any `HT-*` obligations: `{{change_dir}}/test-plan.md`;
+          - implementation evidence: `{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`;
+          - evidence directory: `{{session_dir}}/output/`;
+          - scratch_dir: `{{session_dir}}/scratch/acceptance-test`;
+          - assumptions ledger: `{{session_dir}}/output/acceptance-assumptions.md`;
+          - prior tested revision: `{{session_dir}}/output/acceptance-tested-revision.txt`.
+
+          Tell the tester: All temporary files, clones, build outputs, and servers' working directories must go under `scratch_dir`. Never use `/tmp`, `/private/tmp`, or `$TMPDIR` for them.
+
+          Follow codagent:call-agent's independent-verification and result-accounting rules. A finding where the tester reproduced behavior that contradicts the approved specs, or that an ordinary user would clearly consider broken, may not be dismissed as "not a defect": fix it, or present it to the user as a decision, with your reasoning. If testing finds an actionable product defect, fix it, add practical regression coverage, run the project's relevant checks as its AGENTS.md describes (never Agent Validator), commit with the `[recover-reacceptance-testing]` prefix, push the draft pull request, and resume the same tester against the resulting diff.
+
+          Preserve `REACCEPTANCE_FAILED` and the honest handoff while any defect or impediment remains. Overwrite `{{session_dir}}/output/reacceptance-status.txt` with exactly `REACCEPTANCE_COMPLETE` only after the tester reports no remaining finding for the current revision. Request completion of this interactive step only after that file and the acceptance handoff agree.
+
+      - id: verify-reacceptance-status
+        script: reacceptance-status-gate.sh
+        script_inputs:
+          status_file: "{{session_dir}}/output/reacceptance-status.txt"
+        continue_on_failure: true
+        break_if: success
+
+  # Validation runs once, after review, refinements, and any re-acceptance and
+  # recovery have settled, so everything changed since the previous validation
+  # is checked in one batch.
+  - id: record-validation-base
+    command: |
+      rm -f "{{session_dir}}/output/validation-after-review.txt"
+      git rev-parse HEAD > "{{session_dir}}/output/validation-base-revision.txt"
+
+  - id: validate
+    workflow: "{{validation_workflow}}"
+    params:
+      repair_session: lead-agent
+      result_file: "{{session_dir}}/output/validation-after-review.txt"
+    warn_on_failure: true
+
+  - id: validation-push
+    script: acceptance-push.sh
+    repair:
+      session: lead-agent
+      prompt: |
+        Pushing the validation fixes for {{change_label}} "{{change_name}}" failed. Diagnose the failure from the check output. Commit any tracked change related to the validation fixes following the project's commit message conventions, then push the current branch without force-pushing. Do not change product contents to make the push succeed. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, such as a missing credential, an insufficient permission or token scope, or diverged remote history, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
+
+  - id: verify-validation-pr
+    script: check-draft-pr.sh
+    script_inputs:
+      attempts: "10"
+      interval_seconds: "3"
+      accept_ready: "true"
+    repair:
+      session: lead-agent
+      prompt: |
+        After pushing the validation fixes for {{change_label}} "{{change_name}}", the current branch does not have exactly one open pull request whose head SHA equals local `HEAD`. Align it without force-pushing or changing product contents: push any unpushed commit. Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure, make no unsafe change, explain why, and end your response with the line `REPAIR_BLOCKED`.
+
+  # Skipped when validation committed nothing. The lead judges whether any
+  # validation commit changes observable behavior and, if so, has the tester
+  # retest only that behavior. There is no further validation run: CI-fix
+  # validation covers anything pushed later.
+  - id: retest-validation-fixes
+    session: lead-agent
+    mode: autonomous
+    tools: [call_agent]
+    skip_if: 'sh: test "$(git rev-parse HEAD)" = "$(cat {{session_dir}}/output/validation-base-revision.txt)"'
+    prompt: |
+      Validation after review settled committed fixes to {{change_label}} "{{change_name}}". Read them with `git log --patch "$(cat {{session_dir}}/output/validation-base-revision.txt)..HEAD"`. Decide whether any of those commits changes observable behavior; hardening that leaves behavior unchanged (error paths, resource cleanup, internal refactors) needs no retest. If none changes behavior, say so and continue to next step.
+
+      If some do, run `mkdir -p "{{session_dir}}/scratch/acceptance-test"` before using codagent:call-agent with `session: acceptance-tester`, and require the child to use codagent:prepare-acceptance. Give it:
+      - approved artifacts: `{{change_dir}}/`;
+      - testing envelope and any `HT-*` obligations: `{{change_dir}}/test-plan.md`;
+      - implementation evidence: `{{session_dir}}/output/*session-report*.out` and `{{session_dir}}/audit.log`;
+      - evidence directory: `{{session_dir}}/output/`;
+      - scratch_dir: `{{session_dir}}/scratch/acceptance-test`;
+      - assumptions ledger: `{{session_dir}}/output/acceptance-assumptions.md`;
+      - prior tested revision: `{{session_dir}}/output/acceptance-tested-revision.txt`;
+      - the behavior-changing commits and the behavior to retest. Tell the tester to retest only that behavior and its direct neighbors, not the whole change.
+
+      Tell the tester: All temporary files, clones, build outputs, and servers' working directories must go under `scratch_dir`. Never use `/tmp`, `/private/tmp`, or `$TMPDIR` for them.
+
+      Follow codagent:call-agent's independent-verification and result-accounting rules rather than testing yourself. Fix each actionable defect it reports without expanding the approved scope, verifying with the project's own relevant checks as its AGENTS.md describes (never Agent Validator), then commit following the project's commit message conventions with the `[{{step_id}}]` prefix and push the branch without force-pushing, keeping the pull request in its current state. Do not run validation again.
+
+  - id: record-untested-commits
+    script: record-untested-commits.sh
+    script_inputs:
+      evidence_dir: "{{session_dir}}/output"

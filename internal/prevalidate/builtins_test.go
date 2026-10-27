@@ -1,6 +1,7 @@
 package prevalidate
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/cli"
@@ -60,7 +61,8 @@ func assertExactEmbeddedChildren(t *testing.T, parentRef string, steps []model.S
 
 	for i := range steps {
 		step := &steps[i]
-		if step.Workflow != "" {
+		// A target chosen by a caller param (validation_workflow) has no fixed ref.
+		if step.Workflow != "" && !strings.Contains(step.Workflow, "{{") {
 			childRef := loader.ResolveRelativeWorkflowPath(parentRef, step.Workflow)
 			if _, err := workflowcatalog.Parse(childRef); err != nil {
 				t.Errorf("step %q references unversioned child %q: %v", step.ID, step.Workflow, err)

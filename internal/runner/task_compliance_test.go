@@ -213,6 +213,8 @@ func newTaskWorkflowFixture(t *testing.T) taskWorkflowFixture {
 		taskWorkflowChangeDir + "/proposal.md":  "# Proposal\n",
 		taskWorkflowChangeDir + "/test-plan.md": "# Test plan\n",
 		taskWorkflowChangeDir + "/design.md":    "# Design\n",
+		// Config-gated validator steps run only in a configured project.
+		".validator/config.yml": "checks: {}\n",
 		taskWorkflowChangeDir + "/specs/demo/spec.md": "## ADDED Requirements\n\n### Requirement: Demo\n\nThe system SHALL demo.\n\n" +
 			"#### Scenario: Demo\n- **WHEN** it runs\n- **THEN** it demos\n",
 	}
@@ -228,6 +230,8 @@ func newTaskWorkflowFixture(t *testing.T) taskWorkflowFixture {
 	gitRun(t, repo, "add", ".")
 	gitRun(t, repo, "commit", "-q", "-m", "docs: define demo change")
 	gitRun(t, repo, "checkout", "-q", "-b", "demo-change")
+	// skip_if shell conditions run in the process working directory.
+	t.Chdir(repo)
 
 	return taskWorkflowFixture{repo: repo, sessionDir: t.TempDir(), validatorLog: validatorLog}
 }
