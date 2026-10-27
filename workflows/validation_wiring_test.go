@@ -139,3 +139,82 @@ func TestValidationPointsAbsentFromEarlierStages(t *testing.T) {
 		}
 	}
 }
+
+func TestScaffoldValidatorSetupIsOptional(t *testing.T) {
+	for _, file := range []string{"openspec/scaffold-v1.0.yaml", "spec-driven/scaffold-v1.0.yaml"} {
+		t.Run(file, func(t *testing.T) {
+			steps := loadWiring(t, file)
+			skipSetup := `sh: [ "{{validator_choice.setup}}" = "Skip" ]`
+			for _, id := range []string{"validator-init", "validator-setup"} {
+				step, ok := findWiring(steps, id)
+				if !ok || step.SkipIf != skipSetup {
+					t.Errorf("%s = %+v, want skip_if %q", id, step, skipSetup)
+				}
+			}
+			guidance, ok := findWiring(steps, "validator-skipped-guidance")
+			if !ok || guidance.SkipIf != `sh: [ "{{validator_choice.setup}}" != "Skip" ]` {
+				t.Errorf("validator-skipped-guidance = %+v, ok = %v", guidance, ok)
+			}
+			validate, ok := findWiring(steps, "validate")
+			if !ok || validate.Workflow != "{{validation_workflow}}" || validate.Params["repair_session"] != "implementor-agent" {
+				t.Errorf("validate = %+v, want the selected workflow repairing in implementor-agent", validate)
+			}
+			if _, ok := findWiring(steps, "run-validator"); ok {
+				t.Error("scaffold still runs the validator helper directly")
+			}
+		})
+	}
+}
+
+func TestScaffoldValidationRepairsInTheScaffoldSession(t *testing.T) {
+	for _, file := range []string{"openspec/scaffold-v1.0.yaml", "spec-driven/scaffold-v1.0.yaml"} {
+		body, err := fs.ReadFile(FS, file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Sessions []struct {
+				Name string `yaml:"name"`
+			} `yaml:"sessions"`
+			Steps []struct {
+				ID      string `yaml:"id"`
+				Session string `yaml:"session"`
+			} `yaml:"steps"`
+		}
+		if err := yaml.Unmarshal(body, &doc); err != nil {
+			t.Fatal(err)
+		}
+		declared := false
+		for _, s := range doc.Sessions {
+			declared = declared || s.Name == "implementor-agent"
+		}
+		creator := ""
+		for _, s := range doc.Steps {
+			if s.ID == "scaffold-project" {
+				creator = s.Session
+			}
+		}
+		if !declared || creator != "implementor-agent" {
+			t.Errorf("%s: implementor-agent declared = %v, scaffold-project session = %q", file, declared, creator)
+		}
+	}
+}
+
+func TestOnboardingValidatorSetupIsOptional(t *testing.T) {
+	steps := loadWiring(t, "onboarding/validator-v1.0.yaml")
+	const skipped = `sh: [ "{{validator_choice}}" = "skip" ]`
+	for i, step := range steps {
+		switch {
+		case step.ID == "intro-ui":
+			if step.SkipIf != "" {
+				t.Errorf("intro-ui skip_if = %q, want none", step.SkipIf)
+			}
+		case step.ID == "skip-guidance":
+			if step.SkipIf != `sh: [ "{{validator_choice}}" != "skip" ]` {
+				t.Errorf("skip-guidance skip_if = %q", step.SkipIf)
+			}
+		case step.SkipIf != skipped:
+			t.Errorf("step %d %s skip_if = %q, want %q", i, step.ID, step.SkipIf, skipped)
+		}
+	}
+}
