@@ -342,6 +342,7 @@ func TestRunValidatorRecordsFinalResultForPRGate(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
+			writeValidatorConfig(t, dir)
 			resultFile := filepath.Join(dir, "result.txt")
 			writeFakeBinary(t, dir, "runner", "#!/bin/sh\ncase \"$3\" in\n  task_file) echo '';;\n  result_file) echo \"$RESULT_FILE\";;\nesac\n")
 			writeFakeBinary(t, dir, "validator", "#!/bin/sh\n"+tc.validator+"\n")
@@ -359,6 +360,7 @@ func TestRunValidatorRecordsFinalResultForPRGate(t *testing.T) {
 
 func TestRunValidatorReadsTaskAndResultFileFromSameInput(t *testing.T) {
 	dir := t.TempDir()
+	writeValidatorConfig(t, dir)
 	resultFile := filepath.Join(dir, "result.txt")
 	writeFakeBinary(t, dir, "runner", "#!/bin/sh\njq -r --arg key \"$3\" '.[$key] // \"\"'\n")
 	writeFakeBinary(t, dir, "validator", "#!/bin/sh\nprintf '%s\\n' \"$@\" > validator-args\n")

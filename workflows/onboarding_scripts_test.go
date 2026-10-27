@@ -60,6 +60,7 @@ exit 99
 
 func TestCoreRunValidatorTreatsTaskFileAsData(t *testing.T) {
 	workdir := t.TempDir()
+	writeValidatorConfig(t, workdir)
 	binDir := t.TempDir()
 	writeFakeBinary(t, binDir, "agent-runner", `#!/bin/sh
 if [ "$1" = internal ] && [ "$2" = json-value ] && [ "$3" = task_file ]; then
@@ -103,6 +104,7 @@ printf '%s\n' "$@" > validator-args
 
 func TestCoreRunValidatorForwardsMetricsCorrelation(t *testing.T) {
 	workdir := t.TempDir()
+	writeValidatorConfig(t, workdir)
 	binDir := t.TempDir()
 	writeFakeBinary(t, binDir, "agent-runner", `#!/bin/sh
 printf ''
@@ -240,6 +242,7 @@ func TestTaskComplianceValidatorArguments(t *testing.T) {
 		for _, metrics := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/metrics=%v", value, metrics), func(t *testing.T) {
 				bin, dir := t.TempDir(), t.TempDir()
+				writeValidatorConfig(t, dir)
 				writeFakeBinary(t, bin, "runner", `#!/bin/sh
 exec jq -r --arg key "$3" '.[$key] // ""'
 `)
