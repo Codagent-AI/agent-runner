@@ -205,3 +205,49 @@ func TestValidationAgentValidatorRejectsBadSetup(t *testing.T) {
 		}
 	})
 }
+
+type commandRecorder struct{ commands []string }
+
+func (r *commandRecorder) RunShell(cmd string, _ bool, _ string) (ProcessResult, error) {
+	r.commands = append(r.commands, cmd)
+	return ProcessResult{Started: true}, nil
+}
+
+func (r *commandRecorder) RunScript(string, []byte, bool, string) (ProcessResult, error) {
+	return ProcessResult{Started: true}, nil
+}
+
+func (r *commandRecorder) RunAgent(*AgentProcessOptions) (ProcessResult, error) {
+	return ProcessResult{Started: true}, nil
+}
+
+// A sub-workflow binds an aliased param after defaults, whether the caller
+// passes an alias, a literal, or nothing.
+func TestSubWorkflowBindsAliasedParam(t *testing.T) {
+	dir := t.TempDir()
+	child := "name: child\nparams:\n  - name: mode\n    required: false\n    default: auto\n    aliases:\n      auto: builtin:core/validation-auto-v1.0.yaml\n      none: builtin:core/validation-none-v1.0.yaml\nsteps:\n  - id: show\n    command: echo {{mode}}\n"
+	if err := os.WriteFile(filepath.Join(dir, "child-v1.0.yaml"), []byte(child), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, passed, want string }{
+		{"alias", "none", "builtin:core/validation-none-v1.0.yaml"},
+		{"default", "", "builtin:core/validation-auto-v1.0.yaml"},
+		{"literal", "/abs/mine-v1.0.yaml", "/abs/mine-v1.0.yaml"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			params := map[string]string{}
+			if tc.passed != "" {
+				params["mode"] = tc.passed
+			}
+			step := &model.Step{ID: "call", Workflow: "child-v1.0.yaml", Params: params}
+			ctx := model.NewRootContext(&model.RootContextOptions{WorkflowFile: filepath.Join(dir, "parent-v1.0.yaml"), SessionDir: t.TempDir()})
+			runner := &commandRecorder{}
+			if outcome, err := DispatchStep(step, ctx, runner, &mockGlob{}, &mockLogger{}); err != nil || outcome != OutcomeSuccess {
+				t.Fatalf("outcome = %q, err = %v", outcome, err)
+			}
+			if len(runner.commands) != 1 || !strings.Contains(runner.commands[0], tc.want) {
+				t.Errorf("commands = %v, want one containing %q", runner.commands, tc.want)
+			}
+		})
+	}
+}
