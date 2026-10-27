@@ -72,6 +72,7 @@ steps:
 		{"auto", "auto", ""},
 		{"none", "none", ""},
 		{"agent-validator", "agent-validator", ""},
+		{"valid builtin reference", "builtin:core/validation-none-v1.0.yaml", ""},
 		{"valid absolute path", absValid, ""},
 		{"missing absolute path", filepath.Join(t.TempDir(), "missing-v1.0.yaml"), "missing-v1.0.yaml"},
 		{"invalid absolute path", absInvalid, "nowhere-v1.0.yaml"},

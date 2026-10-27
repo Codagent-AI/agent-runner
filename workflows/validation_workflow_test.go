@@ -155,6 +155,51 @@ func TestTopLevelWorkflowsDeclareValidationWorkflowIdentically(t *testing.T) {
 	}
 }
 
+// Every embedded file that declares validation_workflow declares it the same
+// way, and every current top-level workflow is among them.
+func TestEveryEmbeddedValidationWorkflowParamIsIdentical(t *testing.T) {
+	var first *paramDecl
+	declaring := map[string]bool{}
+	for _, ns := range []string{"core", "openspec", "spec-driven", "onboarding"} {
+		entries, err := fs.ReadDir(FS, ns)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			a := entry.Name()
+			if !strings.HasSuffix(a, ".yaml") {
+				continue
+			}
+			doc, _ := readWorkflowDoc(t, ns+"/"+a)
+			for i := range doc.Params {
+				p := doc.Params[i]
+				if p.Name != "validation_workflow" || len(p.Aliases) == 0 {
+					continue
+				}
+				declaring[ns+"/"+a] = true
+				if p.Default != "auto" {
+					t.Errorf("%s/%s default = %q, want auto", ns, a, p.Default)
+				}
+				if first == nil {
+					first = &p
+				} else if !mapsEqual(first.Aliases, p.Aliases) {
+					t.Errorf("%s/%s aliases differ: %v", ns, a, p.Aliases)
+				}
+			}
+		}
+	}
+	for _, want := range []string{
+		"openspec/change-v3.0.yaml", "spec-driven/change-v3.0.yaml", "openspec/simple-change-v2.0.yaml",
+		"spec-driven/simple-change-v2.0.yaml", "openspec/scaffold-v1.0.yaml", "spec-driven/scaffold-v1.0.yaml",
+		"core/implement-change-v3.0.yaml", "core/verify-change-v2.0.yaml", "core/accept-change-v2.0.yaml",
+		"core/finalize-pr-v2.0.yaml", "core/complete-simple-change-v2.0.yaml",
+	} {
+		if !declaring[want] {
+			t.Errorf("%s does not declare validation_workflow with aliases", want)
+		}
+	}
+}
+
 func mapsEqual(a, b map[string]string) bool {
 	if len(a) != len(b) {
 		return false
