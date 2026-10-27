@@ -1,0 +1,25 @@
+name: validation-none
+description: "Built-in validation workflow: pass without running anything"
+hidden: true
+
+params:
+  - name: repair_session
+    required: false
+    default: lead-agent
+  - name: task_file
+    required: false
+    default: ""
+  - name: task_compliance
+    required: false
+    default: "false"
+  - name: result_file
+    required: false
+    default: ""
+
+steps:
+  - id: record-skipped
+    command: |
+      if [ -n "{{result_file}}" ]; then
+        mkdir -p "$(dirname "{{result_file}}")"
+        printf 'SKIPPED\nvalidation workflow none selected\n' >"{{result_file}}"
+      fi

@@ -75,6 +75,7 @@ type Options struct {
 	ChildState         *model.NestedStepState
 	PreviousStep       *model.PreviousStepRecord
 	Crashes            []model.CrashRecord
+	Warnings           []model.WarningRecord
 	InteractiveAttempt *model.InteractiveAttemptMetadata
 	// NamedSessions and NamedSessionDecls are restored from state on --resume.
 	NamedSessions     map[string]string
@@ -153,6 +154,7 @@ func validateParams(workflow *model.Workflow, params map[string]string) error {
 		}
 		return fmt.Errorf("missing required parameter: %s", param.Name)
 	}
+	workflow.BindAliases(params)
 	return nil
 }
 
@@ -572,6 +574,7 @@ func buildExecutionContext(
 	}
 	ctx.RestorePreviousStep(opts.PreviousStep)
 	ctx.Crashes.Restore(opts.Crashes)
+	ctx.WarningOrigins.Restore(opts.Warnings)
 	if opts.LastSessionStepID != "" {
 		ctx.LastSessionStepID = opts.LastSessionStepID
 	}
@@ -761,6 +764,7 @@ func persistPreviousStep(rs *runState) {
 		}
 		state.Crashes = rs.ctx.Crashes.Records()
 		state.CrashObserved = len(state.Crashes) > 0
+		state.Warnings = rs.ctx.WarningOrigins.Records()
 	}); err != nil {
 		rs.log.Printf("agent-runner: warning: could not persist previous-step state: %v\n", err)
 	}
@@ -870,6 +874,7 @@ func finalizeRun(rs *runState, result WorkflowResult) {
 			}
 			state.Crashes = rs.ctx.Crashes.Records()
 			state.CrashObserved = len(state.Crashes) > 0
+			state.Warnings = rs.ctx.WarningOrigins.Records()
 		}); err != nil {
 			rs.log.Printf("agent-runner: warning: could not persist failed-run state: %v\n", err)
 		}
@@ -1196,6 +1201,7 @@ func writeStepState(step *model.Step, ctx *model.ExecutionContext, workflow *mod
 		ProfileSet:             resolvedProfileSet(ctx),
 		Crashes:                ctx.Crashes.Records(),
 		CrashObserved:          ctx.Crashes.ObservedUnder(nil),
+		Warnings:               ctx.WarningOrigins.Records(),
 	}
 	_ = stateio.WriteState(&state, stateDir)
 }

@@ -133,6 +133,7 @@ printf '%s\n' "$@" > validator-args
 
 func TestOpenSpecCreateChangeReportsUnvalidatedChanges(t *testing.T) {
 	workdir := t.TempDir()
+	writeValidatorConfig(t, workdir)
 	if err := os.MkdirAll(filepath.Join(workdir, "openspec", "changes"), 0o755); err != nil {
 		t.Fatalf("create openspec changes dir: %v", err)
 	}

@@ -57,7 +57,8 @@ func emitStepEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time
 	addStepFailureAuditData(ctx, step, outcome, data)
 	if step != nil && step.WarnOnFailure && (outcome == string(OutcomeFailed) || outcome == string(OutcomeExhausted)) {
 		data["status"] = "warning"
-		ctx.WarningOrigins.Add(prefix)
+		errMsg, _ := data["error"].(string)
+		ctx.WarningOrigins.Add(prefix, errMsg)
 	}
 	data["duration_ms"] = time.Since(startTime).Milliseconds()
 	emitAudit(ctx, audit.Event{

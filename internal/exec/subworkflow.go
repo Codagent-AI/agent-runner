@@ -434,6 +434,7 @@ func validateSubWorkflowParams(workflow *model.Workflow, resolvedParams map[stri
 		}
 		return fmt.Errorf("missing required parameter: %s", param.Name)
 	}
+	workflow.BindAliases(resolvedParams)
 	return nil
 }
 

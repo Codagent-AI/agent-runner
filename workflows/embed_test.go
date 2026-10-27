@@ -830,6 +830,7 @@ func newCommitChangePlanFixture(t *testing.T, script []byte) (repoDir string, ru
 	t.Helper()
 	repoDir = t.TempDir()
 	scriptPath := filepath.Join(t.TempDir(), "commit-change-plan.sh")
+	writeBookkeepingHelper(t, filepath.Dir(scriptPath))
 	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
@@ -841,6 +842,7 @@ func newCommitChangePlanFixture(t *testing.T, script []byte) (repoDir string, ru
 	}
 	runGitOutput(t, repoDir, "add", "README.md")
 	runGitOutput(t, repoDir, "commit", "-m", "chore: initialize fixture")
+	writeValidatorConfig(t, repoDir)
 
 	changeDir := filepath.Join(repoDir, "openspec", "changes", "demo")
 	if err := os.MkdirAll(changeDir, 0o755); err != nil {
@@ -1894,6 +1896,7 @@ func TestCoreCommitChangePlanIncludesOpenSpecBootstrapConfig(t *testing.T) {
 
 	tempDir := t.TempDir()
 	scriptPath := filepath.Join(tempDir, "commit-change-plan.sh")
+	writeBookkeepingHelper(t, filepath.Dir(scriptPath))
 	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
@@ -1978,6 +1981,7 @@ func TestCoreCommitChangePlanUsesTicketSubjectFromChangeName(t *testing.T) {
 
 	tempDir := t.TempDir()
 	scriptPath := filepath.Join(tempDir, "commit-change-plan.sh")
+	writeBookkeepingHelper(t, filepath.Dir(scriptPath))
 	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
@@ -2033,6 +2037,7 @@ func TestCoreCommitChangePlanRejectsRepositoryRoot(t *testing.T) {
 
 	tempDir := t.TempDir()
 	scriptPath := filepath.Join(tempDir, "commit-change-plan.sh")
+	writeBookkeepingHelper(t, filepath.Dir(scriptPath))
 	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
@@ -2077,6 +2082,7 @@ func TestCoreCommitChangePlanReplaysAsNoOpWhenAlreadyCommitted(t *testing.T) {
 
 	tempDir := t.TempDir()
 	scriptPath := filepath.Join(tempDir, "commit-change-plan.sh")
+	writeBookkeepingHelper(t, filepath.Dir(scriptPath))
 	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
@@ -2221,6 +2227,8 @@ func TestCreateChangeScriptsExplainMissingAgentValidator(t *testing.T) {
 
 			tempDir := t.TempDir()
 			scriptPath := filepath.Join(tempDir, "create-change.sh")
+			writeBookkeepingHelper(t, filepath.Dir(scriptPath))
+			writeValidatorConfig(t, tempDir)
 			if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
 				t.Fatalf("write script: %v", err)
 			}
@@ -2811,5 +2819,29 @@ func TestEmbeddedTaskComplianceCallers(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// writeBookkeepingHelper installs the validator bookkeeping gate next to a
+// script copied out of the embedded catalog, as materialization does.
+func writeBookkeepingHelper(t *testing.T, dir string) {
+	t.Helper()
+	helper, err := ReadAsset("core/validator-bookkeeping.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(core/validator-bookkeeping.sh): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "validator-bookkeeping.sh"), helper, 0o700); err != nil {
+		t.Fatalf("write validator-bookkeeping.sh: %v", err)
+	}
+}
+
+// writeValidatorConfig marks dir as a project that has set up Agent Validator.
+func writeValidatorConfig(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, ".validator"), 0o755); err != nil {
+		t.Fatalf("create .validator: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".validator", "config.yml"), []byte("checks: {}\n"), 0o600); err != nil {
+		t.Fatalf("write validator config: %v", err)
 	}
 }

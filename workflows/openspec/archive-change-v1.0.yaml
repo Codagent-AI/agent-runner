@@ -1,10 +1,13 @@
 name: archive-change
-description: "Move an approved OpenSpec change into the archive, verify the commit, and advance the Validator baseline."
+description: "Move an approved OpenSpec change into the archive, verify the commit, and advance the Validator baseline when the selected validation workflow runs Agent Validator."
 hidden: true
 
 params:
   - name: change_name
     required: true
+  - name: validation_workflow
+    required: false
+    default: ""
 
 sessions:
   - name: lead-agent
@@ -52,4 +55,6 @@ steps:
         Never declare success yourself; the check that runs after you decides. If only a human can resolve the failure (a missing credential, permission, or a decision you cannot make safely), make no unsafe change, explain the verified blocker, and end your response with the line `REPAIR_BLOCKED`.
 
   - id: advance-validator-baseline
-    command: agent-validator skip
+    script: advance-validator-baseline.sh
+    script_inputs:
+      validation_workflow: "{{validation_workflow}}"

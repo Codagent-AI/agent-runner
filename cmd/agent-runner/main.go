@@ -2256,6 +2256,16 @@ func prepareFreshRun(req *freshRunRequest) (*runner.RunHandle, error) {
 		if _, err := prevalidate.Pipeline(req.SourceRef, params, prevalidate.Strict, prevalidate.Options{ProfileOverride: req.ProfileOverride}); err != nil {
 			return nil, err
 		}
+	} else if len(params) > 0 {
+		// Builtins are checked at build time, but targets chosen by caller-supplied
+		// params (such as validation_workflow) are only known now.
+		supplied := make([]string, 0, len(params))
+		for name := range params {
+			supplied = append(supplied, name)
+		}
+		if _, err := prevalidate.CallerTargets(req.SourceRef, params, supplied, prevalidate.Options{ProfileOverride: req.ProfileOverride}); err != nil {
+			return nil, err
+		}
 	}
 
 	var eng engine.Engine

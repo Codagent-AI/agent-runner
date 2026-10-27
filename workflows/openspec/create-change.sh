@@ -3,24 +3,29 @@ set -eu
 
 payload=$(cat)
 script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
+. "$script_dir/validator-bookkeeping.sh"
 change_name=$(printf '%s' "$payload" | "$script_dir/validate-change-name.sh")
 
-if ! command -v agent-validator >/dev/null 2>&1; then
-  printf 'create-change: agent-validator is not installed; install it before creating a change\n' >&2
-  exit 127
-fi
+bookkeeping=$(validator_bookkeeping "$(payload_validation_workflow "$payload")")
 
-set +e
-agent-validator detect
-status=$?
-set -e
+if [ "$bookkeeping" = run ]; then
+  if ! command -v agent-validator >/dev/null 2>&1; then
+    printf 'create-change: agent-validator is not installed; install it before creating a change\n' >&2
+    exit 127
+  fi
 
-if [ "$status" -eq 0 ]; then
-  printf 'Unvalidated changes detected. Run agent-validator before planning.\n' >&2
-  exit 1
-fi
-if [ "$status" -ne 2 ]; then
-  exit "$status"
+  set +e
+  agent-validator detect
+  status=$?
+  set -e
+
+  if [ "$status" -eq 0 ]; then
+    printf 'Unvalidated changes detected. Run agent-validator before planning.\n' >&2
+    exit 1
+  fi
+  if [ "$status" -ne 2 ]; then
+    exit "$status"
+  fi
 fi
 
 change_dir="openspec/changes/$change_name"

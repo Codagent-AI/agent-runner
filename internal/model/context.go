@@ -2,6 +2,7 @@
 package model
 
 import (
+	"sort"
 	"strconv"
 	"sync"
 
@@ -30,7 +31,14 @@ type AgentDeprecationState struct {
 // It is shared by nested contexts, including concurrently dispatched steps.
 type WarningState struct {
 	mu      sync.Mutex
-	origins map[string]struct{}
+	origins map[string]string
+}
+
+// WarningRecord is one persisted warning origin: its complete audit prefix and
+// the failure message that was downgraded to a warning.
+type WarningRecord struct {
+	Path    string `json:"path"`
+	Message string `json:"message,omitempty"`
 }
 
 // IntakeHandoffState coordinates the one-time automatic intake delivery for a
@@ -56,17 +64,44 @@ func NewAgentDeprecationState() *AgentDeprecationState {
 
 // NewWarningState creates an empty run-scoped warning origin registry.
 func NewWarningState() *WarningState {
-	return &WarningState{origins: make(map[string]struct{})}
+	return &WarningState{origins: make(map[string]string)}
 }
 
 // Add records a warning origin by its complete audit prefix.
-func (s *WarningState) Add(prefix string) {
+func (s *WarningState) Add(prefix, message string) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.origins[prefix] = struct{}{}
+	s.origins[prefix] = message
+}
+
+// Records returns the recorded origins in path order for persistence.
+func (s *WarningState) Records() []WarningRecord {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]WarningRecord, 0, len(s.origins))
+	for path, message := range s.origins {
+		out = append(out, WarningRecord{Path: path, Message: message})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
+}
+
+// Restore seeds origins recorded by an earlier attempt of the same run.
+func (s *WarningState) Restore(records []WarningRecord) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range records {
+		s.origins[r.Path] = r.Message
+	}
 }
 
 // Count returns the number of distinct warning origins recorded for the run.

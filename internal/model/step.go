@@ -706,6 +706,32 @@ type Param struct {
 	Name     string `yaml:"name" json:"name"`
 	Required *bool  `yaml:"required,omitempty" json:"required,omitempty"`
 	Default  string `yaml:"default,omitempty" json:"default,omitempty"`
+	// Aliases maps short values to the full value the workflow binds, applied
+	// after default substitution.
+	Aliases map[string]string `yaml:"aliases,omitempty" json:"aliases,omitempty"`
+}
+
+// Bind returns the value the workflow sees for a supplied or defaulted value:
+// the alias target when value is an alias key, else value unchanged. Full
+// values are never alias keys, so binding is idempotent.
+func (p *Param) Bind(value string) string {
+	if target, ok := p.Aliases[value]; ok {
+		return target
+	}
+	return value
+}
+
+// BindAliases replaces every aliased value in params with its target.
+func (w *Workflow) BindAliases(params map[string]string) {
+	for i := range w.Params {
+		p := &w.Params[i]
+		if len(p.Aliases) == 0 {
+			continue
+		}
+		if v, ok := params[p.Name]; ok {
+			params[p.Name] = p.Bind(v)
+		}
+	}
 }
 
 // IsRequired returns whether this param is required (defaults to true).
@@ -787,6 +813,11 @@ func (w *Workflow) Validate(knownCLIs []string) error {
 	for _, param := range w.Params {
 		if param.Name == IntakeHandoffVar {
 			return fmt.Errorf(`parameter name %q is reserved`, IntakeHandoffVar)
+		}
+		for key, target := range param.Aliases {
+			if key == "" || target == "" {
+				return fmt.Errorf(`parameter %q has an empty alias key or value`, param.Name)
+			}
 		}
 	}
 

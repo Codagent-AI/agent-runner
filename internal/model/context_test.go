@@ -17,7 +17,7 @@ func TestWarningStateSafelyDeduplicatesConcurrentOrigins(t *testing.T) {
 		workers.Add(1)
 		go func(index int) {
 			defer workers.Done()
-			state.Add(fmt.Sprintf("step-%d", index%4))
+			state.Add(fmt.Sprintf("step-%d", index%4), "")
 		}(i)
 	}
 	workers.Wait()
@@ -705,4 +705,20 @@ func TestSeedSessionPropagation(t *testing.T) {
 			t.Fatalf("expected _seed propagated through nesting, got %q", child2.SessionIDs["_seed"])
 		}
 	})
+}
+
+func TestWarningStateRecordsRoundTrip(t *testing.T) {
+	state := NewWarningState()
+	state.Add("b", "second")
+	state.Add("a", "first")
+	want := []WarningRecord{{Path: "a", Message: "first"}, {Path: "b", Message: "second"}}
+	if diff := cmp.Diff(want, state.Records()); diff != "" {
+		t.Fatalf("records mismatch (-want +got):\n%s", diff)
+	}
+	restored := NewWarningState()
+	restored.Restore(want)
+	restored.Add("a", "first")
+	if got := restored.Count(); got != 2 {
+		t.Fatalf("restored count = %d, want 2", got)
+	}
 }

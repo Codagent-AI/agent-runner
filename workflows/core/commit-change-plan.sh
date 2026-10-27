@@ -2,6 +2,8 @@
 set -eu
 
 payload=$(cat)
+script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
+. "$script_dir/validator-bookkeeping.sh"
 
 if command -v jq >/dev/null 2>&1; then
   change_name=$(printf '%s' "$payload" | jq -er '.change_name | select(type == "string")')
@@ -47,8 +49,12 @@ case "$skip_validator" in
     ;;
 esac
 
+# The baseline advances only when the caller has not skipped the validator and the
+# selected validation workflow actually runs Agent Validator. Callers without a
+# validation_workflow keep config gating alone.
 advance_validator_baseline() {
-  if [ "$skip_validator" = "false" ]; then
+  if [ "$skip_validator" = "false" ] &&
+     [ "$(validator_bookkeeping "$(payload_validation_workflow "$payload")")" = run ]; then
     agent-validator skip
   fi
 }
