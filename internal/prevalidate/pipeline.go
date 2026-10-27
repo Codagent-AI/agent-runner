@@ -217,19 +217,8 @@ func (s *walkState) walkFile(path string, params map[string]string, isSub bool, 
 	if err := createEngine(path, &workflow); err != nil {
 		return err
 	}
-	for _, decl := range workflow.Sessions {
-		canonicalAgent, warning := config.CanonicalAgentName(decl.Agent)
-		if warning != nil {
-			s.addAgentDeprecations(*warning)
-		}
-		if existing, ok := s.sessionDecls[decl.Name]; ok && existing != canonicalAgent {
-			return ValidationError{
-				File:    path,
-				Agent:   decl.Agent,
-				Message: fmt.Sprintf("incompatible named session declaration %q: agent %q conflicts with %q", decl.Name, decl.Agent, existing),
-			}
-		}
-		s.sessionDecls[decl.Name] = canonicalAgent
+	if err := s.registerSessions(path, workflow.Sessions); err != nil {
+		return err
 	}
 
 	visibleParams := bindParamDefaults(workflow.Params, params)
@@ -753,4 +742,24 @@ func probeError(key probeKey, src probeSource, strength cli.ProbeStrength, err e
 		IsProbe:       true,
 		Message:       err.Error(),
 	}
+}
+
+// registerSessions records a workflow's named-session declarations, rejecting
+// one that conflicts with a declaration already made earlier in the walk.
+func (s *walkState) registerSessions(path string, decls []model.SessionDecl) error {
+	for _, decl := range decls {
+		canonicalAgent, warning := config.CanonicalAgentName(decl.Agent)
+		if warning != nil {
+			s.addAgentDeprecations(*warning)
+		}
+		if existing, ok := s.sessionDecls[decl.Name]; ok && existing != canonicalAgent {
+			return ValidationError{
+				File:    path,
+				Agent:   decl.Agent,
+				Message: fmt.Sprintf("incompatible named session declaration %q: agent %q conflicts with %q", decl.Name, decl.Agent, existing),
+			}
+		}
+		s.sessionDecls[decl.Name] = canonicalAgent
+	}
+	return nil
 }

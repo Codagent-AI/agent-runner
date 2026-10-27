@@ -212,3 +212,49 @@ func TestCheckDraftPRAcceptReady(t *testing.T) {
 		})
 	}
 }
+
+// run-validator.sh runs nothing and records SKIPPED when the project has no
+// validator configuration; with configuration it invokes the validator.
+func TestRunValidatorScriptGatesOnConfig(t *testing.T) {
+	jq, err := osexec.LookPath("jq")
+	if err != nil {
+		t.Skip("jq not available")
+	}
+	shim := filepath.Join(t.TempDir(), "runner")
+	if err := os.WriteFile(shim, []byte("#!/bin/sh\nexec "+jq+" -r --arg key \"$3\" '.[$key] // \"\"'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := materializeAsset(t, "core/run-validator.sh")
+	for _, tc := range []struct {
+		name       string
+		config     bool
+		wantResult string
+	}{{"unconfigured", false, "SKIPPED"}, {"configured", true, "PASS"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			project := t.TempDir()
+			if tc.config {
+				writeValidatorConfig(t, project)
+			}
+			calls := filepath.Join(t.TempDir(), "calls")
+			validator := filepath.Join(t.TempDir(), "agent-validator")
+			if err := os.WriteFile(validator, []byte("#!/bin/sh\necho called >>"+calls+"\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			result := filepath.Join(t.TempDir(), "result.txt")
+			cmd := osexec.Command("sh", script)
+			cmd.Dir = project
+			cmd.Env = append(os.Environ(), "AGENT_RUNNER_EXECUTABLE="+shim, "AGENT_RUNNER_VALIDATOR_EXECUTABLE="+validator)
+			cmd.Stdin = strings.NewReader(`{"task_file":"","task_compliance":"false","result_file":"` + result + `"}` + "\n")
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("run-validator.sh: %v\n%s", err, out)
+			}
+			if got := strings.SplitN(readText(t, result), "\n", 2)[0]; got != tc.wantResult {
+				t.Errorf("result = %q, want %q", got, tc.wantResult)
+			}
+			_, statErr := os.Stat(calls)
+			if called := statErr == nil; called != tc.config {
+				t.Errorf("validator called = %v, want %v", called, tc.config)
+			}
+		})
+	}
+}

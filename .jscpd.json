@@ -19,7 +19,6 @@
     "workflows/core/implement-change-v1.0.yaml",
     "workflows/core/implement-change-v2.0.yaml",
     "workflows/core/implement-task-v1.0.yaml",
-    "workflows/core/run-validator-v1.0.yaml",
     "workflows/core/verify-change-v1.0.yaml",
     "workflows/openspec/change-v1.0.yaml",
     "workflows/openspec/change-v2.0.yaml",

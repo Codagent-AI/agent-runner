@@ -254,3 +254,31 @@ func TestArchiveBaselineAdvanceFollowsSelection(t *testing.T) {
 		})
 	}
 }
+
+// The current spec-driven simple-change detection step (guard-clean-tree.sh)
+// runs detect only when the selected validation workflow runs Agent Validator.
+func TestGuardCleanTreeFollowsSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name, selection    string
+		config, installed  bool
+		detectExit         int
+		wantOK, wantDetect bool
+	}{
+		{"none in configured project", "none", true, true, 0, true, false},
+		{"auto without config", "auto", false, false, 2, true, false},
+		{"auto with config, clean", "auto", true, true, 2, true, true},
+		{"auto with config, unvalidated changes", "auto", true, true, 0, false, true},
+		{"agent-validator, clean", "agent-validator", true, true, 2, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newBookkeepingEnv(t, "spec-driven", tc.config, tc.installed, tc.detectExit)
+			out, err := env.run("guard-clean-tree.sh", selectionPayload(tc.selection))
+			if (err == nil) != tc.wantOK {
+				t.Fatalf("ok = %v, want %v; output %q", err == nil, tc.wantOK, out)
+			}
+			if detected := len(env.validatorCalls()) > 0; detected != tc.wantDetect {
+				t.Errorf("detect ran = %v, want %v", detected, tc.wantDetect)
+			}
+		})
+	}
+}

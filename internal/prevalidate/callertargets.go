@@ -51,6 +51,9 @@ func (w *callerWalk) file(path string, params map[string]string, derived map[str
 	if err != nil {
 		return ValidationError{File: path, Message: err.Error()}
 	}
+	if err := w.registerSessions(path, workflow.Sessions); err != nil {
+		return err
+	}
 	visible := bindParamDefaults(workflow.Params, params)
 	names := workflowParamNames(workflow.Params)
 	return w.steps(path, workflow.Steps, visible, names, derived, map[string]bool{})

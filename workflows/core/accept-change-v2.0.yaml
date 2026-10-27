@@ -66,7 +66,7 @@ steps:
     session: lead-agent
     mode: interactive
     prompt: |
-      Recommend re-acceptance testing if changes were made during assumption review or testing and refinement.
+      Recommend re-acceptance testing if changes were made since the last tested revision: during assumption review, during testing and refinement, or by the validation run after acceptance testing (its commits are listed in the `## Validation` section of the handoff).
 
       If nothing changed, state that no re-acceptance testing is needed. Otherwise, briefly show the user everything that changed since the last tested revision (`{{session_dir}}/output/acceptance-tested-revision.txt`), including the validation commits listed in the `## Validation` section of `{{session_dir}}/output/acceptance-handoff.md`, describe the exploration you would run on those changes, and ask whether they want it run.
 

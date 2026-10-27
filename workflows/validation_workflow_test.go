@@ -2,12 +2,16 @@ package builtinworkflows
 
 import (
 	"bytes"
+	"fmt"
 	"io/fs"
 	osexec "os/exec"
+	pathpkg "path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"gopkg.in/yaml.v3"
 )
 
@@ -160,6 +164,7 @@ func TestTopLevelWorkflowsDeclareValidationWorkflowIdentically(t *testing.T) {
 func TestEveryEmbeddedValidationWorkflowParamIsIdentical(t *testing.T) {
 	var first *paramDecl
 	declaring := map[string]bool{}
+	bound := map[string]bool{}
 	for _, ns := range []string{"core", "openspec", "spec-driven", "onboarding"} {
 		entries, err := fs.ReadDir(FS, ns)
 		if err != nil {
@@ -173,7 +178,12 @@ func TestEveryEmbeddedValidationWorkflowParamIsIdentical(t *testing.T) {
 			doc, _ := readWorkflowDoc(t, ns+"/"+a)
 			for i := range doc.Params {
 				p := doc.Params[i]
-				if p.Name != "validation_workflow" || len(p.Aliases) == 0 {
+				if p.Name != "validation_workflow" {
+					continue
+				}
+				if len(p.Aliases) == 0 {
+					// Only the three bookkeeping helpers take the already-bound value.
+					bound[ns+"/"+a] = true
 					continue
 				}
 				declaring[ns+"/"+a] = true
@@ -187,6 +197,12 @@ func TestEveryEmbeddedValidationWorkflowParamIsIdentical(t *testing.T) {
 				}
 			}
 		}
+	}
+	wantBound := map[string]bool{
+		"core/commit-change-plan-v1.0.yaml": true, "core/commit-definition-v1.0.yaml": true, "openspec/archive-change-v1.0.yaml": true,
+	}
+	if diff := cmp.Diff(wantBound, bound); diff != "" {
+		t.Errorf("declarations without aliases (-want +got):\n%s", diff)
 	}
 	for _, want := range []string{
 		"openspec/change-v3.0.yaml", "spec-driven/change-v3.0.yaml", "openspec/simple-change-v2.0.yaml",
@@ -226,40 +242,91 @@ func TestImplementTaskV2HasNoValidatorSteps(t *testing.T) {
 	}
 }
 
-// Current workflows reach Agent Validator only through a validation workflow:
-// no current file runs it directly or composes the validator helper.
+// Current workflows reach Agent Validator only through a validation workflow.
+// The walk starts at every current top-level workflow, follows each static
+// sub-workflow reference (a {{validation_workflow}} target is the allowed way
+// in), and checks every reached file and every script a reached step runs.
 func TestCurrentWorkflowsInvokeValidatorOnlyInValidationWorkflows(t *testing.T) {
-	allowed := map[string]bool{
-		"core/validation-agent-validator-v1.0.yaml": true,
-		"core/run-validator-v1.0.yaml":              true,
+	roots := []string{
+		"openspec/change-v3.0.yaml", "openspec/simple-change-v2.0.yaml", "openspec/scaffold-v1.0.yaml",
+		"spec-driven/change-v3.0.yaml", "spec-driven/simple-change-v2.0.yaml", "spec-driven/scaffold-v1.0.yaml",
+		"core/implement-change-v3.0.yaml",
 	}
-	currentVersions := []string{
-		"core/implement-change-v3.0.yaml", "core/verify-change-v2.0.yaml", "core/accept-change-v2.0.yaml",
-		"core/finalize-pr-v2.0.yaml", "core/implement-task-v2.0.yaml", "core/complete-simple-change-v2.0.yaml",
-		"openspec/change-v3.0.yaml", "openspec/simple-change-v2.0.yaml",
-		"spec-driven/change-v3.0.yaml", "spec-driven/simple-change-v2.0.yaml",
-		"core/validation-auto-v1.0.yaml", "core/validation-none-v1.0.yaml",
+	// Steps that set Agent Validator up on request, and the gated bookkeeping
+	// scripts, may name it.
+	setupSteps := map[string]bool{"validator-choice": true, "validator-init": true, "validator-setup": true, "validator-skipped-guidance": true}
+	gatedScripts := map[string]bool{
+		"create-change.sh": true, "commit-change-plan.sh": true, "advance-validator-baseline.sh": true,
+		"guard-clean-tree.sh": true, "validator-bookkeeping.sh": true,
 	}
-	for _, path := range currentVersions {
-		if allowed[path] {
-			continue
+	idPattern := regexp.MustCompile(`^\s*- id: (\S+)`)
+	scriptPattern := regexp.MustCompile(`^\s*script: (\S+)`)
+	refPattern := regexp.MustCompile(`^\s*workflow: "?([^"\s]+)"?`)
+	invokePattern := regexp.MustCompile(`agent-validator (run|check|review)\b`)
+
+	seen := map[string]bool{}
+	var walk func(path string)
+	walk = func(path string) {
+		if seen[path] {
+			return
 		}
+		seen[path] = true
 		_, body := readWorkflowDoc(t, path)
+		step := ""
 		for n, line := range strings.Split(body, "\n") {
-			trimmed := strings.TrimSpace(line)
-			if strings.Contains(trimmed, "run-validator") {
-				t.Errorf("%s:%d composes the validator helper: %s", path, n+1, trimmed)
+			if m := idPattern.FindStringSubmatch(line); m != nil {
+				step = m[1]
 			}
-			if !strings.Contains(trimmed, "agent-validator run") && !strings.Contains(trimmed, "agent-validator check") && !strings.Contains(trimmed, "agent-validator review") {
+			where := fmt.Sprintf("%s:%d", path, n+1)
+			if m := scriptPattern.FindStringSubmatch(line); m != nil {
+				name := m[1]
+				if name == "run-validator.sh" {
+					t.Errorf("%s runs the validator script directly", where)
+				}
+				if !gatedScripts[name] && scriptMentionsValidator(t, path, name) {
+					t.Errorf("%s runs %s, which invokes Agent Validator outside the gated set", where, name)
+				}
+			}
+			if m := refPattern.FindStringSubmatch(line); m != nil {
+				target := m[1]
+				switch {
+				case strings.Contains(target, "{{"):
+				case strings.Contains(target, "run-validator"):
+					t.Errorf("%s composes the validator helper %s", where, target)
+				default:
+					walk(pathpkg.Join(pathpkg.Dir(path), target))
+				}
+			}
+			lower := strings.ToLower(line)
+			if setupSteps[step] || !invokePattern.MatchString(line) {
 				continue
 			}
-			lower := strings.ToLower(trimmed)
-			if strings.Contains(lower, "do not run") || strings.Contains(lower, "never run") || strings.Contains(lower, "do not") {
+			if strings.Contains(lower, "do not") || strings.Contains(lower, "never") {
 				continue
 			}
-			t.Errorf("%s:%d runs Agent Validator directly: %s", path, n+1, trimmed)
+			t.Errorf("%s runs Agent Validator directly: %s", where, strings.TrimSpace(line))
 		}
 	}
+	for _, root := range roots {
+		walk(root)
+	}
+	if len(seen) < 10 {
+		t.Errorf("walk reached only %d files: %v", len(seen), seen)
+	}
+}
+
+// scriptMentionsValidator reports whether the named script, in the workflow's
+// namespace or core, invokes the validator CLI.
+func scriptMentionsValidator(t *testing.T, workflowPath, script string) bool {
+	t.Helper()
+	for _, dir := range []string{pathpkg.Dir(workflowPath), "core"} {
+		body, err := fs.ReadFile(FS, pathpkg.Join(dir, script))
+		if err == nil {
+			return regexp.MustCompile(`agent-validator\s+(run|check|review|detect|skip)\b`).Match(body)
+		}
+	}
+	t.Fatalf("script %s not found for %s", script, workflowPath)
+	return false
 }
 
 func TestValidationBuiltinsAcceptOnlyNamedRepairSessions(t *testing.T) {

@@ -13,6 +13,10 @@ Common step types:
 
 Captured values can be interpolated later with `{{name}}`. Built-in onboarding workflows use this to pass choices and command output between steps without writing project files.
 
+## Validation Is Optional
+
+Agent Validator is optional. Built-in change workflows validate through a per-run `validation_workflow` choice: `auto` (the default) runs Agent Validator only when the project has `.validator/config.yml`, `agent-validator` requires it, and `none` skips validation. Projects without Agent Validator rely on their own linters, tests, and CI, as their `AGENTS.md` describes.
+
 ## Interactive Continuation
 
 Interactive agent steps run in a live terminal session. The workflow waits there until the current step sends an authenticated completion event:

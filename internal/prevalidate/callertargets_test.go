@@ -129,3 +129,28 @@ func TestCallerTargetsFollowsProvenanceThroughNestedHelpers(t *testing.T) {
 		})
 	}
 }
+
+// A custom validation workflow declaring a named session that conflicts with
+// the caller's declaration is rejected before the run starts.
+func TestCallerTargetsRejectsConflictingNamedSession(t *testing.T) {
+	conflicting := writeWorkflow(t, t.TempDir(), "clash-v1.0.yaml", `
+name: clash
+params:
+  - name: repair_session
+    required: false
+  - name: result_file
+    required: false
+sessions:
+  - name: implementor-agent
+    agent: lead
+steps:
+  - id: ok
+    command: "true"
+`)
+	opts, _, _ := fakeOptions(t, validationAgentsConfig())
+	params := implementChangeParams(conflicting)
+	_, err := CallerTargets("builtin:core/implement-change-v3.0.yaml", params, supplied(params), opts)
+	if err == nil || !strings.Contains(err.Error(), "incompatible named session declaration") {
+		t.Fatalf("error = %v, want a session conflict", err)
+	}
+}

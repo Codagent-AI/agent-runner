@@ -66,7 +66,7 @@ func (r *finalizeRunner) RunAgent(options *AgentProcessOptions) (ProcessResult, 
 
 // runCIFixLoop dispatches finalize-pr's ci-fix-loop with the given CI reports
 // and a custom validation workflow that records itself and ends as validationExit.
-func runCIFixLoop(t *testing.T, reports []string, validationExit string) (outcome StepOutcome, events []string) {
+func runCIFixLoop(t *testing.T, reports []string, validationExit string) (outcome StepOutcome, events []string, warnings int) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	const ref = "builtin:core/finalize-pr-v2.0.yaml"
@@ -97,7 +97,7 @@ func runCIFixLoop(t *testing.T, reports []string, validationExit string) (outcom
 	if err != nil {
 		t.Fatalf("ci-fix-loop: %v (events %v)", err, runner.events)
 	}
-	return outcome, runner.events
+	return outcome, runner.events, ctx.WarningOrigins.Count()
 }
 
 // INT-004: a CI fix is committed, validated, pushed, and head-checked before
@@ -105,18 +105,24 @@ func runCIFixLoop(t *testing.T, reports []string, validationExit string) (outcom
 func TestFinalizeCIFixValidatesBeforePush(t *testing.T) {
 	failed, passed := "CI failed.\n\nCI_FAILED\n", "CI is green.\n\nCI_PASSED\n"
 	t.Run("green first time runs no fix, validation, or push", func(t *testing.T) {
-		outcome, events := runCIFixLoop(t, []string{passed}, "0")
+		outcome, events, warnings := runCIFixLoop(t, []string{passed}, "0")
 		if outcome != OutcomeSuccess {
 			t.Fatalf("outcome = %q; events %v", outcome, events)
+		}
+		if warnings != 0 {
+			t.Errorf("warning origins = %d, want none", warnings)
 		}
 		if diff := cmp.Diff([]string{"ci-wait"}, events); diff != "" {
 			t.Errorf("events (-want +got):\n%s", diff)
 		}
 	})
 	t.Run("fix is validated before it is pushed", func(t *testing.T) {
-		outcome, events := runCIFixLoop(t, []string{failed, passed}, "0")
+		outcome, events, warnings := runCIFixLoop(t, []string{failed, passed}, "0")
 		if outcome != OutcomeSuccess {
 			t.Fatalf("outcome = %q; events %v", outcome, events)
+		}
+		if warnings != 0 {
+			t.Errorf("warning origins = %d, want none for a passing validation", warnings)
 		}
 		want := []string{"ci-wait", "fix-pr", "validation", "push", `head-check:{"accept_ready":"true","attempts":"10","interval_seconds":"3"}`, "ci-wait"}
 		if len(events) != len(want) {
@@ -135,9 +141,12 @@ func TestFinalizeCIFixValidatesBeforePush(t *testing.T) {
 		}
 	})
 	t.Run("red validation still pushes and CI runs on the fix", func(t *testing.T) {
-		outcome, events := runCIFixLoop(t, []string{failed, passed}, "1")
+		outcome, events, warnings := runCIFixLoop(t, []string{failed, passed}, "1")
 		if outcome != OutcomeSuccess {
 			t.Fatalf("outcome = %q; events %v", outcome, events)
+		}
+		if warnings != 1 {
+			t.Errorf("warning origins = %d, want 1 for the red validation", warnings)
 		}
 		if countEvents(events, "push") != 1 || countEvents(events, "ci-wait") != 2 || countEvents(events, "validation") != 1 {
 			t.Errorf("events = %v, want one validation, one push, two CI waits", events)

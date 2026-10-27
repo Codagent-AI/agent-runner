@@ -1,9 +1,15 @@
 # A bad validation_workflow selection is rejected before any step runs, naming
-# the target, and creates no change directory.
-! exec agent-runner run core:implement-change change_name=demo change_dir=openspec/changes/demo change_label=x change_kind=openspec artifact_validation_instruction=x validation_workflow=foo
+# the target: no change directory, no run state, and no audit log.
+! exec agent-runner run openspec:change change_name=demo validation_workflow=foo
 stderr 'foo'
 ! exists openspec/changes/demo
+! exists $HOME/.agent-runner/projects
 
-! exec agent-runner run core:implement-change change_name=demo change_dir=openspec/changes/demo change_label=x change_kind=openspec artifact_validation_instruction=x validation_workflow=/no/such/dir/missing-v1.0.yaml
+! exec agent-runner run openspec:change change_name=demo validation_workflow=/no/such/dir/missing-v1.0.yaml
 stderr 'missing-v1.0.yaml'
 ! exists openspec/changes/demo
+! exists $HOME/.agent-runner/projects
+
+! exec agent-runner run core:implement-change change_name=demo change_dir=openspec/changes/demo change_label=x change_kind=openspec artifact_validation_instruction=x validation_workflow=foo
+stderr 'foo'
+! exists $HOME/.agent-runner/projects

@@ -14,11 +14,18 @@ params:
     default: ""
 
 steps:
+  # Without .validator/config.yml the helper runs nothing: run-validator.sh records
+  # SKIPPED and succeeds, so the loop breaks and the final check is skipped.
+  - id: detect-config
+    command: 'if [ -f .validator/config.yml ]; then printf configured; else printf unconfigured; fi'
+    capture: validator_config
+
   - id: check-task-compliance
     script: check-task-compliance.sh
     script_inputs:
       task_compliance: "{{task_compliance}}"
       task_file: "{{task_file}}"
+    skip_if: 'sh: test "{{validator_config}}" = unconfigured'
 
   - id: validator-retry
     continue_on_failure: true

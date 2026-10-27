@@ -83,6 +83,7 @@ type tailRun struct {
 	handoff  string
 	status   string
 	evidence string
+	warnings int
 }
 
 // runValidationTail runs the validation tail of a v2.0 helper, starting at
@@ -143,7 +144,7 @@ func runValidationTail(t *testing.T, ref, startID, validation string) tailRun {
 		body, _ := os.ReadFile(filepath.Join(evidence, name))
 		return string(body)
 	}
-	return tailRun{outcome: outcome, events: runner.events, inputs: runner.inputs, handoff: read("acceptance-handoff.md"), status: read("acceptance-preparation-status.txt"), evidence: evidence}
+	return tailRun{outcome: outcome, events: runner.events, inputs: runner.inputs, handoff: read("acceptance-handoff.md"), status: read("acceptance-preparation-status.txt"), evidence: evidence, warnings: ctx.WarningOrigins.Count()}
 }
 
 // INT-002: validation runs after acceptance, its commits are pushed and the
@@ -154,12 +155,12 @@ func TestVerifyChangeValidationTail(t *testing.T) {
 	commitFix := "  - id: fix\n    command: |\n      printf 'fixed\\n' > file.txt\n      git commit -q -am 'validation fix'\n"
 	for _, tc := range []struct {
 		name, steps string
-		wantWarning bool
+		wantWarnings int
 		wantHandoff []string
 	}{
-		{"custom success without result file", "  - id: ok\n    command: \"true\"\n", false, []string{"recorded no result", "No commits were made"}},
-		{"custom outright failure warns and continues", "  - id: boom\n    command: \"exit 3\"\n", true, []string{"recorded no result"}},
-		{"failed validation with fixes", commitFix + "  - id: record\n    command: |\n      printf 'FAIL\\ncheck: lint\\n' > \"{{result_file}}\"\n", false, []string{"unresolved", "check: lint", "validation fix", "not exploratory-tested"}},
+		{"custom success without result file", "  - id: ok\n    command: \"true\"\n", 0, []string{"recorded no result", "No commits were made"}},
+		{"custom outright failure warns and continues", "  - id: boom\n    command: \"exit 3\"\n", 1, []string{"recorded no result"}},
+		{"failed validation with fixes", commitFix + "  - id: record\n    command: |\n      printf 'FAIL\\ncheck: lint\\n' > \"{{result_file}}\"\n", 0, []string{"unresolved", "check: lint", "validation fix", "not exploratory-tested"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := runValidationTail(t, ref, "record-validation-base", writeCustomValidation(t, tc.steps))
@@ -177,6 +178,9 @@ func TestVerifyChangeValidationTail(t *testing.T) {
 			}
 			if !strings.Contains(got.inputs["check-draft-pr.sh"], `"accept_ready":"true"`) {
 				t.Errorf("head check inputs %q lack accept_ready", got.inputs["check-draft-pr.sh"])
+			}
+			if got.warnings != tc.wantWarnings {
+				t.Errorf("warning origins = %d, want %d", got.warnings, tc.wantWarnings)
 			}
 			if strings.TrimSpace(got.status) != "ACCEPTANCE_COMPLETE" {
 				t.Errorf("status = %q, want ACCEPTANCE_COMPLETE", got.status)

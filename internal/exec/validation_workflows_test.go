@@ -23,10 +23,15 @@ type validationRunner struct {
 	runs     int
 	events   []string
 	agents   []AgentProcessOptions
+	stderr   []string
 }
 
 func (r *validationRunner) RunShell(cmd string, _ bool, _ string) (ProcessResult, error) {
-	return runProcess(osexec.Command("sh", "-c", cmd), r.repo, nil)
+	result, err := runProcess(osexec.Command("sh", "-c", cmd), r.repo, nil)
+	if result.Stderr != "" {
+		r.stderr = append(r.stderr, result.Stderr)
+	}
+	return result, err
 }
 
 func (r *validationRunner) RunScript(path string, stdin []byte, _ bool, _ string) (ProcessResult, error) {
@@ -62,6 +67,10 @@ type validationRun struct {
 	events  []string
 	result  string
 	agents  []AgentProcessOptions
+	// warnings is the number of warning origins the run recorded; stderr is
+	// what failed shell steps printed.
+	warnings int
+	stderr   string
 }
 
 // runValidationWorkflow dispatches a validation built-in against a repository
@@ -119,7 +128,7 @@ func runValidationWorkflowWith(t *testing.T, name string, withConfig bool, failu
 	group := model.Step{ID: "validation", Steps: append(append([]model.Step{}, opts.before...), workflow.Steps...)}
 	outcome, err := DispatchStep(&group, ctx, runner, &mockGlob{}, &mockLogger{})
 	body, _ := os.ReadFile(resultFile)
-	return validationRun{outcome: outcome, err: err, events: runner.events, result: string(body), agents: runner.agents}
+	return validationRun{outcome: outcome, err: err, events: runner.events, result: string(body), agents: runner.agents, warnings: ctx.WarningOrigins.Count(), stderr: strings.Join(runner.stderr, "\n")}
 }
 
 func TestValidationNoneRunsNothingAndRecordsSkipped(t *testing.T) {
@@ -197,6 +206,9 @@ func TestValidationAgentValidatorExhaustedRepairsWarn(t *testing.T) {
 	if got.outcome == OutcomeFailed {
 		t.Errorf("outcome = %q, want a warning-completed success", got.outcome)
 	}
+	if got.warnings != 1 {
+		t.Errorf("warning origins = %d, want 1 (the final verification)", got.warnings)
+	}
 }
 
 func TestValidationAgentValidatorRejectsBadSetup(t *testing.T) {
@@ -208,11 +220,17 @@ func TestValidationAgentValidatorRejectsBadSetup(t *testing.T) {
 		if len(got.events) != 0 {
 			t.Errorf("ran %v after the missing config", got.events)
 		}
+		if !strings.Contains(got.stderr, ".validator/config.yml") {
+			t.Errorf("diagnostic %q does not name the missing config file", got.stderr)
+		}
 	})
 	t.Run("bad repair session", func(t *testing.T) {
 		got := runValidationWorkflow(t, "validation-agent-validator", true, 0, map[string]string{"repair_session": "acceptance-tester"})
 		if got.outcome != OutcomeFailed {
 			t.Errorf("outcome = %q, want failed", got.outcome)
+		}
+		if len(got.events) != 0 || !strings.Contains(got.stderr, "repair_session must be implementor-agent or lead-agent") {
+			t.Errorf("events %v, diagnostic %q: want no validator command and a repair_session diagnostic", got.events, got.stderr)
 		}
 	})
 }
@@ -270,6 +288,9 @@ func TestValidationAgentValidatorNamesMissingExecutable(t *testing.T) {
 	}
 	if len(got.events) != 0 {
 		t.Errorf("ran %v after the missing executable", got.events)
+	}
+	if !strings.Contains(got.stderr, "executable") {
+		t.Errorf("diagnostic %q does not name the missing executable", got.stderr)
 	}
 }
 
