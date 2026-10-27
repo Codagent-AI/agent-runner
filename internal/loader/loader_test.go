@@ -426,3 +426,12 @@ func TestParseWorkflowSourceRejectsSubmitRouteOutsideBuiltInIntake(t *testing.T)
 		t.Fatalf("ParseWorkflowSource() error = %v, want submit_route eligibility failure", err)
 	}
 }
+
+func TestResolveRelativeWorkflowPathKeepsAbsolutePathFromBuiltinParent(t *testing.T) {
+	abs := filepath.Join(t.TempDir(), "custom-v1.0.yaml")
+	for _, parent := range []string{"builtin:core/implement-change-v3.0.yaml", filepath.Join("home", "wf-v1.0.yaml")} {
+		if got := ResolveRelativeWorkflowPath(parent, abs); got != abs {
+			t.Errorf("parent %q rewrote the absolute path to %q", parent, got)
+		}
+	}
+}

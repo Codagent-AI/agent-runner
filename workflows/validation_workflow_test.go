@@ -235,4 +235,3 @@ func TestValidationBuiltinsAcceptOnlyNamedRepairSessions(t *testing.T) {
 		}
 	}
 }
-
