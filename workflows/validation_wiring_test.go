@@ -218,3 +218,29 @@ func TestOnboardingValidatorSetupIsOptional(t *testing.T) {
 		}
 	}
 }
+
+// INT-005: simple-change validates once after flow testing and once after
+// review, never between tasks, and pushes nothing.
+func TestCompleteSimpleChangeValidationOrder(t *testing.T) {
+	steps := loadWiring(t, "core/complete-simple-change-v2.0.yaml")
+	var ids []string
+	for _, s := range steps {
+		ids = append(ids, s.ID)
+		if s.Script != "" {
+			t.Errorf("step %s runs script %s; simple-change pushes nothing", s.ID, s.Script)
+		}
+	}
+	want := []string{"implement", "test", "validate-after-testing", "review", "validate-after-review"}
+	if diff := cmp.Diff(want, ids); diff != "" {
+		t.Errorf("steps (-want +got):\n%s", diff)
+	}
+	implement := steps[0]
+	if implement.Workflow != "implement-task-v2.0.yaml" {
+		t.Errorf("implement composes %q, want implement-task-v2.0.yaml", implement.Workflow)
+	}
+	for _, key := range []string{"task_compliance", "skip_validator"} {
+		if _, ok := implement.Params[key]; ok {
+			t.Errorf("implement passes retired param %s", key)
+		}
+	}
+}
