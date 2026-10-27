@@ -130,7 +130,7 @@ func TestFinalizeCIFixGroupOrderAndSkip(t *testing.T) {
 }
 
 func TestValidationPointsAbsentFromEarlierStages(t *testing.T) {
-	for _, file := range []string{"core/implement-change-v3.0.yaml", "core/implement-task-v2.0.yaml", "core/verify-change-v2.0.yaml"} {
+	for _, file := range []string{"core/implement-change-v3.0.yaml", "core/implement-task-v2.0.yaml", "core/verify-change-v2.0.yaml", "core/accept-change-v2.0.yaml"} {
 		steps := loadWiring(t, file)
 		for _, id := range []string{"run-validator", "acceptance-validator", "validator-retry"} {
 			if _, ok := findWiring(steps, id); ok {
@@ -242,5 +242,26 @@ func TestCompleteSimpleChangeValidationOrder(t *testing.T) {
 		if _, ok := implement.Params[key]; ok {
 			t.Errorf("implement passes retired param %s", key)
 		}
+	}
+}
+
+// Accept-change validates only after review, refinements, and re-acceptance
+// have settled, and counts exactly one validation point.
+func TestAcceptChangeValidatesAfterReacceptanceSettles(t *testing.T) {
+	steps := loadWiring(t, "core/accept-change-v2.0.yaml")
+	validate := indexOf(steps, "validate")
+	for _, id := range []string{"review-and-refine", "recommend-reacceptance-testing", "run-reacceptance-testing", "reacceptance-gate"} {
+		if i := indexOf(steps, id); i < 0 || i > validate {
+			t.Errorf("%s at %d, want before validate at %d", id, i, validate)
+		}
+	}
+	n := 0
+	for _, s := range steps {
+		if s.Workflow == "{{validation_workflow}}" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("accept-change-v2.0 has %d validation points, want 1", n)
 	}
 }

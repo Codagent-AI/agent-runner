@@ -102,3 +102,30 @@ func TestCallerTargetsWithoutSuppliedParamsValidatesNothing(t *testing.T) {
 		t.Fatalf("CallerTargets with nothing supplied: %v", err)
 	}
 }
+
+// Caller-derived provenance flows from change-v3 through implement-change-v3
+// to verify-change-v2, where the selection is finally used; alias binding at
+// the top does not hide it.
+func TestCallerTargetsFollowsProvenanceThroughNestedHelpers(t *testing.T) {
+	const root = "builtin:openspec/change-v3.0.yaml"
+	for _, tc := range []struct{ name, selection, wantErr string }{
+		{"alias", "none", ""},
+		{"unknown", "foo", "foo"},
+		{"incompatible", "builtin:core/verify-change-v1.0.yaml", "verify-change-v1.0.yaml"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts, _, _ := fakeOptions(t, validationAgentsConfig())
+			params := map[string]string{"change_name": "demo", "validation_workflow": tc.selection}
+			_, err := CallerTargets(root, params, supplied(params), opts)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("CallerTargets: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %v, want one mentioning %q", err, tc.wantErr)
+			}
+		})
+	}
+}

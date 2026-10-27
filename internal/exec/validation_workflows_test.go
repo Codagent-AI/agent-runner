@@ -73,8 +73,19 @@ const (
 
 func runValidationWorkflow(t *testing.T, name string, withConfig bool, failures int, params map[string]string) validationRun {
 	t.Helper()
+	return runValidationWorkflowWith(t, name, withConfig, failures, params, validationOptions{executable: "sh"})
+}
+
+// validationOptions varies the environment around a validation built-in.
+type validationOptions struct {
+	executable string       // AGENT_RUNNER_VALIDATOR_EXECUTABLE
+	before     []model.Step // steps run before the built-in's own steps
+}
+
+func runValidationWorkflowWith(t *testing.T, name string, withConfig bool, failures int, params map[string]string, opts validationOptions) validationRun {
+	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("AGENT_RUNNER_VALIDATOR_EXECUTABLE", "sh")
+	t.Setenv("AGENT_RUNNER_VALIDATOR_EXECUTABLE", opts.executable)
 
 	ref := "builtin:core/" + name + "-v1.0.yaml"
 	workflow, err := loader.LoadWorkflow(ref, loader.Options{})
@@ -105,7 +116,7 @@ func runValidationWorkflow(t *testing.T, name string, withConfig bool, failures 
 		NamedSessionDecls: map[string]string{"implementor-agent": "implementor", "lead-agent": "lead"},
 		NamedSessions:     map[string]string{"implementor-agent": existingImplementorSession, "lead-agent": existingLeadSession},
 	})
-	group := model.Step{ID: "validation", Steps: workflow.Steps}
+	group := model.Step{ID: "validation", Steps: append(append([]model.Step{}, opts.before...), workflow.Steps...)}
 	outcome, err := DispatchStep(&group, ctx, runner, &mockGlob{}, &mockLogger{})
 	body, _ := os.ReadFile(resultFile)
 	return validationRun{outcome: outcome, err: err, events: runner.events, result: string(body), agents: runner.agents}
@@ -249,5 +260,28 @@ func TestSubWorkflowBindsAliasedParam(t *testing.T) {
 				t.Errorf("commands = %v, want one containing %q", runner.commands, tc.want)
 			}
 		})
+	}
+}
+
+func TestValidationAgentValidatorNamesMissingExecutable(t *testing.T) {
+	got := runValidationWorkflowWith(t, "validation-agent-validator", true, 0, nil, validationOptions{executable: "no-such-validator-binary"})
+	if got.outcome != OutcomeFailed {
+		t.Errorf("outcome = %q, want failed", got.outcome)
+	}
+	if len(got.events) != 0 {
+		t.Errorf("ran %v after the missing executable", got.events)
+	}
+}
+
+// auto detects configuration on every invocation, so configuration created by
+// an earlier step of the same run is picked up.
+func TestValidationAutoPicksUpConfigCreatedDuringRun(t *testing.T) {
+	create := model.Step{ID: "create-config", Command: "mkdir -p .validator && : > .validator/config.yml"}
+	got := runValidationWorkflowWith(t, "validation-auto", false, 0, nil, validationOptions{executable: "sh", before: []model.Step{create}})
+	if got.outcome != OutcomeSuccess {
+		t.Fatalf("outcome = %q", got.outcome)
+	}
+	if !strings.Contains(strings.Join(got.events, " "), "run-validator.sh") {
+		t.Errorf("events %v: validator did not run after config appeared", got.events)
 	}
 }

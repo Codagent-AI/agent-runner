@@ -228,3 +228,29 @@ func TestValidatorPRGateAcceptsSkipped(t *testing.T) {
 		})
 	}
 }
+
+// Archiving advances the Validator baseline only when the selected validation
+// workflow runs Agent Validator.
+func TestArchiveBaselineAdvanceFollowsSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name, selection string
+		config          bool
+		wantAdvance     bool
+	}{
+		{"none in configured project", "none", true, false},
+		{"auto with config", "auto", true, true},
+		{"auto without config", "auto", false, false},
+		{"agent-validator", "agent-validator", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newBookkeepingEnv(t, "openspec", tc.config, true, 2)
+			if out, err := env.run("advance-validator-baseline.sh", selectionPayload(tc.selection)); err != nil {
+				t.Fatalf("advance-validator-baseline: %v\n%s", err, out)
+			}
+			advanced := len(env.validatorCalls()) == 1 && env.validatorCalls()[0] == "agent-validator skip"
+			if advanced != tc.wantAdvance {
+				t.Errorf("baseline advanced = %v, want %v (calls %v)", advanced, tc.wantAdvance, env.validatorCalls())
+			}
+		})
+	}
+}
