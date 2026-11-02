@@ -2574,11 +2574,7 @@ func ensureFirstRunForTUI(deps *firstRunDeps) firstRunResult {
 	onboardingDone := settings.Onboarding.CompletedAt != "" || settings.Onboarding.Dismissed != ""
 
 	if settings.Setup.CompletedAt == "" {
-		if deps.runSplash != nil {
-			if err := deps.runSplash(); err != nil {
-				fmt.Fprintf(os.Stderr, "agent-runner: splash: %v\n", err)
-			}
-		}
+		runFirstRunSplash(deps)
 		result, err := deps.runNativeSetup(onboardingDone)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
@@ -2619,6 +2615,15 @@ func ensureFirstRunForTUI(deps *firstRunDeps) firstRunResult {
 		}
 	}
 	return continueToList()
+}
+
+func runFirstRunSplash(deps *firstRunDeps) {
+	if deps.runSplash == nil {
+		return
+	}
+	if err := deps.runSplash(); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: splash: %v\n", err)
+	}
 }
 
 func launchOnboardingDemo(deps *firstRunDeps) firstRunResult {
