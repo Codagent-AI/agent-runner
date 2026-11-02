@@ -15,7 +15,7 @@ func TestEnsureFirstRunForTUIRunsNativeSetupThenDemo(t *testing.T) {
 	var setupRuns int
 	var launched []string
 	var splashed bool
-	result := ensureFirstRunForTUI(firstRunDeps{
+	result := ensureFirstRunForTUI(&firstRunDeps{
 		load: func() (usersettings.Settings, error) {
 			return usersettings.Settings{}, nil
 		},
@@ -53,7 +53,7 @@ func TestEnsureFirstRunForTUIRunsNativeSetupThenDemo(t *testing.T) {
 
 func TestEnsureFirstRunForTUIRunsDemoLaunchFlowAfterNativeSetup(t *testing.T) {
 	var launched bool
-	result := ensureFirstRunForTUI(firstRunDeps{
+	result := ensureFirstRunForTUI(&firstRunDeps{
 		load: func() (usersettings.Settings, error) {
 			return usersettings.Settings{}, nil
 		},
@@ -80,7 +80,7 @@ func TestEnsureFirstRunForTUIRunsDemoLaunchFlowAfterNativeSetup(t *testing.T) {
 
 func TestEnsureFirstRunForTUIShowsDemoPromptWhenSetupAlreadyCompleted(t *testing.T) {
 	var launched []string
-	result := ensureFirstRunForTUI(firstRunDeps{
+	result := ensureFirstRunForTUI(&firstRunDeps{
 		load: func() (usersettings.Settings, error) {
 			return usersettings.Settings{Setup: usersettings.SetupSettings{CompletedAt: "2026-05-04T00:00:00Z"}}, nil
 		},
@@ -106,7 +106,7 @@ func TestEnsureFirstRunForTUIShowsDemoPromptWhenSetupAlreadyCompleted(t *testing
 }
 
 func TestEnsureFirstRunForTUIQuitDuringDemoExitsApp(t *testing.T) {
-	result := ensureFirstRunForTUI(firstRunDeps{
+	result := ensureFirstRunForTUI(&firstRunDeps{
 		load: func() (usersettings.Settings, error) {
 			return usersettings.Settings{Setup: usersettings.SetupSettings{CompletedAt: "2026-05-04T00:00:00Z"}}, nil
 		},
@@ -140,7 +140,7 @@ func TestEnsureFirstRunForTUISkipsWhenCompletedDismissedOrNonTTY(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			launched := false
 			setupRan := false
-			result := ensureFirstRunForTUI(firstRunDeps{
+			result := ensureFirstRunForTUI(&firstRunDeps{
 				load:        func() (usersettings.Settings, error) { return tt.settings, nil },
 				isStdinTTY:  func() bool { return tt.stdinTTY },
 				isStdoutTTY: func() bool { return tt.stdoutTTY },
@@ -170,7 +170,7 @@ func TestEnsureFirstRunForTUISkipsWhenCompletedDismissedOrNonTTY(t *testing.T) {
 
 func TestEnsureFirstRunForTUICancelledSetupExitsApp(t *testing.T) {
 	var launched bool
-	result := ensureFirstRunForTUI(firstRunDeps{
+	result := ensureFirstRunForTUI(&firstRunDeps{
 		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, nil },
 		isStdinTTY:  func() bool { return true },
 		isStdoutTTY: func() bool { return true },
@@ -190,7 +190,7 @@ func TestEnsureFirstRunForTUICancelledSetupExitsApp(t *testing.T) {
 
 func TestEnsureFirstRunForTUIInterruptedSetupExitsApp(t *testing.T) {
 	var launched bool
-	result := ensureFirstRunForTUI(firstRunDeps{
+	result := ensureFirstRunForTUI(&firstRunDeps{
 		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, nil },
 		isStdinTTY:  func() bool { return true },
 		isStdoutTTY: func() bool { return true },
@@ -209,7 +209,7 @@ func TestEnsureFirstRunForTUIInterruptedSetupExitsApp(t *testing.T) {
 }
 
 func TestEnsureFirstRunForTUIFailedSetupResultExitsNonZero(t *testing.T) {
-	result := ensureFirstRunForTUI(firstRunDeps{
+	result := ensureFirstRunForTUI(&firstRunDeps{
 		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, nil },
 		isStdinTTY:  func() bool { return true },
 		isStdoutTTY: func() bool { return true },
@@ -225,7 +225,7 @@ func TestEnsureFirstRunForTUIFailedSetupResultExitsNonZero(t *testing.T) {
 }
 
 func TestEnsureFirstRunForTUISetupErrorGoesHome(t *testing.T) {
-	result := ensureFirstRunForTUI(firstRunDeps{
+	result := ensureFirstRunForTUI(&firstRunDeps{
 		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, nil },
 		isStdinTTY:  func() bool { return true },
 		isStdoutTTY: func() bool { return true },
@@ -242,7 +242,7 @@ func TestEnsureFirstRunForTUISetupErrorGoesHome(t *testing.T) {
 }
 
 func TestEnsureFirstRunForTUISetupErrorFailsWhenNonFatalModeDisabled(t *testing.T) {
-	result := ensureFirstRunForTUI(firstRunDeps{
+	result := ensureFirstRunForTUI(&firstRunDeps{
 		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, nil },
 		isStdinTTY:  func() bool { return true },
 		isStdoutTTY: func() bool { return true },
@@ -446,7 +446,7 @@ func TestResetOnboardingStateRemovesReadOnlyValidatorCache(t *testing.T) {
 }
 
 func TestEnsureFirstRunForTUILoadErrorFails(t *testing.T) {
-	result := ensureFirstRunForTUI(firstRunDeps{
+	result := ensureFirstRunForTUI(&firstRunDeps{
 		load:        func() (usersettings.Settings, error) { return usersettings.Settings{}, errors.New("boom") },
 		isStdinTTY:  func() bool { return true },
 		isStdoutTTY: func() bool { return true },
@@ -460,7 +460,7 @@ func TestEnsureFirstRunForTUILoadErrorFails(t *testing.T) {
 
 func TestDemoPromptNotNowOnReShowDoesNotLaunchWorkflow(t *testing.T) {
 	var launched bool
-	result := ensureFirstRunForTUI(firstRunDeps{
+	result := ensureFirstRunForTUI(&firstRunDeps{
 		load: func() (usersettings.Settings, error) {
 			return usersettings.Settings{Setup: usersettings.SetupSettings{CompletedAt: "2026-05-04T00:00:00Z"}}, nil
 		},

@@ -804,7 +804,7 @@ func dispatchRunCommand(args []string, opts *commandFlags) int {
 			}
 			return handleOnboardingFromRun(ref, opts.onboardingFrom, &runCommandOptions{profileOverride: opts.profileOverride()})
 		}
-		return handleListWithDeps(listview.InitialTabNew, defaultFirstRunDeps)
+		return handleListWithDeps(listview.InitialTabNew, &defaultFirstRunDeps)
 	}
 
 	workflowFile, err := resolveWorkflowArg(args[0])
@@ -1053,14 +1053,14 @@ func openInspectTUI(runID, sessionDir, projectDir string) int {
 }
 
 func handleListWithProfile(profile config.ProfileOverride) int {
-	return handleListWithDepsProfile(listview.InitialTabCurrentDir, defaultFirstRunDeps, profile)
+	return handleListWithDepsProfile(listview.InitialTabCurrentDir, &defaultFirstRunDeps, profile)
 }
 
-func handleListWithDeps(initialTab listview.InitialTab, firstRun firstRunDeps) int {
+func handleListWithDeps(initialTab listview.InitialTab, firstRun *firstRunDeps) int {
 	return handleListWithDepsProfile(initialTab, firstRun, config.ProfileOverride{})
 }
 
-func handleListWithDepsProfile(initialTab listview.InitialTab, firstRun firstRunDeps, profile config.ProfileOverride) int {
+func handleListWithDepsProfile(initialTab listview.InitialTab, firstRun *firstRunDeps, profile config.ProfileOverride) int {
 	if err := requireTTY(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -1078,11 +1078,11 @@ func handleListWithDepsProfile(initialTab listview.InitialTab, firstRun firstRun
 	return handleListAfterFirstRunWithProfile(initialTab, firstRun, nil, profile)
 }
 
-func handleListAfterFirstRun(initialTab listview.InitialTab, firstRun firstRunDeps, extraOptions []func(*listview.Model)) int {
+func handleListAfterFirstRun(initialTab listview.InitialTab, firstRun *firstRunDeps, extraOptions []func(*listview.Model)) int {
 	return handleListAfterFirstRunWithProfile(initialTab, firstRun, extraOptions, config.ProfileOverride{})
 }
 
-func handleListAfterFirstRunWithProfile(initialTab listview.InitialTab, firstRun firstRunDeps, extraOptions []func(*listview.Model), profile config.ProfileOverride) int {
+func handleListAfterFirstRunWithProfile(initialTab listview.InitialTab, firstRun *firstRunDeps, extraOptions []func(*listview.Model), profile config.ProfileOverride) int {
 	settings := loadSplashSettingsForList(firstRun.load, os.Stderr)
 
 	options := []func(*listview.Model){
@@ -2419,7 +2419,7 @@ func handleOnboardingFromRun(workflowFile, from string, runOpts *runCommandOptio
 	reason := runview.FailureReasonForSession(result.sessionDir)
 	return handleListAfterFirstRun(
 		listview.InitialTabCurrentDir,
-		defaultFirstRunDeps,
+		&defaultFirstRunDeps,
 		[]func(*listview.Model){listview.WithOnboardingFailure(result.sessionDir, reason)},
 	)
 }
@@ -2524,10 +2524,10 @@ var defaultFirstRunDeps = firstRunDeps{
 	},
 }
 
-func firstRunDepsWithOnboardingFrom(from string) firstRunDeps {
+func firstRunDepsWithOnboardingFrom(from string) *firstRunDeps {
 	from = strings.TrimSpace(from)
 	if from == "" {
-		return defaultFirstRunDeps
+		return &defaultFirstRunDeps
 	}
 	deps := defaultFirstRunDeps
 	deps.runDemoPromptFlow = func() firstRunResult {
@@ -2543,7 +2543,7 @@ func firstRunDepsWithOnboardingFrom(from string) firstRunDeps {
 		})
 		return firstRunWorkflowResult(result)
 	}
-	return deps
+	return &deps
 }
 
 func mapSetupResult(result nativesetup.Result) nativeSetupResult {
@@ -2561,7 +2561,7 @@ func mapSetupResult(result nativesetup.Result) nativeSetupResult {
 	}
 }
 
-func ensureFirstRunForTUI(deps firstRunDeps) firstRunResult {
+func ensureFirstRunForTUI(deps *firstRunDeps) firstRunResult {
 	settings, err := deps.load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
@@ -2621,7 +2621,7 @@ func ensureFirstRunForTUI(deps firstRunDeps) firstRunResult {
 	return continueToList()
 }
 
-func launchOnboardingDemo(deps firstRunDeps) firstRunResult {
+func launchOnboardingDemo(deps *firstRunDeps) firstRunResult {
 	if deps.runDemoLaunchFlow != nil {
 		return deps.runDemoLaunchFlow()
 	}
