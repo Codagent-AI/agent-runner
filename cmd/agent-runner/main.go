@@ -3346,6 +3346,14 @@ func matchParams(workflow *model.Workflow, positional []string, keyed map[string
 		result[key] = val
 	}
 
+	for i := range workflow.Params {
+		if val, ok := result[workflow.Params[i].Name]; ok {
+			if err := workflow.Params[i].CheckShortName(val); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	// Check for required parameters (default to required if not specified).
 	for _, p := range workflow.Params {
 		required := p.Required == nil || *p.Required

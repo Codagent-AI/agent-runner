@@ -60,3 +60,28 @@ func TestWorkflowValidateRejectsEmptyAlias(t *testing.T) {
 		})
 	}
 }
+
+func TestParamCheckShortNameRejectsUnknownBareName(t *testing.T) {
+	p := aliasParam()
+	err := p.CheckShortName("bogus")
+	if err == nil {
+		t.Fatal("CheckShortName(bogus) succeeded, want an unknown short name error")
+	}
+	want := `unknown short name "bogus" for parameter "v"; use one of: auto, none, or a full value such as builtin:core/auto-v1.0.yaml`
+	if err.Error() != want {
+		t.Fatalf("error = %q, want %q", err, want)
+	}
+}
+
+func TestParamCheckShortNameAcceptsKnownNamesAndFullValues(t *testing.T) {
+	p := aliasParam()
+	for _, value := range []string{"auto", "none", "", "builtin:core/none-v1.0.yaml", "/abs/custom-v1.0.yaml", "custom-v1.0.yaml", "dir/custom-v1.0.yaml"} {
+		if err := p.CheckShortName(value); err != nil {
+			t.Errorf("CheckShortName(%q) = %v, want nil", value, err)
+		}
+	}
+	plain := Param{Name: "other"}
+	if err := plain.CheckShortName("bogus"); err != nil {
+		t.Errorf("param without aliases: CheckShortName(bogus) = %v, want nil", err)
+	}
+}

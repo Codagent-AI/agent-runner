@@ -19,7 +19,7 @@ func TestPrepareFreshRunValidatesValidationWorkflowSelection(t *testing.T) {
 		{"unset", "", ""},
 		{"none", "none", ""},
 		{"agent-validator", "agent-validator", ""},
-		{"unknown name", "foo", "foo"},
+		{"unknown name", "foo", `unknown short name "foo" for parameter "validation_workflow"; use one of: agent-validator, auto, none`},
 		{"incompatible builtin", "builtin:core/verify-change-v1.0.yaml", "verify-change-v1.0.yaml"},
 		{"missing absolute path", absMissing, "missing-v1.0.yaml"},
 	} {

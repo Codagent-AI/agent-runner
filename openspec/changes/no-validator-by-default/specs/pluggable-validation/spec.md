@@ -25,6 +25,10 @@ Every validation point in the run SHALL run the selected workflow. A short name 
 - **THEN** pre-run validation fails with an error naming the target
 - **AND** no step runs
 
+#### Scenario: Unknown short name lists the accepted short names
+- **WHEN** `validation_workflow` is a bare name that is not `auto`, `agent-validator`, or `none`
+- **THEN** pre-run validation fails with an error that names the value as an unknown short name and lists `auto`, `agent-validator`, and `none`
+
 ### Requirement: Built-in validation workflows
 
 Agent Runner SHALL provide three built-in validation workflows.

@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"maps"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -720,6 +721,24 @@ func (p *Param) Bind(value string) string {
 	}
 	return value
 }
+
+// CheckShortName rejects a bare word (letters, digits, '-' or '_') that is not
+// one of an aliased param's short names, so a typo fails with the accepted
+// names rather than as an unresolvable full value. Values with any other
+// character, such as references and paths, pass through.
+func (p *Param) CheckShortName(value string) error {
+	if len(p.Aliases) == 0 || value == "" || !bareWord.MatchString(value) {
+		return nil
+	}
+	if _, ok := p.Aliases[value]; ok {
+		return nil
+	}
+	names := slices.Sorted(maps.Keys(p.Aliases))
+	return fmt.Errorf("unknown short name %q for parameter %q; use one of: %s, or a full value such as %s",
+		value, p.Name, strings.Join(names, ", "), p.Aliases[names[0]])
+}
+
+var bareWord = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // IsRequired returns whether this param is required (defaults to true).
 func (p *Param) IsRequired() bool {
