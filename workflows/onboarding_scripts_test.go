@@ -221,11 +221,13 @@ func writeFakeBinary(t *testing.T, dir, name, body string) {
 
 func openSpecCreateChangeScript(t *testing.T) string {
 	t.Helper()
-	path, err := filepath.Abs(filepath.Join("openspec", "create-change.sh"))
-	if err != nil {
-		t.Fatalf("resolve create-change.sh: %v", err)
+	// Materialize the namespace so shared helpers resolve beside the script,
+	// exactly as they do at runtime.
+	sessionDir := t.TempDir()
+	if err := MaterializeNamespace(sessionDir, "openspec"); err != nil {
+		t.Fatalf("materialize openspec: %v", err)
 	}
-	return path
+	return filepath.Join(sessionDir, "bundled", "openspec", "create-change.sh")
 }
 
 func coreRunValidatorScript(t *testing.T) string {

@@ -8,6 +8,7 @@ import (
 	pathpkg "path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -77,18 +78,27 @@ func TestPayloadValidationWorkflowReadsOptionalString(t *testing.T) {
 	}
 }
 
-func TestValidatorBookkeepingCopiesAreIdentical(t *testing.T) {
-	want, err := ReadAsset("core/validator-bookkeeping.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, ns := range []string{"openspec", "spec-driven"} {
-		got, err := ReadAsset(ns + "/validator-bookkeeping.sh")
+func TestSharedHelpersResolveInEveryNamespace(t *testing.T) {
+	for _, name := range []string{"validator-bookkeeping.sh", "validate-change-name.sh"} {
+		want, err := ReadAsset("core/" + name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.Equal(want, got) {
-			t.Errorf("%s/validator-bookkeeping.sh differs from core/validator-bookkeeping.sh", ns)
+		for _, ns := range []string{"openspec", "spec-driven"} {
+			got, err := ReadAsset(ns + "/" + name)
+			if err != nil {
+				t.Fatalf("ReadAsset(%s/%s): %v", ns, name, err)
+			}
+			if !bytes.Equal(want, got) {
+				t.Errorf("%s/%s differs from core/%s", ns, name, name)
+			}
+			assets, err := ListAssets(ns)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(assets, name) {
+				t.Errorf("ListAssets(%s) does not include shared helper %s", ns, name)
+			}
 		}
 	}
 }

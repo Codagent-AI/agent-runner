@@ -124,6 +124,13 @@ func ReadFile(workflowFile string) ([]byte, error) {
 func ListAssets(namespace string) ([]string, error) {
 	assets, err := listAssetsFS(FS, namespace)
 	if err == nil {
+		if namespace != sharedAssetNamespace {
+			for _, shared := range sharedAssets {
+				if !slices.Contains(assets, shared) {
+					assets = append(assets, shared)
+				}
+			}
+		}
 		return assets, nil
 	}
 	if extra := registeredFS(); extra != nil {
@@ -163,6 +170,26 @@ func listAssetsFS(fsys fs.FS, namespace string) ([]string, error) {
 	return assets, nil
 }
 
+// sharedAssets are helper scripts kept once in the core namespace and made
+// available beside the scripts of every other namespace. A namespace is
+// materialized whole and its scripts call helpers via "$script_dir/<name>", so
+// each namespace must see them; embedding one copy per namespace would only
+// duplicate the source.
+var sharedAssets = []string{"validate-change-name.sh", "validator-bookkeeping.sh"}
+
+const sharedAssetNamespace = "core"
+
+// sharedAssetSource maps a namespace asset path such as
+// "openspec/validator-bookkeeping.sh" to its shared core source, or "" when the
+// asset is not a shared helper.
+func sharedAssetSource(clean string) string {
+	ns, rel, ok := strings.Cut(clean, "/")
+	if !ok || ns == sharedAssetNamespace || !slices.Contains(sharedAssets, rel) {
+		return ""
+	}
+	return path.Join(sharedAssetNamespace, rel)
+}
+
 func ReadAsset(assetPath string) ([]byte, error) {
 	clean := path.Clean(assetPath)
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || path.IsAbs(clean) {
@@ -172,7 +199,13 @@ func ReadAsset(assetPath string) ([]byte, error) {
 	if ext == ".yaml" || ext == ".yml" {
 		return nil, fmt.Errorf("builtin asset path is a workflow: %s", assetPath)
 	}
-	return FS.ReadFile(clean)
+	data, err := FS.ReadFile(clean)
+	if err != nil && errors.Is(err, fs.ErrNotExist) {
+		if src := sharedAssetSource(clean); src != "" {
+			return FS.ReadFile(src)
+		}
+	}
+	return data, err
 }
 
 func List() ([]string, error) {
