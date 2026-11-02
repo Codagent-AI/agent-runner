@@ -63,6 +63,11 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	if resolved.AllDone {
 		return nil, completedResumeError(&state, opts.Until)
 	}
+	if resolved.StepID != resumeState.fromStep {
+		// The recorded step finished; its sub-workflow or loop position belongs
+		// to that step and must not steer the step resume now starts.
+		resumeState.childState = nil
+	}
 	resumeState.fromStep = resolved.StepID
 	if err := validateResumeUntil(&workflow, opts.Until, resolved.StepID); err != nil {
 		return nil, err

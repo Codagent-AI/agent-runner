@@ -94,9 +94,9 @@ func (a *CodexAdapter) BuildArgsWithError(input *BuildArgsInput) ([]string, erro
 	return args, nil
 }
 
-// SpawnEnv gives interactive Codex processes an isolated configuration home
+// SpawnEnv gives integrated Codex processes an isolated configuration home
 // that adds the Agent Runner command plugin without modifying the user's real
-// config. Session and authentication state remain linked to the real home.
+// config. Thread state, sessions, and authentication come from the real home.
 func (a *CodexAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
 	agentCall, err := validatedAgentCall(input)
 	if err != nil {
@@ -117,11 +117,15 @@ func (a *CodexAdapter) SpawnEnv(input *BuildArgsInput) ([]string, error) {
 	if completionEnabled {
 		completion = input.CompletionCommand
 	}
-	privateHome, err := prepareCodexRunnerHome(completion, input.RunnerIntegration, input.InvocationContext(), runID)
+	privateHome, sqliteHome, err := prepareCodexRunnerHome(completion, input.RunnerIntegration, input.InvocationContext(), runID)
 	if err != nil {
 		return nil, fmt.Errorf("codex: create private integration home: %w", err)
 	}
-	return []string{"CODEX_HOME=" + privateHome}, nil
+	env := []string{"CODEX_HOME=" + privateHome}
+	if sqliteHome != "" {
+		env = append(env, "CODEX_SQLITE_HOME="+sqliteHome)
+	}
+	return env, nil
 }
 
 // SupportsSystemPrompt returns false — Codex CLI has no native system prompt flag.

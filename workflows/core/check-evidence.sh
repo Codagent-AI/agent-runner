@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks that the merged checklist is complete before the audit: the first
+# Checks that the checklist is complete before the audit: the first
 # Markdown table with Status and Evidence columns must give every row a final
 # status, and each claim must point at its evidence.
 #
@@ -10,7 +10,7 @@
 #   - The checklist cites no acceptance (AT-n) or human-only (HT-n) test:
 #     manual testing happens once, in acceptance testing, and is never a
 #     checklist check.
-#   - When plan_file (the merged checklist as committed before implementation)
+#   - When plan_file (the checklist as committed before implementation)
 #     is given, every planned row is still there with its planned columns
 #     unchanged, and no row was added. When findings (the audit's) is also
 #     given, rows may be added, and a planned row may change only if a finding

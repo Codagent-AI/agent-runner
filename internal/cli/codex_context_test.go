@@ -19,7 +19,7 @@ func TestCodexContextPrivateHomeINT001(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CODEX_HOME", home)
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	private, err := prepareCodexRunnerHome(&CompletionCommand{Executable: "/bin/true", Args: []string{"step", "complete"}}, nil, ContextAutonomousHeadless, "context-test")
+	private, _, err := prepareCodexRunnerHome(&CompletionCommand{Executable: "/bin/true", Args: []string{"step", "complete"}}, nil, ContextAutonomousHeadless, "context-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestCodexRequestEvidenceINT001(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(source, "sessions"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	private, err := prepareCodexRunnerHome(&CompletionCommand{Executable: "/bin/true", Args: []string{"step", "complete"}}, nil, ContextAutonomousHeadless, "pricing-test")
+	private, _, err := prepareCodexRunnerHome(&CompletionCommand{Executable: "/bin/true", Args: []string{"step", "complete"}}, nil, ContextAutonomousHeadless, "pricing-test")
 	if err != nil {
 		t.Fatal(err)
 	}

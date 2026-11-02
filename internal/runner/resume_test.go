@@ -279,6 +279,49 @@ steps:
 	}
 }
 
+// A run stopped after a completed sub-workflow step (for example by --until)
+// records that sub-workflow's last child; resuming starts the next step's
+// sub-workflow from its beginning instead of looking for that child there.
+func TestResumePastCompletedSubWorkflowStartsNextSubWorkflowFresh(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	files := map[string]string{
+		"change-v1.0.yaml":    "name: change\nsteps:\n  - id: define\n    workflow: define-v1.0.yaml\n  - id: implement\n    workflow: implement-v1.0.yaml\n",
+		"define-v1.0.yaml":    "name: define\nsteps:\n  - id: proposal\n    command: echo PROPOSAL\n  - id: approach-review\n    command: echo REVIEW\n",
+		"implement-v1.0.yaml": "name: implement\nsteps:\n  - id: build\n    command: echo BUILD\n  - id: verify\n    command: echo VERIFY\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	workflowPath := filepath.Join(dir, "change-v1.0.yaml")
+	state := model.RunState{
+		WorkflowFile: workflowPath,
+		WorkflowName: "change",
+		WorkflowHash: stateio.ComputeWorkflowHash(files["change-v1.0.yaml"]),
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+			StepID: "define", Completed: true,
+			Child: &model.NestedStepState{StepID: "approach-review", Completed: true},
+		}},
+	}
+	if err := stateio.WriteState(&state, dir); err != nil {
+		t.Fatal(err)
+	}
+	runner := &mockRunner{}
+	result, err := ResumeWorkflow(filepath.Join(dir, "state.json"), &Options{
+		ProcessRunner: runner,
+		GlobExpander:  &mockGlob{},
+		Log:           &mockLog{},
+	})
+	if err != nil || result != ResultSuccess {
+		t.Fatalf("resume result = %q, error = %v", result, err)
+	}
+	if len(runner.calls) != 2 || !strings.Contains(runner.calls[0][2], "BUILD") || !strings.Contains(runner.calls[1][2], "VERIFY") {
+		t.Fatalf("resumed commands = %v, want implement's build then verify", runner.calls)
+	}
+}
+
 func TestResumeAfterFailedForEachIterationScopesCaptures(t *testing.T) {
 	const loop = `    loop:
       over: "tasks/*.md"
