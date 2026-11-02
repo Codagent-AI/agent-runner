@@ -25,6 +25,13 @@ func TestPrepareFreshRunValidatesValidationWorkflowSelection(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
+			// The agent-validator workflow's repair steps probe the default
+			// profile's CLI, which CI runners do not install.
+			binDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 			project := t.TempDir()
 			t.Chdir(project)
 			sessionDir := filepath.Join(project, "session")
