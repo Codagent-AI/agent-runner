@@ -14,13 +14,22 @@ import (
 func TestEnsureFirstRunForTUIRunsNativeSetupThenDemo(t *testing.T) {
 	var setupRuns int
 	var launched []string
+	var splashed bool
 	result := ensureFirstRunForTUI(firstRunDeps{
 		load: func() (usersettings.Settings, error) {
 			return usersettings.Settings{}, nil
 		},
 		isStdinTTY:  func() bool { return true },
 		isStdoutTTY: func() bool { return true },
+		// The real splash drives the terminal and hangs when tests run with a TTY stdin.
+		runSplash: func() error {
+			splashed = true
+			return nil
+		},
 		runNativeSetup: func(onboardingCompleted bool) (nativeSetupResult, error) {
+			if !splashed {
+				t.Fatal("native setup ran before the splash")
+			}
 			setupRuns++
 			if onboardingCompleted {
 				t.Fatal("onboardingCompleted should be false for fresh setup")

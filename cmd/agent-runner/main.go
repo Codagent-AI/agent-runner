@@ -2470,6 +2470,7 @@ type firstRunDeps struct {
 	load                          func() (usersettings.Settings, error)
 	isStdinTTY                    func() bool
 	isStdoutTTY                   func() bool
+	runSplash                     func() error // nil skips the splash
 	runNativeSetup                func(onboardingCompleted bool) (nativeSetupResult, error)
 	runDemoPrompt                 func() (nativeSetupResult, error)
 	runDemoPromptFlow             func() firstRunResult
@@ -2503,6 +2504,7 @@ var defaultFirstRunDeps = firstRunDeps{
 	load:        usersettings.Load,
 	isStdinTTY:  func() bool { return isatty.IsTerminal(os.Stdin.Fd()) },
 	isStdoutTTY: func() bool { return isatty.IsTerminal(os.Stdout.Fd()) },
+	runSplash:   splash.Run,
 	runNativeSetup: func(onboardingCompleted bool) (nativeSetupResult, error) {
 		result, err := nativesetup.Run(&nativesetup.Deps{
 			OnboardingCompleted: onboardingCompleted,
@@ -2572,8 +2574,10 @@ func ensureFirstRunForTUI(deps firstRunDeps) firstRunResult {
 	onboardingDone := settings.Onboarding.CompletedAt != "" || settings.Onboarding.Dismissed != ""
 
 	if settings.Setup.CompletedAt == "" {
-		if err := splash.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "agent-runner: splash: %v\n", err)
+		if deps.runSplash != nil {
+			if err := deps.runSplash(); err != nil {
+				fmt.Fprintf(os.Stderr, "agent-runner: splash: %v\n", err)
+			}
 		}
 		result, err := deps.runNativeSetup(onboardingDone)
 		if err != nil {
