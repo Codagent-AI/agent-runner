@@ -43,8 +43,10 @@ func ciChecks(pr map[string]any) map[string]any {
 	return ciCommit(pr)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)
 }
 
-// useCISequence makes the fake gh serve one snapshot per GraphQL call, repeating the last.
-func useCISequence(t *testing.T, fixtures ...map[string]any) {
+// useCISequence makes the fake gh serve one snapshot per GraphQL call, repeating
+// the last. It returns the environment entry to pass to runCIFixture; the
+// environment is per run so that tests can run in parallel.
+func useCISequence(t *testing.T, fixtures ...map[string]any) string {
 	t.Helper()
 	dir := t.TempDir()
 	for i, fixture := range fixtures {
@@ -59,7 +61,7 @@ func useCISequence(t *testing.T, fixtures ...map[string]any) {
 	if err := os.WriteFile(filepath.Join(dir, "count"), []byte("0"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("CI_SEQUENCE_DIR", dir)
+	return "CI_SEQUENCE_DIR=" + dir
 }
 
 func writeCIPage(t *testing.T, page string) string {
@@ -71,12 +73,12 @@ func writeCIPage(t *testing.T, page string) string {
 	return path
 }
 
-func runCIFixture(t *testing.T, fixture map[string]any, inputs string) (output string, exitCode int, elapsed time.Duration) {
+func runCIFixture(t *testing.T, fixture map[string]any, inputs string, env ...string) (output string, exitCode int, elapsed time.Duration) {
 	t.Helper()
-	return runCIFixtureWithGHDelay(t, fixture, inputs, 0)
+	return runCIFixtureWithGHDelay(t, fixture, inputs, 0, env...)
 }
 
-func runCIFixtureWithGHDelay(t *testing.T, fixture map[string]any, inputs string, ghDelay time.Duration) (output string, exitCode int, elapsed time.Duration) {
+func runCIFixtureWithGHDelay(t *testing.T, fixture map[string]any, inputs string, ghDelay time.Duration, env ...string) (output string, exitCode int, elapsed time.Duration) {
 	t.Helper()
 	dir := t.TempDir()
 	for _, name := range []string{"ci-wait.sh", "ci_wait.py"} {
@@ -127,6 +129,7 @@ esac
 	}
 	cmd := exec.Command("sh", filepath.Join(dir, "ci-wait.sh"))
 	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "CI_SNAPSHOT="+filepath.Join(dir, "snapshot.json"), fmt.Sprintf("CI_FAKE_GH_DELAY=%g", ghDelay.Seconds()))
+	cmd.Env = append(cmd.Env, env...)
 	cmd.Stdin = strings.NewReader(inputs)
 	start := time.Now()
 	out, err := cmd.CombinedOutput()
@@ -252,6 +255,7 @@ func TestCIWaitClassification(t *testing.T) {
 // primary and continuation queries were also checked against GitHub's schema
 // during implementation; this fixture keeps their response shape offline.
 func TestCIWaitRecordedGraphQLFixture(t *testing.T) {
+	t.Parallel()
 	data, err := os.ReadFile("../testdata/ci_wait_graphql_pr.json")
 	if err != nil {
 		t.Fatal(err)
@@ -276,6 +280,7 @@ func TestCIWaitRecordedGraphQLFixture(t *testing.T) {
 }
 
 func TestCIWaitFatalAndBoundedCalls(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name, mode, want string
 		code             int
@@ -286,8 +291,8 @@ func TestCIWaitFatalAndBoundedCalls(t *testing.T) {
 		{"unreadable snapshot", "unreadable", "CI_PENDING", 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("CI_FAKE_GH_MODE", tt.mode)
-			out, code, elapsed := runCIFixture(t, ciFixture(), `{"deadline_seconds":"6","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1","call_timeout_seconds":"5"}`)
+			t.Parallel()
+			out, code, elapsed := runCIFixture(t, ciFixture(), `{"deadline_seconds":"6","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1","call_timeout_seconds":"5"}`, "CI_FAKE_GH_MODE="+tt.mode)
 			if code != tt.code || !strings.Contains(out, tt.want) || elapsed >= 8*time.Second {
 				t.Fatalf("code=%d elapsed=%s output=%s", code, elapsed, out)
 			}
@@ -296,6 +301,7 @@ func TestCIWaitFatalAndBoundedCalls(t *testing.T) {
 }
 
 func TestCIWaitUnexpectedErrorHasDedicatedExit(t *testing.T) {
+	t.Parallel()
 	collector, err := ReadAsset("core/ci_wait.py")
 	if err != nil {
 		t.Fatal(err)
@@ -306,6 +312,7 @@ func TestCIWaitUnexpectedErrorHasDedicatedExit(t *testing.T) {
 	}
 	for _, mode := range []string{"wait", "reuse"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			program := `import importlib.util, sys
 spec = importlib.util.spec_from_file_location("ci_wait", sys.argv[1])
 module = importlib.util.module_from_spec(spec)
@@ -337,6 +344,7 @@ sys.exit(module.main())
 }
 
 func TestCIWaitTimingOverrideIsVisible(t *testing.T) {
+	t.Parallel()
 	collector, err := ReadAsset("core/ci_wait.py")
 	if err != nil {
 		t.Fatal(err)
@@ -364,12 +372,14 @@ module.Collector({})
 }
 
 func TestCIWaitReadsContinuationPages(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct{ name, field, page, want, detail string }{
 		{"failed check on page two", "checks", `{"data":{"repository":{"pullRequest":{"headRef":{"target":{"statusCheckRollup":{"contexts":{"nodes":[{"name":"late failure","conclusion":"FAILURE"}],"pageInfo":{"hasNextPage":false}}}}}}}}}`, "CI_FAILED", "late failure"},
 		{"actionable thread on page two", "threads", `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread2","isResolved":false,"comments":{"nodes":[{"author":{"login":"reviewer","__typename":"User"},"body":"later issue","path":"late.go","line":9}],"pageInfo":{"hasNextPage":false}}}],"pageInfo":{"hasNextPage":false}}}}}}`, "CI_COMMENTS", "later issue"},
 		{"unread later page", "threads", "fail", "CI_PENDING", "pending"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			fixture := ciFixture()
 			pr := ciPR(fixture)
 			var conn map[string]any
@@ -379,12 +389,11 @@ func TestCIWaitReadsContinuationPages(t *testing.T) {
 				conn = ciConn(pr, "reviewThreads")
 			}
 			conn["pageInfo"] = map[string]any{"hasNextPage": true, "endCursor": "cursor1"}
-			if tt.page == "fail" {
-				t.Setenv("CI_PAGE", "fail")
-			} else {
-				t.Setenv("CI_PAGE", writeCIPage(t, tt.page))
+			page := "fail"
+			if tt.page != "fail" {
+				page = writeCIPage(t, tt.page)
 			}
-			out, code, _ := runCIFixture(t, fixture, `{"deadline_seconds":"5","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
+			out, code, _ := runCIFixture(t, fixture, `{"deadline_seconds":"5","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`, "CI_PAGE="+page)
 			if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), tt.want) || !strings.Contains(out, tt.detail) {
 				t.Fatalf("code=%d report=%s", code, out)
 			}
@@ -393,6 +402,7 @@ func TestCIWaitReadsContinuationPages(t *testing.T) {
 }
 
 func TestCIWaitPaginatesThreadRepliesBeforeDeferring(t *testing.T) {
+	t.Parallel()
 	fixture := ciFixture()
 	pr := ciPR(fixture)
 	ciConn(pr, "reviewThreads")["nodes"] = []any{map[string]any{
@@ -401,14 +411,14 @@ func TestCIWaitPaginatesThreadRepliesBeforeDeferring(t *testing.T) {
 		}, "pageInfo": map[string]any{"hasNextPage": true, "endCursor": "cursor1"}},
 	}}
 	page := `{"data":{"node":{"comments":{"nodes":[{"author":{"login":"alice","__typename":"User"},"body":"deferred"}],"pageInfo":{"hasNextPage":false}}}}}`
-	t.Setenv("CI_PAGE", writeCIPage(t, page))
-	out, code, _ := runCIFixture(t, fixture, `{"deadline_seconds":"5","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
+	out, code, _ := runCIFixture(t, fixture, `{"deadline_seconds":"5","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`, "CI_PAGE="+writeCIPage(t, page))
 	if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), "CI_PASSED") || !strings.Contains(out, "Deferred Threads") {
 		t.Fatalf("code=%d report=%s", code, out)
 	}
 }
 
 func TestCIWaitRechecksBotWhenHeadChanges(t *testing.T) {
+	t.Parallel()
 	past := time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339)
 	fresh := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
 	first := ciFixture()
@@ -420,14 +430,14 @@ func TestCIWaitRechecksBotWhenHeadChanges(t *testing.T) {
 	}
 	second := ciFixture()
 	ciPR(second)["headRefOid"] = "newhead123456"
-	useCISequence(t, first, second)
-	out, code, _ := runCIFixture(t, first, `{"review_bots":"coderabbitai","deadline_seconds":"10","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
+	out, code, _ := runCIFixture(t, first, `{"review_bots":"coderabbitai","deadline_seconds":"10","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`, useCISequence(t, first, second))
 	if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), "CI_REVIEW_INCOMPLETE") || !strings.Contains(out, "**Head:** newhead") {
 		t.Fatalf("code=%d report=%s", code, out)
 	}
 }
 
 func TestCIWaitBotPendingThenSuccess(t *testing.T) {
+	t.Parallel()
 	past := time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339)
 	fresh := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
 	makeSnapshot := func(state string) map[string]any {
@@ -438,8 +448,7 @@ func TestCIWaitBotPendingThenSuccess(t *testing.T) {
 		return fixture
 	}
 	first, second := makeSnapshot("PENDING"), makeSnapshot("SUCCESS")
-	useCISequence(t, first, second)
-	out, code, _ := runCIFixture(t, first, `{"review_bots":"coderabbitai","deadline_seconds":"10","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`)
+	out, code, _ := runCIFixture(t, first, `{"review_bots":"coderabbitai","deadline_seconds":"10","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`, useCISequence(t, first, second))
 	if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), "CI_PASSED") {
 		t.Fatalf("code=%d report=%s", code, out)
 	}
@@ -448,6 +457,7 @@ func TestCIWaitBotPendingThenSuccess(t *testing.T) {
 // Allow process startup under full-suite load while still requiring discovered
 // failures to return well before the overall deadline.
 func TestCIWaitDiscoveredBotFailureIsCI(t *testing.T) {
+	t.Parallel()
 	past := time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339)
 	fresh := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
 	makeSnapshot := func(state string) map[string]any {
@@ -465,10 +475,10 @@ func TestCIWaitDiscoveredBotFailureIsCI(t *testing.T) {
 		{"configured", `"review_bots":"vercel",`, "CI_REVIEW_INCOMPLETE", "vercel: failure"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			first, second := makeSnapshot("PENDING"), makeSnapshot("FAILURE")
-			useCISequence(t, first, second)
 			input := fmt.Sprintf(`{%s"deadline_seconds":"10","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`, tt.bots)
-			out, code, elapsed := runCIFixture(t, first, input)
+			out, code, elapsed := runCIFixture(t, first, input, useCISequence(t, first, second))
 			if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), tt.want) || !strings.Contains(out, tt.detail) {
 				t.Fatalf("code=%d elapsed=%s report=%s", code, elapsed, out)
 			}
@@ -480,6 +490,7 @@ func TestCIWaitDiscoveredBotFailureIsCI(t *testing.T) {
 }
 
 func TestCIWaitAddressedFeedbackAndLatestBotEvidence(t *testing.T) {
+	t.Parallel()
 	push := time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339)
 	old := time.Now().Add(-3 * time.Minute).UTC().Format(time.RFC3339)
 	replied := time.Now().Add(-150 * time.Second).UTC().Format(time.RFC3339)
@@ -527,6 +538,7 @@ func TestCIWaitAddressedFeedbackAndLatestBotEvidence(t *testing.T) {
 		}, `"review_bots":"coderabbitai",`, "CI_PASSED"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			fixture := ciFixture()
 			tt.setup(ciPR(fixture))
 			input := fmt.Sprintf(`{%s"deadline_seconds":"10","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1"}`, tt.inputs)
@@ -542,11 +554,13 @@ func TestCIWaitAddressedFeedbackAndLatestBotEvidence(t *testing.T) {
 // Leave room for subprocess startup under concurrent checks while keeping the
 // elapsed bound below the poll interval so waiting for another poll still fails.
 func TestCIWaitStopsAtGraceEndNotNextPoll(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct{ name, inputs, want string }{
 		{"no expected bot", "", "CI_PASSED"},
 		{"expected bot never starts", `"review_bots":"coderabbitai",`, "CI_REVIEW_INCOMPLETE"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			input := fmt.Sprintf(`{%s"deadline_seconds":"20","poll_interval_seconds":"10","bot_start_grace_seconds":"0.1"}`, tt.inputs)
 			out, code, elapsed := runCIFixture(t, ciFixture(), input)
 			if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), tt.want) || elapsed > 5*time.Second {
