@@ -1,11 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -16,6 +19,9 @@ import (
 
 const scriptWorkerEnv = "AGENT_RUNNER_TESTSCRIPT_WORKER"
 const scriptTempDirEnv = "AGENT_RUNNER_TESTSCRIPT_TEMPDIR"
+const scriptPIDMarker = "supervisor.pid"
+const scriptWorkerPIDMarker = "worker.pid"
+const scriptPIDScopeMarker = "pid-scope"
 const scriptSignalGrace = 5 * time.Second
 
 type scriptTestRun func() int
@@ -28,6 +34,12 @@ func TestMain(m *testing.M) {
 	command := isScriptCommand()
 	if !command && os.Getenv(scriptWorkerEnv) != "1" {
 		os.Exit(runScriptWorker())
+	}
+	if !command && os.Getenv(scriptWorkerEnv) == "1" {
+		if err := os.WriteFile(filepath.Join(os.Getenv(scriptTempDirEnv), scriptWorkerPIDMarker), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, "write testscript worker pid:", err)
+			os.Exit(1)
+		}
 	}
 	run := testscript.TestingM(m)
 	if !command {
@@ -56,7 +68,9 @@ func TestScript(t *testing.T) {
 // testscript.Main owns its binary copy through a defer around m.Run. Test
 // timeouts, panics in test goroutines, and signals skip that defer. Keep a
 // supervisor outside the tests so it can reclaim this run's private temporary
-// directory even when the worker exits abruptly. No other run's files are swept.
+// directory even when the worker exits abruptly. Stale directories are swept
+// at startup only when both supervisor and worker are confirmed dead in the
+// same PID scope. Missing markers preserve runs interrupted during startup.
 // The worker runs in its own process group so signals, escalation, and the final
 // cleanup also reach commands it started. SIGKILL of the supervisor (or SIGKILL of the entire process group) cannot be
 // handled; such a cancellation can still leave the private directory behind.
@@ -65,6 +79,8 @@ func runScriptWorker() int {
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
 	defer signal.Stop(signals)
 
+	scope := scriptPIDScope()
+	sweepScriptTempDirs(os.TempDir(), scope, func(pid int) error { return syscall.Kill(pid, 0) })
 	dir, err := os.MkdirTemp("", "agent-runner-testscript-")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -75,6 +91,16 @@ func runScriptWorker() int {
 			fmt.Fprintln(os.Stderr, "clean up testscript temporary directory:", err)
 		}
 	}()
+	if err := os.WriteFile(filepath.Join(dir, scriptPIDMarker), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, "write testscript supervisor pid:", err)
+		return 1
+	}
+	if scope != "" {
+		if err := os.WriteFile(filepath.Join(dir, scriptPIDScopeMarker), []byte(scope), 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, "write testscript pid scope:", err)
+			return 1
+		}
+	}
 	executable, err := os.Executable()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -124,6 +150,78 @@ func runScriptWorker() int {
 			return 1
 		}
 	}
+}
+
+// Linux temp roots can be shared across PID namespaces. Include the boot ID
+// because namespace inode numbers are only unique within one running kernel.
+// Other supported Unix hosts have a single PID namespace.
+func scriptPIDScope() string {
+	if runtime.GOOS == "linux" {
+		namespace, nsErr := os.Readlink("/proc/self/ns/pid")
+		boot, bootErr := os.ReadFile("/proc/sys/kernel/random/boot_id")
+		if nsErr != nil || bootErr != nil || strings.TrimSpace(string(boot)) == "" {
+			fmt.Fprintln(os.Stderr, "identify testscript pid scope:", nsErr, bootErr)
+			return ""
+		}
+		return "linux:" + strings.TrimSpace(string(boot)) + ":" + namespace
+	}
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		fmt.Fprintln(os.Stderr, "identify testscript pid scope:", err)
+		return ""
+	}
+	return runtime.GOOS + ":" + host
+}
+
+// Keep unmarked directories and ambiguous process-check results: only ESRCH
+// for both owners in our PID scope permits reclamation.
+func sweepScriptTempDirs(root, scope string, checkProcess func(int) error) {
+	if scope == "" {
+		return
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "scan testscript temporary directories:", err)
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "agent-runner-testscript-") {
+			continue
+		}
+		dir := filepath.Join(root, entry.Name())
+		ownerScope, err := os.ReadFile(filepath.Join(dir, scriptPIDScopeMarker))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintln(os.Stderr, "read testscript pid scope:", err)
+		}
+		if err != nil || string(ownerScope) != scope {
+			continue
+		}
+		if !scriptOwnerDead(dir, scriptPIDMarker, checkProcess) || !scriptOwnerDead(dir, scriptWorkerPIDMarker, checkProcess) {
+			continue
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			fmt.Fprintln(os.Stderr, "sweep testscript temporary directory:", err)
+		}
+	}
+}
+
+func scriptOwnerDead(dir, marker string, checkProcess func(int) error) bool {
+	data, err := os.ReadFile(filepath.Join(dir, marker))
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintln(os.Stderr, "read testscript owner pid:", err)
+		}
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 || pid == os.Getpid() {
+		return false
+	}
+	err = checkProcess(pid)
+	if err != nil && !errors.Is(err, syscall.ESRCH) {
+		fmt.Fprintln(os.Stderr, "check testscript owner pid:", err)
+	}
+	return errors.Is(err, syscall.ESRCH)
 }
 
 func scriptRunWithTempDir(m *testing.M, dir string) testscript.TestingM {
