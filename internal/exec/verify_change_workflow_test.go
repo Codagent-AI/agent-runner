@@ -253,7 +253,10 @@ func runVerifyChangeAcceptance(t *testing.T, rounds, skipValidator, stopUnchange
 	if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("initial\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	gitIn(t, repo, "add", "file.txt")
+	writeValidatorConfig(t, repo)
+	// skip_if shell conditions run in the process working directory.
+	t.Chdir(repo)
+	gitIn(t, repo, "add", "file.txt", ".validator")
 	gitIn(t, repo, "commit", "-q", "-m", "initial")
 
 	sessionDir := t.TempDir()
@@ -819,5 +822,17 @@ steps:
 	outcome, err := DispatchStep(&wf.Steps[0], ctx, runner, &mockGlob{}, &mockLogger{})
 	if outcome != OutcomeFailed || runner.agents != 0 || !strings.Contains(runner.stderr, "acceptance_fix_scope") || (ctx.LastFailure == nil || ctx.LastFailure.StepID != "validate-acceptance-fix-scope") {
 		t.Fatalf("sub-workflow: outcome %s, error %v, agents %d, failed %+v, stderr %s", outcome, err, runner.agents, ctx.LastFailure, runner.stderr)
+	}
+}
+
+// writeValidatorConfig marks dir as a project that has set up Agent Validator,
+// so config-gated validator steps run.
+func writeValidatorConfig(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, ".validator"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".validator", "config.yml"), []byte("checks: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

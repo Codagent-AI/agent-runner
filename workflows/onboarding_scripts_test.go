@@ -60,6 +60,7 @@ exit 99
 
 func TestCoreRunValidatorTreatsTaskFileAsData(t *testing.T) {
 	workdir := t.TempDir()
+	writeValidatorConfig(t, workdir)
 	binDir := t.TempDir()
 	writeFakeBinary(t, binDir, "agent-runner", `#!/bin/sh
 if [ "$1" = internal ] && [ "$2" = json-value ] && [ "$3" = task_file ]; then
@@ -103,6 +104,7 @@ printf '%s\n' "$@" > validator-args
 
 func TestCoreRunValidatorForwardsMetricsCorrelation(t *testing.T) {
 	workdir := t.TempDir()
+	writeValidatorConfig(t, workdir)
 	binDir := t.TempDir()
 	writeFakeBinary(t, binDir, "agent-runner", `#!/bin/sh
 printf ''
@@ -133,6 +135,7 @@ printf '%s\n' "$@" > validator-args
 
 func TestOpenSpecCreateChangeReportsUnvalidatedChanges(t *testing.T) {
 	workdir := t.TempDir()
+	writeValidatorConfig(t, workdir)
 	if err := os.MkdirAll(filepath.Join(workdir, "openspec", "changes"), 0o755); err != nil {
 		t.Fatalf("create openspec changes dir: %v", err)
 	}
@@ -218,11 +221,13 @@ func writeFakeBinary(t *testing.T, dir, name, body string) {
 
 func openSpecCreateChangeScript(t *testing.T) string {
 	t.Helper()
-	path, err := filepath.Abs(filepath.Join("openspec", "create-change.sh"))
-	if err != nil {
-		t.Fatalf("resolve create-change.sh: %v", err)
+	// Materialize the namespace so shared helpers resolve beside the script,
+	// exactly as they do at runtime.
+	sessionDir := t.TempDir()
+	if err := MaterializeNamespace(sessionDir, "openspec"); err != nil {
+		t.Fatalf("materialize openspec: %v", err)
 	}
-	return path
+	return filepath.Join(sessionDir, "bundled", "openspec", "create-change.sh")
 }
 
 func coreRunValidatorScript(t *testing.T) string {
@@ -239,6 +244,7 @@ func TestTaskComplianceValidatorArguments(t *testing.T) {
 		for _, metrics := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/metrics=%v", value, metrics), func(t *testing.T) {
 				bin, dir := t.TempDir(), t.TempDir()
+				writeValidatorConfig(t, dir)
 				writeFakeBinary(t, bin, "runner", `#!/bin/sh
 exec jq -r --arg key "$3" '.[$key] // ""'
 `)

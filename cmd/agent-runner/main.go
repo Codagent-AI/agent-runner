@@ -804,7 +804,7 @@ func dispatchRunCommand(args []string, opts *commandFlags) int {
 			}
 			return handleOnboardingFromRun(ref, opts.onboardingFrom, &runCommandOptions{profileOverride: opts.profileOverride()})
 		}
-		return handleListWithDeps(listview.InitialTabNew, defaultFirstRunDeps)
+		return handleListWithDeps(listview.InitialTabNew, &defaultFirstRunDeps)
 	}
 
 	workflowFile, err := resolveWorkflowArg(args[0])
@@ -1053,14 +1053,14 @@ func openInspectTUI(runID, sessionDir, projectDir string) int {
 }
 
 func handleListWithProfile(profile config.ProfileOverride) int {
-	return handleListWithDepsProfile(listview.InitialTabCurrentDir, defaultFirstRunDeps, profile)
+	return handleListWithDepsProfile(listview.InitialTabCurrentDir, &defaultFirstRunDeps, profile)
 }
 
-func handleListWithDeps(initialTab listview.InitialTab, firstRun firstRunDeps) int {
+func handleListWithDeps(initialTab listview.InitialTab, firstRun *firstRunDeps) int {
 	return handleListWithDepsProfile(initialTab, firstRun, config.ProfileOverride{})
 }
 
-func handleListWithDepsProfile(initialTab listview.InitialTab, firstRun firstRunDeps, profile config.ProfileOverride) int {
+func handleListWithDepsProfile(initialTab listview.InitialTab, firstRun *firstRunDeps, profile config.ProfileOverride) int {
 	if err := requireTTY(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -1078,11 +1078,11 @@ func handleListWithDepsProfile(initialTab listview.InitialTab, firstRun firstRun
 	return handleListAfterFirstRunWithProfile(initialTab, firstRun, nil, profile)
 }
 
-func handleListAfterFirstRun(initialTab listview.InitialTab, firstRun firstRunDeps, extraOptions []func(*listview.Model)) int {
+func handleListAfterFirstRun(initialTab listview.InitialTab, firstRun *firstRunDeps, extraOptions []func(*listview.Model)) int {
 	return handleListAfterFirstRunWithProfile(initialTab, firstRun, extraOptions, config.ProfileOverride{})
 }
 
-func handleListAfterFirstRunWithProfile(initialTab listview.InitialTab, firstRun firstRunDeps, extraOptions []func(*listview.Model), profile config.ProfileOverride) int {
+func handleListAfterFirstRunWithProfile(initialTab listview.InitialTab, firstRun *firstRunDeps, extraOptions []func(*listview.Model), profile config.ProfileOverride) int {
 	settings := loadSplashSettingsForList(firstRun.load, os.Stderr)
 
 	options := []func(*listview.Model){
@@ -2256,6 +2256,16 @@ func prepareFreshRun(req *freshRunRequest) (*runner.RunHandle, error) {
 		if _, err := prevalidate.Pipeline(req.SourceRef, params, prevalidate.Strict, prevalidate.Options{ProfileOverride: req.ProfileOverride}); err != nil {
 			return nil, err
 		}
+	} else if len(params) > 0 {
+		// Builtins are checked at build time, but targets chosen by caller-supplied
+		// params (such as validation_workflow) are only known now.
+		supplied := make([]string, 0, len(params))
+		for name := range params {
+			supplied = append(supplied, name)
+		}
+		if _, err := prevalidate.CallerTargets(req.SourceRef, params, supplied, prevalidate.Options{ProfileOverride: req.ProfileOverride}); err != nil {
+			return nil, err
+		}
 	}
 
 	var eng engine.Engine
@@ -2409,7 +2419,7 @@ func handleOnboardingFromRun(workflowFile, from string, runOpts *runCommandOptio
 	reason := runview.FailureReasonForSession(result.sessionDir)
 	return handleListAfterFirstRun(
 		listview.InitialTabCurrentDir,
-		defaultFirstRunDeps,
+		&defaultFirstRunDeps,
 		[]func(*listview.Model){listview.WithOnboardingFailure(result.sessionDir, reason)},
 	)
 }
@@ -2460,6 +2470,7 @@ type firstRunDeps struct {
 	load                          func() (usersettings.Settings, error)
 	isStdinTTY                    func() bool
 	isStdoutTTY                   func() bool
+	runSplash                     func() error // nil skips the splash
 	runNativeSetup                func(onboardingCompleted bool) (nativeSetupResult, error)
 	runDemoPrompt                 func() (nativeSetupResult, error)
 	runDemoPromptFlow             func() firstRunResult
@@ -2493,6 +2504,7 @@ var defaultFirstRunDeps = firstRunDeps{
 	load:        usersettings.Load,
 	isStdinTTY:  func() bool { return isatty.IsTerminal(os.Stdin.Fd()) },
 	isStdoutTTY: func() bool { return isatty.IsTerminal(os.Stdout.Fd()) },
+	runSplash:   splash.Run,
 	runNativeSetup: func(onboardingCompleted bool) (nativeSetupResult, error) {
 		result, err := nativesetup.Run(&nativesetup.Deps{
 			OnboardingCompleted: onboardingCompleted,
@@ -2512,10 +2524,10 @@ var defaultFirstRunDeps = firstRunDeps{
 	},
 }
 
-func firstRunDepsWithOnboardingFrom(from string) firstRunDeps {
+func firstRunDepsWithOnboardingFrom(from string) *firstRunDeps {
 	from = strings.TrimSpace(from)
 	if from == "" {
-		return defaultFirstRunDeps
+		return &defaultFirstRunDeps
 	}
 	deps := defaultFirstRunDeps
 	deps.runDemoPromptFlow = func() firstRunResult {
@@ -2531,7 +2543,7 @@ func firstRunDepsWithOnboardingFrom(from string) firstRunDeps {
 		})
 		return firstRunWorkflowResult(result)
 	}
-	return deps
+	return &deps
 }
 
 func mapSetupResult(result nativesetup.Result) nativeSetupResult {
@@ -2549,7 +2561,7 @@ func mapSetupResult(result nativesetup.Result) nativeSetupResult {
 	}
 }
 
-func ensureFirstRunForTUI(deps firstRunDeps) firstRunResult {
+func ensureFirstRunForTUI(deps *firstRunDeps) firstRunResult {
 	settings, err := deps.load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
@@ -2562,9 +2574,7 @@ func ensureFirstRunForTUI(deps firstRunDeps) firstRunResult {
 	onboardingDone := settings.Onboarding.CompletedAt != "" || settings.Onboarding.Dismissed != ""
 
 	if settings.Setup.CompletedAt == "" {
-		if err := splash.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "agent-runner: splash: %v\n", err)
-		}
+		runFirstRunSplash(deps)
 		result, err := deps.runNativeSetup(onboardingDone)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent-runner: %v\n", err)
@@ -2607,7 +2617,16 @@ func ensureFirstRunForTUI(deps firstRunDeps) firstRunResult {
 	return continueToList()
 }
 
-func launchOnboardingDemo(deps firstRunDeps) firstRunResult {
+func runFirstRunSplash(deps *firstRunDeps) {
+	if deps.runSplash == nil {
+		return
+	}
+	if err := deps.runSplash(); err != nil {
+		fmt.Fprintf(os.Stderr, "agent-runner: splash: %v\n", err)
+	}
+}
+
+func launchOnboardingDemo(deps *firstRunDeps) firstRunResult {
 	if deps.runDemoLaunchFlow != nil {
 		return deps.runDemoLaunchFlow()
 	}
@@ -3325,6 +3344,14 @@ func matchParams(workflow *model.Workflow, positional []string, keyed map[string
 			return nil, fmt.Errorf("unknown parameter: %q", key)
 		}
 		result[key] = val
+	}
+
+	for i := range workflow.Params {
+		if val, ok := result[workflow.Params[i].Name]; ok {
+			if err := workflow.Params[i].CheckShortName(val); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	// Check for required parameters (default to required if not specified).

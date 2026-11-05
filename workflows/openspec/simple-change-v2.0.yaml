@@ -4,6 +4,13 @@ description: "Use for a small branch-local change when the project uses OpenSpec
 params:
   - name: change_name
     required: true
+  - name: validation_workflow
+    required: false
+    default: auto
+    aliases:
+      auto: builtin:core/validation-auto-v1.0.yaml
+      agent-validator: builtin:core/validation-agent-validator-v1.0.yaml
+      none: builtin:core/validation-none-v1.0.yaml
 
 engine:
   type: openspec
@@ -23,6 +30,7 @@ steps:
     script: create-change.sh
     script_inputs:
       change_name: "{{change_name}}"
+      validation_workflow: "{{validation_workflow}}"
 
   - id: plan
     session: lead-agent
@@ -72,15 +80,18 @@ steps:
     params:
       change_name: "{{change_name}}"
       change_dir: "openspec/changes/{{change_name}}"
+      validation_workflow: "{{validation_workflow}}"
 
   - id: complete
-    workflow: ../core/complete-simple-change-v1.0.yaml
+    workflow: ../core/complete-simple-change-v2.0.yaml
     params:
       change_name: "{{change_name}}"
       change_dir: "openspec/changes/{{change_name}}"
       change_label: "OpenSpec change"
+      validation_workflow: "{{validation_workflow}}"
 
   - id: archive
     workflow: archive-change-v1.0.yaml
     params:
       change_name: "{{change_name}}"
+      validation_workflow: "{{validation_workflow}}"

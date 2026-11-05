@@ -2,12 +2,15 @@ package main
 
 import (
 	"bytes"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/codagent/agent-runner/internal/audit"
@@ -126,16 +129,65 @@ func writeSmokeProfileConfig(t *testing.T, home string) {
 	}
 }
 
+var sharedRunnerBuild struct {
+	once sync.Once
+	path string
+	err  error
+}
+
+// buildAgentRunner places an agent-runner binary at runnerBin. The binary is
+// compiled once per test process and copied for each caller, since a link step
+// per test dominates the integration suite's runtime. Without the supervisor's
+// private temp directory (no place to clean up a shared build), it compiles
+// directly into runnerBin.
 func buildAgentRunner(t *testing.T, repoRoot, runnerBin string) {
 	t.Helper()
+	dir := os.Getenv(scriptTempDirEnv)
+	if dir == "" {
+		if err := compileAgentRunner(repoRoot, runnerBin); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	sharedRunnerBuild.once.Do(func() {
+		sharedRunnerBuild.path = filepath.Join(dir, "shared-agent-runner")
+		sharedRunnerBuild.err = compileAgentRunner(repoRoot, sharedRunnerBuild.path)
+	})
+	if sharedRunnerBuild.err != nil {
+		t.Fatal(sharedRunnerBuild.err)
+	}
+	if err := copyExecutable(sharedRunnerBuild.path, runnerBin); err != nil {
+		t.Fatalf("copy agent-runner: %v", err)
+	}
+}
+
+func compileAgentRunner(repoRoot, runnerBin string) error {
 	cmd := exec.Command("go", "build", "-o", runnerBin, "./cmd/agent-runner")
 	cmd.Dir = repoRoot
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("build agent-runner: %v\n%s", err, out.String())
+		return fmt.Errorf("build agent-runner: %w\n%s", err, out.String())
 	}
+	return nil
+}
+
+func copyExecutable(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func headlessSmokeStepIDs() []string {

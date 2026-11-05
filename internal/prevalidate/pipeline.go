@@ -103,10 +103,24 @@ func (e ValidationError) Error() string {
 }
 
 func Pipeline(rootPath string, boundParams map[string]string, mode Mode, opts Options) (Result, error) {
+	state, err := newWalkState(mode, opts)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := state.walkFile(rootPath, boundParams, false, nil); err != nil {
+		return state.result, err
+	}
+	if err := state.probeTriples(); err != nil {
+		return state.result, err
+	}
+	return state.result, nil
+}
+
+func newWalkState(mode Mode, opts Options) (*walkState, error) {
 	opts = opts.withDefaults()
 	cfg, layers, err := opts.LoadConfig()
 	if err != nil {
-		return Result{}, ValidationError{LayerFiles: layers, Message: fmt.Sprintf("loading layered config: %v", err)}
+		return nil, ValidationError{LayerFiles: layers, Message: fmt.Sprintf("loading layered config: %v", err)}
 	}
 
 	state := &walkState{
@@ -123,13 +137,7 @@ func Pipeline(rootPath string, boundParams map[string]string, mode Mode, opts Op
 		state.addAgentDeprecations(cfg.Deprecations...)
 		state.result.ResolvedProfile = activeProfileName(cfg)
 	}
-	if err := state.walkFile(rootPath, boundParams, false, nil); err != nil {
-		return state.result, err
-	}
-	if err := state.probeTriples(); err != nil {
-		return state.result, err
-	}
-	return state.result, nil
+	return state, nil
 }
 
 func (o Options) withDefaults() Options {
@@ -209,19 +217,8 @@ func (s *walkState) walkFile(path string, params map[string]string, isSub bool, 
 	if err := createEngine(path, &workflow); err != nil {
 		return err
 	}
-	for _, decl := range workflow.Sessions {
-		canonicalAgent, warning := config.CanonicalAgentName(decl.Agent)
-		if warning != nil {
-			s.addAgentDeprecations(*warning)
-		}
-		if existing, ok := s.sessionDecls[decl.Name]; ok && existing != canonicalAgent {
-			return ValidationError{
-				File:    path,
-				Agent:   decl.Agent,
-				Message: fmt.Sprintf("incompatible named session declaration %q: agent %q conflicts with %q", decl.Name, decl.Agent, existing),
-			}
-		}
-		s.sessionDecls[decl.Name] = canonicalAgent
+	if err := s.registerSessions(path, workflow.Sessions); err != nil {
+		return err
 	}
 
 	visibleParams := bindParamDefaults(workflow.Params, params)
@@ -272,6 +269,9 @@ func bindParamDefaults(params []model.Param, bound map[string]string) map[string
 	for _, p := range params {
 		if _, ok := out[p.Name]; !ok && p.Default != "" {
 			out[p.Name] = p.Default
+		}
+		if v, ok := out[p.Name]; ok {
+			out[p.Name] = p.Bind(v)
 		}
 	}
 	return out
@@ -742,4 +742,24 @@ func probeError(key probeKey, src probeSource, strength cli.ProbeStrength, err e
 		IsProbe:       true,
 		Message:       err.Error(),
 	}
+}
+
+// registerSessions records a workflow's named-session declarations, rejecting
+// one that conflicts with a declaration already made earlier in the walk.
+func (s *walkState) registerSessions(path string, decls []model.SessionDecl) error {
+	for _, decl := range decls {
+		canonicalAgent, warning := config.CanonicalAgentName(decl.Agent)
+		if warning != nil {
+			s.addAgentDeprecations(*warning)
+		}
+		if existing, ok := s.sessionDecls[decl.Name]; ok && existing != canonicalAgent {
+			return ValidationError{
+				File:    path,
+				Agent:   decl.Agent,
+				Message: fmt.Sprintf("incompatible named session declaration %q: agent %q conflicts with %q", decl.Name, decl.Agent, existing),
+			}
+		}
+		s.sessionDecls[decl.Name] = canonicalAgent
+	}
+	return nil
 }

@@ -75,4 +75,4 @@ steps:
     command: |
       git add openspec/changes/{{change_name}}/
       git commit -m "[{{step_id}}] chore: add openspec documents for {{change_name}}"
-      agent-validator skip
+      if [ -f .validator/config.yml ]; then agent-validator skip; fi

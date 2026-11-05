@@ -45,6 +45,19 @@ inspection, not fresh execution.
 | `core:run-validator` | Run Agent Validator with a counted retry loop and fix-on-failure step. Task-compliance requires `task_compliance: "true"` and a non-empty `task_file`; the default is plain validation. |
 | `core:verify-change` | Review implementation assumptions, validate, open a draft PR, and run bounded acceptance-test, fix, and revalidation rounds. Its optional `skip_implementation_review` parameter (default `false`, accepted only as `true` or `false`) skips the assumption review and the simplification pass for a caller that already produced `acceptance-assumptions.md` and its own maintainability pass; the check that the assumptions handoff exists still runs. Its optional `stop_unchanged_acceptance` parameter (default `false`) ends the acceptance rounds when the lead's fix leaves the tested revision unchanged and writes no `acceptance-retest-reason.txt`, since another tester round could only repeat the last. Its optional `acceptance_fix_scope` parameter defaults to "Resolve every high-confidence finding you can, including implementation, CI, PR-state, tooling, setup, and environmental problems." and replaces only that scope sentence in the acceptance-fix prompt. An empty or ASCII-whitespace-only value is rejected before any agent step. |
 
+### Choosing the validation workflow
+
+`openspec:change`, `spec-driven:change`, `openspec:simple-change`, `spec-driven:simple-change`, and both `scaffold` workflows accept an optional `validation_workflow` parameter. It replaces the old `skip_validator` flag and names the workflow that runs at every validation point of the run:
+
+| Value | Behavior |
+| --- | --- |
+| `auto` (default) | Runs Agent Validator when the project has `.validator/config.yml`; otherwise passes without running anything or needing `agent-validator` installed. |
+| `agent-validator` | Runs Agent Validator's bounded retry loop. Fails, naming what is missing, when the config or executable is absent. |
+| `none` | Passes without running anything. |
+| a `builtin:` reference or an absolute path | Runs that workflow. It receives `repair_session`, `result_file`, `task_file`, and `task_compliance` and may ignore any of them. |
+
+`change` validates after the agent's acceptance testing, again after human review settles, and after each CI fix before it is pushed. `simple-change` validates after flow testing and after the user's review. Unresolved validation warns and the run continues. Agent Validator bookkeeping (`detect` and baseline `skip`) runs only when the selected workflow runs Agent Validator. The older helper versions, including `core:implement-task` v1.0, keep `skip_validator` and run the validator only when `.validator/config.yml` exists.
+
 Some `core:*` workflows are hidden from normal browsing because they are intended to be invoked by higher-level workflows. The shared change-lifecycle workflows accept an artifact directory and validation instructions; the OpenSpec and spec-driven namespaces provide those backend-specific values.
 
 `core:finalize-pr` waits for CI and review feedback in bundled scripts, then resumes the lead agent when fixes are needed. If a CI wait script fails, the lead agent gets one repair attempt to resolve workspace causes such as a missing pull request; the script reruns to decide the outcome. A wait that still fails ends the fix loop and proceeds to final verification, whose wait has its own repair attempt. Its optional `review_bots` parameter accepts comma-separated bot logins to wait for after each push.

@@ -19,6 +19,7 @@ entry_points:
           command: ./.validator/duplication.sh
       - test:
           command: ./.validator/go-offline.sh sh -c 'go test -tags dev_audit $(./.validator/go-packages.sh -tags dev_audit)'
+          timeout: 600
       - security-code:
           command: ./.validator/go-offline.sh gosec -tags=dev_audit -exclude-dir=.claude -exclude-dir=.validator -exclude-dir=worktrees ./...
     reviews:

@@ -51,6 +51,7 @@ var (
 )
 
 func TestInteractiveDirectHandoffWorkflowIntegration(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("interactive direct-handoff smoke test requires a POSIX terminal")
 	}
@@ -100,6 +101,7 @@ func TestInteractiveDirectHandoffWorkflowIntegration(t *testing.T) {
 }
 
 func TestInteractiveDirectHandoffJobControl(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("job control requires a POSIX terminal")
 	}
@@ -119,6 +121,7 @@ func TestInteractiveDirectHandoffJobControl(t *testing.T) {
 
 	for _, mode := range []string{"cooperative", "external", "terminal-output", "terminal-input", "interrupt-tui"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			home := filepath.Join(tmp, "home-"+mode)
 			writeSmokeProfileConfig(t, home)
 			writeTestFile(t, filepath.Join(home, ".agent-runner", "settings.yaml"), "theme: dark\n")
@@ -247,6 +250,7 @@ func TestInteractiveDirectHandoffJobControl(t *testing.T) {
 }
 
 func TestInteractiveShellDirectTerminalHandoffE2E(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("direct terminal handoff requires a POSIX terminal")
 	}
@@ -327,6 +331,7 @@ func terminalDeviceID(file *os.File) (string, error) {
 }
 
 func TestInteractiveTerminalLeaseFailures(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("interactive terminal lease smoke test requires a POSIX terminal")
 	}
@@ -334,6 +339,7 @@ func TestInteractiveTerminalLeaseFailures(t *testing.T) {
 
 	for _, mode := range []string{"release", "restore", "startup"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			tmp := t.TempDir()
 			home := filepath.Join(tmp, "home")
 			writeSmokeProfileConfig(t, home)
@@ -1111,6 +1117,7 @@ func withoutHostLauncherEnv(base []string) []string {
 // INT-002 exercises the step override through the real loader, settings,
 // adapter, terminal handoff and control-channel completion.
 func TestStepAutonomousBackendPTYIntegration(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("requires a POSIX terminal")
 	}

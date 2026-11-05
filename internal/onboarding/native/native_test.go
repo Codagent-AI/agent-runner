@@ -630,3 +630,22 @@ func settleAnimation(m *Model) {
 	m.animDone = true
 	m.prevView = ""
 }
+
+// Crosscheck is described as challenging planning artifacts; code review is
+// attributed to the project's validation, not to Agent Validator itself.
+func TestCrosscheckCopyDoesNotClaimValidatorOwnsCodeReview(t *testing.T) {
+	m := startTestModel(t, baseDeps())
+	panel := tuistyle.Sanitize(m.renderPanel())
+	texts := map[string]string{
+		"summary":     panel,
+		"explanation": roleExplanation(profilerecommend.Crosscheck),
+	}
+	for name, text := range texts {
+		if strings.Contains(text, "remains responsible for implementation-code review") || strings.Contains(text, "Agent Validator reviews implementation code") {
+			t.Errorf("%s claims Agent Validator owns code review:\n%s", name, text)
+		}
+		if !strings.Contains(text, "planning artifacts") {
+			t.Errorf("%s does not describe crosscheck as challenging planning artifacts:\n%s", name, text)
+		}
+	}
+}

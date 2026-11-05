@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"maps"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -706,7 +707,38 @@ type Param struct {
 	Name     string `yaml:"name" json:"name"`
 	Required *bool  `yaml:"required,omitempty" json:"required,omitempty"`
 	Default  string `yaml:"default,omitempty" json:"default,omitempty"`
+	// Aliases maps short values to the full value the workflow binds, applied
+	// after default substitution.
+	Aliases map[string]string `yaml:"aliases,omitempty" json:"aliases,omitempty"`
 }
+
+// Bind returns the value the workflow sees for a supplied or defaulted value:
+// the alias target when value is an alias key, else value unchanged. Full
+// values are never alias keys, so binding is idempotent.
+func (p *Param) Bind(value string) string {
+	if target, ok := p.Aliases[value]; ok {
+		return target
+	}
+	return value
+}
+
+// CheckShortName rejects a bare word (letters, digits, '-' or '_') that is not
+// one of an aliased param's short names, so a typo fails with the accepted
+// names rather than as an unresolvable full value. Values with any other
+// character, such as references and paths, pass through.
+func (p *Param) CheckShortName(value string) error {
+	if len(p.Aliases) == 0 || value == "" || !bareWord.MatchString(value) {
+		return nil
+	}
+	if _, ok := p.Aliases[value]; ok {
+		return nil
+	}
+	names := slices.Sorted(maps.Keys(p.Aliases))
+	return fmt.Errorf("unknown short name %q for parameter %q; use one of: %s, or a full value such as %s",
+		value, p.Name, strings.Join(names, ", "), p.Aliases[names[0]])
+}
+
+var bareWord = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // IsRequired returns whether this param is required (defaults to true).
 func (p *Param) IsRequired() bool {
@@ -731,6 +763,19 @@ type Workflow struct {
 	Sessions    []SessionDecl `yaml:"sessions,omitempty" json:"sessions,omitempty"`
 	Steps       []Step        `yaml:"steps" json:"steps"`
 	Engine      *EngineConfig `yaml:"engine,omitempty" json:"engine,omitempty"`
+}
+
+// BindAliases replaces every aliased value in params with its target.
+func (w *Workflow) BindAliases(params map[string]string) {
+	for i := range w.Params {
+		p := &w.Params[i]
+		if len(p.Aliases) == 0 {
+			continue
+		}
+		if v, ok := params[p.Name]; ok {
+			params[p.Name] = p.Bind(v)
+		}
+	}
 }
 
 // ApplyDefaults sets default values for Workflow fields.
@@ -787,6 +832,11 @@ func (w *Workflow) Validate(knownCLIs []string) error {
 	for _, param := range w.Params {
 		if param.Name == IntakeHandoffVar {
 			return fmt.Errorf(`parameter name %q is reserved`, IntakeHandoffVar)
+		}
+		for key, target := range param.Aliases {
+			if key == "" || target == "" {
+				return fmt.Errorf(`parameter %q has an empty alias key or value`, param.Name)
+			}
 		}
 	}
 

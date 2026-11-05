@@ -1254,7 +1254,7 @@ func (m *Model) screenContent() (title, body, prompt string) {
 
 func (m *Model) recommendationSummary() string {
 	var b strings.Builder
-	b.WriteString("Your four-role profile configures interactive leadership, an independent planning crosscheck, implementation, and acceptance testing. Crosscheck challenges Lead's planning artifacts for omissions and completeness; Agent Validator remains responsible for implementation-code review.\n\n")
+	b.WriteString("Your four-role profile configures interactive leadership, an independent planning crosscheck, implementation, and acceptance testing. Crosscheck challenges Lead's planning artifacts for omissions and completeness; implementation code is reviewed by your project's validation, which uses Agent Validator when you have set it up.\n\n")
 	for _, selection := range m.selections {
 		model := selection.Model
 		if model == "" {
@@ -1300,7 +1300,7 @@ func roleExplanation(role profilerecommend.Role) string {
 	case profilerecommend.Lead:
 		return "Lead works with you interactively to shape goals, decisions, plans, and specifications."
 	case profilerecommend.Crosscheck:
-		return "Crosscheck independently challenges Lead's planning artifacts and looks for omissions; Agent Validator reviews implementation code."
+		return "Crosscheck independently challenges Lead's planning artifacts and looks for omissions; your project's validation, which uses Agent Validator when set up, reviews implementation code."
 	case profilerecommend.Implementor:
 		return "Implementor carries out code changes and focused validation autonomously."
 	case profilerecommend.Tester:

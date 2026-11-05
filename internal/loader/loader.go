@@ -116,6 +116,9 @@ func ResolveRelativeWorkflowPath(parentFile, workflowField string) string {
 		// user workflow can call a built-in sub-workflow without a relative path.
 		return workflowField
 	}
+	if filepath.IsAbs(workflowField) {
+		return workflowField
+	}
 	if builtinworkflows.IsRef(parentFile) {
 		relParent, err := builtinworkflows.RefPath(parentFile)
 		if err != nil {

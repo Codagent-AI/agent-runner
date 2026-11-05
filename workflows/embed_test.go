@@ -119,8 +119,11 @@ func TestResolveSelectsLatestVersionWhileExactReadsRemainAvailable(t *testing.T)
 	if err != nil {
 		t.Fatalf("Resolve(core:implement-change): %v", err)
 	}
-	if coreRef != "builtin:core/implement-change-v2.0.yaml" {
-		t.Fatalf("Resolve(core:implement-change) = %q, want v2.0", coreRef)
+	if coreRef != "builtin:core/implement-change-v3.0.yaml" {
+		t.Fatalf("Resolve(core:implement-change) = %q, want v3.0", coreRef)
+	}
+	if _, err := ReadFile("builtin:core/implement-change-v2.0.yaml"); err != nil {
+		t.Fatalf("ReadFile core implement-change v2.0: %v", err)
 	}
 	if _, err := ReadFile("builtin:core/implement-change-v1.0.yaml"); err != nil {
 		t.Fatalf("ReadFile core implement-change v1.0: %v", err)
@@ -274,7 +277,11 @@ func TestV2ChangeWorkflowsShareCoreLifecyclePhases(t *testing.T) {
 						t.Errorf("%s branch guard workflow = %q", tt.ref, step.Workflow)
 					}
 				case "accept":
-					if step.Workflow != "../core/accept-change-v1.0.yaml" {
+					wantAccept := "../core/accept-change-v1.0.yaml"
+					if strings.HasSuffix(tt.ref, "change-v3.0.yaml") {
+						wantAccept = "../core/accept-change-v2.0.yaml"
+					}
+					if step.Workflow != wantAccept {
 						t.Errorf("%s accept workflow = %q", tt.ref, step.Workflow)
 					}
 					if step.Params["change_dir"] == "" {
@@ -332,14 +339,14 @@ func TestV3ChangeWorkflowsImplementWithoutPlanning(t *testing.T) {
 				if step.ID != "implement" {
 					continue
 				}
-				if step.Workflow != "../core/implement-change-v2.0.yaml" {
-					t.Errorf("%s implement workflow = %q, want ../core/implement-change-v2.0.yaml", tt.ref, step.Workflow)
+				if step.Workflow != "../core/implement-change-v3.0.yaml" {
+					t.Errorf("%s implement workflow = %q, want ../core/implement-change-v3.0.yaml", tt.ref, step.Workflow)
 				}
 				if step.Params["change_dir"] != tt.changeDir || step.Params["change_kind"] != tt.changeKind {
 					t.Errorf("%s implement change_dir/change_kind = %q/%q, want %q/%q",
 						tt.ref, step.Params["change_dir"], step.Params["change_kind"], tt.changeDir, tt.changeKind)
 				}
-				for _, name := range []string{"change_name", "change_label", "artifact_validation_instruction", "skip_validator"} {
+				for _, name := range []string{"change_name", "change_label", "artifact_validation_instruction", "validation_workflow"} {
 					if step.Params[name] == "" {
 						t.Errorf("%s implement step does not pass %s", tt.ref, name)
 					}
@@ -830,6 +837,7 @@ func newCommitChangePlanFixture(t *testing.T, script []byte) (repoDir string, ru
 	t.Helper()
 	repoDir = t.TempDir()
 	scriptPath := filepath.Join(t.TempDir(), "commit-change-plan.sh")
+	writeBookkeepingHelper(t, filepath.Dir(scriptPath))
 	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
@@ -841,6 +849,7 @@ func newCommitChangePlanFixture(t *testing.T, script []byte) (repoDir string, ru
 	}
 	runGitOutput(t, repoDir, "add", "README.md")
 	runGitOutput(t, repoDir, "commit", "-m", "chore: initialize fixture")
+	writeValidatorConfig(t, repoDir)
 
 	changeDir := filepath.Join(repoDir, "openspec", "changes", "demo")
 	if err := os.MkdirAll(changeDir, 0o755); err != nil {
@@ -880,7 +889,7 @@ func TestCoreVerifyChangeSkipValidatorControlsAllValidatorRuns(t *testing.T) {
 	}
 
 	finalValidator := steps[indexes["run-validator"]]
-	if finalValidator.Workflow != "run-validator-v1.0.yaml" || finalValidator.SkipIf != "sh: test {{skip_validator}} = true" {
+	if finalValidator.Workflow != "run-validator-v1.0.yaml" || finalValidator.SkipIf != "sh: test {{skip_validator}} = true || test ! -f .validator/config.yml" {
 		t.Fatalf("run-validator = %+v, want the run-validator workflow behind the skip_validator gate", finalValidator)
 	}
 
@@ -1013,7 +1022,8 @@ func TestV2ImplementChangeCallersProvideChangeKind(t *testing.T) {
 			}
 			for _, step := range workflow.Steps {
 				if step.Workflow != "../core/implement-change-v1.0.yaml" &&
-					step.Workflow != "../core/implement-change-v2.0.yaml" {
+					step.Workflow != "../core/implement-change-v2.0.yaml" &&
+					step.Workflow != "../core/implement-change-v3.0.yaml" {
 					continue
 				}
 				if got := step.Params["change_kind"]; got != tt.want {
@@ -1269,7 +1279,7 @@ func TestV2SimpleChangeWorkflowsShareCorePhases(t *testing.T) {
 					t.Errorf("commit workflow = %q", got)
 				}
 			}
-			if got := steps["complete"].workflow; got != "../core/complete-simple-change-v1.0.yaml" {
+			if got := steps["complete"].workflow; got != "../core/complete-simple-change-v2.0.yaml" {
 				t.Errorf("complete workflow = %q", got)
 			}
 			if got := steps["complete"].params["change_dir"]; got != tt.wantChangeDir {
@@ -1894,6 +1904,7 @@ func TestCoreCommitChangePlanIncludesOpenSpecBootstrapConfig(t *testing.T) {
 
 	tempDir := t.TempDir()
 	scriptPath := filepath.Join(tempDir, "commit-change-plan.sh")
+	writeBookkeepingHelper(t, filepath.Dir(scriptPath))
 	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
@@ -1978,6 +1989,7 @@ func TestCoreCommitChangePlanUsesTicketSubjectFromChangeName(t *testing.T) {
 
 	tempDir := t.TempDir()
 	scriptPath := filepath.Join(tempDir, "commit-change-plan.sh")
+	writeBookkeepingHelper(t, filepath.Dir(scriptPath))
 	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
@@ -2033,6 +2045,7 @@ func TestCoreCommitChangePlanRejectsRepositoryRoot(t *testing.T) {
 
 	tempDir := t.TempDir()
 	scriptPath := filepath.Join(tempDir, "commit-change-plan.sh")
+	writeBookkeepingHelper(t, filepath.Dir(scriptPath))
 	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
@@ -2077,6 +2090,7 @@ func TestCoreCommitChangePlanReplaysAsNoOpWhenAlreadyCommitted(t *testing.T) {
 
 	tempDir := t.TempDir()
 	scriptPath := filepath.Join(tempDir, "commit-change-plan.sh")
+	writeBookkeepingHelper(t, filepath.Dir(scriptPath))
 	if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
@@ -2221,6 +2235,8 @@ func TestCreateChangeScriptsExplainMissingAgentValidator(t *testing.T) {
 
 			tempDir := t.TempDir()
 			scriptPath := filepath.Join(tempDir, "create-change.sh")
+			writeBookkeepingHelper(t, filepath.Dir(scriptPath))
+			writeValidatorConfig(t, tempDir)
 			if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
 				t.Fatalf("write script: %v", err)
 			}
@@ -2811,5 +2827,29 @@ func TestEmbeddedTaskComplianceCallers(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// writeBookkeepingHelper installs the validator bookkeeping gate next to a
+// script copied out of the embedded catalog, as materialization does.
+func writeBookkeepingHelper(t *testing.T, dir string) {
+	t.Helper()
+	helper, err := ReadAsset("core/validator-bookkeeping.sh")
+	if err != nil {
+		t.Fatalf("ReadAsset(core/validator-bookkeeping.sh): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "validator-bookkeeping.sh"), helper, 0o700); err != nil {
+		t.Fatalf("write validator-bookkeeping.sh: %v", err)
+	}
+}
+
+// writeValidatorConfig marks dir as a project that has set up Agent Validator.
+func writeValidatorConfig(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, ".validator"), 0o755); err != nil {
+		t.Fatalf("create .validator: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".validator", "config.yml"), []byte("checks: {}\n"), 0o600); err != nil {
+		t.Fatalf("write validator config: %v", err)
 	}
 }

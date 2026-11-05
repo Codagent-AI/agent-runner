@@ -137,8 +137,8 @@ func TestResolveWorkflowArg(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveWorkflowArg returned error: %v", err)
 		}
-		if got != "builtin:core/finalize-pr-v1.0.yaml" {
-			t.Fatalf("resolveWorkflowArg = %q, want %q", got, "builtin:core/finalize-pr-v1.0.yaml")
+		if got != "builtin:core/finalize-pr-v2.0.yaml" {
+			t.Fatalf("resolveWorkflowArg = %q, want %q", got, "builtin:core/finalize-pr-v2.0.yaml")
 		}
 	})
 
@@ -317,7 +317,7 @@ func TestValidateIntakeRunInvocationRejectsHeadlessByName(t *testing.T) {
 	if err := validateIntakeRunInvocation("builtin:core/intake-v1.0.yaml", true); err == nil || !strings.Contains(err.Error(), "interactive terminal") {
 		t.Fatalf("headless intake error = %v, want interactive-terminal rejection", err)
 	}
-	if err := validateIntakeRunInvocation("builtin:core/finalize-pr-v1.0.yaml", true); err != nil {
+	if err := validateIntakeRunInvocation("builtin:core/finalize-pr-v2.0.yaml", true); err != nil {
 		t.Fatalf("headless non-intake error = %v, want nil", err)
 	}
 }

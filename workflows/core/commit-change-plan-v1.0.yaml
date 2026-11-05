@@ -1,5 +1,5 @@
 name: commit-change-plan
-description: "Commit a structured change plan and advance the Validator baseline."
+description: "Commit a structured change plan and advance the Validator baseline when the selected validation workflow runs Agent Validator."
 hidden: true
 
 params:
@@ -7,6 +7,9 @@ params:
     required: true
   - name: change_dir
     required: true
+  - name: validation_workflow
+    required: false
+    default: ""
 
 steps:
   - id: commit-plan
@@ -14,3 +17,4 @@ steps:
     script_inputs:
       change_name: "{{change_name}}"
       change_dir: "{{change_dir}}"
+      validation_workflow: "{{validation_workflow}}"

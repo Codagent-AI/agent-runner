@@ -139,6 +139,9 @@ type RunState struct {
 	// WarningCount is the number of explicit terminal warning origins recorded
 	// by a successfully completed workflow.
 	WarningCount int `json:"warningCount,omitempty"`
+	// Warnings lists every warning origin recorded so far, so a resumed run
+	// still counts warnings from earlier attempts.
+	Warnings []WarningRecord `json:"warnings,omitempty"`
 	// RunKind identifies special persisted runs without changing how ordinary
 	// callers load them. Empty means an ordinary workflow execution.
 	RunKind string `json:"runKind,omitempty"`

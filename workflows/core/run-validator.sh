@@ -8,6 +8,14 @@ task_file=$(printf '%s' "$payload" | "$AGENT_RUNNER_EXECUTABLE" internal json-va
 task_compliance=$(printf '%s' "$payload" | "$AGENT_RUNNER_EXECUTABLE" internal json-value task_compliance)
 result_file=$(printf '%s' "$payload" | "$AGENT_RUNNER_EXECUTABLE" internal json-value result_file)
 
+if [ ! -f .validator/config.yml ]; then
+  if [ -n "$result_file" ]; then
+    mkdir -p "$(dirname "$result_file")"
+    printf 'SKIPPED\nno .validator/config.yml in this project\n' >"$result_file"
+  fi
+  exit 0
+fi
+
 set -- run --report
 if [ "$task_compliance" = true ] && [ -n "$task_file" ]; then
   set -- "$@" --enable-review task-compliance --context-file "$task_file"

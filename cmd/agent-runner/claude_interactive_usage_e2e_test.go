@@ -16,11 +16,13 @@ import (
 )
 
 func TestInteractiveClaudeUsageE2E001(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runner := filepath.Join(root, "agent-runner")
 	buildAgentRunner(t, findRepoRoot(t), runner)
 	for _, mode := range []string{"final", "missing", "damaged"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			tmp := t.TempDir()
 			home := filepath.Join(tmp, "home")
 			work := filepath.Join(tmp, "work")

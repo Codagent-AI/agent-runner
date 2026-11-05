@@ -6,6 +6,13 @@ params:
     required: true
   - name: change_dir
     required: true
+  - name: validation_workflow
+    required: false
+    default: auto
+    aliases:
+      auto: builtin:core/validation-auto-v1.0.yaml
+      agent-validator: builtin:core/validation-agent-validator-v1.0.yaml
+      none: builtin:core/validation-none-v1.0.yaml
 
 steps:
   - id: validate-feature-branch
@@ -18,6 +25,7 @@ steps:
     script_inputs:
       change_name: "{{change_name}}"
       change_dir: "{{change_dir}}"
+      validation_workflow: "{{validation_workflow}}"
 
   - id: define
     workflow: ../core/define-change-v1.0.yaml
@@ -28,22 +36,25 @@ steps:
       artifact_location_instruction: "Spec-driven artifacts are expected to live outside the current project repository and remain independent of its commits. Keep every definition and planning artifact under the external `{{change_dir}}/` directory."
 
   - id: implement
-    workflow: ../core/implement-change-v2.0.yaml
+    workflow: ../core/implement-change-v3.0.yaml
     params:
       change_name: "{{change_name}}"
       change_dir: "{{change_dir}}"
       change_label: "spec-driven change"
       change_kind: "spec-driven"
       artifact_validation_instruction: 'When an approved artifact changed, read and follow `{{session_dir}}/bundled/spec-driven/definition-validation-checklist.md`, substituting "{{change_dir}}" for `<change-dir>` when validating "{{change_name}}".'
-      skip_validator: "false"
+      validation_workflow: "{{validation_workflow}}"
 
   - id: accept
-    workflow: ../core/accept-change-v1.0.yaml
+    workflow: ../core/accept-change-v2.0.yaml
     params:
       change_name: "{{change_name}}"
       change_dir: "{{change_dir}}"
       change_label: "spec-driven change"
       artifact_validation_instruction: 'If a specification changed, read and follow `{{session_dir}}/bundled/spec-driven/definition-validation-checklist.md`, substituting "{{change_dir}}" for `<change-dir>` when validating "{{change_name}}".'
+      validation_workflow: "{{validation_workflow}}"
 
   - id: finalize
-    workflow: ../core/finalize-pr-v1.0.yaml
+    workflow: ../core/finalize-pr-v2.0.yaml
+    params:
+      validation_workflow: "{{validation_workflow}}"

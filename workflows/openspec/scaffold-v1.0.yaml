@@ -1,8 +1,17 @@
 name: scaffold
-description: "Bootstrap a brand new OpenSpec project, configure validation, and optionally publish it to GitHub."
+description: "Bootstrap a brand new OpenSpec project, optionally set up Agent Validator, and optionally publish it to GitHub."
+
+params:
+  - name: validation_workflow
+    required: false
+    default: auto
+    aliases:
+      auto: builtin:core/validation-auto-v1.0.yaml
+      agent-validator: builtin:core/validation-agent-validator-v1.0.yaml
+      none: builtin:core/validation-none-v1.0.yaml
 
 sessions:
-  - name: scaffold-agent
+  - name: implementor-agent
     agent: implementor
   - name: validator-setup-session
     agent: lead
@@ -47,7 +56,7 @@ steps:
       touch openspec/changes/.gitkeep openspec/specs/.gitkeep
 
   - id: scaffold-project
-    session: scaffold-agent
+    session: implementor-agent
     mode: interactive
     prompt: |
       Help the user scaffold a brand new project in the current directory.
@@ -79,13 +88,41 @@ steps:
 
       git commit -m "[{{step_id}}] chore: scaffold initial project"
 
+  - id: validator-choice
+    mode: ui
+    title: "Agent Validator"
+    body: |
+      Agent Validator is an optional extra check that reviews a change before it is finished. You can set it up now, or skip it and rely on your project's own linters, tests, and CI.
+    inputs:
+      - kind: single_select
+        id: setup
+        prompt: "Agent Validator"
+        options: ["Set up Agent Validator", "Skip"]
+        default: "Set up Agent Validator"
+    actions:
+      - label: "Continue"
+        outcome: continue
+    capture: validator_choice
+
   - id: validator-init
     command: '"$AGENT_RUNNER_EXECUTABLE" internal validator-init'
     mode: interactive
+    skip_if: 'sh: [ "{{validator_choice.setup}}" = "Skip" ]'
+
+  - id: validator-skipped-guidance
+    mode: ui
+    title: "Verify your project"
+    body: |
+      Make sure AGENTS.md explains how to verify this project: linters, the test suite, and any project-specific checks.
+    actions:
+      - label: "Continue"
+        outcome: continue
+    skip_if: 'sh: [ "{{validator_choice.setup}}" != "Skip" ]'
 
   - id: validator-setup
     session: validator-setup-session
     mode: interactive
+    skip_if: 'sh: [ "{{validator_choice.setup}}" = "Skip" ]'
     prompt: |
       Help the user configure Agent Validator for this new project.
 
@@ -93,15 +130,20 @@ steps:
 
       The initial project scaffold has already been committed. If the validator setup skill creates or changes validator configuration, follow that skill's commit guidance, the project's commit message conventions, and prepend [{{step_id}}].
 
-  - id: run-validator
-    workflow: ../core/run-validator-v1.0.yaml
-    continue_on_failure: true
+  # The scaffold agent wrote the project, so it repairs validation findings.
+  # Under auto this passes without config, and picks up config created above.
+  - id: validate
+    workflow: "{{validation_workflow}}"
+    params:
+      repair_session: implementor-agent
+      result_file: "{{session_dir}}/output/validation-scaffold.txt"
+    warn_on_failure: true
 
   - id: publish-choice
     mode: ui
     title: "Publish to GitHub"
     body: |
-      The project has been scaffolded and Agent Validator has run. You can publish it to GitHub now, or keep it local.
+      The project has been scaffolded and validation has run. You can publish it to GitHub now, or keep it local.
     inputs:
       - kind: single_select
         id: publish

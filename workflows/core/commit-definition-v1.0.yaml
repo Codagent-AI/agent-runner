@@ -12,6 +12,9 @@ params:
   - name: skip_validator
     required: false
     default: "false"
+  - name: validation_workflow
+    required: false
+    default: ""
 
 sessions:
   - name: lead-agent
@@ -24,6 +27,7 @@ steps:
       change_name: "{{change_name}}"
       change_dir: "{{change_dir}}"
       skip_validator: "{{skip_validator}}"
+      validation_workflow: "{{validation_workflow}}"
     skip_if: 'sh: test {{change_kind}} = spec-driven'
     repair:
       session: lead-agent

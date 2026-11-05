@@ -150,7 +150,7 @@ func TestCoreVerifyChangeSkipImplementationReviewGatesOwnReview(t *testing.T) {
 		"review-assumptions":         gate,
 		"simplify":                   gate,
 		"verify-assumptions-handoff": "",
-		"run-validator":              "sh: test {{skip_validator}} = true",
+		"run-validator":              "sh: test {{skip_validator}} = true || test ! -f .validator/config.yml",
 	} {
 		if got := workflow.Steps[indexes[id]].SkipIf; got != want {
 			t.Errorf("%s skip_if = %q, want %q", id, got, want)
@@ -252,7 +252,7 @@ func TestCoreVerifyChangeValidatorResultStopsBeforePR(t *testing.T) {
 		t.Fatalf("validator result file is not forwarded: %+v", validator)
 	}
 	gate := findStep(w.Steps, "verify-validator-result")
-	if gate == nil || gate.Script != "validator-pr-gate.sh" || gate.SkipIf != "sh: test {{skip_validator}} = true" {
+	if gate == nil || gate.Script != "validator-pr-gate.sh" || gate.SkipIf != "sh: test {{skip_validator}} = true || test ! -f .validator/config.yml" {
 		t.Fatalf("validator PR gate = %+v", gate)
 	}
 }
@@ -271,7 +271,7 @@ func TestCoreVerifyChangeAcceptanceValidatorRecordsResultWithoutGating(t *testin
 		ID:       "acceptance-validator",
 		Workflow: "run-validator-v1.0.yaml",
 		Params:   map[string]string{"result_file": resultFile},
-		SkipIf:   "sh: test {{skip_validator}} = true",
+		SkipIf:   "sh: test {{skip_validator}} = true || test ! -f .validator/config.yml",
 	}
 	validator := findStep(loop.Steps, "acceptance-validator")
 	if validator == nil {
@@ -342,6 +342,7 @@ func TestRunValidatorRecordsFinalResultForPRGate(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
+			writeValidatorConfig(t, dir)
 			resultFile := filepath.Join(dir, "result.txt")
 			writeFakeBinary(t, dir, "runner", "#!/bin/sh\ncase \"$3\" in\n  task_file) echo '';;\n  result_file) echo \"$RESULT_FILE\";;\nesac\n")
 			writeFakeBinary(t, dir, "validator", "#!/bin/sh\n"+tc.validator+"\n")
@@ -359,6 +360,7 @@ func TestRunValidatorRecordsFinalResultForPRGate(t *testing.T) {
 
 func TestRunValidatorReadsTaskAndResultFileFromSameInput(t *testing.T) {
 	dir := t.TempDir()
+	writeValidatorConfig(t, dir)
 	resultFile := filepath.Join(dir, "result.txt")
 	writeFakeBinary(t, dir, "runner", "#!/bin/sh\njq -r --arg key \"$3\" '.[$key] // \"\"'\n")
 	writeFakeBinary(t, dir, "validator", "#!/bin/sh\nprintf '%s\\n' \"$@\" > validator-args\n")

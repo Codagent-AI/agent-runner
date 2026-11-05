@@ -1,0 +1,42 @@
+name: validation-auto
+description: "Built-in validation workflow: run Agent Validator when the project has .validator/config.yml, otherwise pass"
+hidden: true
+
+params:
+  - name: repair_session
+    required: false
+    default: lead-agent
+  - name: task_file
+    required: false
+    default: ""
+  - name: task_compliance
+    required: false
+    default: "false"
+  - name: result_file
+    required: false
+    default: ""
+
+steps:
+  # Detected on every run so config created earlier in the same run (scaffold)
+  # is picked up. A leading non-skippable step, because a workflow's first step
+  # cannot be conditionally skipped.
+  - id: detect-config
+    command: 'if [ -f .validator/config.yml ]; then printf configured; else printf unconfigured; fi'
+    capture: validator_config
+
+  - id: run-agent-validator
+    workflow: validation-agent-validator-v1.0.yaml
+    params:
+      repair_session: "{{repair_session}}"
+      task_file: "{{task_file}}"
+      task_compliance: "{{task_compliance}}"
+      result_file: "{{result_file}}"
+    skip_if: 'sh: test "{{validator_config}}" = unconfigured'
+
+  - id: record-skipped
+    command: |
+      if [ -n "{{result_file}}" ]; then
+        mkdir -p "$(dirname "{{result_file}}")"
+        printf 'SKIPPED\nno .validator/config.yml in this project\n' >"{{result_file}}"
+      fi
+    skip_if: 'sh: test "{{validator_config}}" = configured'

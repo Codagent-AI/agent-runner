@@ -4,7 +4,9 @@
 # HEAD. Prints the pull request URL only when every check passes.
 #
 # Optional inputs: attempts (default 1) and interval_seconds (default 3) let a
-# caller wait for GitHub to report a just-pushed head.
+# caller wait for GitHub to report a just-pushed head. accept_ready (default
+# false) also accepts a pull request that is ready for review rather than a
+# draft, for checks made after the pull request may have been marked ready.
 set -eu
 
 payload=$(cat)
@@ -18,6 +20,14 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 attempts=$(printf '%s' "$payload" | jq -r '.attempts // "1"')
 interval=$(printf '%s' "$payload" | jq -r '.interval_seconds // "3"')
+accept_ready=$(printf '%s' "$payload" | jq -r '.accept_ready // "false"')
+case "$accept_ready" in
+  true|false) ;;
+  *)
+    printf 'accept_ready must be true or false, got: %s\n' "$accept_ready" >&2
+    exit 1
+    ;;
+esac
 case "$attempts" in
   ''|*[!0-9]*|0)
     printf 'attempts must be a positive integer, got: %s\n' "$attempts" >&2
@@ -48,7 +58,7 @@ while :; do
       is_draft=$(printf '%s' "$pr_json" | jq -r '.[0].isDraft')
       base=$(printf '%s' "$pr_json" | jq -r '.[0].baseRefName')
       pr_head=$(printf '%s' "$pr_json" | jq -r '.[0].headRefOid')
-      if [ "$state" = "OPEN" ] && [ "$is_draft" = "true" ] && [ -n "$base" ] && [ "$local_head" = "$pr_head" ]; then
+      if [ "$state" = "OPEN" ] && { [ "$is_draft" = "true" ] || [ "$accept_ready" = "true" ]; } && [ -n "$base" ] && [ "$local_head" = "$pr_head" ]; then
         printf '%s\n' "$(printf '%s' "$pr_json" | jq -r '.[0].url')"
         exit 0
       fi
