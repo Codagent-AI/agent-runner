@@ -1,5 +1,62 @@
 # agent-runner
 
+## 0.5.0
+
+### Minor Changes
+
+- [#196](https://github.com/Codagent-AI/agent-runner/pull/196) `core:finalize-pr` now waits for CI in scripted workflow steps instead of having the lead agent session poll for it.
+- [#199](https://github.com/Codagent-AI/agent-runner/pull/199) `core:verify-change` replaces its `/simplify` pass with a single, narrower maintainability pass that targets duplication and wrong-layer logic, preserves behavior, and records anything needing a decision as an assumption.
+- [#209](https://github.com/Codagent-AI/agent-runner/pull/209) Adds the experimental `openspec:orchestrated-implement-change` workflow, which implements a change directly from its proposal, specs, design, and test plan with the lead agent orchestrating, skipping the task breakdown.
+- [#213](https://github.com/Codagent-AI/agent-runner/pull/213) Agent steps whose CLI crashes, including steps inside sub-workflows, are now reported as infrastructure failures rather than ordinary step failures.
+- [#214](https://github.com/Codagent-AI/agent-runner/pull/214) Adds external-user mode (`--external-user <dir>`, `--external-user-timeout`), so interactive Claude and Codex steps can run without a terminal while an external program supplies user turns through files.
+- [#225](https://github.com/Codagent-AI/agent-runner/pull/225) Workflow steps can set `autonomous_backend` to override the user's autonomous backend setting for that step.
+- [#226](https://github.com/Codagent-AI/agent-runner/pull/226) Agent-call MCP tools gain per-call deadlines, follow-ups addressed by call ID, structured result details, and more informative progress updates.
+- [#241](https://github.com/Codagent-AI/agent-runner/pull/241) Usage and cost are now collected for Claude steps that run on the autonomous-interactive backend.
+- [#251](https://github.com/Codagent-AI/agent-runner/pull/251) The Claude adapter sets an MCP tool timeout for the agent-call server so long-running agent calls are not cut off by Claude's default timeout.
+- [#254](https://github.com/Codagent-AI/agent-runner/pull/254) Adds the core `plan-and-implement-change` workflow, which plans tasks and implements a change in a single run with one run ID, resume target, and `run-metrics.json`.
+- [#257](https://github.com/Codagent-AI/agent-runner/pull/257) Removes the task-compliance step from the built-in non-factory workflows.
+- [#262](https://github.com/Codagent-AI/agent-runner/pull/262) The orchestrated implementation workflow's lead now delegates each slice to the implementor through `call_agent` instead of its built-in sub-agent tool.
+- [#266](https://github.com/Codagent-AI/agent-runner/pull/266) Adds `core:audited-implement-change`, a candidate workflow where one implementor session owns the whole change and an independent crosscheck reviewer verifies it delivered the approved definition.
+- [#275](https://github.com/Codagent-AI/agent-runner/pull/275) The audited implementation workflow requires recorded outcome evidence before its audit and stops acceptance rounds that make no progress.
+- [#281](https://github.com/Codagent-AI/agent-runner/pull/281) Run metrics now record each agent session's context size per step.
+- [#286](https://github.com/Codagent-AI/agent-runner/pull/286) Run metrics and the run view now show an estimated API-equivalent cost for Codex steps.
+- [#290](https://github.com/Codagent-AI/agent-runner/pull/290) `audit.log` step-end events now record each step's output writes and repository patch, backed by a per-run `step-evidence/` store, so the development audit judge can assess what each step produced.
+- [#296](https://github.com/Codagent-AI/agent-runner/pull/296) Built-in workflows support an `openspec` directory that is a symlink to another repository.
+- [#297](https://github.com/Codagent-AI/agent-runner/pull/297) `core:verify-change` callers can now set the scope of its acceptance-fix step.
+- [#302](https://github.com/Codagent-AI/agent-runner/pull/302) `openspec:change` and `spec-driven:change` v3.0 become the defaults: they drop the separate task-planning step and implement through `core:implement-change` v2.0, the renamed audited implementation workflow.
+- [#308](https://github.com/Codagent-AI/agent-runner/pull/308) In change v3, the implementor writes the verification checklist alone, replacing the lead's checklist and the crosscheck merge.
+
+### Patch Changes
+
+- [#193](https://github.com/Codagent-AI/agent-runner/pull/193) The development audit, available only in dev builds, records its judge's token usage and cost.
+- [#198](https://github.com/Codagent-AI/agent-runner/pull/198) Validator review usage is captured in run metrics again after agent-validator changed its capabilities reply.
+- [#200](https://github.com/Codagent-AI/agent-runner/pull/200) Temporarily disables the automatic post-run development audit.
+- [#204](https://github.com/Codagent-AI/agent-runner/pull/204) Sandbox sync-lock tests no longer pick up the launching user's Git configuration.
+- [#205](https://github.com/Codagent-AI/agent-runner/pull/205) Claude subagent usage collection follows a symlinked `~/.claude/projects` store instead of failing to read it.
+- [#210](https://github.com/Codagent-AI/agent-runner/pull/210) Implementor steps no longer run agent-validator themselves, leaving validation and its metrics to the workflow's own validator steps.
+- [#217](https://github.com/Codagent-AI/agent-runner/pull/217) CI pins factory routing to agent-factory 2445e6d, so new Bugs land in Backlog like other issue types.
+- [#220](https://github.com/Codagent-AI/agent-runner/pull/220) Interrupted test runs no longer leave copies of the testscript binary behind in the temp directory.
+- [#229](https://github.com/Codagent-AI/agent-runner/pull/229) CI installs the latest Go 1.26 patch so govulncheck stops failing on an already fixed vulnerability.
+- [#232](https://github.com/Codagent-AI/agent-runner/pull/232) Claude steps on the autonomous-interactive backend in yolo mode now run with Claude's auto permission mode.
+- [#237](https://github.com/Codagent-AI/agent-runner/pull/237) Copilot session discovery tolerates filesystems with coarse modification times.
+- [#239](https://github.com/Codagent-AI/agent-runner/pull/239) Archives OpenSpec changes that had been left unarchived on main.
+- [#242](https://github.com/Codagent-AI/agent-runner/pull/242) Agent calls wait for the child session probe to finish before completing, so the child's session is reliably recorded.
+- [#250](https://github.com/Codagent-AI/agent-runner/pull/250) Copilot, Codex, and OpenCode session discovery honor called-child session exclusions, so a parent step no longer claims its child agent call's session.
+- [#252](https://github.com/Codagent-AI/agent-runner/pull/252) After escaping from a finished run, the run list relaunches in the run's original working directory.
+- [#253](https://github.com/Codagent-AI/agent-runner/pull/253) In the switcher, `q` is routed to the active view instead of always quitting the app.
+- [#258](https://github.com/Codagent-AI/agent-runner/pull/258) CI-wait classification tests get load-independent timing headroom so they stop flaking.
+- [#264](https://github.com/Codagent-AI/agent-runner/pull/264) Sandbox settings no longer carry over the host's Claude hooks.
+- [#276](https://github.com/Codagent-AI/agent-runner/pull/276) The audited workflow's checklist must cite automated checks and a fixed plan, and its checks reject acceptance or human-only tests cited as checks.
+- [#277](https://github.com/Codagent-AI/agent-runner/pull/277) The audited workflow keeps checklist checks fast and reruns only the evidence that needs refreshing.
+- [#282](https://github.com/Codagent-AI/agent-runner/pull/282) The audited workflow records per-row evidence and the implementor's decisions, so testing claims are backed by output files.
+- [#291](https://github.com/Codagent-AI/agent-runner/pull/291) Audit Git numstat counts binary files instead of discarding the step's evidence.
+- [#294](https://github.com/Codagent-AI/agent-runner/pull/294) Value audit Git attribution includes commits from every retried attempt of a step, not just the first.
+- [#300](https://github.com/Codagent-AI/agent-runner/pull/300) The value audit no longer blanks judge notes that use slashes in ordinary prose.
+- [#301](https://github.com/Codagent-AI/agent-runner/pull/301) The value audit records each step's credit role and the outcomes steps share, so finder and fixer are no longer both rated unique.
+- [#303](https://github.com/Codagent-AI/agent-runner/pull/303) Simple-change workflows present agent-call findings as the lead's plain-language recommendation instead of relaying the child's raw findings.
+- [#305](https://github.com/Codagent-AI/agent-runner/pull/305) Resuming past a completed sub-workflow step starts the next sub-workflow fresh instead of re-entering the finished one.
+- [#307](https://github.com/Codagent-AI/agent-runner/pull/307) Agent Runner's private Codex homes share thread state with the real Codex home, so Codex sessions resume across them.
+
 ## 0.4.0
 
 Agent Runner 0.4.0 ships the v2 change workflows, experimental interactive intake, exploratory acceptance, and automatic failure recovery, plus a long run of reliability fixes found in real workflow runs.
