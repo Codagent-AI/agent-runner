@@ -33,7 +33,7 @@ The hidden `core:implement-change` workflow SHALL be backed by `core/implement-c
 - **WHEN** a user resolves `openspec:change` or `spec-driven:change`
 - **THEN** the selected definition is the namespace's `change-v3.0.yaml`, and its earlier versions stay readable by exact reference
 
-#### Scenario: Core implement-change resolves to the current audited workflow
+#### Scenario: Core implement-change resolves to the audited workflow
 - **WHEN** a user resolves `core:implement-change`
 - **THEN** the selected definition is `core/implement-change-v3.0.yaml`, while `core/implement-change-v2.0.yaml` and `core/implement-change-v1.0.yaml` remain readable by exact reference and path
 
@@ -124,6 +124,10 @@ The `core:plan-change` workflow SHALL accept an optional `skip_validator` parame
 #### Scenario: Plan already committed while skipping
 - **WHEN** `core:plan-change` runs with `skip_validator=true` and the change directory is already committed
 - **THEN** the commit step succeeds without running `agent-validator skip`
+
+#### Scenario: Other commit-plan caller is unchanged
+- **WHEN** `core:commit-change-plan` runs `commit-change-plan.sh` without a `skip_validator` input, in a project with `.validator/config.yml`, for a run whose selected validation workflow runs Agent Validator
+- **THEN** the script commits the change and runs `agent-validator skip` exactly as before
 
 #### Scenario: Current simple-change follows its validation workflow
 - **WHEN** the current `openspec:simple-change` commits its plan through `core:commit-change-plan` with `validation_workflow=none` in a project with `.validator/config.yml`

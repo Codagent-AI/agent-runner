@@ -46,6 +46,10 @@ The current v2.0 `spec-driven` and `openspec` `simple-change` workflows SHALL NO
 - **WHEN** a pinned or resumed `spec-driven/implement-change-v1.0.yaml` or `openspec/implement-change-v1.0.yaml` runs its per-task loop
 - **THEN** each per-task validator command omits `--enable-review task-compliance` and `--context-file`
 
+#### Scenario: complete-simple-change disables task-compliance
+- **WHEN** a pinned or resumed run reaches `core/complete-simple-change-v1.0`'s implement step
+- **THEN** its validator command omits `--enable-review task-compliance` and `--context-file`
+
 #### Scenario: Current simple-change runs no per-task validation
 - **WHEN** a v2.0 `spec-driven/simple-change` or `openspec/simple-change` run implements its tasks
 - **THEN** no validator command runs between tasks
