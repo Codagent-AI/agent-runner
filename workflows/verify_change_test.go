@@ -525,14 +525,21 @@ func TestCoreImplementChangeV2Shape(t *testing.T) {
 	if loop.Loop == nil || (loop.Loop.Max == nil || *loop.Loop.Max != 12) || loop.ContinueOnFailure {
 		t.Fatalf("bad completion loop: %+v", loop)
 	}
-	wantChildren := []string{"check-completion-not-blocked", "check-completion", "check-progress", "judge-completion", "check-completion-verdict", "check-judge-not-blocked", "accept-complete", "continue-implementation"}
+	wantChildren := []string{"check-completion-not-blocked", "check-completion", "check-progress", "escape-implementor-response", "judge-completion", "check-completion-verdict", "check-judge-not-blocked", "accept-complete", "continue-implementation"}
 	if diff := cmp.Diff(wantChildren, stepIDs(loop.Steps)); diff != "" {
 		t.Fatal(diff)
 	}
 	if findStep(workflow.Steps, "complete-evidence") != nil {
 		t.Fatal("old pre-audit repair remains")
 	}
+	escape := findStep(loop.Steps, "escape-implementor-response")
+	if escape.Script != "escape-untrusted-text.sh" || escape.Capture != "judge_implementor_response" || escape.ScriptInputs["text"] != "{{implementor_response}}" {
+		t.Fatalf("bad response escaping: %+v", escape)
+	}
 	judge := findStep(loop.Steps, "judge-completion")
+	if !strings.Contains(judge.Prompt, "{{judge_implementor_response}}") || strings.Contains(judge.Prompt, "{{implementor_response}}") {
+		t.Fatal("judge must receive only the escaped implementor response")
+	}
 	assertAgentStep(t, judge, "tester", "new", model.ModeAutonomous)
 	if len(judge.Tools) != 0 {
 		t.Fatal("judge must be independent")

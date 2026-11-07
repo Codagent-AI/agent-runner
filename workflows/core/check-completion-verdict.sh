@@ -43,7 +43,9 @@ if [ "$recorded" != true ]; then
   jq -sc --argjson verdict "$verdict" '.[-1] += ($verdict | {verdict, remaining: (.remaining // [])}) | .[-1].state = "closed" | .[]' "$ledger_file" > "$ledger_file.tmp"
   mv "$ledger_file.tmp" "$ledger_file"
 fi
-remaining=$(printf '%s' "$verdict" | jq -r 'if .verdict == "continue" then [.remaining[] | "- " + .] | join("\n") else "" end')
+# The list is interpolated inside <remaining-work>; neutralize angle brackets so
+# the judge's text cannot forge that block's closing tag.
+remaining=$(printf '%s' "$verdict" | jq -r 'if .verdict == "continue" then [.remaining[] | "- " + (gsub("<"; "‹") | gsub(">"; "›"))] | join("\n") else "" end')
 if [ "$word" = continue ]; then
   printf '%s\n' "$remaining" > "$remaining_file"
   count=$(jq -s '[.[] | select(.verdict == "continue")] | length' "$ledger_file")

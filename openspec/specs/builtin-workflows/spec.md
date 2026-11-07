@@ -128,7 +128,7 @@ The hidden `core:implement-change` workflow SHALL be backed by `core/implement-c
 
 Between its `implement` step and its `audit` step, `core/implement-change-v2.0.yaml` SHALL run the implementation completion loop (see `implementation-completion-loop`), and the loop SHALL be the only gate on implementation completeness before the audit. It SHALL NOT contain a `complete-evidence` step, and SHALL NOT run a pre-audit evidence check with a rerun repair. Its post-audit `complete-evidence-after-review` and `recheck-evidence` steps SHALL keep their current behavior. The completion judge SHALL run as a fresh `tester` session for each judgment, separate from the `acceptance-tester` session.
 
-The steps outside the loop SHALL keep their IDs. A run recorded against the earlier layout, at a step or repair target that no longer exists (for example `complete-evidence`), SHALL fail to resume with an error naming the missing step. It SHALL NOT silently resume at a different step. A run recorded as having completed `implement` under the earlier layout lacks the implementor's captured final response. When it reaches the completion judge, the judge step SHALL fail with an undefined-variable error naming `implementor_response`, and no judge agent SHALL run without that response.
+The steps outside the loop SHALL keep their IDs. A run recorded against the earlier layout, at a step or repair target that no longer exists (for example `complete-evidence`), SHALL fail to resume with an error naming the missing step. It SHALL NOT silently resume at a different step. A run recorded as having completed `implement` under the earlier layout lacks the implementor's captured final response. When it reaches the completion judge, the loop SHALL fail before any judge agent runs, at the step that prepares the implementor's response for the judge, with an undefined-variable error naming `implementor_response`. No judge agent SHALL run without that response.
 
 `openspec/change-v3.0.yaml` and `spec-driven/change-v3.0.yaml` SHALL be the selected `openspec:change` and `spec-driven:change`. Each SHALL run its validate, create, define, implement, accept, and finalize steps (plus archive for `openspec`) without a `plan` step, and its `implement` step SHALL invoke `../core/implement-change-v2.0.yaml` with `change_name`, `change_dir`, `change_label`, `change_kind`, `artifact_validation_instruction`, and `skip_validator`. No orchestrated implementation workflow SHALL be embedded.
 
@@ -151,7 +151,7 @@ The steps outside the loop SHALL keep their IDs. A run recorded against the earl
 
 #### Scenario: Run recorded after implement under the earlier layout
 - **WHEN** a run recorded with `implement` completed and no `implementor_response` capture is resumed against the updated workflow, and its completion check fails
-- **THEN** the judge step fails with an undefined-variable error naming `implementor_response`, and no judge agent process starts
+- **THEN** the loop fails before the judge with an undefined-variable error naming `implementor_response`, and no judge agent process starts
 
 #### Scenario: Run recorded in a removed step
 - **WHEN** a run recorded with a failed `check-evidence` repair whose rerun target is `complete-evidence` is resumed against the updated workflow
