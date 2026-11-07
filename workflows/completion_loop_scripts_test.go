@@ -2,12 +2,16 @@ package builtinworkflows
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/codagent/agent-runner/internal/textfmt"
 )
 
 func TestCompletionEvidenceFixtures(t *testing.T) {
@@ -73,7 +77,7 @@ func newCompletionFixture(t *testing.T) *completionFixture {
 	t.Helper()
 	dir := t.TempDir()
 	scripts := t.TempDir()
-	for _, name := range []string{"check-evidence.sh", "check-implementation-complete.sh", "check-implementation-progress.sh", "check-completion-verdict.sh"} {
+	for _, name := range []string{"checklist-sha256.sh", "check-evidence.sh", "check-implementation-complete.sh", "check-implementation-progress.sh", "check-completion-verdict.sh"} {
 		b, e := ReadAsset("core/" + name)
 		if e != nil {
 			t.Fatal(e)
@@ -271,4 +275,149 @@ func TestCompletionAcceptedExceptionalVerdicts(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A restricted PATH models minimal containers and failing hash programs without
+// depending on which optional checksum tools are installed on the test host.
+func completionHashPath(t *testing.T, mode string) string {
+	t.Helper()
+	bin := t.TempDir()
+	for _, name := range []string{"sh", "cat", "jq", "git", "dirname", "touch", "rm", "mv"} {
+		path, err := exec.LookPath(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.Symlink(path, filepath.Join(bin, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if mode == "missing" {
+		return bin
+	}
+	body := "#!/bin/sh\n"
+	name := "shasum"
+	switch mode {
+	case "fallback":
+		name = "sha256sum"
+		python, err := exec.LookPath("python3")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body += "exec " + textfmt.ShellQuote(python) + " -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'\n"
+	case "failed":
+		body += "echo hash-tool-failure >&2\nprintf '%064d\\n' 0\nexit 17\n"
+	case "empty":
+		body += "exit 0\n"
+	}
+	if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+func TestCompletionChecksumFailures(t *testing.T) {
+	for _, script := range []string{"check-implementation-progress.sh", "check-completion-verdict.sh"} {
+		for _, mode := range []string{"missing", "failed", "empty"} {
+			t.Run(script+"/"+mode, func(t *testing.T) {
+				f := newCompletionFixture(t)
+				f.mustRun("check-implementation-progress.sh")
+				f.write("completion-verdict.json", `{"verdict":"continue","remaining":["finish"]}`)
+				if script == "check-implementation-progress.sh" {
+					f.mustRun("check-completion-verdict.sh")
+				}
+				t.Setenv("PATH", completionHashPath(t, mode))
+				out, err := f.run(script)
+				if err == nil {
+					t.Fatalf("hash failure was ignored: %s", out)
+				}
+				if strings.Contains(out, "implementation stalled") {
+					t.Fatalf("hash error misreported as stall: %s", out)
+				}
+				if mode == "missing" && !strings.Contains(out, "shasum or sha256sum is required") {
+					t.Fatalf("missing tool diagnostic: %s", out)
+				}
+				if mode == "failed" && !strings.Contains(out, "hash-tool-failure") {
+					t.Fatalf("lost hash stderr: %s", out)
+				}
+				if mode == "empty" && !strings.Contains(out, "empty or invalid SHA-256") {
+					t.Fatalf("missing digest diagnostic: %s", out)
+				}
+				_, statErr := os.Stat(f.input["snapshot_file"])
+				if script == "check-completion-verdict.sh" && !os.IsNotExist(statErr) {
+					t.Fatal("bad snapshot was written")
+				}
+				if script == "check-implementation-progress.sh" && statErr != nil {
+					t.Fatal("snapshot removed after failed hash")
+				}
+			})
+		}
+	}
+}
+
+func TestCompletionChecksumFallbackDetectsChecklistProgress(t *testing.T) {
+	f := newCompletionFixture(t)
+	f.mustRun("check-implementation-progress.sh")
+	f.write("completion-verdict.json", `{"verdict":"continue","remaining":["finish"]}`)
+	t.Setenv("PATH", completionHashPath(t, "fallback"))
+	f.mustRun("check-completion-verdict.sh")
+	b, err := os.ReadFile(f.input["snapshot_file"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot struct {
+		Checksum string `json:"checklist_sha256"`
+	}
+	if err = json.Unmarshal(b, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	checklist, err := os.ReadFile(f.input["checklist_file"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("%x", sha256.Sum256(checklist)); snapshot.Checksum != want {
+		t.Fatalf("checksum=%q want %q", snapshot.Checksum, want)
+	}
+	f.write("checklist.md", "checklist-only progress")
+	f.mustRun("check-implementation-progress.sh")
+}
+
+func TestCompletionGitErrorsRemainDiagnostic(t *testing.T) {
+	for _, revision := range []string{"", "missing-revision"} {
+		t.Run(revision, func(t *testing.T) {
+			f := newCompletionFixture(t)
+			f.commit("feat: work")
+			f.write("complete.md", "done")
+			f.input["start_head"] = revision
+			out, err := f.run("check-implementation-complete.sh")
+			if err == nil || !strings.Contains(out, "invalid implementation start revision") || !strings.Contains(out, "fatal:") || strings.Contains(out, "no implementation commit") {
+				t.Fatalf("git error was hidden: %v %s", err, out)
+			}
+			problems, err := os.ReadFile(filepath.Join(f.dir, "completion-problems.txt"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(problems), "fatal:") {
+				t.Fatalf("git diagnostics missing from report: %s", problems)
+			}
+		})
+	}
+	t.Run("log failure", func(t *testing.T) {
+		f := newCompletionFixture(t)
+		f.commit("feat: work")
+		f.write("complete.md", "done")
+		git, err := exec.LookPath("git")
+		if err != nil {
+			t.Fatal(err)
+		}
+		bin := t.TempDir()
+		body := "#!/bin/sh\nif [ \"$1\" = log ]; then echo history-read-failure >&2; exit 19; fi\nexec " + textfmt.ShellQuote(git) + " \"$@\"\n"
+		if err = os.WriteFile(filepath.Join(bin, "git"), []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+		out, err := f.run("check-implementation-complete.sh")
+		if err == nil || !strings.Contains(out, "cannot inspect implementation commits") || !strings.Contains(out, "history-read-failure") || strings.Contains(out, "no implementation commit") {
+			t.Fatalf("git log error was hidden: %v %s", err, out)
+		}
+	})
 }

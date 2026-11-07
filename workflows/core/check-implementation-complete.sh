@@ -23,7 +23,13 @@ if [ ! -s "$completion_file" ]; then
   printf -- '- completion record %s is missing or empty\n' "$completion_file" >> "$problems"
 fi
 commits_ok=true
-if ! subjects=$(git log --format=%s "$start_head..HEAD" 2>/dev/null) || ! printf '%s\n' "$subjects" | grep -v '^\[judge-completion\]' | grep -q .; then
+if ! revision=$(git rev-parse --verify "$start_head^{commit}" 2>&1); then
+  commits_ok=false
+  printf 'invalid implementation start revision %s: %s\n' "$start_head" "$revision" | sed 's/^/- /' >> "$problems"
+elif ! subjects=$(git log --format=%s "$revision..HEAD" 2>&1); then
+  commits_ok=false
+  printf 'cannot inspect implementation commits: %s\n' "$subjects" | sed 's/^/- /' >> "$problems"
+elif ! printf '%s\n' "$subjects" | grep -v '^\[judge-completion\]' | grep -q .; then
   commits_ok=false
   printf -- '- no implementation commit since %s (judge-completion commits do not count)\n' "$start_head" >> "$problems"
 fi

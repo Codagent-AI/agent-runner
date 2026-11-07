@@ -5,6 +5,7 @@ set -eu
 # so the runner reports the script diagnostic rather than a JSON parse error.
 trap 'status=$?; if [ "$status" -ne 0 ]; then printf "{}\n"; fi' 0
 command -v jq >/dev/null 2>&1 || { echo 'jq is required to read the completion verdict input' >&2; exit 1; }
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 payload=$(cat)
 verdict_file=$(printf '%s' "$payload" | jq -r '.verdict_file')
 check_file=$(printf '%s' "$payload" | jq -r '.check_file')
@@ -53,7 +54,7 @@ if [ "$word" = continue ]; then
   fi
   if [ ! -f "$snapshot_file" ]; then
     head=$(git rev-parse HEAD)
-    checksum=$(shasum -a 256 "$checklist_file" | cut -d ' ' -f 1)
+    checksum=$("$script_dir/checklist-sha256.sh" "$checklist_file")
     jq -n --arg head "$head" --arg sum "$checksum" '{head:$head,checklist_sha256:$sum}' > "$snapshot_file.tmp"
     mv "$snapshot_file.tmp" "$snapshot_file"
   fi
