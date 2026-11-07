@@ -1418,6 +1418,7 @@ func applyRepairStepEnd(n *StepNode, data map[string]any) {
 		record.Blocked = true
 	}
 	record.RepairAttempts = n.RepairAttempts
+	record.OutputBeforeRepair, _ = boolField(data, "repair_output_before_repair")
 }
 
 func eventCarriesMetrics(event RawEvent) bool {

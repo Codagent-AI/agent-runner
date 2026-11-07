@@ -123,6 +123,7 @@ func failFrame(ctx *model.ExecutionContext, frame *model.RepairFrame, owningPref
 		record = &model.FailureRecord{StepID: frame.CheckID, Prefix: owningPrefix}
 	}
 	record.RepairAttempts = frame.Attempts
+	record.OutputBeforeRepair = frame.CheckBeforeLastRepair
 	if record.Guarded == nil && frame.Guarded != nil {
 		ref := *frame.Guarded
 		record.Guarded = &model.AgentExecutionRecord{Ref: ref}

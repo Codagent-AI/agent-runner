@@ -54,6 +54,18 @@ The `step_end`, `iteration_end`, `sub_workflow_end`, and `run_end` events report
 
 `state.json` records the final `failureKind`, `crashObserved`, and `crashes` ledger. The ledger contains the crashed step ID, nested path, prefix, attempt, and available exit or error details. The infrastructure failure reason shown in the console, `state.json`, and the run list keeps only the first line of evidence, cut to 300 characters. These fields let a caller classify a completed run without reading `audit.log`.
 
+When a repair ends before the check runs again, its failure reason labels the saved
+check output: `check failed: before repair: <stderr line>`, or
+`check failed with exit code N before repair` when stderr is empty. The blocked
+response and repair-attempt suffixes keep their usual form. A guarded action that
+blocks before any repair, or a check rerun after the final repair, has no label.
+A crashed repair agent keeps its infrastructure failure reason. State persists the
+repair frame's `checkBeforeLastRepair` flag; terminal check `step_end` events carry
+`repair_output_before_repair: true`. Historical records without that field render
+without the label. The console, run view, run list, and debug state use the same
+classified run failure reason.
+
+
 ## Recorded Workflow Versions
 
 `state.json` keeps the selected physical path in `workflowFile`. That filename

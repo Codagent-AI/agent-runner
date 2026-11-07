@@ -445,10 +445,7 @@ func TestCoreImplementChangeV2Shape(t *testing.T) {
 		"verify-checklist",
 		"record-implementation-start",
 		"implement",
-		"check-implementation-not-blocked",
-		"complete-evidence",
-		"check-evidence-not-blocked",
-		"check-evidence",
+		"complete-implementation",
 		"audit",
 		"resolve-findings",
 		"check-findings-not-blocked",
@@ -475,11 +472,10 @@ func TestCoreImplementChangeV2Shape(t *testing.T) {
 		capture string
 	}{
 		"implementor-checklist": {session: "implementor-agent"},
-		"implement":             {session: "implementor-agent"},
+		"implement":             {session: "implementor-agent", capture: "implementor_response"},
 		"audit":                 {session: "crosscheck-agent", capture: "audit_findings"},
 		"resolve-findings":      {session: "implementor-agent"},
 		// Evidence repairs are agent steps, so they can ask the lead.
-		"complete-evidence":              {session: "implementor-agent"},
 		"complete-evidence-after-review": {session: "implementor-agent"},
 	}
 	for id, want := range agentSteps {
@@ -497,7 +493,6 @@ func TestCoreImplementChangeV2Shape(t *testing.T) {
 	// written its problem list.
 	const problemsFile = "{{session_dir}}/output/evidence-problems.txt"
 	for id, target := range map[string]string{
-		"check-evidence":   "complete-evidence",
 		"recheck-evidence": "complete-evidence-after-review",
 	} {
 		step := workflow.Steps[indexes[id]]
@@ -526,8 +521,30 @@ func TestCoreImplementChangeV2Shape(t *testing.T) {
 			t.Errorf("%s must directly precede %s's blocked check", target, id)
 		}
 	}
-	if indexes["check-evidence"] < indexes["check-implementation-not-blocked"] || indexes["check-evidence"] > indexes["audit"] {
-		t.Error("check-evidence must run after implementation and before the audit")
+	loop := findStep(workflow.Steps, "complete-implementation")
+	if loop.Loop == nil || (loop.Loop.Max == nil || *loop.Loop.Max != 12) || loop.ContinueOnFailure {
+		t.Fatalf("bad completion loop: %+v", loop)
+	}
+	wantChildren := []string{"check-completion-not-blocked", "check-completion", "check-progress", "judge-completion", "check-completion-verdict", "check-judge-not-blocked", "accept-complete", "continue-implementation"}
+	if diff := cmp.Diff(wantChildren, stepIDs(loop.Steps)); diff != "" {
+		t.Fatal(diff)
+	}
+	if findStep(workflow.Steps, "complete-evidence") != nil {
+		t.Fatal("old pre-audit repair remains")
+	}
+	judge := findStep(loop.Steps, "judge-completion")
+	assertAgentStep(t, judge, "tester", "new", model.ModeAutonomous)
+	if len(judge.Tools) != 0 {
+		t.Fatal("judge must be independent")
+	}
+	cont := findStep(loop.Steps, "continue-implementation")
+	assertAgentStep(t, cont, "", "implementor-agent", model.ModeAutonomous)
+	if cont.Capture != "implementor_response" || !cont.HasTool(model.RunnerToolCallAgent) {
+		t.Fatalf("bad continuation: %+v", cont)
+	}
+	check := findStep(loop.Steps, "check-completion")
+	if check.Script != "check-implementation-complete.sh" || !check.ContinueOnFailure || check.BreakIf != "success" {
+		t.Fatalf("bad check: %+v", check)
 	}
 	if indexes["recheck-evidence"] < indexes["check-findings-not-blocked"] || indexes["recheck-evidence"] > indexes["check-lead-decisions"] {
 		t.Error("recheck-evidence must run after resolve-findings and before the lead record check")
@@ -544,7 +561,7 @@ func TestCoreImplementChangeV2Shape(t *testing.T) {
 	if !strings.Contains(workflow.Steps[indexes["verify-checklist"]].Command, `cp "$list" "{{session_dir}}/output/planned-checklist.md"`) {
 		t.Error("verify-checklist must keep the committed checklist as the plan the evidence checks compare with")
 	}
-	for _, id := range []string{"check-implementor-checklist-not-blocked", "check-implementation-not-blocked", "check-findings-not-blocked", "check-evidence-not-blocked", "check-recheck-evidence-not-blocked"} {
+	for _, id := range []string{"check-implementor-checklist-not-blocked", "check-findings-not-blocked", "check-recheck-evidence-not-blocked"} {
 		step := workflow.Steps[indexes[id]]
 		if step.Repair != nil || step.ContinueOnFailure || step.Script != "check-not-blocked.sh" ||
 			step.ScriptInputs["blocked_file"] != "{{session_dir}}/output/implementation-blocked.md" {

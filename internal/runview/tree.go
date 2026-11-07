@@ -199,10 +199,11 @@ type FailureEvidence struct {
 	// GuardedResponse is the guarded execution's final response, resolved from
 	// the tree by prefix when the detail pane needs it. Audit never duplicates
 	// it into the check's own event.
-	GuardedResponse string
-	Blocked         bool
-	BlockedBy       string
-	RepairAttempts  int
+	GuardedResponse    string
+	Blocked            bool
+	BlockedBy          string
+	RepairAttempts     int
+	OutputBeforeRepair bool
 }
 
 // ensureFailure returns the node's failure record, creating it if needed.
