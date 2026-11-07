@@ -164,7 +164,7 @@ func TestCompletionConditions(t *testing.T) {
 }
 
 func TestCompletionVerdictValidation(t *testing.T) {
-	for _, tc := range []struct{ name, verdict string }{{"missing", ""}, {"malformed", "{"}, {"unknown", `{"verdict":"yes"}`}, {"empty", `{"verdict":"continue","remaining":[]}`}, {"wrong type", `{"verdict":"continue","remaining":[1]}`}, {"complete", `{"verdict":"complete"}`}, {"blocked", `{"verdict":"blocked"}`}} {
+	for _, tc := range []struct{ name, verdict string }{{"missing", ""}, {"malformed", "{"}, {"unknown", `{"verdict":"yes"}`}, {"empty", `{"verdict":"continue","remaining":[]}`}, {"wrong type", `{"verdict":"continue","remaining":[1]}`}, {"complete", `{"verdict":"complete"}`}, {"blocked", `{"verdict":"blocked"}`}, {"trailing newline", `{"verdict":"continue\n","remaining":["finish R-1"]}`}, {"not a string", `{"verdict":["continue"],"remaining":["finish R-1"]}`}} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newCompletionFixture(t)
 			f.mustRun("check-implementation-progress.sh")

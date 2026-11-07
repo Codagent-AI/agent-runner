@@ -60,6 +60,10 @@ func PrimeReplayResume(ctx *model.ExecutionContext, basePath []model.NestingSegm
 	if len(ctx.NestingPath) > len(basePath) {
 		return nil
 	}
+	// A resumed replay is a repair attempt already under way, so the check's
+	// recorded output predates it. A frame persisted before this flag existed
+	// lacks it.
+	frame.CheckBeforeLastRepair = true
 	attempt := frame.Attempts + 1
 	ctx.NestingPath = extendedRepairNesting(basePath, frame.CheckID, attempt)
 	return RestoreLastFailureForResume(ctx)

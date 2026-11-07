@@ -27,6 +27,9 @@ else
   [ -s "$verdict_file" ] || invalid 'missing verdict file'
   verdict=$(jq -cse 'if length == 1 and (.[0] | type == "object") then .[0] else error("expected one object") end' "$verdict_file" 2>/dev/null) || invalid 'malformed JSON'
 fi
+# Match the exact JSON string: command substitution would strip a trailing
+# newline from "continue\n" and let it dispatch as continue uncounted.
+printf '%s' "$verdict" | jq -e '.verdict | IN("blocked", "continue", "fix-record", "complete")' >/dev/null 2>&1 || invalid 'unknown verdict'
 word=$(printf '%s' "$verdict" | jq -r '.verdict')
 case "$word" in
   continue)

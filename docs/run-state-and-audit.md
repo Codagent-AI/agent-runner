@@ -61,7 +61,8 @@ response and repair-attempt suffixes keep their usual form, and a repair agent o
 rerun target that blocks counts as a used repair attempt. A guarded action that
 blocks before any repair, or a check rerun after the final repair, has no label.
 A crashed repair agent keeps its infrastructure failure reason. State persists the
-repair frame's `checkBeforeLastRepair` flag; terminal check `step_end` events carry
+repair frame's `checkBeforeLastRepair` flag, and a resumed rerun replay sets it
+even when an older state file lacks it; terminal check `step_end` events carry
 `repair_output_before_repair: true`. Historical records without that field render
 without the label. The console, run view, run list, and debug state use the same
 classified run failure reason.
