@@ -628,6 +628,12 @@ func emitRepairBlocked(ctx *model.ExecutionContext, prefix string, attempt int, 
 func terminalBlocked(step *model.Step, ctx *model.ExecutionContext, owningPrefix string, startTime time.Time, response string) (StepOutcome, error) {
 	frame := ctx.RepairFrame
 	ctx.StepFailure = model.StepFailure{Kind: model.FailureStep}
+	// A repair agent or rerun target that blocks has used the attempt it
+	// started, though the check never ran again to settle it. A guarded
+	// action that blocks before any attempt leaves the count unchanged.
+	if frame.CheckBeforeLastRepair {
+		frame.Attempts++
+	}
 	emitRepairBlocked(ctx, owningPrefix, frame.Attempts, response)
 	ctx.LastFailure.Blocked = true
 	ctx.LastFailure.BlockedBy = response

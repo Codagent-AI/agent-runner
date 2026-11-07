@@ -95,6 +95,11 @@ func terminalReplayBlocked(ctx *model.ExecutionContext, checkStep *model.Step, r
 	ctx.StepFailure = model.StepFailure{Kind: model.FailureStep}
 	frame := ctx.RepairFrame
 	owningPrefix := auditBuildPrefixForOwningCheck(ctx, frame.CheckID)
+	// The blocking replay is the attempt it started; count it, as
+	// terminalBlocked does for the other blocked forms.
+	if frame.CheckBeforeLastRepair {
+		frame.Attempts++
+	}
 	emitRepairBlocked(ctx, owningPrefix, frame.Attempts, response)
 	record := failFrame(ctx, frame, owningPrefix)
 	record.Blocked = true

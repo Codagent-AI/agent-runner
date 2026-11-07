@@ -133,7 +133,7 @@ steps:
 					t.Fatalf("sessions %v", sessions)
 				}
 			case "before-repair":
-				want := "check failed: before repair: original-check-output; blocked: human decision needed"
+				want := "check failed: before repair: original-check-output; blocked: human decision needed after 1 repair attempts"
 				if first.exitCode == 0 || state.FailureReason != want || !strings.Contains(first.text, want) || runview.FailureReasonForSession(session) != want {
 					t.Fatalf("state %q\n%s", state.FailureReason, first.text)
 				}

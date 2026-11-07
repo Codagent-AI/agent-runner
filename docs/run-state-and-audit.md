@@ -57,7 +57,8 @@ The `step_end`, `iteration_end`, `sub_workflow_end`, and `run_end` events report
 When a repair ends before the check runs again, its failure reason labels the saved
 check output: `check failed: before repair: <stderr line>`, or
 `check failed with exit code N before repair` when stderr is empty. The blocked
-response and repair-attempt suffixes keep their usual form. A guarded action that
+response and repair-attempt suffixes keep their usual form, and a repair agent or
+rerun target that blocks counts as a used repair attempt. A guarded action that
 blocks before any repair, or a check rerun after the final repair, has no label.
 A crashed repair agent keeps its infrastructure failure reason. State persists the
 repair frame's `checkBeforeLastRepair` flag; terminal check `step_end` events carry

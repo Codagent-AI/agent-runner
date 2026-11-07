@@ -235,7 +235,7 @@ func TestExecuteCheckStepInlineRepairAgentDeclaresBlocked(t *testing.T) {
 	if ctx.LastFailure == nil || !ctx.LastFailure.Blocked {
 		t.Fatalf("expected blocked failure record, got %+v", ctx.LastFailure)
 	}
-	if got := ClassifyFailure(ctx.LastFailure); got != "check failed: before repair: broken; blocked: cannot fix this." {
+	if got := ClassifyFailure(ctx.LastFailure); got != "check failed: before repair: broken; blocked: cannot fix this. after 1 repair attempts" {
 		t.Errorf("reason = %q", got)
 	}
 	if got := findAuditEvent(auditLog.events, audit.EventStepEnd); got == nil {

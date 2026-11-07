@@ -63,13 +63,13 @@ func TestRepairOutputBeforeRepairHistoricalIntegration(t *testing.T) {
 		want           string
 		flag           bool
 	}{
-		{name: "inline blocked", results: []stepExec.ProcessResult{check, blocked}, want: "check failed: before repair: original check; blocked: needs decision", flag: true},
-		{name: "rerun blocks second attempt", rerun: true, results: []stepExec.ProcessResult{agent("worked"), check, agent("fixed"), {ExitCode: 2, Stderr: "3 rows unverified"}, blocked}, want: "check failed: before repair: 3 rows unverified; blocked: needs decision after 2 repair attempts", flag: true},
-		{name: "rerun blocked", rerun: true, results: []stepExec.ProcessResult{agent("worked"), check, blocked}, want: "check failed: before repair: original check; blocked: needs decision", flag: true},
+		{name: "inline blocked", results: []stepExec.ProcessResult{check, blocked}, want: "check failed: before repair: original check; blocked: needs decision after 1 repair attempts", flag: true},
+		{name: "rerun blocks second attempt", rerun: true, results: []stepExec.ProcessResult{agent("worked"), check, agent("fixed"), {ExitCode: 2, Stderr: "3 rows unverified"}, blocked}, want: "check failed: before repair: 3 rows unverified; blocked: needs decision after 3 repair attempts", flag: true},
+		{name: "rerun blocked", rerun: true, results: []stepExec.ProcessResult{agent("worked"), check, blocked}, want: "check failed: before repair: original check; blocked: needs decision after 1 repair attempts", flag: true},
 		{name: "step failure", results: []stepExec.ProcessResult{check, {Started: true, Stderr: "Tool error: AskUserQuestion error: not supported in autonomous mode"}}, want: "check failed: before repair: original check after 1 repair attempts", flag: true},
 		{name: "guarded blocked", guarded: true, results: []stepExec.ProcessResult{blocked, check}, want: "check failed: original check; blocked: needs decision"},
 		{name: "rechecked exhaustion", results: []stepExec.ProcessResult{check, agent("fixed"), {ExitCode: 2, Stderr: "still red"}}, want: "check failed: still red after 1 repair attempts"},
-		{name: "empty stderr", results: []stepExec.ProcessResult{{ExitCode: 2}, blocked}, want: "check failed with exit code 2 before repair; blocked: needs decision", flag: true},
+		{name: "empty stderr", results: []stepExec.ProcessResult{{ExitCode: 2}, blocked}, want: "check failed with exit code 2 before repair; blocked: needs decision after 1 repair attempts", flag: true},
 		{name: "crash", results: []stepExec.ProcessResult{check, {Started: true, ExitCode: 1, Stderr: "Selected model is at capacity"}}, want: "check repair failed (infrastructure): Selected model is at capacity after 1 repair attempts", flag: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
