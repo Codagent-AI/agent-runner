@@ -77,7 +77,7 @@ func newCompletionFixture(t *testing.T) *completionFixture {
 	t.Helper()
 	dir := t.TempDir()
 	scripts := t.TempDir()
-	for _, name := range []string{"checklist-sha256.sh", "check-evidence.sh", "check-implementation-complete.sh", "check-implementation-progress.sh", "check-completion-verdict.sh"} {
+	for _, name := range []string{"checklist-rows.awk", "checklist-sha256.sh", "check-evidence.sh", "check-implementation-complete.sh", "check-implementation-progress.sh", "check-completion-verdict.sh"} {
 		b, e := ReadAsset("core/" + name)
 		if e != nil {
 			t.Fatal(e)

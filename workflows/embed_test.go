@@ -2819,7 +2819,7 @@ func TestCompletionLoopScriptsEmbedded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"checklist-sha256.sh", "check-implementation-complete.sh", "check-implementation-progress.sh", "check-completion-verdict.sh"} {
+	for _, name := range []string{"checklist-rows.awk", "checklist-sha256.sh", "check-implementation-complete.sh", "check-implementation-progress.sh", "check-completion-verdict.sh"} {
 		if !slices.Contains(assets, name) {
 			t.Errorf("missing asset %s", name)
 		}

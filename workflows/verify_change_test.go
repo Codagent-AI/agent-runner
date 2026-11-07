@@ -637,6 +637,13 @@ func TestCoreCheckNotBlockedScript(t *testing.T) {
 
 func TestCoreCheckEvidenceScript(t *testing.T) {
 	scriptPath := writeAssetScript(t, "core/check-evidence.sh")
+	parser, err := ReadAsset("core/checklist-rows.awk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(scriptPath), "checklist-rows.awk"), parser, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	const header = "| ID | Behavior | How to verify | Evidence | Status |\n|----|----|----|----|----|\n"
 	ptr := func(s string) *string { return &s }
 
