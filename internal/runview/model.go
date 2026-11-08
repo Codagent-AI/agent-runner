@@ -262,12 +262,12 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 		}
 	}
 	failedHistoricalRun := entered != FromLiveRun && auditRunFailed(events)
-	events = filterAuditEventsForWorkflowState(events, state.WorkflowHash, tree.Root, currentStepID(&state), state.Completed)
+	events = filterAuditEventsForWorkflowState(events, state.WorkflowHash, tree.Root, auditFilterStepID(&state, tree.Root), state.Completed)
 	if workflowMissing && len(tree.Root.Children) == 0 && reconstructTopLevelStepsFromAudit(tree.Root, events) {
 		m.loadErr = ""
-		// Re-run the position filter now that currentStepID can be resolved
+		// Re-run the position filter now that the cutoff can be resolved
 		// against the recovered top-level order.
-		events = filterAuditEventsForWorkflowState(events, state.WorkflowHash, tree.Root, currentStepID(&state), state.Completed)
+		events = filterAuditEventsForWorkflowState(events, state.WorkflowHash, tree.Root, auditFilterStepID(&state, tree.Root), state.Completed)
 	}
 	for _, e := range events {
 		tree.ApplyEvent(e)
@@ -373,6 +373,25 @@ func currentStepID(state *model.RunState) string {
 		return state.CurrentStep.Nested.StepID
 	}
 	return state.CurrentStep.StepID
+}
+
+// auditFilterStepID includes the owning check's terminal evidence when a failed
+// repair stopped at an earlier replay step. The saved position still controls
+// resume; only the audit projection extends through the check.
+func auditFilterStepID(state *model.RunState, root *StepNode) string {
+	current := currentStepID(state)
+	if state == nil || state.CurrentStep.Nested == nil {
+		return current
+	}
+	frame := state.CurrentStep.Nested.Repair
+	if frame == nil || frame.Phase != model.RepairPhaseFailed {
+		return current
+	}
+	currentIndex := childIndexByID(root, current)
+	if currentIndex >= 0 && childIndexByID(root, frame.CheckID) > currentIndex {
+		return frame.CheckID
+	}
+	return current
 }
 
 func (m *Model) applyCurrentStepState(state *model.RunState, markInProgress bool) *StepNode {
@@ -1927,6 +1946,7 @@ func lastTopLevelChild(root *StepNode) *StepNode {
 }
 
 // findFailedLeaf returns the deepest non-container StepNode with StatusFailed.
+// A terminally blocked check is treated as a leaf despite its attempt history.
 // Equal-depth failures use durable terminal-event order when both candidates
 // have it, otherwise traversal preserves workflow order.
 func findFailedLeaf(n *StepNode) *StepNode {
@@ -1947,10 +1967,16 @@ func findFailedLeaf(n *StepNode) *StepNode {
 			(node.Status == StatusSuccess || node.Status == StatusSkipped) {
 			return
 		}
-		for _, child := range node.Children {
-			visit(child, depth+1)
+		// A blocked check owns the terminal failure evidence. Its attempt
+		// children describe earlier failures and would hide the blocked reason.
+		blockedCheck := node.Status == StatusFailed && node.RepairBlocked &&
+			(node.Type == NodeShell || node.Type == NodeScript)
+		if !blockedCheck {
+			for _, child := range node.Children {
+				visit(child, depth+1)
+			}
 		}
-		if node.Status == StatusFailed && !node.IsContainer() {
+		if node.Status == StatusFailed && (!node.IsContainer() || blockedCheck) {
 			deeper := depth > bestDepth
 			moreRecent := depth == bestDepth && best != nil &&
 				node.FailureOrdinal > 0 && best.FailureOrdinal > 0 &&

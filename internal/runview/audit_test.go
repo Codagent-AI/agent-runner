@@ -275,6 +275,35 @@ func TestFilterAuditEventsForWorkflowState_KeepsRunEndForCompletedMatchingWorkfl
 	}
 }
 
+func TestFilterAuditEventsForWorkflowState_RepairPositionStillDropsFutureEvents(t *testing.T) {
+	for _, phase := range []string{model.RepairPhaseReplaying, model.RepairPhaseFailed} {
+		t.Run(phase, func(t *testing.T) {
+			lines := append(blockedReplayAuditFixture(),
+				`2026-09-01T00:00:10Z [finalize] step_start {"command":"echo done"}`,
+				`2026-09-01T00:00:11Z [finalize] step_end {"outcome":"success"}`,
+			)
+			m := writeRepairRun(t, "implement-change", repairPRWorkflowYAML, lines, &model.RunState{
+				WorkflowName: "implement-change", WorkflowHash: "fixture-hash",
+				CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+					StepID: "open-draft-pr",
+					Repair: &model.RepairFrame{
+						CheckID: "verify-draft-pr", Form: "rerun", Target: "open-draft-pr", Phase: phase,
+					},
+				}},
+			})
+			if got := childByID(m.tree.Root, "finalize").Status; got != StatusPending {
+				t.Errorf("stale step after owning check = %v, want pending", got)
+			}
+			if phase == model.RepairPhaseReplaying {
+				check := childByID(m.tree.Root, "verify-draft-pr")
+				if check.Status != StatusPending || check.Failure != nil || len(check.Children) != 0 {
+					t.Errorf("replaying frame retained future check events: %+v", check)
+				}
+			}
+		})
+	}
+}
+
 func TestApplyEvent_StepStartStepEnd(t *testing.T) {
 	tree := buildImplementChangeTree(t)
 	tree.ApplyEvent(RawEvent{

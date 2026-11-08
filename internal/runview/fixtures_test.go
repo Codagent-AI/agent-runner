@@ -199,6 +199,17 @@ func inProgressRerunAuditFixture() []string {
 	}
 }
 
+// blockedReplayAuditFixture records a target that declares REPAIR_BLOCKED
+// during replay, leaving the persisted position at the target rather than check.
+func blockedReplayAuditFixture() []string {
+	return append(inProgressRerunAuditFixture(),
+		`2026-09-01T00:00:06Z [verify-draft-pr, attempt:1, open-draft-pr] step_end {"outcome":"success","stdout":"push rejected: token lacks workflow scope\nREPAIR_BLOCKED","identity":{"attempt":1}}`,
+		`2026-09-01T00:00:07Z [verify-draft-pr] repair_blocked {"attempt":0,"response":"push rejected: token lacks workflow scope\nREPAIR_BLOCKED"}`,
+		`2026-09-01T00:00:08Z [verify-draft-pr] step_end {"outcome":"failed","exit_code":1,"stderr":"no draft pull request found","repair_form":"rerun","repair_target":"open-draft-pr","repair_max":1,"repair_attempts":0,"repair_blocked":true,"guarded_prefix":"[open-draft-pr]","guarded_attempt":1,"identity":{"step_type":"shell","attempt":1}}`,
+		`2026-09-01T00:00:09Z run_end {"outcome":"failed"}`,
+	)
+}
+
 // recoveredRerunAuditFixture continues inProgressRerunAuditFixture through the
 // replayed check passing.
 func recoveredRerunAuditFixture() []string {
