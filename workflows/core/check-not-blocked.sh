@@ -22,7 +22,9 @@ if [ -z "$blocked_file" ]; then
 fi
 
 if [ -e "$blocked_file" ]; then
-  if [ -n "$snapshot_file" ]; then
+  # An empty record still stops the run, but only a non-empty one is a real
+  # block; keep the snapshot otherwise so a resumed run can detect the stall.
+  if [ -n "$snapshot_file" ] && [ -s "$blocked_file" ]; then
     rm -f "$snapshot_file"
   fi
   if [ -n "$resume_hint" ]; then

@@ -730,6 +730,45 @@ func TestCoreCheckNotBlockedResume(t *testing.T) {
 	}
 }
 
+func TestCoreCheckNotBlockedEmptyRecordKeepsSnapshot(t *testing.T) {
+	for _, fallback := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fallback=%v", fallback), func(t *testing.T) {
+			script := writeAssetScript(t, "core/check-not-blocked.sh")
+			dir := t.TempDir()
+			blocked := filepath.Join(dir, "implementation-blocked.md")
+			snapshot := filepath.Join(dir, "continue-snapshot.json")
+			payload, err := json.Marshal(map[string]string{
+				"blocked_file": blocked, "resume_hint": "true", "snapshot_file": snapshot,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var env []string
+			if fallback {
+				bin := t.TempDir()
+				for _, name := range []string{"cat", "sed", "rm"} {
+					path, err := exec.LookPath(name)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(path, filepath.Join(bin, name)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				env = append(env, "PATH="+bin)
+			}
+			mustWriteFile(t, snapshot, "original snapshot")
+			mustWriteFile(t, blocked, "")
+			if out, err := runScriptIn(t, script, dir, string(payload), env...); err == nil {
+				t.Fatalf("empty blocked record must still fail\n%s", out)
+			}
+			if got, err := os.ReadFile(snapshot); err != nil || string(got) != "original snapshot" {
+				t.Errorf("snapshot must survive an empty blocked record: %q, %v", got, err)
+			}
+		})
+	}
+}
+
 func TestCoreCheckEvidenceScript(t *testing.T) {
 	scriptPath := writeAssetScript(t, "core/check-evidence.sh")
 	parser, err := ReadAsset("core/checklist-rows.awk")
