@@ -43,7 +43,8 @@ func ciChecks(pr map[string]any) map[string]any {
 	return ciCommit(pr)["statusCheckRollup"].(map[string]any)["contexts"].(map[string]any)
 }
 
-// useCISequence makes the fake gh serve one snapshot per GraphQL call, repeating the last.
+// useCISequence makes the fake gh serve one snapshot per GraphQL call, repeating
+// the last unless CI_SEQUENCE_EXHAUSTED is set to hang.
 func useCISequence(t *testing.T, fixtures ...map[string]any) {
 	t.Helper()
 	dir := t.TempDir()
@@ -108,7 +109,10 @@ case "$*" in
       n=$(cat "$CI_SEQUENCE_DIR/count")
       n=$((n + 1))
       echo "$n" > "$CI_SEQUENCE_DIR/count"
-      if [ ! -f "$CI_SEQUENCE_DIR/$n.json" ]; then n=$(ls "$CI_SEQUENCE_DIR" | grep -c '\.json$'); fi
+      if [ ! -f "$CI_SEQUENCE_DIR/$n.json" ]; then
+        if [ "$CI_SEQUENCE_EXHAUSTED" = hang ]; then sleep 10; fi
+        n=$(ls "$CI_SEQUENCE_DIR" | grep -c '\.json$')
+      fi
       cat "$CI_SEQUENCE_DIR/$n.json"
       exit 0
     fi
@@ -290,6 +294,35 @@ func TestCIWaitFatalAndBoundedCalls(t *testing.T) {
 			out, code, elapsed := runCIFixture(t, ciFixture(), `{"deadline_seconds":"6","poll_interval_seconds":"0.05","bot_start_grace_seconds":"0.1","call_timeout_seconds":"5"}`)
 			if code != tt.code || !strings.Contains(out, tt.want) || elapsed >= 8*time.Second {
 				t.Fatalf("code=%d elapsed=%s output=%s", code, elapsed, out)
+			}
+		})
+	}
+}
+
+func TestCIWaitReadFailureAfterCompletePoll(t *testing.T) {
+	for _, tt := range []struct {
+		name, interval, callTimeout, want string
+	}{
+		{"deadline truncated read", "2", "5", "CI_REVIEW_INCOMPLETE"},
+		{"full budget read", "0.2", "2", "CI_PENDING"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := ciFixture()
+			pr := ciPR(fixture)
+			ciSuites(pr)["nodes"] = []any{map[string]any{"createdAt": time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339)}}
+			ciChecks(pr)["nodes"] = []any{
+				map[string]any{"name": "build", "conclusion": "SUCCESS"},
+				map[string]any{"name": "CodeRabbit", "conclusion": "NEUTRAL", "completedAt": time.Now().Add(-time.Minute).UTC().Format(time.RFC3339), "checkSuite": map[string]any{"app": map[string]any{"slug": "coderabbitai"}}},
+			}
+			useCISequence(t, fixture)
+			t.Setenv("CI_SEQUENCE_EXHAUSTED", "hang")
+			input := fmt.Sprintf(`{"review_bots":"coderabbitai","deadline_seconds":"6","poll_interval_seconds":%q,"call_timeout_seconds":%q,"bot_start_grace_seconds":"0"}`, tt.interval, tt.callTimeout)
+			out, code, elapsed := runCIFixture(t, fixture, input)
+			if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), tt.want) || !strings.Contains(out, "coderabbitai: neutral") || !strings.Contains(out, "timed out: gh api graphql") {
+				t.Fatalf("code=%d elapsed=%s output=%s", code, elapsed, out)
+			}
+			if elapsed >= 8*time.Second {
+				t.Fatalf("wait exceeded deadline margin: %s", elapsed)
 			}
 		})
 	}
