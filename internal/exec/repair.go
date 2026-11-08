@@ -283,6 +283,7 @@ func executeCheckWithRepair(step *model.Step, ctx *model.ExecutionContext, runne
 	prep := prepareCheck(step, ctx)
 	emitStepStart(ctx, owningPrefix, startTime, prep.startData(step))
 	if err := prep.err(); err != nil {
+		RecordPreStartFailure(ctx, step, owningPrefix, err)
 		emitStepEnd(ctx, owningPrefix, startTime, "failed", map[string]any{"error": err.Error()}, step)
 		return OutcomeFailed, err
 	}

@@ -121,6 +121,7 @@ func emitAudit(ctx *model.ExecutionContext, event audit.Event) {
 
 func emitShellInterpolationFailure(ctx *model.ExecutionContext, step *model.Step, err error) {
 	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
+	RecordPreStartFailure(ctx, step, prefix, err)
 	startTime := time.Now()
 	startData := map[string]any{"command": step.Command}
 	if step.MetricsSource != "" {

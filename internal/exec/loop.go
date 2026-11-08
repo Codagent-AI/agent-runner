@@ -167,9 +167,9 @@ func executeForEachLoop(
 	opts LoopExecuteOptions,
 	requireMatches *bool,
 ) (LoopResult, error) {
-	stepID := step.ID
-	pattern, err := textfmt.InterpolateTyped(overPattern, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(stepID))
+	pattern, err := textfmt.InterpolateTyped(overPattern, ctx.Params, ctx.CapturedVariables, ctx.BuiltinVarsForStep(step.ID))
 	if err != nil {
+		RecordPreStartFailure(ctx, step, audit.BuildPrefix(nestingToAudit(ctx), step.ID), err)
 		return LoopResult{Outcome: OutcomeFailed, LastIteration: -1}, err
 	}
 
@@ -178,10 +178,10 @@ func executeForEachLoop(
 		return LoopResult{Outcome: OutcomeFailed, LastIteration: -1}, err
 	}
 
-	prefix := audit.BuildPrefix(nestingToAudit(ctx), stepID)
+	prefix := audit.BuildPrefix(nestingToAudit(ctx), step.ID)
 	startTime := time.Now()
 
-	resumeIter, resumeBody, recordedLoopVar, resumed := consumeLoopResume(ctx, stepID)
+	resumeIter, resumeBody, recordedLoopVar, resumed := consumeLoopResume(ctx, step.ID)
 	if resumeIter > opts.ResumeFromIteration {
 		opts.ResumeFromIteration = resumeIter
 	}
@@ -194,7 +194,7 @@ func executeForEachLoop(
 
 	if len(matches) == 0 {
 		if requireMatches != nil && *requireMatches {
-			log.Errorf("agent-runner: for-each loop %q matched 0 files for pattern: %s\n", stepID, pattern)
+			log.Errorf("agent-runner: for-each loop %q matched 0 files for pattern: %s\n", step.ID, pattern)
 			emitLoopEnd(ctx, prefix, startTime, step, 0, false, "failed")
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: -1}, nil
 		}
@@ -207,7 +207,7 @@ func executeForEachLoop(
 	completed := 0
 	if startIter >= len(matches) {
 		if resumed {
-			flushAndKeepLoopIterationProgress(ctx, stepID, startIter, false)
+			flushAndKeepLoopIterationProgress(ctx, step.ID, startIter, false)
 		}
 		emitLoopEnd(ctx, prefix, startTime, step, completed, false, "success")
 		return LoopResult{Outcome: OutcomeSuccess, LastIteration: len(matches) - 1}, nil
@@ -219,14 +219,14 @@ func executeForEachLoop(
 		if asIndex != "" {
 			loopVar[asIndex] = strconv.Itoa(i)
 		}
-		recordLoopIterationProgress(ctx, stepID, i, loopVar, false)
+		recordLoopIterationProgress(ctx, step.ID, i, loopVar, false)
 		iterCtx := model.NewLoopIterationContext(ctx, model.LoopIterationOptions{
-			StepID:    stepID,
+			StepID:    step.ID,
 			Iteration: i,
 			LoopVar:   loopVar,
 		})
 		if i == resumeIter && resumeBody != nil {
-			attachForEachResume(iterCtx, resumeBody, recordedLoopVar, loopVar, stepID, i, log)
+			attachForEachResume(iterCtx, resumeBody, recordedLoopVar, loopVar, step.ID, i, log)
 			resumeBody = nil
 		}
 
@@ -248,7 +248,7 @@ func executeForEachLoop(
 			return LoopResult{Outcome: OutcomeFailed, LastIteration: i}, nil
 		}
 		mergeIterationCaptures(ctx, iterCtx)
-		flushAndKeepLoopIterationProgress(ctx, stepID, i+1, false)
+		flushAndKeepLoopIterationProgress(ctx, step.ID, i+1, false)
 		if result.breakTriggered {
 			emitLoopEnd(ctx, prefix, startTime, step, completed, true, "success")
 			return LoopResult{Outcome: OutcomeSuccess, LastIteration: i}, nil
@@ -514,6 +514,8 @@ func executeIterationBody(
 		skip, skipErr := ShouldSkipStep(steps[i].SkipIf, iterCtx, bodyStepID)
 		if skipErr != nil {
 			iterCtx.StepFailure = model.StepFailure{Kind: model.FailureStep}
+			RecordPreStartFailure(iterCtx, &steps[i], audit.BuildPrefix(nestingToAudit(iterCtx), bodyStepID), skipErr)
+			iterCtx.PropagateFailure()
 			persistIterationFailState(iterCtx, loopStepID, iteration, bodyStepID, false)
 			return iterationResult{failed: true}, fmt.Errorf("step %q skip_if evaluation failed: %w", bodyStepID, skipErr)
 		}
@@ -535,6 +537,7 @@ func executeIterationBody(
 				iterCtx.StepFailure = model.StepFailure{Kind: model.FailureStep}
 			}
 			persistIterationFailState(iterCtx, loopStepID, iteration, bodyStepID, false)
+			iterCtx.PropagateFailure()
 			return iterationResult{failed: true}, dispatchErr
 		}
 

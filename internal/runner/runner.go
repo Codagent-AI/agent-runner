@@ -664,6 +664,7 @@ func executeTopLevelStep(rs *runState, step *model.Step, index int, steps []mode
 	skip, err := exec.ShouldSkipStep(step.SkipIf, rs.ctx, step.ID)
 	if err != nil {
 		rs.ctx.StepFailure = model.StepFailure{Kind: model.FailureStep}
+		exec.RecordPreStartFailure(rs.ctx, step, audit.BuildPrefix(nestingToAuditInfo(rs.ctx), step.ID), err)
 		rs.log.Printf("\nagent-runner: step %q skip_if evaluation failed: %v\n", step.ID, err)
 		return ResultFailed, true, false, 0
 	}

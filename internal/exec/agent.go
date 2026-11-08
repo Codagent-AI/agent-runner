@@ -1336,6 +1336,7 @@ func emitAgentPreStartFailure(ctx *model.ExecutionContext, prefix string, startT
 }
 
 func emitAgentFailureEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, step *model.Step, errMsg string) {
+	RecordPreStartFailure(ctx, step, prefix, errors.New(errMsg))
 	cliName := step.CLI
 	if cliName == "" {
 		cliName = "claude"

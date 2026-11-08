@@ -63,6 +63,7 @@ func emitUIEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, 
 	}
 	if err != nil {
 		data["error"] = err.Error()
+		RecordPreStartFailure(ctx, step, prefix, err)
 	}
 	emitStepEnd(ctx, prefix, startTime, outcome, data, step)
 }

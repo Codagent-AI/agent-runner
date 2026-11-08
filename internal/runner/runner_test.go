@@ -550,6 +550,124 @@ func TestRunWorkflowRecordsFailureReasonFromFailingCheck(t *testing.T) {
 	}
 }
 
+func TestRunWorkflowRecordsPreStartFailureReason(t *testing.T) {
+	maxIterations := 1
+	for _, tc := range []struct {
+		name   string
+		step   model.Step
+		detail string
+	}{
+		{name: "shell", step: shellStep("broken", "echo {{missing}}")},
+		{name: "shell with repair", step: model.Step{ID: "broken", Command: "echo {{missing}}", Repair: &model.Repair{Prompt: "fix", Agent: "test-agent", Max: &maxIterations}}},
+		{name: "script input with repair", step: model.Step{ID: "broken", Script: "check.sh", ScriptInputs: map[string]string{"value": "{{missing}}"}, Repair: &model.Repair{Prompt: "fix", Agent: "test-agent", Max: &maxIterations}}, detail: "script_inputs.value: "},
+		{name: "agent", step: model.Step{ID: "broken", Prompt: "{{missing}}", Agent: "test-agent", Mode: model.ModeAutonomous}},
+		{name: "script input", step: model.Step{ID: "broken", Script: "check.sh", ScriptInputs: map[string]string{"value": "{{missing}}"}}, detail: "script_inputs.value: "},
+		{name: "ui", step: model.Step{ID: "broken", Mode: model.ModeUI, Title: "{{missing}}", Actions: []model.UIAction{{Label: "OK", Outcome: "ok"}}}},
+		{name: "loop over", step: model.Step{ID: "broken", Loop: &model.Loop{Over: "{{missing}}", As: "item"}, Steps: []model.Step{shellStep("body", "echo ok")}}},
+		{name: "loop body", step: model.Step{ID: "loop", Loop: &model.Loop{Max: &maxIterations}, Steps: []model.Step{shellStep("broken", "echo {{missing}}")}}},
+		{name: "sub-workflow path", step: model.Step{ID: "broken", Workflow: "{{missing}}"}},
+		{name: "skip if", step: model.Step{ID: "broken", Command: "echo ok", SkipIf: "sh: echo {{missing}}"}, detail: "skip_if interpolation: "},
+		{name: "loop body skip if", step: model.Step{ID: "loop", Loop: &model.Loop{Max: &maxIterations}, Steps: []model.Step{{ID: "broken", Command: "echo ok", SkipIf: "sh: echo {{missing}}"}}}, detail: "skip_if interpolation: "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := model.Workflow{Name: "test", Steps: []model.Step{tc.step}}
+			w.ApplyDefaults()
+			sessionDir := t.TempDir()
+			workflowDir := t.TempDir()
+			writeWorkflowFile(t, workflowDir, "check.sh", "echo ok")
+			result, _ := RunWorkflow(&w, map[string]string{}, &Options{
+				ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+				SessionDir: sessionDir, WorkflowFile: filepath.Join(workflowDir, "test-v1.0.yaml"), ProfileStore: testAgentProfileStore(),
+			})
+			if result != ResultFailed {
+				t.Fatalf("result = %q, want failed", result)
+			}
+			assertPersistedStepFailure(t, sessionDir, "broken failed: "+tc.detail+"undefined variable: {{missing}}")
+		})
+	}
+}
+
+func TestRunWorkflowPreStartFailureReplacesToleratedCheck(t *testing.T) {
+	w := model.Workflow{Name: "test", Steps: []model.Step{
+		{ID: "earlier", Command: "exit 1", ContinueOnFailure: true},
+		shellStep("later", "echo {{missing}}"),
+	}}
+	w.ApplyDefaults()
+	sessionDir := t.TempDir()
+	result, _ := RunWorkflow(&w, map[string]string{}, &Options{
+		ProcessRunner: &mockRunner{results: []exec.ProcessResult{{ExitCode: 1, Stderr: "earlier failure"}}},
+		GlobExpander:  &mockGlob{}, Log: &mockLog{}, SessionDir: sessionDir,
+	})
+	if result != ResultFailed {
+		t.Fatalf("result = %q, want failed", result)
+	}
+	assertPersistedStepFailure(t, sessionDir, "later failed: undefined variable: {{missing}}")
+}
+
+func TestRunWorkflowRecordsSubWorkflowPreStartFailure(t *testing.T) {
+	for _, skip := range []bool{false, true} {
+		t.Run(fmt.Sprintf("skip=%t", skip), func(t *testing.T) {
+			body := "    command: echo {{missing}}\n"
+			detail := ""
+			if skip {
+				body = "    command: echo ok\n    skip_if: 'sh: echo {{missing}}'\n"
+				detail = "skip_if interpolation: "
+			}
+			child := writeWorkflowFile(t, t.TempDir(), "child-v1.0.yaml", "name: child\nsteps:\n  - id: broken\n"+body)
+			w := model.Workflow{Name: "test", Steps: []model.Step{{ID: "child", Workflow: child}}}
+			w.ApplyDefaults()
+			sessionDir := t.TempDir()
+			result, _ := RunWorkflow(&w, map[string]string{}, &Options{
+				ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{}, SessionDir: sessionDir,
+			})
+			if result != ResultFailed {
+				t.Fatalf("result = %q, want failed", result)
+			}
+			assertPersistedStepFailure(t, sessionDir, "broken failed: "+detail+"undefined variable: {{missing}}")
+		})
+	}
+}
+
+func TestRunWorkflowResumeRecordsUndefinedCaptureFailure(t *testing.T) {
+	source := "name: test\nsteps:\n  - id: capture\n    command: echo value\n    capture: missing\n  - id: broken\n    command: echo {{missing}}\n"
+	workflowPath := writeWorkflowFile(t, t.TempDir(), "test-v1.0.yaml", source)
+	sessionDir := t.TempDir()
+	state := model.RunState{
+		WorkflowFile: workflowPath, WorkflowName: "test", WorkflowHash: stateio.ComputeWorkflowHash(source),
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+			StepID: "capture", Completed: true, SessionIDs: map[string]string{},
+			CapturedVariables: map[string]model.CapturedValue{},
+		}},
+	}
+	if err := stateio.WriteState(&state, sessionDir); err != nil {
+		t.Fatal(err)
+	}
+	handle, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+		ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := ExecuteFromHandle(handle, nil); result != ResultFailed {
+		t.Fatalf("result = %q, want failed", result)
+	}
+	assertPersistedStepFailure(t, sessionDir, "broken failed: undefined variable: {{missing}}")
+}
+
+func assertPersistedStepFailure(t *testing.T, sessionDir, want string) {
+	t.Helper()
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.FailureReason != want {
+		t.Errorf("FailureReason = %q, want %q", state.FailureReason, want)
+	}
+	if state.FailureKind != model.FailureStep {
+		t.Errorf("FailureKind = %q, want step", state.FailureKind)
+	}
+}
+
 func TestRunWorkflowResumeRebuildsGuardedResponseFromAuditAfterInterruption(t *testing.T) {
 	sessionDir := t.TempDir()
 	workflowPath := filepath.Join(t.TempDir(), "deploy-v1.0.yaml")
