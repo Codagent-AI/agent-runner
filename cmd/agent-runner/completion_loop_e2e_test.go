@@ -17,7 +17,7 @@ import (
 func TestCompletionLoopE2E(t *testing.T) {
 	runnerBin := filepath.Join(t.TempDir(), "agent-runner")
 	buildAgentRunner(t, findRepoRoot(t), runnerBin)
-	for _, scenario := range []string{"early-stop", "budget-resume", "stall-resume", "before-repair"} {
+	for _, scenario := range []string{"early-stop", "budget-resume", "stall-resume", "missing-verdict-resume", "invalid-verdict-resume", "blocked-resume", "before-repair"} {
 		t.Run(scenario, func(t *testing.T) {
 			home := t.TempDir()
 			repo := t.TempDir()
@@ -132,6 +132,40 @@ steps:
 				if sessions["implement"] == "" || sessions["implement"] != sessions["continue"] || sessions["judge"] == sessions["implement"] {
 					t.Fatalf("sessions %v", sessions)
 				}
+			case "missing-verdict-resume", "invalid-verdict-resume", "blocked-resume":
+				want := "completion judge returned no valid verdict"
+				if scenario == "blocked-resume" {
+					want = "implementation-blocked.md"
+				}
+				if first.exitCode == 0 || !strings.Contains(state.FailureReason, want) {
+					t.Errorf("first: %+v\n%s", state, first.text)
+				}
+				ledgerPath := filepath.Join(session, "output", "completion-loop.jsonl")
+				ledger := readCompletionFile(t, ledgerPath)
+				if strings.Count(ledger, "\n") != 1 {
+					t.Fatalf("ledger before resume %s", ledger)
+				}
+				if scenario == "blocked-resume" {
+					if e = os.Remove(filepath.Join(session, "output", "implementation-blocked.md")); e != nil {
+						t.Fatal(e)
+					}
+				}
+				second := runRepairBlockedCLI(t, runnerBin, repo, env, "--headless", "--profile", "completion_test", "--until", "audit", "--resume", filepath.Base(session))
+				if second.exitCode != 0 || !strings.Contains(second.text, "audit") {
+					t.Fatalf("resume: %d\n%s", second.exitCode, second.text)
+				}
+				ledger = readCompletionFile(t, ledgerPath)
+				judgments := 1
+				if scenario == "blocked-resume" {
+					judgments = 2
+				}
+				if strings.Count(ledger, "\n") != judgments || strings.Count(ledger, `"verdict":"continue"`) != judgments {
+					t.Fatalf("ledger after resume %s", ledger)
+				}
+				calls := readCompletionFile(t, filepath.Join(home, "cli-calls.jsonl"))
+				if strings.Count(calls, `"Role": "judge"`) != 2 {
+					t.Fatalf("expected two judge calls: %s", calls)
+				}
 			case "before-repair":
 				want := "check failed: before repair: original-check-output; blocked: human decision needed after 1 repair attempts"
 				if first.exitCode == 0 || state.FailureReason != want || !strings.Contains(first.text, want) || runview.FailureReasonForSession(session) != want {
@@ -183,6 +217,19 @@ steps:
 				if count != passes {
 					t.Fatalf("continue invocations=%d want %d", count, passes)
 				}
+				if scenario == "budget-resume" {
+					calls := readCompletionFile(t, filepath.Join(home, "cli-calls.jsonl"))
+					third := runRepairBlockedCLI(t, runnerBin, repo, env, "--headless", "--profile", "completion_test", "--resume", filepath.Base(session))
+					if third.exitCode == 0 || !strings.Contains(third.text, "implementation incomplete") {
+						t.Fatalf("budget resume: %d\n%s", third.exitCode, third.text)
+					}
+					if got := readCompletionFile(t, filepath.Join(session, "output", "completion-loop.jsonl")); got != ledger {
+						t.Fatalf("recorded ledger changed: %s -> %s", ledger, got)
+					}
+					if got := readCompletionFile(t, filepath.Join(home, "cli-calls.jsonl")); got != calls {
+						t.Fatalf("recorded verdict invoked an agent: %s", got)
+					}
+				}
 			}
 			if _, e = os.Stat(filepath.Join(home, "validator-called")); !os.IsNotExist(e) {
 				t.Fatal("unexpected validator invocation")
@@ -232,13 +279,21 @@ result='done'
 if 'BEFORE_REPAIR_MARKER' in prompt:
  record('repair');result='human decision needed\nREPAIR_BLOCKED'
 elif 'Judge whether the implementation' in prompt:
+ prior_calls=(home/'cli-calls.jsonl').read_text()
+ judge_calls=sum(json.loads(line)['Role']=='judge' for line in prior_calls.splitlines())
+ if scenario in ('missing-verdict-resume','invalid-verdict-resume') and (output/'completion-verdict.json').exists(): raise RuntimeError('stale verdict was not removed')
  record('judge')
+ if scenario in ('missing-verdict-resume','invalid-verdict-resume') and judge_calls==0:
+  if scenario=='invalid-verdict-resume': (output/'completion-verdict.json').write_text('{invalid')
+  print(json.dumps(dict(type='result',result='no valid verdict',session_id=session)));sys.exit(0)
  if scenario=='early-stop' and 'early stop with R-2 unfinished' not in prompt: raise RuntimeError('implementor response missing')
  (output/'completion-verdict.json').write_text(json.dumps(dict(verdict='continue',reason='unfinished',remaining=['finish R-2'])))
 elif '<remaining-work>' in prompt:
  record('continue')
  counter=home/'passes';n=int(counter.read_text())+1 if counter.exists() else 1;counter.write_text(str(n))
- if scenario=='early-stop':
+ if scenario=='blocked-resume' and n==1:
+  (output/'implementation-blocked.md').write_text('Missing credential; obtain permission before resuming')
+ elif scenario in ('early-stop','missing-verdict-resume','invalid-verdict-resume','blocked-resume'):
   (repo/'second.txt').write_text('second row implemented');(output/'evidence/second.log').write_text('TestSecond PASS\n');checklist.write_text(rows(True));commit('feat: finish second row');(output/'implementation-complete.md').write_text('done')
  else:
   if n==2:

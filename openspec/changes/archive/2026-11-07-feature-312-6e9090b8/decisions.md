@@ -68,8 +68,8 @@
 - **Decision-bearing:** no
 
 ## spec: invalid verdict handling
-- **Decision:** A missing or malformed verdict, a `continue` with no remaining-work list, or an unguarded `complete` fails the run with "completion judge returned no valid verdict". There is no automatic re-judgment.
-- **Alternatives considered:** Re-running the judge once (more surface for a defect case; a resume reruns the judge anyway).
+- **Decision:** A missing or malformed verdict, a `continue` with no remaining-work list, or an unguarded `complete` fails the run with "completion judge returned no valid verdict". There is no automatic re-judgment during the failed run. On manual resume, the judge and validation group restarts from its first member, discards a rejected verdict file, and re-runs the judge for the still-open ledger entry. A verdict already recorded in the ledger remains authoritative and skips the judge.
+- **Alternatives considered:** Automatically re-running the judge once (more surface for a defect case; manual resume provides a retry through the explicit judge and validation group).
 - **Direction-level:** no
 - **Decision-bearing:** no
 

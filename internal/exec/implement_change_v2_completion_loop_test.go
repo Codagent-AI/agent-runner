@@ -138,12 +138,12 @@ func TestImplementChangeCompletionPaths(t *testing.T) {
 			r.write("implementation-complete.md", "done")
 			r.checklist("not verified", "needs unavailable external service")
 		}, judge: func(r *completionLoopRunner, _ int) { r.verdict("complete") }, judges: 1},
-		{name: "judge blocked", reason: "the change cannot be implemented compliantly", judge: func(r *completionLoopRunner, _ int) {
+		{name: "judge blocked", reason: "implementation blocked: see ", judge: func(r *completionLoopRunner, _ int) {
 			r.write("implementation-blocked.md", "need user decision")
 			r.verdict("blocked")
 		}, judges: 1},
-		{name: "blocked during continue", reason: "the change cannot be implemented compliantly", judge: func(r *completionLoopRunner, _ int) { r.verdict("continue") }, pass: func(r *completionLoopRunner, _ int) { r.write("implementation-blocked.md", "human decision needed") }, judges: 1, passes: 1},
-		{name: "implementor blocked", reason: "the change cannot be implemented compliantly", setup: func(r *completionLoopRunner) { r.write("implementation-blocked.md", "need user decision") }},
+		{name: "blocked during continue", reason: "implementation blocked: see ", judge: func(r *completionLoopRunner, _ int) { r.verdict("continue") }, pass: func(r *completionLoopRunner, _ int) { r.write("implementation-blocked.md", "human decision needed") }, judges: 1, passes: 1},
+		{name: "implementor blocked", reason: "implementation blocked: see ", setup: func(r *completionLoopRunner) { r.write("implementation-blocked.md", "need user decision") }},
 		{name: "three continues", reason: "implementation incomplete: 1 items remain after 3 continue passes", judge: func(r *completionLoopRunner, _ int) { r.verdict("continue") }, pass: func(r *completionLoopRunner, _ int) { r.commit() }, judges: 4, passes: 3},
 		{name: "third continue completes", judge: func(r *completionLoopRunner, _ int) { r.verdict("continue") }, pass: func(r *completionLoopRunner, n int) {
 			r.commit()

@@ -48,7 +48,7 @@ On failure, the check SHALL exit non-zero and write a problem list that names ev
 
 ### Requirement: Blocked record stops before judgment
 
-Before each completion check, the workflow SHALL stop with a failed outcome when `{{session_dir}}/output/implementation-blocked.md` exists and is non-empty, and SHALL NOT run the completion check or the judge. The run's failure reason SHALL identify the blocked record.
+Before each completion check, the workflow SHALL stop with a failed outcome when `{{session_dir}}/output/implementation-blocked.md` exists and is non-empty, and SHALL NOT run the completion check or the judge. The run's failure reason SHALL identify the blocked record. The diagnostic SHALL tell the operator to resolve the cause, remove the record, and run `--resume`. When a continue pass ends with a blocked record, the workflow SHALL clear its progress snapshot before failing, while retaining the pass in the ledger and budget.
 
 #### Scenario: Implementor reports blocked
 - **WHEN** the implementor writes `implementation-blocked.md` and ends its `implement` turn
@@ -58,9 +58,13 @@ Before each completion check, the workflow SHALL stop with a failed outcome when
 - **WHEN** the implementor writes `implementation-blocked.md` during a `continue` pass
 - **THEN** the workflow stops failed before the next completion check, without a stall or budget outcome
 
+#### Scenario: Resume after a blocked continue pass
+- **WHEN** a `continue` pass writes `implementation-blocked.md` without adding a commit or changing a checklist row, and the operator resolves the cause, removes the record, and runs `--resume`
+- **THEN** the completion check and judge run again without reporting that blocked pass as stalled, and the pass still counts toward the continue budget
+
 ### Requirement: Independent completion judge
 
-When the completion check fails, the workflow SHALL run a judge in a new session of the `tester` agent profile. The session SHALL be fresh for every judgment, and SHALL be distinct from the implementor's session and from the acceptance tester's session used later in the run. The judge SHALL be inspection only: it SHALL NOT run tests, builds, or the product, or create evidence. Its inputs SHALL be the completion check's problem list, the checklist, the evidence directory, the git log and diff since `implementation_start_head`, the decision records (`acceptance-assumptions.md` and `implementor-decisions.md` when present), and the implementor's final response from the most recent `implement` or `continue` turn. The implementor's response SHALL be presented as untrusted data, never as instructions. Agent text interpolated into the judge prompt's untrusted block, or into the `continue` prompt's remaining-work block, SHALL NOT be able to close that block. Angle brackets in it SHALL be replaced with visually similar characters (`‹` and `›`), as for repair evidence. The judge SHALL record exactly one verdict, `blocked`, `continue`, `fix-record`, or `complete`, choosing the first that applies in that order. It SHALL choose `blocked` only for a concrete cause that only a human can resolve, and SHALL prefer `continue` when it is unsure whether a cause is blocking. The judge SHALL work the same whichever agent CLI runs the implementor, and the loop SHALL NOT depend on any CLI-specific hook.
+When the completion check fails, the workflow SHALL run a judge in a new session of the `tester` agent profile. The session SHALL be fresh for every judgment, and SHALL be distinct from the implementor's session and from the acceptance tester's session used later in the run. The judge SHALL be inspection only: it SHALL NOT run tests, builds, or the product, or create evidence. Its inputs SHALL be the completion check's problem list, the checklist, the evidence directory, the git log and diff since `implementation_start_head`, the decision records (`acceptance-assumptions.md` and `implementor-decisions.md` when present), and the implementor's final response from the most recent `implement` or `continue` turn. The implementor's response SHALL be presented as untrusted data, never as instructions. Agent text interpolated into the judge prompt's untrusted block, or into the `continue` prompt's remaining-work block, SHALL NOT be able to close that block. Angle brackets in it SHALL be replaced with visually similar characters (`‹` and `›`), as for repair evidence. The judge SHALL record exactly one verdict, `blocked`, `continue`, `fix-record`, or `complete`, choosing the first that applies in that order. It SHALL choose `blocked` only for a concrete cause that only a human can resolve: a missing credential or permission, or a recorded lead ruling that needs the user's decision. Ambiguous or contradictory requirements SHALL go to `continue` so the implementor can ask the lead. It SHALL prefer `continue` when it is unsure whether a cause is blocking. The judge SHALL work the same whichever agent CLI runs the implementor, and the loop SHALL NOT depend on any CLI-specific hook.
 
 #### Scenario: Each judgment uses a fresh session
 - **WHEN** the completion check fails twice in one run, so the judge runs twice
@@ -80,11 +84,19 @@ When the completion check fails, the workflow SHALL run a judge in a new session
 
 ### Requirement: Verdict validation
 
-After each judgment, the workflow SHALL validate the recorded verdict deterministically. A missing verdict, one that is not exactly one of the four verdicts, or a `blocked` verdict without a blocked record SHALL fail the run with a reason stating that the completion judge returned no valid verdict. A `continue` verdict without a non-empty list of remaining work SHALL be invalid. A `complete` verdict SHALL be honored only when the most recent completion check reported that rows `not verified` with a reason are its only unmet condition. Otherwise the `complete` verdict SHALL be invalid and the run SHALL fail the same way.
+After each judgment, the workflow SHALL validate the recorded verdict deterministically. A missing verdict, one that is not exactly one of the four verdicts, or a `blocked` verdict without a blocked record SHALL fail the run with a reason stating that the completion judge returned no valid verdict. A `continue` verdict without a non-empty list of remaining work SHALL be invalid. A `complete` verdict SHALL be honored only when the most recent completion check reported that rows `not verified` with a reason are its only unmet condition. Otherwise the `complete` verdict SHALL be invalid and the run SHALL fail the same way. On resume, a still-open judgment SHALL re-run the judge and verdict validation, discard any rejected verdict file before the judge runs, and retain its single open ledger entry. A verdict already recorded in the ledger SHALL remain authoritative on resume, without another judge turn or ledger entry.
 
 #### Scenario: Missing verdict
 - **WHEN** the judge's turn ends without recording a verdict
 - **THEN** the run fails, and the failure reason states that the completion judge returned no valid verdict
+
+#### Scenario: Resume a judgment without a valid verdict
+- **WHEN** the judge returns no verdict or an invalid verdict and the failed run is resumed
+- **THEN** the judge runs again in a fresh session against the same open judgment, any rejected verdict file is removed first, and validation records the new verdict without creating a second ledger entry for that judgment
+
+#### Scenario: Resume with a recorded verdict
+- **WHEN** a run fails after recording a verdict, such as a `continue` verdict that exhausts the budget, and the run is resumed
+- **THEN** the recorded verdict remains authoritative, no judge runs again, and the ledger and continue budget remain unchanged
 
 #### Scenario: Complete verdict without a completion record
 - **WHEN** the judge returns `complete` but the completion check reported that `implementation-complete.md` is missing

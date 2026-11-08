@@ -3,6 +3,7 @@ package builtinworkflows
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -525,7 +526,7 @@ func TestCoreImplementChangeV2Shape(t *testing.T) {
 	if loop.Loop == nil || (loop.Loop.Max == nil || *loop.Loop.Max != 12) || loop.ContinueOnFailure {
 		t.Fatalf("bad completion loop: %+v", loop)
 	}
-	wantChildren := []string{"check-completion-not-blocked", "check-completion", "check-progress", "escape-implementor-response", "judge-completion", "check-completion-verdict", "check-judge-not-blocked", "accept-complete", "continue-implementation"}
+	wantChildren := []string{"check-completion-not-blocked", "check-completion", "check-progress", "escape-implementor-response", "judge-and-validate", "check-judge-not-blocked", "accept-complete", "continue-implementation"}
 	if diff := cmp.Diff(wantChildren, stepIDs(loop.Steps)); diff != "" {
 		t.Fatal(diff)
 	}
@@ -536,9 +537,29 @@ func TestCoreImplementChangeV2Shape(t *testing.T) {
 	if escape.Script != "escape-untrusted-text.sh" || escape.Capture != "judge_implementor_response" || escape.ScriptInputs["text"] != "{{implementor_response}}" {
 		t.Fatalf("bad response escaping: %+v", escape)
 	}
+	group := findStep(loop.Steps, "judge-and-validate")
+	if group == nil || group.Loop != nil || len(group.Steps) == 0 {
+		t.Fatal("judge and validation must share a group for resume")
+	}
+	for _, id := range []string{"check-completion-not-blocked", "check-judge-not-blocked"} {
+		step := findStep(loop.Steps, id)
+		if step.ScriptInputs["resume_hint"] == "" {
+			t.Errorf("%s must explain how to resume", id)
+		}
+		wantSnapshot := ""
+		if id == "check-completion-not-blocked" {
+			wantSnapshot = "{{session_dir}}/output/continue-snapshot.json"
+		}
+		if step.ScriptInputs["snapshot_file"] != wantSnapshot {
+			t.Errorf("%s snapshot = %q, want %q", id, step.ScriptInputs["snapshot_file"], wantSnapshot)
+		}
+	}
 	judge := findStep(loop.Steps, "judge-completion")
 	if !strings.Contains(judge.Prompt, "{{judge_implementor_response}}") || strings.Contains(judge.Prompt, "{{implementor_response}}") {
 		t.Fatal("judge must receive only the escaped implementor response")
+	}
+	if !strings.Contains(judge.Prompt, "a missing credential or permission, or a recorded lead ruling that needs the user's decision") || strings.Contains(judge.Prompt, "because a requirement is ambiguous") {
+		t.Fatal("judge blocked criteria must require a human-only cause")
 	}
 	assertAgentStep(t, judge, "tester", "new", model.ModeAutonomous)
 	if len(judge.Tools) != 0 {
@@ -637,8 +658,75 @@ func TestCoreCheckNotBlockedScript(t *testing.T) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
 	}
+	want := "the change cannot be implemented compliantly without a user decision:\nDecision needed: which export format?\nafter deciding, update the definition and start a new run; resuming this run would not redo the stopped work\n"
+	if out != want {
+		t.Errorf("default output changed (-want +got):\n%s", cmp.Diff(want, out))
+	}
 	if out, err := runScriptIn(t, scriptPath, dir, `{}`); err == nil || !strings.Contains(out, "blocked_file is required") {
 		t.Errorf("missing input: err = %v\n%s", err, out)
+	}
+}
+
+func TestCoreCheckNotBlockedResume(t *testing.T) {
+	for _, fallback := range []bool{false, true} {
+		for _, withSnapshot := range []bool{false, true} {
+			t.Run(fmt.Sprintf("fallback=%v/snapshot=%v", fallback, withSnapshot), func(t *testing.T) {
+				script := writeAssetScript(t, "core/check-not-blocked.sh")
+				dir := t.TempDir()
+				blocked := filepath.Join(dir, "implementation-blocked.md")
+				snapshot := filepath.Join(dir, "continue-snapshot.json")
+				input := map[string]string{"blocked_file": blocked, "resume_hint": "true"}
+				if withSnapshot {
+					input["snapshot_file"] = snapshot
+				}
+				payload, err := json.Marshal(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var env []string
+				if fallback {
+					// Restrict PATH to the script's utilities, excluding jq.
+					bin := t.TempDir()
+					for _, name := range []string{"cat", "sed", "rm"} {
+						path, err := exec.LookPath(name)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Symlink(path, filepath.Join(bin, name)); err != nil {
+							t.Fatal(err)
+						}
+					}
+					env = append(env, "PATH="+bin)
+				}
+				mustWriteFile(t, snapshot, "original snapshot")
+				if out, err := runScriptIn(t, script, dir, string(payload), env...); err != nil {
+					t.Fatalf("no blocked record: %v\n%s", err, out)
+				}
+				if got, err := os.ReadFile(snapshot); err != nil || string(got) != "original snapshot" {
+					t.Fatalf("snapshot changed without blocked record: %s, %v", got, err)
+				}
+				mustWriteFile(t, blocked, "Missing credential\n")
+				out, err := runScriptIn(t, script, dir, string(payload), env...)
+				if err == nil {
+					t.Fatal("blocked record must fail")
+				}
+				if !strings.Contains(strings.SplitN(out, "\n", 2)[0], "implementation-blocked.md") {
+					t.Errorf("first line must identify record: %s", out)
+				}
+				for _, want := range []string{"Missing credential", "resolve the cause", "remove", "--resume"} {
+					if !strings.Contains(out, want) {
+						t.Errorf("missing %q: %s", want, out)
+					}
+				}
+				if strings.Contains(out, "start a new run") {
+					t.Errorf("unexpected new-run advice: %s", out)
+				}
+				_, err = os.Stat(snapshot)
+				if withSnapshot && !os.IsNotExist(err) || !withSnapshot && err != nil {
+					t.Errorf("snapshot removal: withSnapshot=%v, err=%v", withSnapshot, err)
+				}
+			})
+		}
 	}
 }
 
