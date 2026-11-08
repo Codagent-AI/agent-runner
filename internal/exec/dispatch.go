@@ -150,6 +150,7 @@ func executeGroupStep(
 		skip, skipErr := ShouldSkipStep(steps[i].SkipIf, ctx, steps[i].ID)
 		if skipErr != nil {
 			ctx.StepFailure = model.StepFailure{Kind: model.FailureStep}
+			RecordPreStartFailure(ctx, &steps[i], audit.BuildPrefix(nestingToAudit(ctx), steps[i].ID), skipErr)
 			err := fmt.Errorf("step %q skip_if evaluation failed: %w", steps[i].ID, skipErr)
 			ctx.NestingPath = originalNestingPath
 			emitStepEnd(ctx, prefix, startTime, string(OutcomeFailed), map[string]any{"error": err.Error()}, step)
@@ -190,7 +191,7 @@ func executeGroupStep(
 			emitStepEnd(ctx, prefix, startTime, string(OutcomeAborted), nil, step)
 			return OutcomeAborted, nil
 		}
-		closeToleratedFrame(ctx, &steps[i], outcome)
+		ClearToleratedFailure(ctx, &steps[i], outcome)
 		recordPreviousStep(ctx, &steps[i], outcome)
 		if isBlockingOutcome(&steps[i], outcome) {
 			ctx.NestingPath = originalNestingPath

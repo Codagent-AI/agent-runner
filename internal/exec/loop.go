@@ -175,6 +175,7 @@ func executeForEachLoop(
 
 	matches, err := globExp.Expand(pattern)
 	if err != nil {
+		RecordPreStartFailure(ctx, step, audit.BuildPrefix(nestingToAudit(ctx), step.ID), err)
 		return LoopResult{Outcome: OutcomeFailed, LastIteration: -1}, err
 	}
 
@@ -203,7 +204,6 @@ func executeForEachLoop(
 	}
 
 	startIter := opts.ResumeFromIteration
-	lastIter := startIter
 	completed := 0
 	if startIter >= len(matches) {
 		if resumed {
@@ -214,7 +214,6 @@ func executeForEachLoop(
 	}
 
 	for i := startIter; i < len(matches); i++ {
-		lastIter = i
 		loopVar := map[string]string{asVar: matches[i]}
 		if asIndex != "" {
 			loopVar[asIndex] = strconv.Itoa(i)
@@ -256,7 +255,7 @@ func executeForEachLoop(
 	}
 
 	emitLoopEnd(ctx, prefix, startTime, step, completed, false, "success")
-	return LoopResult{Outcome: OutcomeSuccess, LastIteration: lastIter}, nil
+	return LoopResult{Outcome: OutcomeSuccess, LastIteration: len(matches) - 1}, nil
 }
 
 func attachForEachResume(iterCtx *model.ExecutionContext, resumeBody *model.NestedStepState, recordedLoopVar, loopVar map[string]string, stepID string, iteration int, log Logger) {
@@ -577,7 +576,7 @@ func finishIterationBodyStep(
 ) (result iterationResult, done bool) {
 	// A tolerated failure resumes at the next step, so it counts as completed
 	// and its repair frame (if any) is done.
-	bodyCompleted := (outcome != OutcomeFailed && outcome != OutcomeAborted) || closeToleratedFrame(iterCtx, step, outcome)
+	bodyCompleted := (outcome != OutcomeFailed && outcome != OutcomeAborted) || ClearToleratedFailure(iterCtx, step, outcome)
 	if outcome != OutcomeAborted {
 		recordPreviousStep(iterCtx, step, outcome)
 	}
@@ -601,7 +600,6 @@ func finishIterationBodyStep(
 		return iterationResult{failed: true}, true
 	}
 	if outcome == OutcomeFailed {
-		iterCtx.ClearInheritedFailure()
 		iterCtx.StepFailure = model.StepFailure{}
 	}
 	return iterationResult{}, false

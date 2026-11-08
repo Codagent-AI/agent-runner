@@ -255,7 +255,7 @@ func executeChildSteps(
 func finishChildStep(childCtx *model.ExecutionContext, step *model.Step, outcome StepOutcome) (result StepOutcome, done bool) {
 	// A tolerated failure resumes at the next step, so it counts as completed
 	// and its repair frame (if any) is done.
-	completed := (outcome != OutcomeFailed && outcome != OutcomeAborted) || closeToleratedFrame(childCtx, step, outcome)
+	completed := (outcome != OutcomeFailed && outcome != OutcomeAborted) || ClearToleratedFailure(childCtx, step, outcome)
 
 	if outcome == OutcomeAborted {
 		updateChildProgress(childCtx, step.ID, completed)
@@ -270,7 +270,6 @@ func finishChildStep(childCtx *model.ExecutionContext, step *model.Step, outcome
 		return OutcomeFailed, true
 	}
 	if outcome == OutcomeFailed {
-		childCtx.ClearInheritedFailure()
 		childCtx.StepFailure = model.StepFailure{}
 	}
 	return OutcomeSuccess, false
