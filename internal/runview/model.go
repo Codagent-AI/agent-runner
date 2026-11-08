@@ -262,12 +262,14 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 		}
 	}
 	failedHistoricalRun := entered != FromLiveRun && auditRunFailed(events)
-	events = filterAuditEventsForWorkflowState(events, state.WorkflowHash, tree.Root, auditFilterStepID(&state, tree.Root), state.Completed)
+	filterStepID := auditFilterStepID(&state, tree.Root, events)
+	events = filterAuditEventsForWorkflowState(events, state.WorkflowHash, tree.Root, filterStepID, state.Completed)
 	if workflowMissing && len(tree.Root.Children) == 0 && reconstructTopLevelStepsFromAudit(tree.Root, events) {
 		m.loadErr = ""
 		// Re-run the position filter now that the cutoff can be resolved
 		// against the recovered top-level order.
-		events = filterAuditEventsForWorkflowState(events, state.WorkflowHash, tree.Root, auditFilterStepID(&state, tree.Root), state.Completed)
+		filterStepID = auditFilterStepID(&state, tree.Root, events)
+		events = filterAuditEventsForWorkflowState(events, state.WorkflowHash, tree.Root, filterStepID, state.Completed)
 	}
 	for _, e := range events {
 		tree.ApplyEvent(e)
@@ -378,13 +380,22 @@ func currentStepID(state *model.RunState) string {
 // auditFilterStepID includes the owning check's terminal evidence when a failed
 // repair stopped at an earlier replay step. The saved position still controls
 // resume; only the audit projection extends through the check.
-func auditFilterStepID(state *model.RunState, root *StepNode) string {
+func auditFilterStepID(state *model.RunState, root *StepNode, events []RawEvent) string {
 	current := currentStepID(state)
 	if state == nil || state.CurrentStep.Nested == nil {
 		return current
 	}
 	frame := state.CurrentStep.Nested.Repair
-	if frame == nil || frame.Phase != model.RepairPhaseFailed {
+	if frame == nil {
+		return current
+	}
+	failed := frame.Phase == model.RepairPhaseFailed
+	if frame.Phase == model.RepairPhaseReplaying && frame.Form == string(model.RepairRerun) {
+		// Older runners persisted the replay step before terminal repair
+		// bookkeeping. Recover its terminal state from this invocation's audit.
+		failed = auditHasTerminalRepairFailure(events, state.WorkflowHash, frame)
+	}
+	if !failed {
 		return current
 	}
 	currentIndex := childIndexByID(root, current)

@@ -225,6 +225,41 @@ func (f *FileTailer) ReadSince(sessionDir string) ([]RawEvent, error) {
 	return events, err
 }
 
+// auditHasTerminalRepairFailure recognizes legacy replaying frames whose
+// terminal phase was not persisted. Both terminal events must belong to the
+// latest invocation and its workflow hash, so interrupted resumes stay filtered.
+func auditHasTerminalRepairFailure(events []RawEvent, workflowHash string, frame *model.RepairFrame) bool {
+	segmentMatches := true
+	checkFailed, runFailed := false, false
+	for _, event := range events {
+		if event.Type == "run_start" && event.Prefix == "" {
+			hash, _ := stringField(event.Data, "workflow_hash")
+			segmentMatches = hash == "" || hash == workflowHash
+			checkFailed, runFailed = false, false
+		}
+		if !segmentMatches {
+			continue
+		}
+		if event.Type == "run_end" && event.Prefix == "" {
+			outcome, _ := stringField(event.Data, "outcome")
+			runFailed = outcome == "failed"
+		}
+		if event.Prefix != "["+frame.CheckID+"]" {
+			continue
+		}
+		if event.Type == "step_start" {
+			checkFailed = false
+		}
+		if event.Type == "step_end" {
+			outcome, _ := stringField(event.Data, "outcome")
+			form, _ := stringField(event.Data, "repair_form")
+			target, _ := stringField(event.Data, "repair_target")
+			checkFailed = outcome == "failed" && form == string(model.RepairRerun) && target == frame.Target
+		}
+	}
+	return checkFailed && runFailed
+}
+
 func filterAuditEventsForWorkflowState(events []RawEvent, workflowHash string, root *StepNode, currentStepID string, runCompleted bool) []RawEvent {
 	if workflowHash == "" || len(events) == 0 {
 		return events

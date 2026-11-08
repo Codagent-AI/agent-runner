@@ -203,14 +203,11 @@ func ResolveResumeStep(steps []Step, recordedStepID string, completed bool, fram
 	if frame != nil && frame.Phase == RepairPhaseFailed {
 		resumeAt := recordedStepID
 		rerun := frame.Form == string(RepairRerun)
-		// For the rerun form, resume at the target when the frame's own check
-		// is recordedStepID. Otherwise the check is owned by a step nested
-		// inside recordedStepID (a group has no child-position state of its
-		// own, so its frame is recorded on the enclosing scope with the group
-		// as recordedStepID) and frame.Target lives in that nested scope, not
-		// in this list: resume at recordedStepID and let its ordinary
-		// from-scratch re-execution reach the target.
-		if rerun && frame.CheckID == recordedStepID {
+		// A replay may stop at the target or an intermediate step before the
+		// check reruns. Re-enter at the target whenever this scope owns the
+		// check. Group-owned frames instead restart their enclosing step;
+		// their target belongs to the group's children, not this step list.
+		if rerun && (frame.CheckID == recordedStepID || stepExists(steps, frame.CheckID)) {
 			resumeAt = frame.Target
 		}
 		if !stepExists(steps, resumeAt) {
