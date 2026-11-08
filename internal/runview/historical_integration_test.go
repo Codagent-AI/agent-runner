@@ -478,3 +478,31 @@ steps:
 		}
 	}
 }
+
+// A newer invocation recorded under a different workflow hash must still reset
+// terminal repair evidence when the workflow file is missing and the cutoff is
+// recalculated after audit reconstruction.
+func TestRepairProjectionIgnoresOlderFailureBeforeMismatchedRunStartAfterReconstruction(t *testing.T) {
+	lines := append(blockedReplayAuditFixture(),
+		`2026-09-01T00:00:10Z run_start {"workflow_hash":"newer-hash"}`,
+		`2026-09-01T00:00:11Z [open-draft-pr] step_start {}`,
+	)
+	state := &model.RunState{
+		WorkflowName: "implement-change", WorkflowHash: "fixture-hash",
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+			StepID: "open-draft-pr",
+			Repair: &model.RepairFrame{CheckID: "verify-draft-pr", Form: "rerun", Target: "open-draft-pr", Phase: model.RepairPhaseReplaying},
+		}},
+	}
+	m := writeRepairRun(t, "implement-change", repairPRWorkflowYAML, lines, state)
+	if err := os.Remove(state.WorkflowFile); err != nil {
+		t.Fatal(err)
+	}
+	m, err := New(m.sessionDir, m.projectDir, FromInspect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if check := childByID(m.tree.Root, "verify-draft-pr"); check != nil && (check.Failure != nil || check.Status == StatusFailed) {
+		t.Errorf("older failure treated as current evidence: %+v", check)
+	}
+}

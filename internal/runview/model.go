@@ -261,14 +261,16 @@ func New(sessionDir, projectDir string, entered Entered) (*Model, error) {
 			m.loadErr = "audit log: " + err.Error()
 		}
 	}
+	rawEvents := events
 	failedHistoricalRun := entered != FromLiveRun && auditRunFailed(events)
-	filterStepID := auditFilterStepID(&state, tree.Root, events)
+	filterStepID := auditFilterStepID(&state, tree.Root, rawEvents)
 	events = filterAuditEventsForWorkflowState(events, state.WorkflowHash, tree.Root, filterStepID, state.Completed)
 	if workflowMissing && len(tree.Root.Children) == 0 && reconstructTopLevelStepsFromAudit(tree.Root, events) {
 		m.loadErr = ""
 		// Re-run the position filter now that the cutoff can be resolved
-		// against the recovered top-level order.
-		filterStepID = auditFilterStepID(&state, tree.Root, events)
+		// against the recovered top-level order. Use the unfiltered events so a
+		// newer invocation's run_start still resets older failure evidence.
+		filterStepID = auditFilterStepID(&state, tree.Root, rawEvents)
 		events = filterAuditEventsForWorkflowState(events, state.WorkflowHash, tree.Root, filterStepID, state.Completed)
 	}
 	for _, e := range events {

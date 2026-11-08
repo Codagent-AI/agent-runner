@@ -916,3 +916,57 @@ func TestResumeRepairTopLevelSubWorkflowReplay(t *testing.T) {
 		t.Fatalf("expected 2 calls (act replay, verify), got %d: %v", len(runner2.calls), runner2.calls)
 	}
 }
+
+// TestResumeRepairLegacyTerminalReplayFrameReentersAtTarget covers runs saved
+// before the terminal failed phase was persisted: a finalized failed run whose
+// frame is still replaying with the rerun target completed must re-enter at
+// the target with a fresh budget rather than advance past it.
+func TestResumeRepairLegacyTerminalReplayFrameReentersAtTarget(t *testing.T) {
+	sessionDir := t.TempDir()
+	workflowPath := writeWorkflowFile(t, t.TempDir(), "test-v1.0.yaml", rerunRepairYAML)
+
+	result, err := runWorkflowFile(t, workflowPath, &Options{
+		ProcessRunner: &mockRunner{results: []exec.ProcessResult{
+			{ExitCode: 0, Stdout: claudeAgentOutput("looked into it: missing scope\nREPAIR_BLOCKED")},
+			{ExitCode: 1, Stderr: "not ready"},
+		}},
+		GlobExpander: &mockGlob{}, Log: &mockLog{}, SessionDir: sessionDir, ProfileStore: testAgentProfileStore(),
+	})
+	if err != nil || result != ResultFailed {
+		t.Fatalf("result = %q, err = %v; want failed", result, err)
+	}
+
+	// Rewrite the saved state to what an older runner persisted.
+	statePath := filepath.Join(sessionDir, "state.json")
+	state, err := stateio.ReadState(statePath)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	nested := state.CurrentStep.Nested
+	nested.Completed = true
+	nested.Repair.Phase = model.RepairPhaseReplaying
+	nested.Repair.Attempts = nested.Repair.Budget
+	if state.FailureKind == "" {
+		t.Fatalf("finalized failed run has no failure kind: %+v", state)
+	}
+	if err := stateio.WriteState(&state, sessionDir); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	runner2 := &mockRunner{results: []exec.ProcessResult{
+		{ExitCode: 0, Stdout: claudeAgentOutput("opened (ready)")},
+		{ExitCode: 0, Stdout: "pr is open"},
+	}}
+	result, err = ResumeWorkflow(statePath, &Options{
+		ProcessRunner: runner2, GlobExpander: &mockGlob{}, Log: &mockLog{}, ProfileStore: testAgentProfileStore(),
+	})
+	if err != nil {
+		t.Fatalf("resume error: %v", err)
+	}
+	if result != ResultSuccess {
+		t.Fatalf("expected success, got %q", result)
+	}
+	if len(runner2.calls) != 2 {
+		t.Fatalf("expected 2 calls (act, verify), got %d: %v", len(runner2.calls), runner2.calls)
+	}
+}
