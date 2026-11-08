@@ -301,10 +301,11 @@ func TestCIWaitFatalAndBoundedCalls(t *testing.T) {
 
 func TestCIWaitReadFailureAfterCompletePoll(t *testing.T) {
 	for _, tt := range []struct {
-		name, interval, callTimeout, want string
+		name, interval, callTimeout, want, newHead string
 	}{
-		{"deadline truncated read", "2", "5", "CI_REVIEW_INCOMPLETE"},
-		{"full budget read", "0.2", "2", "CI_PENDING"},
+		{"deadline truncated read", "2", "5", "CI_REVIEW_INCOMPLETE", ""},
+		{"full budget read", "0.2", "2", "CI_PENDING", ""},
+		{"head changes before pagination fails", "2", "5", "CI_PENDING", "newhead123456"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			fixture := ciFixture()
@@ -314,12 +315,24 @@ func TestCIWaitReadFailureAfterCompletePoll(t *testing.T) {
 				map[string]any{"name": "build", "conclusion": "SUCCESS"},
 				map[string]any{"name": "CodeRabbit", "conclusion": "NEUTRAL", "completedAt": time.Now().Add(-time.Minute).UTC().Format(time.RFC3339), "checkSuite": map[string]any{"app": map[string]any{"slug": "coderabbitai"}}},
 			}
-			useCISequence(t, fixture)
+			if tt.newHead != "" {
+				second := ciFixture()
+				secondPR := ciPR(second)
+				secondPR["headRefOid"] = tt.newHead
+				ciChecks(secondPR)["nodes"] = ciChecks(pr)["nodes"]
+				ciConn(secondPR, "reviews")["pageInfo"] = map[string]any{"hasPreviousPage": true, "startCursor": "reviews-page-2"}
+				useCISequence(t, fixture, second)
+			} else {
+				useCISequence(t, fixture)
+			}
 			t.Setenv("CI_SEQUENCE_EXHAUSTED", "hang")
 			input := fmt.Sprintf(`{"review_bots":"coderabbitai","deadline_seconds":"6","poll_interval_seconds":%q,"call_timeout_seconds":%q,"bot_start_grace_seconds":"0"}`, tt.interval, tt.callTimeout)
 			out, code, elapsed := runCIFixture(t, fixture, input)
 			if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), tt.want) || !strings.Contains(out, "coderabbitai: neutral") || !strings.Contains(out, "timed out: gh api graphql") {
 				t.Fatalf("code=%d elapsed=%s output=%s", code, elapsed, out)
+			}
+			if tt.newHead != "" && !strings.Contains(out, "**Head:** "+tt.newHead) {
+				t.Fatalf("report does not identify the new head: %s", out)
 			}
 			if elapsed >= 8*time.Second {
 				t.Fatalf("wait exceeded deadline margin: %s", elapsed)
