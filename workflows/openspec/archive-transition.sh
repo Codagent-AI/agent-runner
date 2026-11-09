@@ -95,16 +95,21 @@ fi
 # JSON, so the CLI's own progress output must go to stderr.
 #
 # Each command's output is held back until it is known to matter, so a failure
-# reason starts with the failing command's own error rather than the "is
-# valid" banner of the validate that passed before it.
+# reason is not the "is valid" banner of the validate that passed before it.
+# The real CLI prints its progress and its error to stdout in that order, so
+# the first stderr line (the reported failure reason) is the failed command's
+# whole output collapsed onto one line, then the output itself.
+fail_with_output() {
+  printf 'openspec %s failed: %s\n' "$1" "$(printf '%s\n' "$2" | sed '/^[[:space:]]*$/d; s/^[[:space:]]*//' | paste -sd '|' - | sed 's/|/ | /g')" >&2
+  printf '%s\n' "$2" >&2
+  exit 1
+}
 if [ -d "$change_dir" ]; then
   if ! validate_out=$(openspec validate --type change "$change_name" 2>&1); then
-    printf '%s\n' "$validate_out" >&2
-    exit 1
+    fail_with_output validate "$validate_out"
   fi
   if ! archive_out=$(openspec archive "$change_name" --yes 2>&1); then
-    printf '%s\n' "$archive_out" >&2
-    exit 1
+    fail_with_output archive "$archive_out"
   fi
   printf '%s\n%s\n' "$validate_out" "$archive_out" >&2
 fi
