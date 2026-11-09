@@ -733,10 +733,13 @@ func runAndPersistTopLevelStep(rs *runState, step *model.Step) (exec.StepOutcome
 	outcome, loopResult, err := runStep(step, rs)
 	rs.ctx.FlushState = nil
 	warning := exec.IsWarningOutcome(step, outcome)
-	if err == nil {
+	rewindPending := rs.ctx.PendingRewind != nil
+	// A pending repair replay must retain its frame and remain incomplete;
+	// failure tolerance applies only once the repair cycle is terminal.
+	if err == nil && !rewindPending {
 		exec.ClearToleratedFailure(rs.ctx, step, outcome)
 	}
-	completed := err == nil && outcome != exec.OutcomeAborted && (outcome != exec.OutcomeFailed || warning || step.ContinueOnFailure)
+	completed := err == nil && !rewindPending && outcome != exec.OutcomeAborted && (outcome != exec.OutcomeFailed || warning || step.ContinueOnFailure)
 	if !completed && rs.ctx.LastSubWorkflowChild == nil && resumeChild != nil {
 		// A resume can fail before any child step starts, for example when the
 		// persisted child ID no longer exists in a sub-workflow. Keep the prior
