@@ -673,3 +673,40 @@ func TestArchiveTransitionSnapshotsNonASCIIPreExistingPath(t *testing.T) {
 		t.Fatalf("snapshot should record the non-ASCII path unquoted with its blob:\n%s", snapshot)
 	}
 }
+
+// TestArchiveTransitionFailureStartsWithTheFailingCommandError proves the
+// first stderr line, which failure classification reports, is the real
+// error and not the banner of the validate that passed before it.
+func TestArchiveTransitionFailureStartsWithTheFailingCommandError(t *testing.T) {
+	cases := []struct {
+		name, validate, archive, want string
+	}{
+		{"archive fails", `echo "Change '$3' is valid"; exit 0`, `echo "Error: archive failed: target exists"; exit 1`, "Error: archive failed: target exists"},
+		{"validate fails", `echo "Error: validation failed"; exit 1`, `exit 0`, "Error: validation failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newArchiveTestFixture(t, "ticket-123-demo")
+			binDir := filepath.Join(t.TempDir(), "bin")
+			if err := os.MkdirAll(binDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			script := "#!/bin/sh\nif [ \"$1\" = validate ]; then " + tc.validate + "; fi\nif [ \"$1\" = archive ]; then " + tc.archive + "; fi\n"
+			if err := os.WriteFile(filepath.Join(binDir, "openspec"), []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			f.env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
+			stdin, err := json.Marshal(map[string]string{"change_name": f.changeName, "session_dir": f.sessionDir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			stdout, stderr, err := f.runStdout(t, "archive-transition.sh", stdin)
+			if err == nil {
+				t.Fatalf("expected failure, stdout:\n%s", stdout)
+			}
+			if first, _, _ := strings.Cut(stderr, "\n"); first != tc.want {
+				t.Fatalf("first stderr line = %q, want %q\nstderr:\n%s", first, tc.want, stderr)
+			}
+		})
+	}
+}

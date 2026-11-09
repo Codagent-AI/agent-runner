@@ -93,9 +93,20 @@ fi
 
 # stdout is the captured archive_state that verify-archive-commit parses as
 # JSON, so the CLI's own progress output must go to stderr.
+#
+# Each command's output is held back until it is known to matter, so a failure
+# reason starts with the failing command's own error rather than the "is
+# valid" banner of the validate that passed before it.
 if [ -d "$change_dir" ]; then
-  openspec validate --type change "$change_name" >&2
-  openspec archive "$change_name" --yes >&2
+  if ! validate_out=$(openspec validate --type change "$change_name" 2>&1); then
+    printf '%s\n' "$validate_out" >&2
+    exit 1
+  fi
+  if ! archive_out=$(openspec archive "$change_name" --yes 2>&1); then
+    printf '%s\n' "$archive_out" >&2
+    exit 1
+  fi
+  printf '%s\n%s\n' "$validate_out" "$archive_out" >&2
 fi
 
 archive_candidates=$(find_archive_dirs)
