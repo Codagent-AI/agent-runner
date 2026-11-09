@@ -190,23 +190,24 @@ func TestToleratedRerunRepairPersistsPendingRewind(t *testing.T) {
 			if nested.Completed {
 				t.Error("pending repair persisted as completed")
 			}
-			if nested.Repair == nil || nested.Repair.Phase != model.RepairPhaseReplaying {
-				t.Fatalf("want replaying repair frame, got %+v", nested.Repair)
+			if nested.Repair == nil || nested.Repair.Phase != model.RepairPhaseReplaying || !nested.Repair.ReplayArmed {
+				t.Fatalf("want armed replaying repair frame, got %+v", nested.Repair)
 			}
 			rs.auditLogger.Close()
 			runlock.Delete(dir)
-			// Resume re-enters the recorded check with the open repair budget.
-			resumed := &mockRunner{results: []exec.ProcessResult{{ExitCode: 0}}}
+			// Resume replays the rerun target first, then reruns the check, keeping
+			// the open repair budget.
+			resumed := &mockRunner{results: []exec.ProcessResult{{Stdout: claudeAgentOutput("acted")}, {ExitCode: 0}}}
 			result, err := ResumeWorkflow(filepath.Join(dir, "state.json"), &Options{
 				ProcessRunner: resumed, GlobExpander: &mockGlob{}, Log: &mockLog{}, ProfileStore: testAgentProfileStore(),
 			})
 			if err != nil || result != ResultSuccess {
 				t.Fatalf("ResumeWorkflow() = (%q, %v), want success", result, err)
 			}
-			if len(resumed.calls) != 1 {
-				t.Fatalf("resumed process calls = %d, want re-entered check", len(resumed.calls))
+			if len(resumed.calls) != 2 {
+				t.Fatalf("resumed process calls = %d, want target replay then check", len(resumed.calls))
 			}
-			if diff := cmp.Diff([]string{"sh", "-c", "exit 1"}, resumed.calls[0]); diff != "" {
+			if diff := cmp.Diff([]string{"sh", "-c", "exit 1"}, resumed.calls[1]); diff != "" {
 				t.Errorf("resumed check (-want +got):\n%s", diff)
 			}
 		})

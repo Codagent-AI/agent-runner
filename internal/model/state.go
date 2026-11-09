@@ -67,6 +67,10 @@ type RepairFrame struct {
 	LastAttemptCrashed    bool      `json:"lastAttemptCrashed,omitempty"`
 	LastCrashPrefix       string    `json:"lastCrashPrefix,omitempty"`
 	CheckBeforeLastRepair bool      `json:"checkBeforeLastRepair,omitempty"`
+	// ReplayArmed is true from when a rerun replay is armed until the sequencer
+	// consumes it, so resume can tell a replay that never started from a check
+	// interrupted while rerunning after its replay finished.
+	ReplayArmed bool `json:"replayArmed,omitempty"`
 }
 
 // RewindRequest asks the sequencer to resume execution from an earlier step
@@ -193,8 +197,10 @@ type ResolveResumeStepResult struct {
 // If the recorded step did not complete, it returns that step (to re-run it).
 //
 // frame is the open repair frame restored at this scope, or nil when none is
-// open. A frame in phase checking, repairing, or replaying does not change
-// the resolution: the recorded step (the check, or a step inside its replay
+// open. A frame with ReplayArmed whose recorded step is still the check
+// resumes at frame.Target with its budget kept, because the replay never
+// started. Otherwise a frame in phase checking, repairing, or replaying does
+// not change the resolution: the recorded step (the check, or a step inside its replay
 // range) is resumed as usual and its budget is kept. A frame in phase failed
 // re-enters the cycle with a fresh budget instead: at frame.Target for the
 // rerun form (frame is kept open, moved to phase replaying), or at the
@@ -219,6 +225,18 @@ func ResolveResumeStep(steps []Step, recordedStepID string, completed bool, fram
 			frame.Phase = RepairPhaseReplaying
 		}
 		return ResolveResumeStepResult{StepID: resumeAt}, nil
+	}
+
+	if frame != nil && frame.ReplayArmed {
+		// This resume starts or continues the armed replay, so a later save
+		// during the check's rerun must not read as a replay yet to start.
+		frame.ReplayArmed = false
+		if !completed && frame.CheckID == recordedStepID {
+			if !stepExists(steps, frame.Target) {
+				return ResolveResumeStepResult{}, fmt.Errorf("step %q not found", frame.Target)
+			}
+			return ResolveResumeStepResult{StepID: frame.Target}, nil
+		}
 	}
 
 	for i := range steps {

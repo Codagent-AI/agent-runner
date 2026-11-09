@@ -241,6 +241,37 @@ func TestResolveResumeStep(t *testing.T) {
 		}
 	})
 
+	t.Run("replay armed but not started, resumes at target keeping budget", func(t *testing.T) {
+		frame := &RepairFrame{CheckID: "check", Form: "rerun", Phase: RepairPhaseReplaying, Attempts: 1, Budget: 2, Target: "a", ReplayArmed: true}
+		got, err := ResolveResumeStep(steps, "check", false, frame)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.StepID != "a" {
+			t.Fatalf("got %+v", got)
+		}
+		if frame.Attempts != 1 || frame.Phase != RepairPhaseReplaying {
+			t.Fatalf("frame mutated unexpectedly: %+v", frame)
+		}
+		if frame.ReplayArmed {
+			t.Fatal("resume must disarm the replay it is starting")
+		}
+	})
+
+	t.Run("replay finished and check interrupted, re-enters the check", func(t *testing.T) {
+		frame := &RepairFrame{CheckID: "b", Form: "rerun", Phase: RepairPhaseReplaying, Attempts: 1, Budget: 2, Target: "a"}
+		got, err := ResolveResumeStep(steps, "b", false, frame)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.StepID != "b" {
+			t.Fatalf("got %+v", got)
+		}
+		if frame.Attempts != 1 || frame.Phase != RepairPhaseReplaying {
+			t.Fatalf("frame mutated unexpectedly: %+v", frame)
+		}
+	})
+
 	t.Run("frame phase failed, form rerun, resumes at target with fresh budget", func(t *testing.T) {
 		frame := &RepairFrame{CheckID: "check", Form: "rerun", Phase: RepairPhaseFailed, Attempts: 2, Budget: 2, Target: "a"}
 		got, err := ResolveResumeStep(steps, "check", false, frame)

@@ -7,10 +7,14 @@ import (
 	"github.com/codagent/agent-runner/internal/model"
 )
 
-// takeRewind pops and clears ctx.PendingRewind, reporting nil when none is set.
+// takeRewind pops and clears ctx.PendingRewind and disarms the repair frame's
+// replay marker, reporting nil when no rewind is set.
 func takeRewind(ctx *model.ExecutionContext) *model.RewindRequest {
 	rw := ctx.PendingRewind
 	ctx.PendingRewind = nil
+	if rw != nil && ctx.RepairFrame != nil {
+		ctx.RepairFrame.ReplayArmed = false
+	}
 	return rw
 }
 
