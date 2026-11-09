@@ -676,13 +676,13 @@ func TestArchiveTransitionSnapshotsNonASCIIPreExistingPath(t *testing.T) {
 
 // TestArchiveTransitionFailureStartsWithTheFailingCommandError proves the
 // first stderr line, which failure classification reports, is the real
-// error and not the banner of the validate that passed before it.
+// error and not a validate banner or archive progress line before it.
 func TestArchiveTransitionFailureStartsWithTheFailingCommandError(t *testing.T) {
 	cases := []struct {
 		name, validate, archive, want string
 	}{
 		{"archive fails", `echo "Change '$3' is valid"; exit 0`, `echo "Error: archive failed: target exists"; exit 1`, "openspec archive failed: Error: archive failed: target exists"},
-		{"archive prints progress before its error", `echo "Change '$3' is valid"; exit 0`, `printf 'Task status: ✓ Complete\n\nSpecs to update:\n  foo: update\nfoo MODIFIED failed for header "x" - not found\nAborted. No files were changed.\n'; exit 1`, `openspec archive failed: Task status: ✓ Complete | Specs to update: | foo: update | foo MODIFIED failed for header "x" - not found | Aborted. No files were changed.`},
+		{"archive prints progress before its error", `echo "Change '$3' is valid"; exit 0`, `printf 'Task status: ✓ Complete\n\nSpecs to update:\n  foo: update\nfoo MODIFIED failed for header "x" - not found\nAborted. No files were changed.\n'; exit 1`, `openspec archive failed: foo MODIFIED failed for header "x" - not found`},
 		{"validate fails", `echo "Error: validation failed"; exit 1`, `exit 0`, "openspec validate failed: Error: validation failed"},
 	}
 	for _, tc := range cases {
