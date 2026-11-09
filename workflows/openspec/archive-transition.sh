@@ -102,7 +102,7 @@ fi
 # output follows.
 fail_with_output() {
   trimmed=$(printf '%s\n' "$2" | sed '/^[[:space:]]*$/d; s/^[[:space:]]*//')
-  reason=$(printf '%s\n' "$trimmed" | grep -i -m1 -E 'error|failed|not found|invalid|abort')
+  reason=$(printf '%s\n' "$trimmed" | grep -i -m1 -E 'error|failed|not found|invalid|abort' || true)
   [ -n "$reason" ] || reason=$(printf '%s\n' "$trimmed" | paste -sd '|' - | sed 's/|/ | /g')
   printf 'openspec %s failed: %s\n' "$1" "$reason" >&2
   printf '%s\n' "$2" >&2
