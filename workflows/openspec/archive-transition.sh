@@ -98,18 +98,17 @@ fi
 # reason is not the "is valid" banner of the validate that passed before it.
 # The real CLI prints progress before its error on stdout and marks no line as
 # the error, so the reported failure reason (the first stderr line) is chosen
-# by structure, not by wording: validate reports its first "[ERROR]" line;
-# otherwise the first unindented line that is not a known banner, progress
-# entry or trailer (a change or spec name can contain any word). With no such
+# by structure, not by wording: the first "[ERROR]" or "✖" marked line (the
+# CLI's own error markers); otherwise the first unindented line that is not a
+# known banner, progress entry or trailer (a change or spec name can contain
+# any word). With no such
 # line the whole output is collapsed onto one line. The full output follows.
 fail_with_output() {
   trimmed=$(printf '%s\n' "$2" | sed '/^[[:space:]]*$/d; s/^[[:space:]]*//')
-  reason=
-  if [ "$1" = validate ]; then
-    reason=$(printf '%s\n' "$2" | grep -F -m1 '[ERROR]' | sed 's/^[^[]*//' || true)
-  fi
+  reason=$(printf '%s\n' "$2" | grep -F -m1 '[ERROR]' | sed 's/^[^[]*\[/[/' || true)
+  [ -n "$reason" ] || reason=$(printf '%s\n' "$2" | grep -m1 '^✖' || true)
   [ -n "$reason" ] || reason=$(printf '%s\n' "$2" | grep -v '^[[:space:]]' |
-    grep -v -E "^(Change '.*' (is valid|has issues)|Proposal warnings|Task status:|Specs to update:|Aborted\.|Next steps:)" |
+    grep -v -E "^(Change '.*' (is valid|has issues)|Proposal warnings|Task status:|Specs to update:|Aborted\.|Next steps:|Warning:|Applying changes|Totals:|Specs updated|Validation errors in)" |
     sed -n '/./{p;q;}' || true)
   [ -n "$reason" ] || reason=$(printf '%s\n' "$trimmed" | paste -sd '|' - | sed 's/|/ | /g')
   printf 'openspec %s failed: %s\n' "$1" "$reason" >&2
