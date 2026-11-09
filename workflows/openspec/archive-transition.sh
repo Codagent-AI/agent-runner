@@ -97,12 +97,13 @@ fi
 # Each command's output is held back until it is known to matter, so a failure
 # reason is not the "is valid" banner of the validate that passed before it.
 # The real CLI prints progress before its error on stdout, so the reported
-# failure reason (the first stderr line) is the first line that reads as an
-# error, falling back to the whole output collapsed onto one line. The full
+# failure reason (the first stderr line) is the first unindented line that reads as an
+# error (progress entries such as spec names are indented, so a spec called
+# error-handling is not mistaken for one), falling back to the whole output collapsed onto one line. The full
 # output follows.
 fail_with_output() {
   trimmed=$(printf '%s\n' "$2" | sed '/^[[:space:]]*$/d; s/^[[:space:]]*//')
-  reason=$(printf '%s\n' "$trimmed" | grep -i -m1 -E 'error|failed|not found|invalid|abort' || true)
+  reason=$(printf '%s\n' "$2" | grep -v '^[[:space:]]' | grep -i -m1 -E 'error|failed|not found|invalid|abort' || true)
   [ -n "$reason" ] || reason=$(printf '%s\n' "$trimmed" | paste -sd '|' - | sed 's/|/ | /g')
   printf 'openspec %s failed: %s\n' "$1" "$reason" >&2
   printf '%s\n' "$2" >&2
