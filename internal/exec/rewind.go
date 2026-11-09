@@ -158,6 +158,9 @@ func emitReplayTerminalEnd(ctx *model.ExecutionContext, checkStep *model.Step, o
 	}
 	endData := repairEndData(checkEndData(checkStep, lastResultFromFailure(ctx.LastFailure)), frame, blocked)
 	addGuardedLinkage(endData, OutcomeFailed, ctx)
+	if frame.Guarded != nil {
+		endData["guarded_prefix"], endData["guarded_attempt"] = frame.Guarded.Prefix, frame.Guarded.Attempt
+	}
 	emitStepEnd(ctx, owningPrefix, startTime, "failed", endData, checkStep)
 }
 

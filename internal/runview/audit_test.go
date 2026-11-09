@@ -275,6 +275,69 @@ func TestFilterAuditEventsForWorkflowState_KeepsRunEndForCompletedMatchingWorkfl
 	}
 }
 
+func TestFilterAuditEventsForWorkflowState_RepairPositionStillDropsFutureEvents(t *testing.T) {
+	for _, phase := range []string{model.RepairPhaseReplaying, model.RepairPhaseFailed} {
+		t.Run(phase, func(t *testing.T) {
+			lines := blockedReplayAuditFixture()
+			if phase == model.RepairPhaseReplaying {
+				// A replay still in progress has no terminal run_end yet.
+				lines = lines[:len(lines)-1]
+			}
+			lines = append(lines,
+				`2026-09-01T00:00:10Z [finalize] step_start {"command":"echo done"}`,
+				`2026-09-01T00:00:11Z [finalize] step_end {"outcome":"success"}`,
+			)
+			m := writeRepairRun(t, "implement-change", repairPRWorkflowYAML, lines, &model.RunState{
+				WorkflowName: "implement-change", WorkflowHash: "fixture-hash",
+				CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+					StepID: "open-draft-pr",
+					Repair: &model.RepairFrame{
+						CheckID: "verify-draft-pr", Form: "rerun", Target: "open-draft-pr", Phase: phase,
+					},
+				}},
+			})
+			if got := childByID(m.tree.Root, "finalize").Status; got != StatusPending {
+				t.Errorf("stale step after owning check = %v, want pending", got)
+			}
+			if phase == model.RepairPhaseReplaying {
+				check := childByID(m.tree.Root, "verify-draft-pr")
+				if check.Status != StatusPending || check.Failure != nil || len(check.Children) != 0 {
+					t.Errorf("replaying frame retained future check events: %+v", check)
+				}
+			}
+		})
+	}
+}
+
+// Historical terminal evidence must not override a newer replay or a
+// mismatched workflow segment, nor may a check terminal alone end a live run.
+func TestAuditFilterDoesNotInferFailureFromStaleRepairEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		audit []string
+	}{
+		{"newer invocation", append(blockedReplayAuditFixture(),
+			`2026-09-01T00:00:10Z run_start {"workflow_hash":"fixture-hash"}`,
+			`2026-09-01T00:00:11Z [open-draft-pr] step_start {}`,
+		)},
+		{"mismatched workflow", append([]string{`2026-09-01T00:00:00Z run_start {"workflow_hash":"old-hash"}`}, blockedReplayAuditFixture()[1:]...)},
+		{"no run end", blockedReplayAuditFixture()[:len(blockedReplayAuditFixture())-1]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := writeRepairRun(t, "implement-change", repairPRWorkflowYAML, tc.audit, &model.RunState{
+				WorkflowHash: "fixture-hash",
+				CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+					StepID: "open-draft-pr",
+					Repair: &model.RepairFrame{CheckID: "verify-draft-pr", Form: "rerun", Target: "open-draft-pr", Phase: model.RepairPhaseReplaying},
+				}},
+			})
+			if check := childByID(m.tree.Root, "verify-draft-pr"); check.Status != StatusPending || check.Failure != nil {
+				t.Errorf("stale repair evidence applied: %+v", check)
+			}
+		})
+	}
+}
+
 func TestApplyEvent_StepStartStepEnd(t *testing.T) {
 	tree := buildImplementChangeTree(t)
 	tree.ApplyEvent(RawEvent{
@@ -1195,6 +1258,23 @@ func TestApplyEvent_RepairBlockedRecordsDeclarationWithoutAttemptChildren(t *tes
 	if check.RepairBudget != 1 || check.RepairAttempts != 0 || check.RepairTarget != "open-draft-pr" {
 		t.Fatalf("repair metadata = budget %d attempts %d target %q",
 			check.RepairBudget, check.RepairAttempts, check.RepairTarget)
+	}
+}
+
+func TestApplyEvent_ResumedExhaustionClearsEarlierBlockedState(t *testing.T) {
+	wf := fixtureRepairImplementChange()
+	tree := BuildTree(&wf, fixturePath("openspec/implement-change-v1.0.yaml"))
+	applyFixtureAudit(t, tree, blockedRerunAuditFixture())
+	applyFixtureAudit(t, tree, []string{
+		`2026-09-01T00:00:20Z [verify-draft-pr] step_end {"outcome":"failed","exit_code":1,"stderr":"still no draft pull request","repair_form":"rerun","repair_target":"open-draft-pr","repair_max":1,"repair_attempts":1,"repair_blocked":false}`,
+	})
+
+	check := childByID(tree.Root, "verify-draft-pr")
+	if check.RepairBlocked {
+		t.Fatal("a later unblocked failure should clear the blocked state")
+	}
+	if check.Failure == nil || check.Failure.Blocked || check.Failure.BlockedBy != "" {
+		t.Fatalf("failure record should not carry the earlier block: %+v", check.Failure)
 	}
 }
 

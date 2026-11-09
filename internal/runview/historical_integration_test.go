@@ -2,6 +2,7 @@ package runview
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -272,6 +273,97 @@ func TestRepairProjectionINT005BlockedRerunEvidence(t *testing.T) {
 	}
 }
 
+// A workflow hash exercises the position filter used by real persisted runs.
+// The failed repair frame owns events beyond the saved replay position.
+func TestRepairProjectionFailedReplayHistoricalEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		stepID     string
+		attempts   int
+		audit      []string
+		wantDetail []string
+	}{
+		{
+			name: "blocked target", stepID: "open-draft-pr",
+			audit:      blockedReplayAuditFixture(),
+			wantDetail: []string{"push rejected: token lacks workflow scope", "REPAIR_BLOCKED"},
+		},
+		{
+			name: "intermediate step exhausts budget", stepID: "prepare-pr", attempts: 1,
+			audit: append(inProgressRerunAuditFixture(),
+				`2026-09-01T00:00:06Z [verify-draft-pr, attempt:1, open-draft-pr] step_end {"outcome":"success","stdout":"retrying push","identity":{"attempt":1}}`,
+				`2026-09-01T00:00:07Z [verify-draft-pr, attempt:1, prepare-pr] step_start {"command":"echo prepared"}`,
+				`2026-09-01T00:00:08Z [verify-draft-pr, attempt:1, prepare-pr] step_end {"outcome":"failed","exit_code":1,"stderr":"preparation failed"}`,
+				`2026-09-01T00:00:09Z [verify-draft-pr] repair_attempt_end {"attempt":1,"form":"rerun","outcome":"failed","failed_step":"prepare-pr"}`,
+				`2026-09-01T00:00:10Z [verify-draft-pr] step_end {"outcome":"failed","exit_code":1,"stderr":"no draft pull request found","repair_form":"rerun","repair_target":"open-draft-pr","repair_max":1,"repair_attempts":1,"repair_blocked":false,"guarded_prefix":"[open-draft-pr]","guarded_attempt":1,"identity":{"step_type":"shell","attempt":1}}`,
+				`2026-09-01T00:00:11Z run_end {"outcome":"failed"}`,
+			),
+			wantDetail: []string{"repair: rerun open-draft-pr · 1 of 1 used"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workflow := strings.Replace(repairPRWorkflowYAML, "  - id: verify-draft-pr", "  - id: prepare-pr\n    command: echo prepared\n  - id: verify-draft-pr", 1)
+			// The intermediate step completed before the check first failed.
+			lines := append([]string{}, tc.audit[:3]...)
+			lines = append(lines,
+				`2026-09-01T00:00:02Z [prepare-pr] step_start {"command":"echo prepared"}`,
+				`2026-09-01T00:00:02Z [prepare-pr] step_end {"outcome":"success","stdout":"prepared"}`,
+			)
+			lines = append(lines, tc.audit[3:]...)
+			for _, source := range []string{"workflow file", "audit reconstruction"} {
+				t.Run(source, func(t *testing.T) {
+					state := &model.RunState{
+						WorkflowName: "implement-change", WorkflowHash: "fixture-hash",
+						CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+							StepID: tc.stepID,
+							Repair: &model.RepairFrame{
+								CheckID: "verify-draft-pr", Form: "rerun", Target: "open-draft-pr",
+								Phase: model.RepairPhaseFailed, Budget: 1, Attempts: tc.attempts,
+							},
+						}},
+					}
+					m := writeRepairRun(t, "implement-change", workflow, lines, state)
+					if source == "audit reconstruction" {
+						if err := os.Remove(state.WorkflowFile); err != nil {
+							t.Fatal(err)
+						}
+						var err error
+						m, err = New(m.sessionDir, m.projectDir, FromInspect)
+						if err != nil {
+							t.Fatal(err)
+						}
+					}
+					check := childByID(m.tree.Root, "verify-draft-pr")
+					if check == nil {
+						t.Fatalf("check missing: loadErr=%q", m.loadErr)
+					}
+					if tc.attempts == 0 {
+						if got := findFailedLeaf(m.tree.Root); got != check {
+							t.Errorf("failed leaf = %v, want owning check", got)
+						}
+						if m.selectedNode() != check {
+							t.Errorf("historical selection = %v, want owning check", m.selectedNode())
+						}
+					}
+					m.setSelected(check)
+					detail := stripANSI(m.selectedDetailDocument(100).renderCopy())
+					for _, want := range append([]string{"Failure evidence", "no draft pull request found"}, tc.wantDetail...) {
+						if !strings.Contains(detail, want) {
+							t.Errorf("failed replay check detail missing %q:\n%s", want, detail)
+						}
+					}
+					if got := m.tree.FindByPrefix("[verify-draft-pr, attempt:1, open-draft-pr]"); got == nil || got.Status != StatusSuccess {
+						t.Errorf("replayed target = %v, want successful attempt child", got)
+					}
+					if got := childByID(m.tree.Root, "prepare-pr").Status; got != StatusSuccess {
+						t.Errorf("intermediate step status = %v, want success", got)
+					}
+				})
+			}
+		})
+	}
+}
+
 // TestRepairProjectionINT005PreChangeAuditRendersUnchanged pins the rendering
 // of an audit log recorded before repair existed.
 func TestRepairProjectionINT005PreChangeAuditRendersUnchanged(t *testing.T) {
@@ -384,5 +476,33 @@ steps:
 				t.Fatalf("missing %q in %s", want, text)
 			}
 		}
+	}
+}
+
+// A newer invocation recorded under a different workflow hash must still reset
+// terminal repair evidence when the workflow file is missing and the cutoff is
+// recalculated after audit reconstruction.
+func TestRepairProjectionIgnoresOlderFailureBeforeMismatchedRunStartAfterReconstruction(t *testing.T) {
+	lines := append(blockedReplayAuditFixture(),
+		`2026-09-01T00:00:10Z run_start {"workflow_hash":"newer-hash"}`,
+		`2026-09-01T00:00:11Z [open-draft-pr] step_start {}`,
+	)
+	state := &model.RunState{
+		WorkflowName: "implement-change", WorkflowHash: "fixture-hash",
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+			StepID: "open-draft-pr",
+			Repair: &model.RepairFrame{CheckID: "verify-draft-pr", Form: "rerun", Target: "open-draft-pr", Phase: model.RepairPhaseReplaying},
+		}},
+	}
+	m := writeRepairRun(t, "implement-change", repairPRWorkflowYAML, lines, state)
+	if err := os.Remove(state.WorkflowFile); err != nil {
+		t.Fatal(err)
+	}
+	m, err := New(m.sessionDir, m.projectDir, FromInspect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if check := childByID(m.tree.Root, "verify-draft-pr"); check != nil && (check.Failure != nil || check.Status == StatusFailed) {
+		t.Errorf("older failure treated as current evidence: %+v", check)
 	}
 }

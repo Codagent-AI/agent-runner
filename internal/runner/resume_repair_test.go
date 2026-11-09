@@ -918,6 +918,60 @@ func TestResumeRepairTopLevelSubWorkflowReplay(t *testing.T) {
 	}
 }
 
+// TestResumeRepairLegacyTerminalReplayFrameReentersAtTarget covers runs saved
+// before the terminal failed phase was persisted: a finalized failed run whose
+// frame is still replaying with the rerun target completed must re-enter at
+// the target with a fresh budget rather than advance past it.
+func TestResumeRepairLegacyTerminalReplayFrameReentersAtTarget(t *testing.T) {
+	sessionDir := t.TempDir()
+	workflowPath := writeWorkflowFile(t, t.TempDir(), "test-v1.0.yaml", rerunRepairYAML)
+
+	result, err := runWorkflowFile(t, workflowPath, &Options{
+		ProcessRunner: &mockRunner{results: []exec.ProcessResult{
+			{ExitCode: 0, Stdout: claudeAgentOutput("looked into it: missing scope\nREPAIR_BLOCKED")},
+			{ExitCode: 1, Stderr: "not ready"},
+		}},
+		GlobExpander: &mockGlob{}, Log: &mockLog{}, SessionDir: sessionDir, ProfileStore: testAgentProfileStore(),
+	})
+	if err != nil || result != ResultFailed {
+		t.Fatalf("result = %q, err = %v; want failed", result, err)
+	}
+
+	// Rewrite the saved state to what an older runner persisted.
+	statePath := filepath.Join(sessionDir, "state.json")
+	state, err := stateio.ReadState(statePath)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	nested := state.CurrentStep.Nested
+	nested.Completed = true
+	nested.Repair.Phase = model.RepairPhaseReplaying
+	nested.Repair.Attempts = nested.Repair.Budget
+	if state.FailureKind == "" {
+		t.Fatalf("finalized failed run has no failure kind: %+v", state)
+	}
+	if err := stateio.WriteState(&state, sessionDir); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	runner2 := &mockRunner{results: []exec.ProcessResult{
+		{ExitCode: 0, Stdout: claudeAgentOutput("opened (ready)")},
+		{ExitCode: 0, Stdout: "pr is open"},
+	}}
+	result, err = ResumeWorkflow(statePath, &Options{
+		ProcessRunner: runner2, GlobExpander: &mockGlob{}, Log: &mockLog{}, ProfileStore: testAgentProfileStore(),
+	})
+	if err != nil {
+		t.Fatalf("resume error: %v", err)
+	}
+	if result != ResultSuccess {
+		t.Fatalf("expected success, got %q", result)
+	}
+	if len(runner2.calls) != 2 {
+		t.Fatalf("expected 2 calls (act, verify), got %d: %v", len(runner2.calls), runner2.calls)
+	}
+}
+
 // A replaying frame persisted by a binary that predates checkBeforeLastRepair
 // lacks the flag. The replay it resumes still started a repair attempt, so a
 // target that then declares REPAIR_BLOCKED counts that attempt and labels the
@@ -975,5 +1029,43 @@ func TestResumeRepairLegacyReplayingFrameBlockedCountsAttempt(t *testing.T) {
 		if !strings.Contains(verifyEnd, want) {
 			t.Errorf("verify step_end missing %s: %s", want, verifyEnd)
 		}
+	}
+}
+
+// A replayed step that fails before the check runs again leaves the check's
+// last real output as the evidence; the attempt marker it emits has none.
+func TestRerunRepairAbsorbedReplayFailureKeepsCheckEvidence(t *testing.T) {
+	maxAttempts, oneIteration := 2, 1
+	agent := func(id, prompt string) model.Step {
+		return model.Step{ID: id, Prompt: prompt, Agent: "test-agent", Mode: model.ModeAutonomous, Session: model.SessionNew}
+	}
+	w := model.Workflow{Name: "test", Steps: []model.Step{
+		{ID: "seed", Command: "echo value", Capture: "input"},
+		agent("act", "open it"),
+		{ID: "body-loop", Loop: &model.Loop{Max: &oneIteration}, Steps: []model.Step{agent("body", "{{input}}")}},
+		{ID: "verify", Command: "exit 1", Repair: &model.Repair{Rerun: "act", Max: &maxAttempts, RangeCaptures: []string{"input"}}},
+	}}
+	w.ApplyDefaults()
+	sessionDir := t.TempDir()
+	result, err := RunWorkflow(&w, map[string]string{}, &Options{
+		ProcessRunner: &mockRunner{results: []exec.ProcessResult{
+			{ExitCode: 0, Stdout: "value"},
+			{ExitCode: 0, Stdout: claudeAgentOutput("opened")},
+			{ExitCode: 0, Stdout: claudeAgentOutput("body")},
+			{ExitCode: 1, Stderr: "STALE-CHECK-LINE"},
+			{ExitCode: 0, Stdout: claudeAgentOutput("replay one")},
+			{ExitCode: 0, Stdout: claudeAgentOutput("replay two")},
+		}},
+		GlobExpander: &mockGlob{}, Log: &mockLog{}, SessionDir: sessionDir, ProfileStore: testAgentProfileStore(),
+	})
+	if err != nil || result != ResultFailed {
+		t.Fatalf("result = %q, err = %v; want failed", result, err)
+	}
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if want := "verify failed: before repair: STALE-CHECK-LINE after 2 repair attempts"; state.FailureReason != want {
+		t.Fatalf("FailureReason = %q, want %q", state.FailureReason, want)
 	}
 }

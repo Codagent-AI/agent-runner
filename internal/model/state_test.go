@@ -175,6 +175,18 @@ func TestResolveResumeStep(t *testing.T) {
 		}
 	})
 
+	t.Run("group-owned frame sharing an outer step ID restarts the group", func(t *testing.T) {
+		outer := []Step{{ID: "group"}, {ID: "check"}}
+		frame := &RepairFrame{Phase: RepairPhaseFailed, Form: string(RepairRerun), CheckID: "check", Target: "inner-target"}
+		got, err := ResolveResumeStep(outer, "group", false, frame)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.StepID != "group" {
+			t.Fatalf("got %+v", got)
+		}
+	})
+
 	t.Run("no frame, completed, advances to next step", func(t *testing.T) {
 		got, err := ResolveResumeStep(steps, "b", true, nil)
 		if err != nil {

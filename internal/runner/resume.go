@@ -54,6 +54,7 @@ func PrepareResume(stateFilePath string, opts *Options) (*RunHandle, error) {
 	warnIfWorkflowHashChanged(&state, opts.Log)
 
 	resumeState := restoreResumeContext(&state)
+	reopenLegacyTerminalRepairFrame(&state, resumeState.repairFrame)
 
 	// Resolve which step to actually resume from — advance past completed steps.
 	resolved, err := model.ResolveResumeStep(workflow.Steps, resumeState.fromStep, resumeState.completed, resumeState.repairFrame)
@@ -197,6 +198,23 @@ func restoreResumeContext(state *model.RunState) restoredResumeContext {
 		result.childState = nested.Child
 	}
 	return result
+}
+
+// reopenLegacyTerminalRepairFrame converts a replaying rerun frame saved by an
+// older runner into the terminal failed phase. Those runners kept failed only in
+// memory, so a blocked or exhausted run was saved still replaying with the
+// replayed step completed. Resume rewrites state.json without a failure kind,
+// so a recorded failure kind means the last invocation finalized as failed
+// rather than being interrupted; a hard error leaves the step incomplete and
+// keeps resuming that step as before.
+func reopenLegacyTerminalRepairFrame(state *model.RunState, frame *model.RepairFrame) {
+	nested := state.CurrentStep.Nested
+	if frame == nil || nested == nil || !nested.Completed || state.FailureKind == "" {
+		return
+	}
+	if frame.Phase == model.RepairPhaseReplaying && frame.Form == string(model.RepairRerun) {
+		frame.Phase = model.RepairPhaseFailed
+	}
 }
 
 func resumeAlreadyCompleted(stateFilePath string, state *model.RunState) bool {

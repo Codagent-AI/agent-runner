@@ -686,6 +686,15 @@ func executeTopLevelStep(rs *runState, step *model.Step, index int, steps []mode
 
 	rw, absorbed := exec.AfterStepDispatch(rs.ctx, steps, index, basePath, outcome)
 	if rw.Stopped {
+		// Replay bookkeeping can fail the owning check after the dispatched
+		// step has already persisted its state and cleared FlushState.
+		if err := updateState(rs.sessionDir, func(state *model.RunState) {
+			if state.CurrentStep.Nested != nil {
+				state.CurrentStep.Nested.Repair = rs.ctx.RepairFrame
+			}
+		}); err != nil {
+			rs.log.Printf("agent-runner: warning: could not persist terminal repair state: %v\n", err)
+		}
 		rs.log.Printf("\nagent-runner: step %q failed. Stopping.\n", step.ID)
 		return ResultFailed, true, false, 0
 	}
