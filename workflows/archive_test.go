@@ -684,7 +684,9 @@ func TestArchiveTransitionFailureStartsWithTheFailingCommandError(t *testing.T) 
 		{"archive fails", `echo "Change '$3' is valid"; exit 0`, `echo "Error: archive failed: target exists"; exit 1`, "openspec archive failed: Error: archive failed: target exists"},
 		{"archive prints progress before its error", `echo "Change '$3' is valid"; exit 0`, `printf 'Task status: ✓ Complete\n\nSpecs to update:\n  foo: update\nfoo MODIFIED failed for header "x" - not found\nAborted. No files were changed.\n'; exit 1`, `openspec archive failed: foo MODIFIED failed for header "x" - not found`},
 		{"spec name looks like an error", `echo "Change '$3' is valid"; exit 0`, `printf 'Task status: ✓ Complete\n\nSpecs to update:\n  error-handling: update\nfoo MODIFIED failed for header "x" - not found\n'; exit 1`, `openspec archive failed: foo MODIFIED failed for header "x" - not found`},
-		{"no line reads as an error", `echo "Change '$3' is valid"; exit 0`, `printf 'Task status: ok\nsomething odd\n'; exit 1`, "openspec archive failed: Task status: ok | something odd"},
+		{"archive error without a keyword", `echo "Change '$3' is valid"; exit 0`, `printf 'Task status: ok\n\nSpecs to update:\n  foo: update\nfoo: target spec does not exist; only ADDED requirements are allowed\nAborted. No files were changed.\n'; exit 1`, "openspec archive failed: foo: target spec does not exist; only ADDED requirements are allowed"},
+		{"validate failure for a keyword-named change", `printf "Change 'fix-error-x' has issues\n\342\234\227 [ERROR] foo/spec.md: ADDED \"A\" must contain SHALL or MUST\nNext steps:\n"; exit 1`, `exit 0`, `openspec validate failed: [ERROR] foo/spec.md: ADDED "A" must contain SHALL or MUST`},
+		{"no line qualifies as the error", `echo "Change '$3' is valid"; exit 0`, `printf 'Task status: ok\n  something odd\n'; exit 1`, "openspec archive failed: Task status: ok | something odd"},
 		{"validate fails", `echo "Error: validation failed"; exit 1`, `exit 0`, "openspec validate failed: Error: validation failed"},
 	}
 	for _, tc := range cases {
