@@ -60,6 +60,10 @@ func PrimeReplayResume(ctx *model.ExecutionContext, basePath []model.NestingSegm
 	if len(ctx.NestingPath) > len(basePath) {
 		return nil
 	}
+	// A resumed replay is a repair attempt already under way, so the check's
+	// recorded output predates it. A frame persisted before this flag existed
+	// lacks it.
+	frame.CheckBeforeLastRepair = true
 	attempt := frame.Attempts + 1
 	ctx.NestingPath = extendedRepairNesting(basePath, frame.CheckID, attempt)
 	return RestoreLastFailureForResume(ctx)
@@ -95,6 +99,11 @@ func terminalReplayBlocked(ctx *model.ExecutionContext, checkStep *model.Step, r
 	ctx.StepFailure = model.StepFailure{Kind: model.FailureStep}
 	frame := ctx.RepairFrame
 	owningPrefix := auditBuildPrefixForOwningCheck(ctx, frame.CheckID)
+	// The blocking replay is the attempt it started; count it, as
+	// terminalBlocked does for the other blocked forms.
+	if frame.CheckBeforeLastRepair {
+		frame.Attempts++
+	}
 	emitRepairBlocked(ctx, owningPrefix, frame.Attempts, response)
 	record := failFrame(ctx, frame, owningPrefix)
 	record.Blocked = true
@@ -123,6 +132,7 @@ func failFrame(ctx *model.ExecutionContext, frame *model.RepairFrame, owningPref
 		record = &model.FailureRecord{StepID: frame.CheckID, Prefix: owningPrefix}
 	}
 	record.RepairAttempts = frame.Attempts
+	record.OutputBeforeRepair = frame.CheckBeforeLastRepair
 	if record.Guarded == nil && frame.Guarded != nil {
 		ref := *frame.Guarded
 		record.Guarded = &model.AgentExecutionRecord{Ref: ref}

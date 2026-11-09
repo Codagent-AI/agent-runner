@@ -139,13 +139,14 @@ func classifiedFailureReason(evidence *FailureEvidence) string {
 		return ""
 	}
 	return exec.ClassifyFailure(&model.FailureRecord{
-		StepID:         evidence.StepID,
-		ExitCode:       evidence.ExitCode,
-		Stdout:         evidence.Stdout,
-		Stderr:         evidence.Stderr,
-		Blocked:        evidence.Blocked,
-		BlockedBy:      evidence.BlockedBy,
-		RepairAttempts: evidence.RepairAttempts,
+		StepID:             evidence.StepID,
+		ExitCode:           evidence.ExitCode,
+		Stdout:             evidence.Stdout,
+		Stderr:             evidence.Stderr,
+		Blocked:            evidence.Blocked,
+		BlockedBy:          evidence.BlockedBy,
+		RepairAttempts:     evidence.RepairAttempts,
+		OutputBeforeRepair: evidence.OutputBeforeRepair,
 	})
 }
 

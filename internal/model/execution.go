@@ -74,4 +74,6 @@ type FailureRecord struct {
 	// RepairAttempts is the number of repair attempts that ran before this
 	// failure was recorded terminal.
 	RepairAttempts int `json:"repairAttempts,omitempty"`
+	// OutputBeforeRepair means the check output predates the last repair work.
+	OutputBeforeRepair bool `json:"outputBeforeRepair,omitempty"`
 }

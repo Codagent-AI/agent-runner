@@ -1231,3 +1231,24 @@ func TestApplyEvent_PreRepairAuditLogCreatesNoRepairState(t *testing.T) {
 		t.Fatalf("pre-change failure without guarded linkage recorded evidence: %+v", check.Failure)
 	}
 }
+
+// An error-only step_end (the check failed to prepare or start) supplies no
+// new output, so the retained output keeps its before-repair label.
+func TestApplyStepEnd_ErrorOnlyEndKeepsBeforeRepairLabel(t *testing.T) {
+	n := &StepNode{ID: "check-plan", Type: NodeShell}
+	applyStepEnd(n, map[string]any{
+		"outcome": "failed", "exit_code": float64(1), "stdout": "", "stderr": "plan is missing a tasks section",
+		"repair_form": "inline", "repair_max": float64(1), "repair_attempts": float64(1),
+		"repair_blocked": true, "repair_output_before_repair": true,
+	})
+	if n.Failure == nil || !n.Failure.OutputBeforeRepair {
+		t.Fatalf("first end should label the output before repair: %+v", n.Failure)
+	}
+	applyStepEnd(n, map[string]any{"outcome": "failed", "error": "interpolate command: undefined variable"})
+	if n.Failure.Stderr != "plan is missing a tasks section" {
+		t.Fatalf("retained stderr = %q", n.Failure.Stderr)
+	}
+	if !n.Failure.OutputBeforeRepair {
+		t.Fatal("error-only end dropped the before-repair label from the retained output")
+	}
+}

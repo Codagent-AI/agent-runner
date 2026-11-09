@@ -706,7 +706,7 @@ func TestRunWorkflowReplayPreservesCheckEvidenceAfterPreStartFailure(t *testing.
 					}
 				}
 			}
-			assertPersistedStepFailure(t, sessionDir, "check failed: CHECK-EVIDENCE-LINE after 2 repair attempts")
+			assertPersistedStepFailure(t, sessionDir, "check failed: before repair: CHECK-EVIDENCE-LINE after 2 repair attempts")
 		})
 	}
 }
