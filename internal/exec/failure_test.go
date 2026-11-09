@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -383,5 +384,25 @@ func TestRestoreLastFailureForResumeFallsBackToBlockedStepEnd(t *testing.T) {
 	}
 	if ctx.LastFailure.Guarded == nil || ctx.LastFailure.Guarded.Response != "push rejected\nREPAIR_BLOCKED" {
 		t.Fatalf("expected guarded response restored, got %+v", ctx.LastFailure.Guarded)
+	}
+}
+
+func TestClassifyFailureBeforeRepair(t *testing.T) {
+	for _, tc := range []struct{ stderr, want string }{{"broken\nmore", "check failed: before repair: broken; blocked: decision after 1 repair attempts"}, {"", "check failed with exit code 2 before repair; blocked: decision after 1 repair attempts"}} {
+		record := &model.FailureRecord{StepID: "check", ExitCode: 2, Stderr: tc.stderr, Blocked: true, BlockedBy: "decision", RepairAttempts: 1}
+		// Decode the additive persisted field, so this also pins legacy defaults.
+		b, _ := json.Marshal(record)
+		var data map[string]any
+		if err := json.Unmarshal(b, &data); err != nil {
+			t.Fatal(err)
+		}
+		data["outputBeforeRepair"] = true
+		b, _ = json.Marshal(data)
+		if err := json.Unmarshal(b, record); err != nil {
+			t.Fatal(err)
+		}
+		if got := ClassifyFailure(record); got != tc.want {
+			t.Errorf("got %q want %q", got, tc.want)
+		}
 	}
 }

@@ -2813,3 +2813,19 @@ func TestEmbeddedTaskComplianceCallers(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCompletionLoopScriptsEmbedded(t *testing.T) {
+	assets, err := ListAssets("core")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"checklist-rows.awk", "checklist-sha256.sh", "check-implementation-complete.sh", "check-implementation-progress.sh", "check-completion-verdict.sh"} {
+		if !slices.Contains(assets, name) {
+			t.Errorf("missing asset %s", name)
+		}
+		body, err := ReadAsset("core/" + name)
+		if err != nil || len(body) == 0 {
+			t.Errorf("read %s: %v", name, err)
+		}
+	}
+}
