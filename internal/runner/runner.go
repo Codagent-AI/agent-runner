@@ -687,17 +687,7 @@ func executeTopLevelStep(rs *runState, step *model.Step, index int, steps []mode
 
 	rw, absorbed := exec.AfterStepDispatch(rs.ctx, steps, index, basePath, outcome)
 	if rw.Stopped {
-		// Replay bookkeeping can fail the owning check after the dispatched
-		// step has already persisted its state and cleared FlushState.
-		if err := updateState(rs.sessionDir, func(state *model.RunState) {
-			if state.CurrentStep.Nested != nil {
-				state.CurrentStep.Nested.Repair = rs.ctx.RepairFrame
-			}
-		}); err != nil {
-			rs.log.Printf("agent-runner: warning: could not persist terminal repair state: %v\n", err)
-		}
-		rs.log.Printf("\nagent-runner: step %q failed. Stopping.\n", step.ID)
-		return ResultFailed, true, false, 0
+		return handleStoppedTopLevelRepair(rs, step, steps)
 	}
 	if rw.Rewound {
 		return ResultSuccess, false, true, rw.NextIndex
@@ -720,6 +710,36 @@ func executeTopLevelStep(rs *runState, step *model.Step, index int, steps []mode
 	return ResultSuccess, stopAfterUntil(rs, step.ID, index), false, 0
 }
 
+// handleStoppedTopLevelRepair applies the owning check's terminal flow control
+// when a replay ends before the sequencer reaches that check again.
+func handleStoppedTopLevelRepair(rs *runState, replayedStep *model.Step, steps []model.Step) (result WorkflowResult, terminal, rewound bool, nextIndex int) {
+	if frame := rs.ctx.RepairFrame; frame != nil {
+		for checkIndex := range steps {
+			check := &steps[checkIndex]
+			if check.ID != frame.CheckID || !exec.ClearToleratedFailure(rs.ctx, check, exec.OutcomeFailed) {
+				continue
+			}
+			// The completed position belongs to the check, not the replayed step.
+			// Advancing from the replayed step would execute the repair range again.
+			rs.ctx.LastSubWorkflowChild = nil
+			writeStepState(check, rs.ctx, &rs.workflow, rs.workflowHash, rs.sessionDir, nil, true)
+			result, terminal = handleFailedTopLevelStep(rs, check, checkIndex)
+			return result, terminal, !terminal, checkIndex + 1
+		}
+	}
+	// Replay bookkeeping can fail the owning check after the dispatched
+	// step has already persisted its state and cleared FlushState.
+	if err := updateState(rs.sessionDir, func(state *model.RunState) {
+		if state.CurrentStep.Nested != nil {
+			state.CurrentStep.Nested.Repair = rs.ctx.RepairFrame
+		}
+	}); err != nil {
+		rs.log.Printf("agent-runner: warning: could not persist terminal repair state: %v\n", err)
+	}
+	rs.log.Printf("\nagent-runner: step %q failed. Stopping.\n", replayedStep.ID)
+	return ResultFailed, true, false, 0
+}
+
 func runAndPersistTopLevelStep(rs *runState, step *model.Step) (exec.StepOutcome, error) {
 	// Fresh chain for each top-level step; writeStepState intentionally does
 	// not clear it so the mid-step and post-step writes can share.
@@ -733,10 +753,13 @@ func runAndPersistTopLevelStep(rs *runState, step *model.Step) (exec.StepOutcome
 	outcome, loopResult, err := runStep(step, rs)
 	rs.ctx.FlushState = nil
 	warning := exec.IsWarningOutcome(step, outcome)
-	if err == nil {
+	rewindPending := rs.ctx.PendingRewind != nil
+	// A pending repair replay must retain its frame and remain incomplete;
+	// failure tolerance applies only once the repair cycle is terminal.
+	if err == nil && !rewindPending {
 		exec.ClearToleratedFailure(rs.ctx, step, outcome)
 	}
-	completed := err == nil && outcome != exec.OutcomeAborted && (outcome != exec.OutcomeFailed || warning || step.ContinueOnFailure)
+	completed := err == nil && !rewindPending && outcome != exec.OutcomeAborted && (outcome != exec.OutcomeFailed || warning || step.ContinueOnFailure)
 	if !completed && rs.ctx.LastSubWorkflowChild == nil && resumeChild != nil {
 		// A resume can fail before any child step starts, for example when the
 		// persisted child ID no longer exists in a sub-workflow. Keep the prior

@@ -8,6 +8,21 @@ import (
 	"github.com/codagent/agent-runner/internal/model"
 )
 
+func TestAfterStepDispatchDisarmsConsumedReplay(t *testing.T) {
+	frame := &model.RepairFrame{CheckID: "check", Form: "rerun", Target: "act", Phase: model.RepairPhaseReplaying, ReplayArmed: true}
+	ctx := &model.ExecutionContext{RepairFrame: frame, PendingRewind: &model.RewindRequest{Target: "act", CheckID: "check"}}
+	steps := []model.Step{{ID: "act"}, {ID: "check"}}
+
+	rw, _ := AfterStepDispatch(ctx, steps, 1, nil, OutcomeFailed)
+
+	if !rw.Rewound || rw.NextIndex != 0 {
+		t.Fatalf("AfterStepDispatch() = %+v, want rewind to target", rw)
+	}
+	if frame.ReplayArmed {
+		t.Fatal("consumed replay is still armed")
+	}
+}
+
 // TestRerunRepairAcrossAllSequencers proves the shared rewind helpers behave
 // identically at the top-level runner (via ExecuteLoopStep/DispatchStep
 // entry points available from this package), inside a loop body, inside a

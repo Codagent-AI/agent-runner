@@ -95,6 +95,7 @@ func flushState(ctx *model.ExecutionContext) {
 func armRerunReplay(ctx *model.ExecutionContext, frame *model.RepairFrame) {
 	frame.CheckBeforeLastRepair = true
 	frame.Phase = model.RepairPhaseReplaying
+	frame.ReplayArmed = true
 	clearRangeCaptures(ctx, frame.RangeCaptures)
 	ctx.PendingRewind = &model.RewindRequest{Target: frame.Target, CheckID: frame.CheckID}
 	flushState(ctx)
