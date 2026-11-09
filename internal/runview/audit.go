@@ -1437,11 +1437,18 @@ func applyRepairStepEnd(n *StepNode, data map[string]any) {
 	if exitCode, ok := intField(data, "exit_code"); ok {
 		record.ExitCode = exitCode
 	}
-	if stdout, ok := stringField(data, "stdout"); ok {
+	stdout, hasStdout := stringField(data, "stdout")
+	if hasStdout {
 		record.Stdout = stdout
 	}
-	if stderr, ok := stringField(data, "stderr"); ok {
+	stderr, hasStderr := stringField(data, "stderr")
+	if hasStderr {
 		record.Stderr = stderr
+	}
+	// The label describes the retained output, so only an event that replaces
+	// that output (not an error-only end) can change it.
+	if hasStdout || hasStderr {
+		record.OutputBeforeRepair, _ = boolField(data, "repair_output_before_repair")
 	}
 	if hasGuarded {
 		record.GuardedPrefix = guardedPrefix

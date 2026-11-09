@@ -268,9 +268,16 @@ func readAuditEvents(sessionDir string) ([]rawAuditEvent, error) {
 func ClassifyFailure(record *model.FailureRecord) string {
 	var sb strings.Builder
 	if line := firstLine(record.Stderr); line != "" {
-		fmt.Fprintf(&sb, "%s failed: %s", record.StepID, line)
+		label := ""
+		if record.OutputBeforeRepair {
+			label = "before repair: "
+		}
+		fmt.Fprintf(&sb, "%s failed: %s%s", record.StepID, label, line)
 	} else {
 		fmt.Fprintf(&sb, "%s failed with exit code %d", record.StepID, record.ExitCode)
+		if record.OutputBeforeRepair {
+			sb.WriteString(" before repair")
+		}
 	}
 	if record.Blocked {
 		fmt.Fprintf(&sb, "; blocked: %s", firstLine(record.BlockedBy))

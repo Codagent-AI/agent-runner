@@ -93,6 +93,7 @@ func flushState(ctx *model.ExecutionContext) {
 // enclosing sequencer consumes: the target through the check re-execute, and
 // captures owned by that range are cleared so the replay recomputes them.
 func armRerunReplay(ctx *model.ExecutionContext, frame *model.RepairFrame) {
+	frame.CheckBeforeLastRepair = true
 	frame.Phase = model.RepairPhaseReplaying
 	clearRangeCaptures(ctx, frame.RangeCaptures)
 	ctx.PendingRewind = &model.RewindRequest{Target: frame.Target, CheckID: frame.CheckID}
@@ -102,6 +103,9 @@ func armRerunReplay(ctx *model.ExecutionContext, frame *model.RepairFrame) {
 // repairEndData adds the repair fields every owning-check step_end carries
 // to data and returns it.
 func repairEndData(data map[string]any, frame *model.RepairFrame, blocked bool) map[string]any {
+	if frame.CheckBeforeLastRepair {
+		data["repair_output_before_repair"] = true
+	}
 	data["repair_form"] = frame.Form
 	data["repair_target"] = frame.Target
 	data["repair_max"] = frame.Budget
@@ -375,6 +379,7 @@ func runInlineRepairIteration(
 	owningPrefix string, startTime time.Time, attempt int, lastResult ProcessResult,
 ) (outcome StepOutcome, done bool, checkResult ProcessResult, err error) {
 	frame := ctx.RepairFrame
+	frame.CheckBeforeLastRepair = true
 	frame.Phase = model.RepairPhaseRepairing
 	frame.LastAttemptCrashed = false
 	frame.LastCrashPrefix = ""
@@ -430,6 +435,7 @@ func runInlineRepairIteration(
 // outcome or an error occurred.
 func settleInternalCheck(step *model.Step, ctx *model.ExecutionContext, log Logger, owningPrefix string, startTime time.Time, result ProcessResult) (StepOutcome, bool, error) {
 	frame := ctx.RepairFrame
+	frame.CheckBeforeLastRepair = false
 	frame.Attempts++
 	emitRepairAttemptEnd(ctx, owningPrefix, frame.Form, frame.Attempts, result)
 
@@ -622,6 +628,12 @@ func emitRepairBlocked(ctx *model.ExecutionContext, prefix string, attempt int, 
 func terminalBlocked(step *model.Step, ctx *model.ExecutionContext, owningPrefix string, startTime time.Time, response string) (StepOutcome, error) {
 	frame := ctx.RepairFrame
 	ctx.StepFailure = model.StepFailure{Kind: model.FailureStep}
+	// A repair agent or rerun target that blocks has used the attempt it
+	// started, though the check never ran again to settle it. A guarded
+	// action that blocks before any attempt leaves the count unchanged.
+	if frame.CheckBeforeLastRepair {
+		frame.Attempts++
+	}
 	emitRepairBlocked(ctx, owningPrefix, frame.Attempts, response)
 	ctx.LastFailure.Blocked = true
 	ctx.LastFailure.BlockedBy = response
@@ -651,6 +663,7 @@ func terminalFailed(step *model.Step, ctx *model.ExecutionContext, owningPrefix 
 	frame.Phase = model.RepairPhaseFailed
 	if ctx.LastFailure != nil {
 		ctx.LastFailure.RepairAttempts = frame.Attempts
+		ctx.LastFailure.OutputBeforeRepair = frame.CheckBeforeLastRepair
 	}
 	flushState(ctx)
 	endData := repairEndData(checkEndData(step, lastResult), frame, blocked)

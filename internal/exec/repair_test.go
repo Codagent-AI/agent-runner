@@ -1,8 +1,10 @@
 package exec
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/codagent/agent-runner/internal/audit"
 	"github.com/codagent/agent-runner/internal/config"
@@ -233,6 +235,13 @@ func TestExecuteCheckStepInlineRepairAgentDeclaresBlocked(t *testing.T) {
 	if ctx.LastFailure == nil || !ctx.LastFailure.Blocked {
 		t.Fatalf("expected blocked failure record, got %+v", ctx.LastFailure)
 	}
+	if got := ClassifyFailure(ctx.LastFailure); got != "check failed: before repair: broken; blocked: cannot fix this. after 1 repair attempts" {
+		t.Errorf("reason = %q", got)
+	}
+	if got := findAuditEvent(auditLog.events, audit.EventStepEnd); got == nil {
+		t.Fatal("missing step end")
+	}
+
 }
 
 func TestExecuteCheckStepMarkerOnPassingCheckHasNoEffect(t *testing.T) {
@@ -309,4 +318,34 @@ func findAuditEvents(events []audit.Event, t audit.EventType) []audit.Event {
 		}
 	}
 	return out
+}
+
+// The frame, rather than the transient LastFailure, owns output age across resume.
+func TestRepairOutputAgeSurvivesResume(t *testing.T) {
+	ctx := makeCtx()
+	frame := &model.RepairFrame{CheckID: "check", Form: "rerun", Target: "act"}
+	armRerunReplay(ctx, frame)
+	encoded, err := json.Marshal(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored model.RepairFrame
+	if err = json.Unmarshal(encoded, &restored); err != nil {
+		t.Fatal(err)
+	}
+	if !restored.CheckBeforeLastRepair {
+		t.Fatal("output age was not persisted")
+	}
+	ctx.RepairFrame = &restored
+	ctx.LastFailure = &model.FailureRecord{StepID: "check", Stderr: "original"}
+	_, err = terminalFailed(&model.Step{ID: "check"}, ctx, "[check]", time.Now(), ProcessResult{ExitCode: 1, Stderr: "original"}, false)
+	if err != nil || !ctx.LastFailure.OutputBeforeRepair {
+		t.Fatalf("failure=%+v err=%v", ctx.LastFailure, err)
+	}
+	// A real recheck refreshes output age, whether it passes or fails.
+	ctx.RepairFrame = &restored
+	_, _, err = settleInternalCheck(&model.Step{ID: "check"}, ctx, &mockLogger{}, "[check]", time.Now(), ProcessResult{ExitCode: 1, Stderr: "fresh"})
+	if err != nil || restored.CheckBeforeLastRepair {
+		t.Fatalf("frame=%+v err=%v", restored, err)
+	}
 }

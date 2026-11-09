@@ -63,9 +63,10 @@ type RepairFrame struct {
 	// StartedAt is when the owning check's step_start was emitted, so a
 	// terminal step_end emitted outside the check's own call (a replay that
 	// stops before the check reruns) reports the check's full duration.
-	StartedAt          time.Time `json:"startedAt,omitempty"`
-	LastAttemptCrashed bool      `json:"lastAttemptCrashed,omitempty"`
-	LastCrashPrefix    string    `json:"lastCrashPrefix,omitempty"`
+	StartedAt             time.Time `json:"startedAt,omitempty"`
+	LastAttemptCrashed    bool      `json:"lastAttemptCrashed,omitempty"`
+	LastCrashPrefix       string    `json:"lastCrashPrefix,omitempty"`
+	CheckBeforeLastRepair bool      `json:"checkBeforeLastRepair,omitempty"`
 }
 
 // RewindRequest asks the sequencer to resume execution from an earlier step

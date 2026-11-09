@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -968,5 +969,65 @@ func TestResumeRepairLegacyTerminalReplayFrameReentersAtTarget(t *testing.T) {
 	}
 	if len(runner2.calls) != 2 {
 		t.Fatalf("expected 2 calls (act, verify), got %d: %v", len(runner2.calls), runner2.calls)
+	}
+}
+
+// A replaying frame persisted by a binary that predates checkBeforeLastRepair
+// lacks the flag. The replay it resumes still started a repair attempt, so a
+// target that then declares REPAIR_BLOCKED counts that attempt and labels the
+// check's last output as predating the repair.
+func TestResumeRepairLegacyReplayingFrameBlockedCountsAttempt(t *testing.T) {
+	sessionDir := t.TempDir()
+	workflowPath := writeWorkflowFile(t, t.TempDir(), "test-v1.0.yaml", rerunRepairYAML)
+
+	// Calls: act (ok), verify (fails, rewinds), act replay -- abort here.
+	runInterrupted(t, workflowPath, sessionDir, &abortingRunner{
+		mockRunner: mockRunner{results: []exec.ProcessResult{
+			{ExitCode: 0, Stdout: claudeAgentOutput("opened (draft)")},
+			{ExitCode: 1, Stderr: "not ready"},
+		}},
+		abortOnCall: 3,
+	}, &Options{ProfileStore: testAgentProfileStore()})
+
+	statePath := filepath.Join(sessionDir, "state.json")
+	raw, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	flag := regexp.MustCompile(`,\s*"checkBeforeLastRepair":\s*true`)
+	if !flag.Match(raw) || !strings.Contains(string(raw), `"replaying"`) {
+		t.Fatalf("expected a replaying frame carrying checkBeforeLastRepair:\n%s", raw)
+	}
+	if err := os.WriteFile(statePath, flag.ReplaceAll(raw, nil), 0o600); err != nil {
+		t.Fatalf("write legacy state: %v", err)
+	}
+
+	// Resume replays act, which now blocks.
+	runner2 := &mockRunner{results: []exec.ProcessResult{
+		{ExitCode: 0, Stdout: claudeAgentOutput("needs a human\nREPAIR_BLOCKED")},
+	}}
+	result, err := ResumeWorkflow(statePath, &Options{
+		ProcessRunner: runner2, GlobExpander: &mockGlob{}, Log: &mockLog{}, ProfileStore: testAgentProfileStore(),
+	})
+	if err != nil {
+		t.Fatalf("resume error: %v", err)
+	}
+	if result != ResultFailed {
+		t.Fatalf("expected failed, got %q", result)
+	}
+	auditData, err := os.ReadFile(filepath.Join(sessionDir, "audit.log"))
+	if err != nil {
+		t.Fatalf("read audit.log: %v", err)
+	}
+	var verifyEnd string
+	for _, line := range strings.Split(string(auditData), "\n") {
+		if strings.Contains(line, "[verify] step_end") {
+			verifyEnd = line
+		}
+	}
+	for _, want := range []string{`"repair_attempts":1`, `"repair_output_before_repair":true`, `"repair_blocked":true`} {
+		if !strings.Contains(verifyEnd, want) {
+			t.Errorf("verify step_end missing %s: %s", want, verifyEnd)
+		}
 	}
 }
