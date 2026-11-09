@@ -2,7 +2,7 @@ package model
 
 // PropagateFailure copies c's failure record onto every ancestor context.
 // The top-level runner classifies whatever failure record its root context
-// carries, so a nested check's failure must be visible there before its
+// carries, so a nested step's failure must be visible there before its
 // scope's blocking return unwinds past the child context that recorded it.
 func (c *ExecutionContext) PropagateFailure() {
 	for p := c.ParentContext; p != nil; p = p.ParentContext {
@@ -54,9 +54,9 @@ type AgentExecutionRecord struct {
 	CallResponses []CallResponse `json:"callResponses,omitempty" yaml:"callResponses,omitempty"`
 }
 
-// FailureRecord captures the evidence for one failed shell or script check:
-// its own output, the most recent guarded agent execution in scope (if any),
-// and any repair/blocked evidence attached by the repair executor.
+// FailureRecord captures a failed step's pre-start error or process output.
+// For shell and script checks, it also identifies the most recent guarded
+// agent execution in scope (if any) and any repair/blocked evidence.
 type FailureRecord struct {
 	StepID   string `json:"stepId"`
 	Prefix   string `json:"prefix"`

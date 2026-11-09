@@ -175,7 +175,12 @@ func emitScriptEnd(ctx *model.ExecutionContext, prefix string, startTime time.Ti
 	if result != nil {
 		exitCode, stdout, stderr = result.ExitCode, result.Stdout, result.Stderr
 	}
-	failureErr := recordCheckFailure(ctx, step, StepOutcome(outcome), prefix, checkAttempt(ctx, step), exitCode, stdout, stderr, log)
+	var failureErr error
+	if result == nil && err != nil {
+		RecordPreStartFailure(ctx, step, prefix, err)
+	} else {
+		failureErr = recordCheckFailure(ctx, step, StepOutcome(outcome), prefix, checkAttempt(ctx, step), exitCode, stdout, stderr, log)
+	}
 	emitStepEnd(ctx, prefix, startTime, outcome, data, step)
 	return failureErr
 }

@@ -1336,6 +1336,10 @@ func emitAgentPreStartFailure(ctx *model.ExecutionContext, prefix string, startT
 }
 
 func emitAgentFailureEnd(ctx *model.ExecutionContext, prefix string, startTime time.Time, step *model.Step, errMsg string) {
+	// A replay absorbs this failure, and the owning check's evidence must survive it.
+	if !replayOpen(ctx) {
+		RecordPreStartFailure(ctx, step, prefix, errors.New(errMsg))
+	}
 	cliName := step.CLI
 	if cliName == "" {
 		cliName = "claude"

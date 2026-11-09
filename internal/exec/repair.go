@@ -287,6 +287,7 @@ func executeCheckWithRepair(step *model.Step, ctx *model.ExecutionContext, runne
 	prep := prepareCheck(step, ctx)
 	emitStepStart(ctx, owningPrefix, startTime, prep.startData(step))
 	if err := prep.err(); err != nil {
+		RecordPreStartFailure(ctx, step, owningPrefix, err)
 		emitStepEnd(ctx, owningPrefix, startTime, "failed", map[string]any{"error": err.Error()}, step)
 		return OutcomeFailed, err
 	}
@@ -297,6 +298,7 @@ func executeCheckWithRepair(step *model.Step, ctx *model.ExecutionContext, runne
 		emitNestedMetricCapture(ctx, step, owningPrefix, run.Metrics)
 	}
 	if run.RunErr != nil {
+		RecordPreStartFailure(ctx, step, owningPrefix, run.RunErr)
 		emitStepEnd(ctx, owningPrefix, startTime, "failed", map[string]any{"error": run.RunErr.Error()}, step)
 		return OutcomeFailed, run.RunErr
 	}
@@ -566,6 +568,7 @@ func runInternalCheckAtCurrentNesting(step *model.Step, ctx *model.ExecutionCont
 	prep := prepareCheck(step, ctx)
 	emitStepStart(ctx, prefix, startTime, prep.startData(step))
 	if err := prep.err(); err != nil {
+		RecordPreStartFailure(ctx, step, prefix, err)
 		emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{"error": err.Error()}, &internalStep)
 		return ProcessResult{}, err
 	}

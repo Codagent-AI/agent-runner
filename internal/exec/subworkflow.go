@@ -31,12 +31,14 @@ func ExecuteSubWorkflowStep(
 	workflowPath, err := resolveWorkflowPath(step.Workflow, parentCtx, step.ID)
 	if err != nil {
 		emitStepStart(parentCtx, prefix, startTime, nil)
+		RecordPreStartFailure(parentCtx, step, prefix, err)
 		emitSubEnd(parentCtx, prefix, startTime, step, "failed", err.Error())
 		return OutcomeFailed, err
 	}
 	resolvedParams, err := resolveParams(step.Params, parentCtx, step.ID)
 	if err != nil {
 		emitStepStart(parentCtx, prefix, startTime, map[string]any{"workflow_path": workflowPath})
+		RecordPreStartFailure(parentCtx, step, prefix, err)
 		emitSubEnd(parentCtx, prefix, startTime, step, "failed", err.Error())
 		return OutcomeFailed, err
 	}
@@ -47,12 +49,14 @@ func ExecuteSubWorkflowStep(
 
 	workflow, childCtx, err := prepareSubWorkflow(step, workflowPath, resolvedParams, parentCtx, log)
 	if err != nil {
+		RecordPreStartFailure(parentCtx, step, prefix, err)
 		emitSubEnd(parentCtx, prefix, startTime, step, "failed", err.Error())
 		return OutcomeFailed, err
 	}
 
 	startFromStepID, startCompleted, err := applyResumeState(parentCtx, childCtx)
 	if err != nil {
+		RecordPreStartFailure(parentCtx, step, prefix, err)
 		emitSubEnd(parentCtx, prefix, startTime, step, "failed", err.Error())
 		return OutcomeFailed, err
 	}
@@ -198,6 +202,8 @@ func executeChildSteps(
 		skip, skipErr := ShouldSkipStep(workflow.Steps[i].SkipIf, childCtx, workflow.Steps[i].ID)
 		if skipErr != nil {
 			childCtx.StepFailure = model.StepFailure{Kind: model.FailureStep}
+			RecordPreStartFailure(childCtx, &workflow.Steps[i], audit.BuildPrefix(nestingToAudit(childCtx), workflow.Steps[i].ID), skipErr)
+			childCtx.PropagateFailure()
 			return OutcomeFailed, fmt.Errorf("step %q skip_if evaluation failed: %w", workflow.Steps[i].ID, skipErr)
 		}
 		if skip {
@@ -212,6 +218,7 @@ func executeChildSteps(
 			if childCtx.StepFailure.Kind == "" {
 				childCtx.StepFailure = model.StepFailure{Kind: model.FailureStep}
 			}
+			childCtx.PropagateFailure()
 			return OutcomeFailed, err
 		}
 
@@ -248,7 +255,7 @@ func executeChildSteps(
 func finishChildStep(childCtx *model.ExecutionContext, step *model.Step, outcome StepOutcome) (result StepOutcome, done bool) {
 	// A tolerated failure resumes at the next step, so it counts as completed
 	// and its repair frame (if any) is done.
-	completed := (outcome != OutcomeFailed && outcome != OutcomeAborted) || closeToleratedFrame(childCtx, step, outcome)
+	completed := (outcome != OutcomeFailed && outcome != OutcomeAborted) || ClearToleratedFailure(childCtx, step, outcome)
 
 	if outcome == OutcomeAborted {
 		updateChildProgress(childCtx, step.ID, completed)
@@ -263,7 +270,6 @@ func finishChildStep(childCtx *model.ExecutionContext, step *model.Step, outcome
 		return OutcomeFailed, true
 	}
 	if outcome == OutcomeFailed {
-		childCtx.ClearInheritedFailure()
 		childCtx.StepFailure = model.StepFailure{}
 	}
 	return OutcomeSuccess, false

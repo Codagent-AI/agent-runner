@@ -664,6 +664,7 @@ func executeTopLevelStep(rs *runState, step *model.Step, index int, steps []mode
 	skip, err := exec.ShouldSkipStep(step.SkipIf, rs.ctx, step.ID)
 	if err != nil {
 		rs.ctx.StepFailure = model.StepFailure{Kind: model.FailureStep}
+		exec.RecordPreStartFailure(rs.ctx, step, audit.BuildPrefix(nestingToAuditInfo(rs.ctx), step.ID), err)
 		rs.log.Printf("\nagent-runner: step %q skip_if evaluation failed: %v\n", step.ID, err)
 		return ResultFailed, true, false, 0
 	}
@@ -732,10 +733,8 @@ func runAndPersistTopLevelStep(rs *runState, step *model.Step) (exec.StepOutcome
 	outcome, loopResult, err := runStep(step, rs)
 	rs.ctx.FlushState = nil
 	warning := exec.IsWarningOutcome(step, outcome)
-	if outcome == exec.OutcomeFailed && (warning || step.ContinueOnFailure) {
-		// A failed check that flow control lets the run advance past is
-		// done: its repair frame (if any) must not be persisted as open.
-		rs.ctx.RepairFrame = nil
+	if err == nil {
+		exec.ClearToleratedFailure(rs.ctx, step, outcome)
 	}
 	completed := err == nil && outcome != exec.OutcomeAborted && (outcome != exec.OutcomeFailed || warning || step.ContinueOnFailure)
 	if !completed && rs.ctx.LastSubWorkflowChild == nil && resumeChild != nil {

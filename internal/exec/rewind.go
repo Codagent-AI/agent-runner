@@ -83,6 +83,17 @@ func inReplay(ctx *model.ExecutionContext, basePath []model.NestingSegment) bool
 // through. Only a blocking outcome inside a replay range counts as a failed
 // repair attempt; a replayed step whose own flow control tolerates its
 // failure proceeds through ordinary sequencing instead.
+// replayOpen reports whether ctx or an enclosing scope is replaying a
+// rerun-form repair cycle.
+func replayOpen(ctx *model.ExecutionContext) bool {
+	for c := ctx; c != nil; c = c.ParentContext {
+		if frame := c.RepairFrame; frame != nil && frame.Phase == model.RepairPhaseReplaying {
+			return true
+		}
+	}
+	return false
+}
+
 func isBlockingOutcome(step *model.Step, outcome StepOutcome) bool {
 	if outcome == OutcomeAborted {
 		return true
@@ -295,12 +306,19 @@ func toleratedFailure(step *model.Step, outcome StepOutcome) bool {
 	return outcome == OutcomeFailed && !isBlockingOutcome(step, outcome)
 }
 
-// closeToleratedFrame clears ctx.RepairFrame when step's failure is tolerated
-// by its flow control, so a done check is never persisted as an open cycle.
-func closeToleratedFrame(ctx *model.ExecutionContext, step *model.Step, outcome StepOutcome) bool {
+// ClearToleratedFailure clears a tolerated step's failure evidence and repair
+// frame before sequencing advances. A replayed intermediate step must keep
+// the owning check's open frame and evidence for the remaining repair cycle.
+// It reports whether flow control tolerates the step's outcome.
+func ClearToleratedFailure(ctx *model.ExecutionContext, step *model.Step, outcome StepOutcome) bool {
 	if !toleratedFailure(step, outcome) {
 		return false
 	}
+	if frame := ctx.RepairFrame; frame != nil && frame.Phase == model.RepairPhaseReplaying && frame.CheckID != step.ID {
+		return true
+	}
 	ctx.RepairFrame = nil
+	ctx.LastFailure = nil
+	ctx.ClearInheritedFailure()
 	return true
 }

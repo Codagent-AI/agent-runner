@@ -53,6 +53,12 @@ func parseAuditLine(line string) (rawAuditEvent, bool) {
 	return ev, true
 }
 
+// RecordPreStartFailure records a step error that occurred before a process
+// started, replacing any earlier failure.
+func RecordPreStartFailure(ctx *model.ExecutionContext, step *model.Step, prefix string, err error) {
+	ctx.LastFailure = &model.FailureRecord{StepID: step.ID, Prefix: prefix, Stderr: err.Error()}
+}
+
 // recordCheckFailure updates ctx.LastFailure from a shell or script check's
 // process result: on non-zero exit it builds a FailureRecord naming the
 // check (by its own audit prefix and attempt) and its guarded execution (if
@@ -266,7 +272,7 @@ func readAuditEvents(sessionDir string) ([]rawAuditEvent, error) {
 }
 
 // ClassifyFailure renders the classified root failure reason for a failing
-// check: the step ID, then "failed:", then the first non-empty line of
+// step: the step ID, then "failed:", then the first non-empty line of
 // stderr (or the exit code when stderr is empty), then a blocked clause and
 // a repair-attempts clause when the repair executor recorded them.
 func ClassifyFailure(record *model.FailureRecord) string {

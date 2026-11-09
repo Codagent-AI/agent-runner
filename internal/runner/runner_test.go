@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -474,9 +475,12 @@ func (m *lockProbeRunner) RunScript(path string, stdin []byte, _ bool, _ string)
 	return r, nil
 }
 
-type mockGlob struct{ matches []string }
+type mockGlob struct {
+	matches []string
+	err     error
+}
 
-func (g *mockGlob) Expand(_ string) ([]string, error) { return g.matches, nil }
+func (g *mockGlob) Expand(_ string) ([]string, error) { return g.matches, g.err }
 
 type mockLog struct{ lines []string }
 
@@ -547,6 +551,306 @@ func TestRunWorkflowRecordsFailureReasonFromFailingCheck(t *testing.T) {
 	}
 	if !strings.Contains(string(auditData), `"failure_reason":"verify-draft-pr failed: expected one open PR"`) {
 		t.Fatalf("run_end missing failure_reason: %s", auditData)
+	}
+}
+
+func TestRunWorkflowRecordsPreStartFailureReason(t *testing.T) {
+	maxIterations := 1
+	for _, tc := range []struct {
+		name      string
+		step      model.Step
+		detail    string
+		globError error
+		message   string
+	}{
+		{name: "shell", step: shellStep("broken", "echo {{missing}}")},
+		{name: "shell with repair", step: model.Step{ID: "broken", Command: "echo {{missing}}", Repair: &model.Repair{Prompt: "fix", Agent: "test-agent", Max: &maxIterations}}},
+		{name: "script input with repair", step: model.Step{ID: "broken", Script: "check.sh", ScriptInputs: map[string]string{"value": "{{missing}}"}, Repair: &model.Repair{Prompt: "fix", Agent: "test-agent", Max: &maxIterations}}, detail: "script_inputs.value: "},
+		{name: "agent", step: model.Step{ID: "broken", Prompt: "{{missing}}", Agent: "test-agent", Mode: model.ModeAutonomous}},
+		{name: "script input", step: model.Step{ID: "broken", Script: "check.sh", ScriptInputs: map[string]string{"value": "{{missing}}"}}, detail: "script_inputs.value: "},
+		{name: "ui", step: model.Step{ID: "broken", Mode: model.ModeUI, Title: "{{missing}}", Actions: []model.UIAction{{Label: "OK", Outcome: "ok"}}}},
+		{name: "loop over", step: model.Step{ID: "broken", Loop: &model.Loop{Over: "{{missing}}", As: "item"}, Steps: []model.Step{shellStep("body", "echo ok")}}},
+		{name: "loop body", step: model.Step{ID: "loop", Loop: &model.Loop{Max: &maxIterations}, Steps: []model.Step{shellStep("broken", "echo {{missing}}")}}},
+		{name: "sub-workflow path", step: model.Step{ID: "broken", Workflow: "{{missing}}"}},
+		{name: "skip if", step: model.Step{ID: "broken", Command: "echo ok", SkipIf: "sh: echo {{missing}}"}, detail: "skip_if interpolation: "},
+		{name: "group member skip if", step: model.Step{ID: "group", Steps: []model.Step{{ID: "broken", Command: "echo ok", SkipIf: "sh: echo {{missing}}"}}}, detail: "skip_if interpolation: "},
+		{name: "glob expansion", step: model.Step{ID: "broken", Loop: &model.Loop{Over: "[", As: "item"}, Steps: []model.Step{shellStep("body", "echo ok")}}, globError: fmt.Errorf("invalid glob pattern"), message: "invalid glob pattern"},
+		{name: "loop body skip if", step: model.Step{ID: "loop", Loop: &model.Loop{Max: &maxIterations}, Steps: []model.Step{{ID: "broken", Command: "echo ok", SkipIf: "sh: echo {{missing}}"}}}, detail: "skip_if interpolation: "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := model.Workflow{Name: "test", Steps: []model.Step{tc.step}}
+			w.ApplyDefaults()
+			sessionDir := t.TempDir()
+			workflowDir := t.TempDir()
+			writeWorkflowFile(t, workflowDir, "check.sh", "echo ok")
+			result, _ := RunWorkflow(&w, map[string]string{}, &Options{
+				ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{err: tc.globError}, Log: &mockLog{},
+				SessionDir: sessionDir, WorkflowFile: filepath.Join(workflowDir, "test-v1.0.yaml"), ProfileStore: testAgentProfileStore(),
+			})
+			if result != ResultFailed {
+				t.Fatalf("result = %q, want failed", result)
+			}
+			message := tc.message
+			if message == "" {
+				message = tc.detail + "undefined variable: {{missing}}"
+			}
+			assertPersistedStepFailure(t, sessionDir, "broken failed: "+message)
+		})
+	}
+}
+
+func TestRunWorkflowPreStartFailureReplacesToleratedCheck(t *testing.T) {
+	w := model.Workflow{Name: "test", Steps: []model.Step{
+		{ID: "earlier", Command: "exit 1", ContinueOnFailure: true},
+		shellStep("later", "echo {{missing}}"),
+	}}
+	w.ApplyDefaults()
+	sessionDir := t.TempDir()
+	result, _ := RunWorkflow(&w, map[string]string{}, &Options{
+		ProcessRunner: &mockRunner{results: []exec.ProcessResult{{ExitCode: 1, Stderr: "earlier failure"}}},
+		GlobExpander:  &mockGlob{}, Log: &mockLog{}, SessionDir: sessionDir,
+	})
+	if result != ResultFailed {
+		t.Fatalf("result = %q, want failed", result)
+	}
+	assertPersistedStepFailure(t, sessionDir, "later failed: undefined variable: {{missing}}")
+}
+
+func TestRunWorkflowToleratedPreStartFailureDoesNotBlameEarlierStep(t *testing.T) {
+	for _, scope := range []string{"top-level", "group", "loop", "sub-workflow"} {
+		for _, warn := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/warn=%t", scope, warn), func(t *testing.T) {
+				required := true
+				maxIterations := 1
+				steps := []model.Step{
+					{ID: "seed", Command: "echo value", Capture: "missing", SkipIf: "sh: true"},
+					{ID: "earlier", Prompt: "{{missing}}", Agent: "test-agent", Mode: model.ModeAutonomous, ContinueOnFailure: !warn, WarnOnFailure: warn},
+					{ID: "later", Loop: &model.Loop{Over: "*.absent", As: "item", RequireMatches: &required}, Steps: []model.Step{shellStep("body", "echo ok")}},
+				}
+				switch scope {
+				case "group":
+					steps = []model.Step{{ID: "group", Steps: steps}}
+				case "loop":
+					steps = []model.Step{{ID: "loop", Loop: &model.Loop{Max: &maxIterations}, Steps: steps}}
+				case "sub-workflow":
+					flowControl := "continue_on_failure: true"
+					if warn {
+						flowControl = "warn_on_failure: true"
+					}
+					source := "name: child\nsteps:\n  - id: seed\n    command: echo value\n    capture: missing\n    skip_if: 'sh: true'\n  - id: earlier\n    prompt: '{{missing}}'\n    agent: test-agent\n    mode: autonomous\n    " + flowControl + "\n  - id: later\n    loop:\n      over: '*.absent'\n      as: item\n      require_matches: true\n    steps:\n      - id: body\n        command: echo ok\n"
+					child := writeWorkflowFile(t, t.TempDir(), "child-v1.0.yaml", source)
+					steps = []model.Step{{ID: "child", Workflow: child}}
+				}
+				w := model.Workflow{Name: "test", Steps: steps}
+				w.ApplyDefaults()
+				sessionDir := t.TempDir()
+				result, err := RunWorkflow(&w, map[string]string{}, &Options{
+					ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+					SessionDir: sessionDir, ProfileStore: testAgentProfileStore(),
+				})
+				if err != nil || result != ResultFailed {
+					t.Fatalf("result = %q, err = %v, want failed without error", result, err)
+				}
+				// Zero required matches has no error record of its own. It must
+				// not inherit the tolerated agent's pre-start failure instead.
+				assertPersistedStepFailure(t, sessionDir, "")
+			})
+		}
+	}
+}
+
+func TestRunWorkflowReplayPreservesCheckEvidenceAfterPreStartFailure(t *testing.T) {
+	for _, toleratedIntermediate := range []bool{false, true} {
+		t.Run(fmt.Sprintf("tolerated-intermediate=%t", toleratedIntermediate), func(t *testing.T) {
+			maxAttempts := 2
+			steps := []model.Step{
+				{ID: "seed", Command: "echo value", Capture: "input"},
+				{ID: "act", Prompt: "act", Agent: "test-agent", Mode: model.ModeAutonomous, Session: model.SessionNew},
+			}
+			results := []exec.ProcessResult{
+				{ExitCode: 0, Stdout: "value"},
+				{ExitCode: 0, Stdout: claudeAgentOutput("acted")},
+			}
+			if toleratedIntermediate {
+				steps = append(steps, model.Step{ID: "notify", Prompt: "{{input}}", Agent: "test-agent", Mode: model.ModeAutonomous, ContinueOnFailure: true})
+				results = append(results, exec.ProcessResult{ExitCode: 0, Stdout: claudeAgentOutput("notified")})
+			}
+			steps = append(steps,
+				model.Step{ID: "mid", Prompt: "{{input}}", Capture: "input", Agent: "test-agent", Mode: model.ModeAutonomous},
+				model.Step{ID: "check", Command: "exit 1", Repair: &model.Repair{Rerun: "act", Max: &maxAttempts, RangeCaptures: []string{"input"}}},
+			)
+			results = append(results,
+				exec.ProcessResult{ExitCode: 0, Stdout: claudeAgentOutput("GUARDED-RESPONSE")},
+				exec.ProcessResult{ExitCode: 1, Stdout: "CHECK-OUTPUT", Stderr: "CHECK-EVIDENCE-LINE"},
+				exec.ProcessResult{ExitCode: 0, Stdout: claudeAgentOutput("replay one")},
+				exec.ProcessResult{ExitCode: 0, Stdout: claudeAgentOutput("replay two")},
+			)
+			w := model.Workflow{Name: "test", Steps: steps}
+			w.ApplyDefaults()
+			sessionDir := t.TempDir()
+			processRunner := &mockRunner{results: results}
+			result, err := RunWorkflow(&w, map[string]string{}, &Options{
+				ProcessRunner: processRunner, GlobExpander: &mockGlob{}, Log: &mockLog{},
+				SessionDir: sessionDir, ProfileStore: testAgentProfileStore(),
+			})
+			if err != nil || result != ResultFailed {
+				t.Fatalf("result = %q, err = %v, want failed without error", result, err)
+			}
+			if len(processRunner.calls) != len(results) {
+				t.Fatalf("process calls = %d, want %d", len(processRunner.calls), len(results))
+			}
+			for _, call := range processRunner.calls[len(results)-2:] {
+				prompt := strings.Join(call, " ")
+				for _, evidence := range []string{"CHECK-OUTPUT", "CHECK-EVIDENCE-LINE", "GUARDED-RESPONSE"} {
+					if !strings.Contains(prompt, evidence) {
+						t.Errorf("replayed target prompt missing %q: %s", evidence, prompt)
+					}
+				}
+			}
+			assertPersistedStepFailure(t, sessionDir, "check failed: before repair: CHECK-EVIDENCE-LINE after 2 repair attempts")
+		})
+	}
+}
+
+func TestRunWorkflowReplayPreStartFailures(t *testing.T) {
+	maxAttempts, oneIteration := 2, 1
+	repair := &model.Repair{Rerun: "act", Max: &maxAttempts, RangeCaptures: []string{"input"}}
+	seed := model.Step{ID: "seed", Command: "echo value", Capture: "input"}
+	agent := func(id, prompt string) model.Step {
+		return model.Step{ID: id, Prompt: prompt, Agent: "test-agent", Mode: model.ModeAutonomous, Session: model.SessionNew}
+	}
+	ok := func(text string) exec.ProcessResult {
+		return exec.ProcessResult{ExitCode: 0, Stdout: claudeAgentOutput(text)}
+	}
+	failedCheck := exec.ProcessResult{ExitCode: 1, Stderr: "STALE-CHECK-LINE"}
+	shellOK := exec.ProcessResult{ExitCode: 0, Stdout: "value"}
+
+	run := func(t *testing.T, steps []model.Step, results []exec.ProcessResult) (*mockRunner, string) {
+		t.Helper()
+		w := model.Workflow{Name: "test", Steps: steps}
+		w.ApplyDefaults()
+		sessionDir := t.TempDir()
+		processRunner := &mockRunner{results: results}
+		result, _ := RunWorkflow(&w, map[string]string{}, &Options{
+			ProcessRunner: processRunner, GlobExpander: &mockGlob{}, Log: &mockLog{},
+			SessionDir: sessionDir, ProfileStore: testAgentProfileStore(),
+		})
+		if result != ResultFailed {
+			t.Fatalf("result = %q, want failed", result)
+		}
+		return processRunner, sessionDir
+	}
+
+	t.Run("replayed shell step names its own failure", func(t *testing.T) {
+		_, sessionDir := run(t, []model.Step{
+			seed, agent("act", "act"), shellStep("mid", "echo {{input}}"),
+			{ID: "check", Command: "exit 1", Repair: repair},
+		}, []exec.ProcessResult{shellOK, ok("acted"), shellOK, failedCheck, ok("replay")})
+		assertPersistedStepFailure(t, sessionDir, "mid failed: undefined variable: {{input}}")
+	})
+
+	t.Run("check rerun names its own failure", func(t *testing.T) {
+		_, sessionDir := run(t, []model.Step{
+			seed, agent("act", "act"),
+			{ID: "check", Command: "test {{input}} = no", Repair: repair},
+		}, []exec.ProcessResult{shellOK, ok("acted"), failedCheck, ok("replay")})
+		assertPersistedStepFailure(t, sessionDir, "check failed: undefined variable: {{input}}")
+	})
+
+	t.Run("nested replayed agent adds no false repair evidence", func(t *testing.T) {
+		processRunner, _ := run(t, []model.Step{
+			seed, agent("act", "act"),
+			{ID: "loop", Loop: &model.Loop{Max: &oneIteration}, Steps: []model.Step{agent("body", "{{input}}")}},
+			{ID: "check", Command: "exit 1", Repair: repair},
+		}, []exec.ProcessResult{shellOK, ok("acted"), ok("body"), failedCheck, ok("replay one"), ok("replay two")})
+		last := strings.Join(processRunner.calls[len(processRunner.calls)-1], " ")
+		if strings.Contains(last, "undefined variable") {
+			t.Errorf("replayed target prompt carries the pre-start error as check evidence: %s", last)
+		}
+	})
+}
+
+type shellSpawnFailureRunner struct{ mockRunner }
+
+func (r *shellSpawnFailureRunner) RunShell(cmd string, capture bool, _ string) (exec.ProcessResult, error) {
+	return exec.ProcessResult{}, errors.New("could not spawn shell")
+}
+
+func TestRunWorkflowRecordsShellSpawnFailure(t *testing.T) {
+	w := model.Workflow{Name: "test", Steps: []model.Step{shellStep("spawn", "echo ok")}}
+	w.ApplyDefaults()
+	sessionDir := t.TempDir()
+	result, _ := RunWorkflow(&w, map[string]string{}, &Options{
+		ProcessRunner: &shellSpawnFailureRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+		SessionDir: sessionDir, ProfileStore: testAgentProfileStore(),
+	})
+	if result != ResultFailed {
+		t.Fatalf("result = %q, want failed", result)
+	}
+	assertPersistedStepFailure(t, sessionDir, "spawn failed: could not spawn shell")
+}
+
+func TestRunWorkflowRecordsSubWorkflowPreStartFailure(t *testing.T) {
+	for _, skip := range []bool{false, true} {
+		t.Run(fmt.Sprintf("skip=%t", skip), func(t *testing.T) {
+			body := "    command: echo {{missing}}\n"
+			detail := ""
+			if skip {
+				body = "    command: echo ok\n    skip_if: 'sh: echo {{missing}}'\n"
+				detail = "skip_if interpolation: "
+			}
+			child := writeWorkflowFile(t, t.TempDir(), "child-v1.0.yaml", "name: child\nsteps:\n  - id: broken\n"+body)
+			w := model.Workflow{Name: "test", Steps: []model.Step{{ID: "child", Workflow: child}}}
+			w.ApplyDefaults()
+			sessionDir := t.TempDir()
+			result, _ := RunWorkflow(&w, map[string]string{}, &Options{
+				ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{}, SessionDir: sessionDir,
+			})
+			if result != ResultFailed {
+				t.Fatalf("result = %q, want failed", result)
+			}
+			assertPersistedStepFailure(t, sessionDir, "broken failed: "+detail+"undefined variable: {{missing}}")
+		})
+	}
+}
+
+func TestRunWorkflowResumeRecordsUndefinedCaptureFailure(t *testing.T) {
+	source := "name: test\nsteps:\n  - id: capture\n    command: echo value\n    capture: missing\n  - id: broken\n    command: echo {{missing}}\n"
+	workflowPath := writeWorkflowFile(t, t.TempDir(), "test-v1.0.yaml", source)
+	sessionDir := t.TempDir()
+	state := model.RunState{
+		WorkflowFile: workflowPath, WorkflowName: "test", WorkflowHash: stateio.ComputeWorkflowHash(source),
+		CurrentStep: model.CurrentStep{Nested: &model.NestedStepState{
+			StepID: "capture", Completed: true, SessionIDs: map[string]string{},
+			CapturedVariables: map[string]model.CapturedValue{},
+		}},
+	}
+	if err := stateio.WriteState(&state, sessionDir); err != nil {
+		t.Fatal(err)
+	}
+	handle, err := PrepareResume(filepath.Join(sessionDir, "state.json"), &Options{
+		ProcessRunner: &mockRunner{}, GlobExpander: &mockGlob{}, Log: &mockLog{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := ExecuteFromHandle(handle, nil); result != ResultFailed {
+		t.Fatalf("result = %q, want failed", result)
+	}
+	assertPersistedStepFailure(t, sessionDir, "broken failed: undefined variable: {{missing}}")
+}
+
+func assertPersistedStepFailure(t *testing.T, sessionDir, want string) {
+	t.Helper()
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.FailureReason != want {
+		t.Errorf("FailureReason = %q, want %q", state.FailureReason, want)
+	}
+	if state.FailureKind != model.FailureStep {
+		t.Errorf("FailureKind = %q, want step", state.FailureKind)
 	}
 }
 

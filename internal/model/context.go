@@ -272,8 +272,8 @@ type ExecutionContext struct {
 	// groups share the parent context and save/restore it around the body.
 	LastAgentExecution *AgentExecutionRecord
 	// LastFailure is the most recent failure record produced by a failed
-	// shell or script check in this scope. Nested scopes copy their failing
-	// check's record onto every parent context when a failure stops the
+	// step in this scope, including pre-start errors. Nested scopes copy their
+	// failing step's record onto every parent context when a failure stops the
 	// scope and propagates upward as blocking, and clear it when the
 	// failure is absorbed instead.
 	LastFailure *FailureRecord
