@@ -208,7 +208,7 @@ func ResolveResumeStep(steps []Step, recordedStepID string, completed bool, fram
 		// check reruns. Re-enter at the target whenever this scope owns the
 		// check. Group-owned frames instead restart their enclosing step;
 		// their target belongs to the group's children, not this step list.
-		if rerun && (frame.CheckID == recordedStepID || stepExists(steps, frame.CheckID)) {
+		if rerun && (frame.CheckID == recordedStepID || (stepExists(steps, frame.CheckID) && stepExists(steps, frame.Target))) {
 			resumeAt = frame.Target
 		}
 		if !stepExists(steps, resumeAt) {

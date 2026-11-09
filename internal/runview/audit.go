@@ -1419,8 +1419,8 @@ func applyRepairStepEnd(n *StepNode, data map[string]any) {
 		n.RepairAttempts = attempts
 		n.RepairActiveAttempt = 0
 	}
-	if blocked, ok := boolField(data, "repair_blocked"); ok && blocked {
-		n.RepairBlocked = true
+	if blocked, ok := boolField(data, "repair_blocked"); ok {
+		n.RepairBlocked = blocked
 	}
 
 	if n.Status != StatusFailed {
@@ -1456,8 +1456,9 @@ func applyRepairStepEnd(n *StepNode, data map[string]any) {
 			record.GuardedAttempt = attempt
 		}
 	}
-	if n.RepairBlocked {
-		record.Blocked = true
+	record.Blocked = n.RepairBlocked
+	if !n.RepairBlocked {
+		record.BlockedBy = ""
 	}
 	record.RepairAttempts = n.RepairAttempts
 }

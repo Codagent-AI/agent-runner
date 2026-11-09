@@ -1261,6 +1261,23 @@ func TestApplyEvent_RepairBlockedRecordsDeclarationWithoutAttemptChildren(t *tes
 	}
 }
 
+func TestApplyEvent_ResumedExhaustionClearsEarlierBlockedState(t *testing.T) {
+	wf := fixtureRepairImplementChange()
+	tree := BuildTree(&wf, fixturePath("openspec/implement-change-v1.0.yaml"))
+	applyFixtureAudit(t, tree, blockedRerunAuditFixture())
+	applyFixtureAudit(t, tree, []string{
+		`2026-09-01T00:00:20Z [verify-draft-pr] step_end {"outcome":"failed","exit_code":1,"stderr":"still no draft pull request","repair_form":"rerun","repair_target":"open-draft-pr","repair_max":1,"repair_attempts":1,"repair_blocked":false}`,
+	})
+
+	check := childByID(tree.Root, "verify-draft-pr")
+	if check.RepairBlocked {
+		t.Fatal("a later unblocked failure should clear the blocked state")
+	}
+	if check.Failure == nil || check.Failure.Blocked || check.Failure.BlockedBy != "" {
+		t.Fatalf("failure record should not carry the earlier block: %+v", check.Failure)
+	}
+}
+
 func TestApplyEvent_RepairFailureRecordSurvivesResumedSuccess(t *testing.T) {
 	wf := fixtureRepairPlanChange()
 	tree := BuildTree(&wf, fixturePath("openspec/plan-change-v1.0.yaml"))

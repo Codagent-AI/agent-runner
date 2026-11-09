@@ -668,6 +668,9 @@ func terminalFailed(step *model.Step, ctx *model.ExecutionContext, owningPrefix 
 	flushState(ctx)
 	endData := repairEndData(checkEndData(step, lastResult), frame, blocked)
 	addGuardedLinkage(endData, OutcomeFailed, ctx)
+	if frame.Guarded != nil {
+		endData["guarded_prefix"], endData["guarded_attempt"] = frame.Guarded.Prefix, frame.Guarded.Attempt
+	}
 	emitStepEnd(ctx, owningPrefix, startTime, "failed", endData, step)
 	return OutcomeFailed, nil
 }

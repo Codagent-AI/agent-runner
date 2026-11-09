@@ -1031,3 +1031,41 @@ func TestResumeRepairLegacyReplayingFrameBlockedCountsAttempt(t *testing.T) {
 		}
 	}
 }
+
+// A replayed step that fails before the check runs again leaves the check's
+// last real output as the evidence; the attempt marker it emits has none.
+func TestRerunRepairAbsorbedReplayFailureKeepsCheckEvidence(t *testing.T) {
+	maxAttempts, oneIteration := 2, 1
+	agent := func(id, prompt string) model.Step {
+		return model.Step{ID: id, Prompt: prompt, Agent: "test-agent", Mode: model.ModeAutonomous, Session: model.SessionNew}
+	}
+	w := model.Workflow{Name: "test", Steps: []model.Step{
+		{ID: "seed", Command: "echo value", Capture: "input"},
+		agent("act", "open it"),
+		{ID: "body-loop", Loop: &model.Loop{Max: &oneIteration}, Steps: []model.Step{agent("body", "{{input}}")}},
+		{ID: "verify", Command: "exit 1", Repair: &model.Repair{Rerun: "act", Max: &maxAttempts, RangeCaptures: []string{"input"}}},
+	}}
+	w.ApplyDefaults()
+	sessionDir := t.TempDir()
+	result, err := RunWorkflow(&w, map[string]string{}, &Options{
+		ProcessRunner: &mockRunner{results: []exec.ProcessResult{
+			{ExitCode: 0, Stdout: "value"},
+			{ExitCode: 0, Stdout: claudeAgentOutput("opened")},
+			{ExitCode: 0, Stdout: claudeAgentOutput("body")},
+			{ExitCode: 1, Stderr: "STALE-CHECK-LINE"},
+			{ExitCode: 0, Stdout: claudeAgentOutput("replay one")},
+			{ExitCode: 0, Stdout: claudeAgentOutput("replay two")},
+		}},
+		GlobExpander: &mockGlob{}, Log: &mockLog{}, SessionDir: sessionDir, ProfileStore: testAgentProfileStore(),
+	})
+	if err != nil || result != ResultFailed {
+		t.Fatalf("result = %q, err = %v; want failed", result, err)
+	}
+	state, err := stateio.ReadState(filepath.Join(sessionDir, "state.json"))
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if want := "verify failed: before repair: STALE-CHECK-LINE after 2 repair attempts"; state.FailureReason != want {
+		t.Fatalf("FailureReason = %q, want %q", state.FailureReason, want)
+	}
+}

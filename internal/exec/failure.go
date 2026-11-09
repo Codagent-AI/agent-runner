@@ -199,6 +199,10 @@ func RestoreLastFailureForResume(ctx *model.ExecutionContext) error {
 		if event.Type != "repair_attempt_start" || event.Prefix != owningPrefix {
 			continue
 		}
+		// An attempt re-armed after an absorbed replay failure carries no check result.
+		if _, hasResult := event.Data["exit_code"]; !hasResult {
+			continue
+		}
 		found = true
 		record.ExitCode = intFromAny(event.Data["exit_code"])
 		record.Stdout = stringFromAny(event.Data["stdout"])

@@ -116,20 +116,10 @@ func TestRepairOutputBeforeRepairHistoricalIntegration(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			// Replay the full durable log for per-check evidence, including a
-			// rerun whose saved position is still its earlier target.
-			direct := BuildTree(&w, workflowPath)
-			events, e := (&FileTailer{}).ReadSince(session)
-			if e != nil {
-				t.Fatal(e)
-			}
-			for _, event := range events {
-				direct.ApplyEvent(event)
-			}
 			if m.failureReason() != tc.want {
 				t.Fatalf("run view %q", m.failureReason())
 			}
-			node := childByID(direct.Root, "check")
+			node := childByID(m.tree.Root, "check")
 			if node == nil || node.Failure == nil {
 				b, _ := os.ReadFile(filepath.Join(session, "audit.log"))
 				t.Fatalf("no failure evidence: node %+v audit %s", node, b)
