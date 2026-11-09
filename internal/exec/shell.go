@@ -275,6 +275,7 @@ func ExecuteShellStep(
 		emitNestedMetricCapture(ctx, step, prefix, run.Metrics)
 	}
 	if run.RunErr != nil {
+		RecordPreStartFailure(ctx, step, prefix, run.RunErr)
 		emitStepEnd(ctx, prefix, startTime, "failed", map[string]any{"error": run.RunErr.Error()}, step)
 		return OutcomeFailed, run.RunErr
 	}

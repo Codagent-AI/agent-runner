@@ -54,12 +54,8 @@ func parseAuditLine(line string) (rawAuditEvent, bool) {
 }
 
 // RecordPreStartFailure records a step error that occurred before a process
-// started, replacing any earlier failure unless a replay still needs the
-// owning check's repair evidence.
+// started, replacing any earlier failure.
 func RecordPreStartFailure(ctx *model.ExecutionContext, step *model.Step, prefix string, err error) {
-	if frame := ctx.RepairFrame; frame != nil && frame.Phase == model.RepairPhaseReplaying {
-		return
-	}
 	ctx.LastFailure = &model.FailureRecord{StepID: step.ID, Prefix: prefix, Stderr: err.Error()}
 }
 

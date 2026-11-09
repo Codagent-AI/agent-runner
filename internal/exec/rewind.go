@@ -83,6 +83,17 @@ func inReplay(ctx *model.ExecutionContext, basePath []model.NestingSegment) bool
 // through. Only a blocking outcome inside a replay range counts as a failed
 // repair attempt; a replayed step whose own flow control tolerates its
 // failure proceeds through ordinary sequencing instead.
+// replayOpen reports whether ctx or an enclosing scope is replaying a
+// rerun-form repair cycle.
+func replayOpen(ctx *model.ExecutionContext) bool {
+	for c := ctx; c != nil; c = c.ParentContext {
+		if frame := c.RepairFrame; frame != nil && frame.Phase == model.RepairPhaseReplaying {
+			return true
+		}
+	}
+	return false
+}
+
 func isBlockingOutcome(step *model.Step, outcome StepOutcome) bool {
 	if outcome == OutcomeAborted {
 		return true
