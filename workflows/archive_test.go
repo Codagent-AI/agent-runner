@@ -673,3 +673,49 @@ func TestArchiveTransitionSnapshotsNonASCIIPreExistingPath(t *testing.T) {
 		t.Fatalf("snapshot should record the non-ASCII path unquoted with its blob:\n%s", snapshot)
 	}
 }
+
+// TestArchiveTransitionFailureStartsWithTheFailingCommandError proves the
+// first stderr line, which failure classification reports, is the real
+// error and not a validate banner or archive progress line before it.
+func TestArchiveTransitionFailureStartsWithTheFailingCommandError(t *testing.T) {
+	cases := []struct {
+		name, validate, archive, want string
+	}{
+		{"archive fails", `echo "Change '$3' is valid"; exit 0`, `echo "Error: archive failed: target exists"; exit 1`, "openspec archive failed: Error: archive failed: target exists"},
+		{"archive prints progress before its error", `echo "Change '$3' is valid"; exit 0`, `printf 'Task status: ✓ Complete\n\nSpecs to update:\n  foo: update\nfoo MODIFIED failed for header "x" - not found\nAborted. No files were changed.\n'; exit 1`, `openspec archive failed: foo MODIFIED failed for header "x" - not found`},
+		{"spec name looks like an error", `echo "Change '$3' is valid"; exit 0`, `printf 'Task status: ✓ Complete\n\nSpecs to update:\n  error-handling: update\nfoo MODIFIED failed for header "x" - not found\n'; exit 1`, `openspec archive failed: foo MODIFIED failed for header "x" - not found`},
+		{"archive error without a keyword", `echo "Change '$3' is valid"; exit 0`, `printf 'Task status: ok\n\nSpecs to update:\n  foo: update\nfoo: target spec does not exist; only ADDED requirements are allowed\nAborted. No files were changed.\n'; exit 1`, "openspec archive failed: foo: target spec does not exist; only ADDED requirements are allowed"},
+		{"validate failure for a keyword-named change", `printf "Change 'fix-error-x' has issues\n\342\234\227 [ERROR] foo/spec.md: ADDED \"A\" must contain SHALL or MUST\nNext steps:\n"; exit 1`, `exit 0`, `openspec validate failed: [ERROR] foo/spec.md: ADDED "A" must contain SHALL or MUST`},
+		{"archive error after the real preamble", `echo "Change '$3' is valid"; exit 0`, `printf 'Task status: 0/1 tasks\nWarning: 1 incomplete task(s) found. Continuing due to --yes flag.\n\nSpecs to update:\n  cap: create\nApplying changes to openspec/specs/cap/spec.md:\n  + 1 added\nTotals: + 1, ~ 0, - 0, → 0\n\342\234\226 Error: target already exists\n'; exit 1`, "openspec archive failed: \u2716 Error: target already exists"},
+		{"archive error with only preamble lines before a plain error", `echo "Change '$3' is valid"; exit 0`, `printf 'Task status: 0/1 tasks\nWarning: 1 incomplete task(s) found. Continuing due to --yes flag.\nApplying changes to x:\nTotals: + 1\nboom: target missing\n'; exit 1`, "openspec archive failed: boom: target missing"},
+		{"incidental [ERROR] inside a requirement name", `echo "Change '$3' is valid"; exit 0`, `printf 'Task status: ok\n\nSpecs to update:\n  foo: update\nfoo MODIFIED failed for header "### Requirement: [ERROR] thing" - not found\nAborted. No files were changed.\n'; exit 1`, `openspec archive failed: foo MODIFIED failed for header "### Requirement: [ERROR] thing" - not found`},
+		{"unindented emoji warning before a plain error", `echo "Change '$3' is valid"; exit 0`, `printf 'Task status: ok\n\nSpecs to update:\n  cap: create\n\342\232\240\357\270\217  Warning: cap - 1 REMOVED requirement(s) ignored for new spec (nothing to remove).\nnonexistent: target spec does not exist\n'; exit 1`, "openspec archive failed: nonexistent: target spec does not exist"},
+		{"no line qualifies as the error", `echo "Change '$3' is valid"; exit 0`, `printf 'Task status: ok\n  something odd\n'; exit 1`, "openspec archive failed: Task status: ok | something odd"},
+		{"validate fails", `echo "Error: validation failed"; exit 1`, `exit 0`, "openspec validate failed: Error: validation failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newArchiveTestFixture(t, "ticket-123-demo")
+			binDir := filepath.Join(t.TempDir(), "bin")
+			if err := os.MkdirAll(binDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			script := "#!/bin/sh\nif [ \"$1\" = validate ]; then " + tc.validate + "; fi\nif [ \"$1\" = archive ]; then " + tc.archive + "; fi\n"
+			if err := os.WriteFile(filepath.Join(binDir, "openspec"), []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			f.env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
+			stdin, err := json.Marshal(map[string]string{"change_name": f.changeName, "session_dir": f.sessionDir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			stdout, stderr, err := f.runStdout(t, "archive-transition.sh", stdin)
+			if err == nil {
+				t.Fatalf("expected failure, stdout:\n%s", stdout)
+			}
+			if first, _, _ := strings.Cut(stderr, "\n"); first != tc.want {
+				t.Fatalf("first stderr line = %q, want %q\nstderr:\n%s", first, tc.want, stderr)
+			}
+		})
+	}
+}
