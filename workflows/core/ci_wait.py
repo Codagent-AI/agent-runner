@@ -388,13 +388,22 @@ class Collector:
             if poll and now() >= self.deadline - min(self.call_timeout, 0.1):
                 break
             poll += 1
+            previous_state, previous_head, previous_complete = state, self.head, self.complete
+            truncated_budget = self.deadline - now() < self.call_timeout
             try:
                 pr = self.read_snapshot()
                 state = self.classify(pr)
             except (Transient, KeyError, TypeError) as exc:
                 self.complete = False
                 print("ci-wait: snapshot: " + str(exc), file=sys.stderr)
-                if self.snapshot:
+                if truncated_budget and previous_complete and previous_state and self.head == previous_head:
+                    # A deadline-shortened read cannot invalidate the preceding
+                    # complete poll. Keep its classification even if pagination
+                    # has already replaced self.snapshot with a partial read.
+                    state = previous_state
+                    self.snapshot = state["pr"]
+                    self.complete = True
+                elif self.snapshot:
                     state = self.classify(self.snapshot)
             if state:
                 marker = self.marker(state)

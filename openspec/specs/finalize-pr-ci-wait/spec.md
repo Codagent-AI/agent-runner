@@ -252,6 +252,10 @@ If there is no pull request for the current branch, if GitHub authentication fai
 - **WHEN** a GitHub call made by the CI wait blocks indefinitely
 - **THEN** the call is abandoned by its timeout, and the wait finishes within the overall deadline plus the fixed margin
 
+#### Scenario: Deadline-truncated read preserves the preceding complete poll
+- **WHEN** a read starts with less than the full call timeout remaining and fails, and the immediately preceding poll read all data for the same head
+- **THEN** the wait retains that complete poll's classified state and ends with its marker at the deadline
+
 #### Scenario: Comments unreadable at deadline
 - **WHEN** all checks pass but every attempt to read review comments fails until the deadline
 - **THEN** the report ends with `CI_PENDING`
